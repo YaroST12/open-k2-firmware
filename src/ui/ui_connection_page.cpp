@@ -281,7 +281,9 @@ Strip ConnectionPage::labels() const {
     const bool share = (tab_ == conn::Tab::Source && held::shown_caps().valid) || (tab_ == conn::Tab::Cable && held::cable_em().valid);
     const sl::Id back = (iq_asked_ && fusb302::interrogate_running()) ? sl::Stop : sl::Back;
     if (view_ == View::Overview) {
-        return {{back, sl::Up, share ? sl::OpenShare : sl::Open, sl::Dn}};
+        const sl::Id up = tab_ == conn::Tab::Source ? sl::UpDim : sl::Up;
+        const sl::Id dn = tab_ == conn::Tab::Sink ? sl::DnDim : sl::Dn;
+        return {{back, up, share ? sl::OpenShare : sl::Open, dn}};
     }
     if (view_ == View::Spec) {
         return {{back, sl::Up, share ? sl::ActionsShare : sl::Actions, sl::Dn}};
@@ -295,7 +297,9 @@ Strip ConnectionPage::labels() const {
     const sl::Id ok = (reset_confirm || iq_confirm) ? (share ? sl::ConfirmShare : sl::Confirm)
                     : valid ? conn::act_slot(items_[static_cast<std::size_t>(i)].act, false, share)
                     : share ? sl::ShareLong : sl::None;
-    return {{back, sl::Up, ok, sl::Dn}};
+    const sl::Id up = i <= 0 ? sl::UpDim : sl::Up;
+    const sl::Id dn = i >= act_count() - 1 ? sl::DnDim : sl::Dn;
+    return {{back, up, ok, dn}};
 }
 
 bool ConnectionPage::on_event(Event e) {
@@ -458,6 +462,7 @@ void ConnectionPage::build_items() {
     conn::ActFacts a;
     const pd::Link &link = ctx_.ui->link();
     a.inline_sink = link.inline_mode() || ctx_.inline_mode;
+    a.reset_inline = ctx_.ui->link_reset_inline();
     a.attached = facts_.charger || facts_.inline_sink;
     // A device alone on the K2 (a dual-role phone): offer the active Identify there too (the driver presents Rd)
     a.alone = pd::identify_alone(a.inline_sink, ctx_.pm_online, ctx_.pm_online ? ctx_.vbus_fast_mv : -1,
@@ -743,6 +748,8 @@ struct TabData {
     bool in_use = false;    // possibly inline: the line is live and a device behind the K2 may be using it
     fastcharge::Protocol fc;
     int32_t vbus_mv = -1;   // the fast VBUS reading in 100 mV steps (what the Type-C row shows), -1 unknown
+    int32_t ibus_ma = -1;   // debounced |IBUS| magnitude (50 mA < 1 A, 100 mA >= 1 A), -1 unknown
+    uint32_t live_mw = 0;   // vbus_mv * ibus_ma / 1000 when both are known
     uint32_t vooc = 0;      // the Sink tab's raw VOOC note (ConnectionPage::vooc_), 0 = no live session
     bool iq_ok = false;     // fusb302::interrogate_status() belongs to the current session
     int32_t cable_mohm = -1;   // measured cable resistance in milliohms, -1 = none
@@ -759,6 +766,15 @@ int32_t current_cable_mohm(const UiContext &ctx) {
 int32_t typec_vbus_mv(bool pm_online, int32_t vbus_fast_mv) {
     if (!pm_online || vbus_fast_mv < 1000) return -1;
     return (vbus_fast_mv / 100) * 100;
+}
+
+// Quantized live current magnitude for Overview inline power fallbacks (50 mA steps < 1 A, 100 mA >= 1 A).
+int32_t typec_ibus_ma(bool pm_online, int32_t current_ma) {
+    if (!pm_online) return -1;
+    const uint32_t ma = power::abs_sat(current_ma);
+    if (ma < 25u) return 0;
+    if (ma < 1000u) return static_cast<int32_t>(((ma + 25u) / 50u) * 50u);
+    return static_cast<int32_t>(((ma + 50u) / 100u) * 100u);
 }
 
 uint16_t conf_colour(const usblink::Link &l) {
@@ -1861,9 +1877,24 @@ void put_mohm_chip(StrBuf<10> &out, int32_t mohm) {
     }
 }
 
-void put_slice_if_fits(StrBuf<40> &dst, std::string_view seg) {
-    if (seg.empty()) return;
-    if (text_width(kLabelFont, dst.view()) + text_width(kLabelFont, seg) <= text::conn::kSliceLineMaxPx) dst.put(seg);
+bool put_slice_if_fits(StrBuf<40> &dst, std::string_view seg) {
+    if (seg.empty()) return true;
+    if (text_width(kLabelFont, dst.view()) + text_width(kLabelFont, seg) > text::conn::kSliceLineMaxPx) return false;
+    dst.put(seg);
+    return true;
+}
+
+void put_w_hero(StrBuf<16> &out, uint32_t mw) {
+    if (mw >= 9950u) {
+        out.put_u32((mw + 500u) / 1000u).put_char('W');
+    } else if (mw >= 50u) {
+        const uint32_t dw = (mw + 50u) / 100u;
+        out.put_u32(dw / 10u);
+        if (dw % 10u != 0u) out.put_char('.').put_u32(dw % 10u);
+        out.put_char('W');
+    } else {
+        out.put("0W");
+    }
 }
 
 void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
@@ -1904,7 +1935,14 @@ void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
     const MatchResult &r = *d.r;
     if (r.caps_seen) {
         const pd::SourceCaps &caps = *d.caps;
-        sl.head.put_u32(r.src_max_mw / 1000u).put_char('W');
+        uint32_t best_mw = 0, best_mv = 0, best_ma = 0;
+        for (int i = 0; i < r.rows && i < int(pd::kMaxPdos); i++) {
+            const pd::Pdo &p = caps.pdos[i];
+            const uint32_t mw = p.max_mw ? p.max_mw : (p.max_mv > 0 && p.max_ma > 0 ? uint32_t(p.max_mv) * p.max_ma / 1000u : 0u);
+            if (mw > best_mw) { best_mw = mw; best_mv = p.max_mv; best_ma = p.max_ma; }
+        }
+        if (best_mw == 0) best_mw = r.src_max_mw;
+        put_w_hero(sl.head, best_mw);
         const pd::OfferSource src = held::offer_source();
         if (held::offer_throttled()) sl.add_chip("PEAK", SliceSpec::Ok);
         else if (src == pd::OfferSource::Probed) sl.add_chip("PROBED", SliceSpec::Ok);
@@ -1921,15 +1959,25 @@ void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
         } else if (caps.spec_rev == 1) {
             sl.add_chip("PD2.0", SliceSpec::Solid);
         }
+        if (best_mv > 0 && best_ma > 0) put_va(sl.l1, best_mv, best_ma);
         const pd::Identity &vid = fusb302::vdm().identity;
         if (vid.valid) {
-            if (vid.vendor && vid.vendor[0]) {
-                sl.l1.put(vid.vendor).put_char(' ');
+            StrBuf<36> seg;
+            if (!sl.l1.view().empty()) seg.put(" \xC2\xB7 ");
+            if (vid.vendor && vid.vendor[0]) seg.put(vid.vendor).put_char(' ');
+            seg.put_hex(vid.vid, 4).put_char(':').put_hex(vid.pid, 4);
+            if (!put_slice_if_fits(sl.l1, seg.view())) {
+                seg.clear();
+                if (!sl.l1.view().empty()) seg.put(" \xC2\xB7 ");
+                seg.put_hex(vid.vid, 4).put_char(':').put_hex(vid.pid, 4);
+                put_slice_if_fits(sl.l1, seg.view());
             }
-            sl.l1.put_hex(vid.vid, 4).put_char(':').put_hex(vid.pid, 4);
             if (caps.epr) put_slice_if_fits(sl.l1, " \xC2\xB7 EPR");
         } else {
-            sl.l1.put_u32(static_cast<uint32_t>(r.rows)).put(r.rows == 1 ? " offer \xC2\xB7 ID unknown" : " offers \xC2\xB7 ID unknown");
+            StrBuf<28> seg;
+            if (!sl.l1.view().empty()) seg.put(" \xC2\xB7 ");
+            seg.put_u32(static_cast<uint32_t>(r.rows)).put(r.rows == 1 ? " offer" : " offers");
+            put_slice_if_fits(sl.l1, seg.view());
             if (caps.epr) put_slice_if_fits(sl.l1, " \xC2\xB7 EPR");
         }
         if (held::offer_throttled()) {
@@ -1940,12 +1988,56 @@ void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
         }
         return;
     }
+    const bool live_inline = f.inline_sink || d.in_use || (d.vbus_mv > pd::kVSafe5MaxMv && !d.k2_sink);
+    if (live_inline) {
+        if (d.vbus_mv >= 1000 && d.live_mw >= 500u) {
+            put_w_hero(sl.head, d.live_mw);
+            sl.add_chip("LIVE", SliceSpec::AmberOutline);
+            sl.add_chip("INLINE", SliceSpec::Warn);
+            put_va(sl.l1, static_cast<uint32_t>(d.vbus_mv), static_cast<uint32_t>(d.ibus_ma));
+            put_slice_if_fits(sl.l1, (verdict == pd::PdVerdict::None && d.vbus_mv <= pd::kVSafe5MaxMv)
+                                         ? " \xC2\xB7 no PD seen"
+                                         : " \xC2\xB7 PD missed");
+            sl.l2.put("Reset & re-read captures caps");
+            return;
+        }
+        sl.dim = (d.vbus_mv < 1000);
+        sl.head.put("Missed PD");
+        sl.add_chip("INLINE", SliceSpec::Warn);
+        if (d.vbus_mv >= 1000 && d.ibus_ma >= 0) {
+            put_va(sl.l1, static_cast<uint32_t>(d.vbus_mv), static_cast<uint32_t>(d.ibus_ma));
+            put_slice_if_fits(sl.l1, " \xC2\xB7 0W live");
+        } else if (d.vbus_mv >= 1000) {
+            put_v(sl.l1, static_cast<uint32_t>(d.vbus_mv));
+            sl.l1.put("V \xC2\xB7 PD missed");
+        } else {
+            sl.l1.put(text::conn::kSliceNoPdL1);
+        }
+        sl.l2.put("Reset & re-read captures caps");
+        return;
+    }
     sl.dim = true;
+    const uint32_t rp_ma = r.typec_ma ? r.typec_ma : fusb302::typec_ma();
     if (verdict == pd::PdVerdict::None && none_why == pd::PdNoneWhy::SourceNeverOffered) {
+        if (d.vbus_mv >= 1000 && rp_ma > 0) {
+            sl.dim = false;
+            put_w_hero(sl.head, static_cast<uint32_t>(d.vbus_mv) * rp_ma / 1000u);
+            sl.add_chip("NO PD", SliceSpec::Neutral);
+            put_va(sl.l1, static_cast<uint32_t>(d.vbus_mv), rp_ma);
+            put_slice_if_fits(sl.l1, " \xC2\xB7 No PD offers");
+            if (legacy_row_protocol(d.fc) && d.fc != fastcharge::Protocol::Pending) {
+                StrBuf<6> fcn;
+                fc_pill_text(d.fc, fcn);
+                if (!fcn.view().empty()) sl.l2.put("Legacy ").put(fcn.view());
+            } else {
+                sl.l2.put(text::conn::kNoPdNeverL);
+            }
+            return;
+        }
         sl.head.put("No PD");
         sl.l1.put(text::conn::kNoPdNeverL);
         StrBuf<28> tc;
-        typec_row_text(d.vbus_mv, r.typec_ma ? r.typec_ma : fusb302::typec_ma(), tc);
+        typec_row_text(d.vbus_mv, rp_ma, tc);
         if (!tc.view().empty()) sl.l2.put("Type-C ").put(tc.view());
         else if (legacy_row_protocol(d.fc) && d.fc != fastcharge::Protocol::Pending) {
             StrBuf<6> fcn;
@@ -1953,6 +2045,15 @@ void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
             if (!fcn.view().empty()) sl.l2.put("Legacy ").put(fcn.view());
         }
     } else if (r.typec_ma || r.typec_rp) {
+        if (d.vbus_mv >= 1000 && rp_ma > 0) {
+            sl.dim = false;
+            put_w_hero(sl.head, static_cast<uint32_t>(d.vbus_mv) * rp_ma / 1000u);
+            sl.add_chip("TYPE-C", SliceSpec::Neutral);
+            put_va(sl.l1, static_cast<uint32_t>(d.vbus_mv), rp_ma);
+            put_slice_if_fits(sl.l1, " \xC2\xB7 Type-C Rp");
+            sl.l2.put("No PD offers on the line");
+            return;
+        }
         sl.head.put("Type-C");
         sl.l1.put("No PD offers on the line");
         StrBuf<28> tc;
@@ -1978,11 +2079,6 @@ void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
         sl.add_chip("WAIT", SliceSpec::Ok);
         sl.l1.put(text::conn::kSliceReadyL1);
         sl.l2.put("Open to read or test");
-    } else if (f.inline_sink) {
-        sl.head.put("Missed PD");
-        sl.add_chip("INLINE", SliceSpec::Warn);
-        sl.l1.put(text::conn::kSliceNoPdL1);
-        sl.l2.put("Reset & re-read captures caps");
     } else if (f.wait == raguard::WaitKind::DualRolePort) {
         sl.head.put("Dual-role");
         sl.l1.put(text::conn::kDualRoleL);
@@ -1996,14 +2092,17 @@ void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
     sl.tag = text::conn::kSliceTagCable;
     const MatchResult &r = *d.r;
     const pd::Emarker &em = held::cable_em();
+    const uint32_t cable_w = em.valid
+        ? (em.max_power_w ? uint32_t(em.max_power_w) : uint32_t(em.max_voltage_v) * uint32_t(em.max_current_a))
+        : 0u;
     const bool power_limits =
-        (r.caps_seen && em.valid && em.max_power_w > 0 && uint32_t(em.max_power_w) * 1000u < r.src_max_mw) ||
+        (r.caps_seen && em.valid && cable_w > 0 && cable_w * 1000u < r.src_max_mw) ||
         (r.caps_seen && !em.valid && f.cable_fact == cablefact::Fact::NoChip && r.src_max_mw > 60000u);
     const bool cable_limits = d.ul.cable_limited || power_limits;
     sl.warn = cable_limits;
     if (em.valid) {
-        if (em.max_power_w > 0) sl.head.put_u32(em.max_power_w).put_char('W');
-        else sl.head.put_u32(em.max_current_a).put("A ").put_u32(em.max_voltage_v).put_char('V');
+        if (cable_w > 0) sl.head.put_u32(cable_w).put_char('W');
+        else sl.head.put_u32(em.max_voltage_v).put("V ").put_u32(em.max_current_a).put_char('A');
         if (cable_limits) {
             sl.add_chip("LIMIT", SliceSpec::Warn);
         } else if (held::cable_source() == pd::CableSource::Probed) {
@@ -2030,33 +2129,35 @@ void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
             }
         }
         put_slice_if_fits(sl.l1, em.is_active ? " \xC2\xB7 Active" : " \xC2\xB7 Passive");
+        if (em.max_voltage_v > 0 && em.max_current_a > 0)
+            sl.l2.put_u32(em.max_voltage_v).put("V ").put_u32(em.max_current_a).put_char('A');
         if (cable_limits) {
             sl.l2_warn = true;
-            sl.l2.put(text::conn::kSliceBottleneck);
-        } else {
-            sl.l2.put_u32(em.max_current_a).put("A ").put_u32(em.max_voltage_v).put_char('V');
-            if (em.latency_str && em.latency_str[0]) {
-                StrBuf<20> seg;
-                seg.put(" \xC2\xB7 ").put(em.latency_str);
-                put_slice_if_fits(sl.l2, seg.view());
-            }
+            const bool has_va = !sl.l2.view().empty();
+            if (!put_slice_if_fits(sl.l2, has_va ? " \xC2\xB7 Bottleneck: caps link" : text::conn::kSliceBottleneck))
+                put_slice_if_fits(sl.l2, " \xC2\xB7 Bottleneck");
+        } else if (em.latency_str && em.latency_str[0]) {
+            StrBuf<20> seg;
+            if (!sl.l2.view().empty()) seg.put(" \xC2\xB7 ");
+            seg.put(em.latency_str);
+            put_slice_if_fits(sl.l2, seg.view());
         }
         return;
     }
     if (f.cable_fact == cablefact::Fact::NoChip) {
-        sl.head.put("Plain 3A");
-        if (cable_limits) sl.add_chip("LIMIT", SliceSpec::Warn);
+        sl.head.put("60W");
+        sl.add_chip(cable_limits ? "LIMIT" : "PLAIN", cable_limits ? SliceSpec::Warn : SliceSpec::Neutral);
         if (d.cable_mohm >= 0) {
             StrBuf<10> rc;
             put_mohm_chip(rc, d.cable_mohm);
             sl.add_chip(rc.view(), SliceSpec::Neutral);
         }
-        sl.l1.put(text::conn::kNoChipL);
+        sl.l1.put("20V 3A \xC2\xB7 Plain cable, no chip");
         if (cable_limits) {
             sl.l2_warn = true;
             sl.l2.put(text::conn::kSliceBottleneck);
         } else {
-            sl.l2.put("60W max (20V 3A)");
+            sl.l2.put("No e-marker chip");
         }
         return;
     }
@@ -2091,14 +2192,30 @@ void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
     sl.tag = text::conn::kSliceTagSink;
     const MatchResult &r = *d.r;
     if (r.request_seen && !d.k2_sink) {
-        put_va(sl.head, r.want_mv, r.want_ma);
+        const uint32_t mv = r.want_mv ? r.want_mv : (d.vbus_mv >= 1000 ? static_cast<uint32_t>(d.vbus_mv) : 0u);
+        const uint32_t ma = r.want_ma;
+        const uint32_t mw = r.want_mw ? r.want_mw : (mv > 0 && ma > 0 ? mv * ma / 1000u : 0u);
+        if (mw > 0) put_w_hero(sl.head, mw);
+        else if (mv > 0 || ma > 0) put_va(sl.head, mv, ma);
+        else sl.head.put("Request");
         const pd::Contract &ct = fusb302::contract();
         if (ct.ready) sl.add_chip("OK", SliceSpec::Ok);
         sl.add_chip("SNIFFED", SliceSpec::AmberOutline);
-        if (r.src_max_mw > 0) {
-            sl.l1.put("Asks ").put_u32(r.want_mw / 1000u).put("W of ").put_u32(r.src_max_mw / 1000u).put("W offered");
+        if (mv > 0 && ma > 0) {
+            put_va(sl.l1, mv, ma);
+            if (r.src_max_mw > 0) {
+                StrBuf<24> seg;
+                seg.put(" \xC2\xB7 of ").put_u32((r.src_max_mw + 500u) / 1000u).put("W offered");
+                if (!put_slice_if_fits(sl.l1, seg.view())) {
+                    seg.clear();
+                    seg.put(" \xC2\xB7 of ").put_u32((r.src_max_mw + 500u) / 1000u).put_char('W');
+                    put_slice_if_fits(sl.l1, seg.view());
+                }
+            }
+        } else if (r.src_max_mw > 0) {
+            sl.l1.put("Asks ").put_u32((mw + 500u) / 1000u).put("W of ").put_u32((r.src_max_mw + 500u) / 1000u).put("W offered");
         } else {
-            sl.l1.put("Asks ").put_u32(r.want_mw / 1000u).put_char('W');
+            sl.l1.put("Asks ").put_u32((mw + 500u) / 1000u).put_char('W');
         }
         const pd::Identity &sid = fusb302::sink_vdm().identity;
         const pd::Identity &iqid = d.iq_ok ? fusb302::interrogate_status().id : pd::Identity{};
@@ -2127,7 +2244,14 @@ void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
     }
     if (fusb302::identify_current()) {
         const pd::Identity &pid = fusb302::identify_identity();
-        if (pid.valid && pid.vendor && pid.vendor[0] && text_width(kMid, pid.vendor) <= 132) sl.head.put(pid.vendor);
+        uint32_t smw = 0, smv = 0, sma = 0;
+        for (uint32_t raw : d.sink) {
+            const pd::Pdo p = pd::decode_pdo(raw);
+            const uint32_t mw = p.max_mw ? p.max_mw : (p.max_mv > 0 && p.max_ma > 0 ? uint32_t(p.max_mv) * p.max_ma / 1000u : 0u);
+            if (mw > smw) { smw = mw; smv = p.max_mv; sma = p.max_ma; }
+        }
+        if (smw > 0) put_w_hero(sl.head, smw);
+        else if (pid.valid && pid.vendor && pid.vendor[0] && text_width(kMid, pid.vendor) <= 132) sl.head.put(pid.vendor);
         else sl.head.put("Device read");
         sl.add_chip("PROBED", SliceSpec::Ok);
         const uint32_t irev = fusb302::identify_status().revision;
@@ -2136,14 +2260,19 @@ void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
             rv.put("PD").put_u32((irev >> 28) & 0xFu).put_char('.').put_u32((irev >> 24) & 0xFu);
             sl.add_chip(rv.view(), SliceSpec::Solid);
         }
+        if (smv > 0 && sma > 0) put_va(sl.l1, smv, sma);
         if (pid.valid) {
-            sl.l1.put_hex(pid.vid, 4).put_char(':').put_hex(pid.pid, 4);
-            if (pid.vendor && pid.vendor[0]) {
-                StrBuf<24> seg;
-                seg.put_char(' ').put(pid.vendor);
+            StrBuf<36> seg;
+            if (!sl.l1.view().empty()) seg.put(" \xC2\xB7 ");
+            seg.put_hex(pid.vid, 4).put_char(':').put_hex(pid.pid, 4);
+            if (pid.vendor && pid.vendor[0]) seg.put_char(' ').put(pid.vendor);
+            if (!put_slice_if_fits(sl.l1, seg.view())) {
+                seg.clear();
+                if (!sl.l1.view().empty()) seg.put(" \xC2\xB7 ");
+                seg.put_hex(pid.vid, 4).put_char(':').put_hex(pid.pid, 4);
                 put_slice_if_fits(sl.l1, seg.view());
             }
-        } else {
+        } else if (sl.l1.view().empty()) {
             sl.l1.put("Standalone PD read");
         }
         if (!d.sink.empty()) {
@@ -2158,14 +2287,42 @@ void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
     if (d.k2_sink) {
         sl.head.put("K2");
         sl.add_chip("SELF", SliceSpec::Solid);
-        sl.l1.put("K2 draws power itself");
+        if (d.vbus_mv >= 1000 && d.ibus_ma >= 0) {
+            put_va(sl.l1, static_cast<uint32_t>(d.vbus_mv), static_cast<uint32_t>(d.ibus_ma));
+            StrBuf<16> ws;
+            put_w_hero(ws, d.live_mw);
+            StrBuf<20> seg;
+            seg.put(" \xC2\xB7 ").put(ws.view());
+            put_slice_if_fits(sl.l1, seg.view());
+            sl.l2.put("K2 draws power itself");
+        } else {
+            sl.l1.put("K2 draws power itself");
+        }
         return;
     }
-    if (f.inline_sink) {
+    const bool live_inline = f.inline_sink || d.in_use || (d.vbus_mv > pd::kVSafe5MaxMv && !d.k2_sink);
+    if (live_inline) {
+        if (d.vbus_mv >= 1000 && d.ibus_ma >= 0) {
+            put_w_hero(sl.head, d.live_mw);
+            sl.add_chip("LIVE", SliceSpec::AmberOutline);
+            sl.add_chip("INLINE", SliceSpec::Warn);
+            put_va(sl.l1, static_cast<uint32_t>(d.vbus_mv), static_cast<uint32_t>(d.ibus_ma));
+            put_slice_if_fits(sl.l1, (verdict == pd::PdVerdict::None && d.vbus_mv <= pd::kVSafe5MaxMv)
+                                         ? " \xC2\xB7 no PD"
+                                         : " \xC2\xB7 live draw");
+            sl.l2.put("Reset & re-read or interrogate");
+            return;
+        }
         sl.head.put("In use");
         sl.add_chip("INLINE", SliceSpec::Warn);
-        if (verdict == pd::PdVerdict::None) sl.l1.put(conn::no_pd_line(conn::Tab::Sink, none_why));
-        else sl.l1.put("Device drawing power inline");
+        if (d.vbus_mv >= 1000) {
+            put_v(sl.l1, static_cast<uint32_t>(d.vbus_mv));
+            sl.l1.put("V \xC2\xB7 live inline");
+        } else if (verdict == pd::PdVerdict::None) {
+            sl.l1.put(conn::no_pd_line(conn::Tab::Sink, none_why));
+        } else {
+            sl.l1.put("Device drawing power inline");
+        }
         sl.l2.put("Open to identify or interrogate");
         return;
     }
@@ -2274,8 +2431,10 @@ bool ConnectionPage::paint_overview(const MatchResult &r, const pd::SourceCaps &
     d.k2_sink = fusb302::self_powered();
     d.k2_sink_ok = fusb302::pin_rd() == 1;
     d.fc = static_cast<fastcharge::Protocol>(fc_);
-    d.in_use = link.inline_mode();
+    d.in_use = ctx_.ui->link_reset_inline();
     d.vbus_mv = vbus_;
+    d.ibus_ma = ibus_;
+    d.live_mw = (vbus_ >= 1000 && ibus_ >= 0) ? (static_cast<uint32_t>(vbus_) * static_cast<uint32_t>(ibus_) / 1000u) : 0u;
     d.vooc = vooc_;
     d.iq_ok = iq_have_ && iq_session_ == fusb302::session() && fusb302::interrogate_status().phase != pd::IqPhase::Idle;
     d.cable_mohm = current_cable_mohm(ctx_);
@@ -2313,6 +2472,8 @@ bool ConnectionPage::paint_actions_ident(const MatchResult &r, const pd::SourceC
     d.fc = static_cast<fastcharge::Protocol>(fc_);
     d.in_use = link.inline_mode();
     d.vbus_mv = vbus_;
+    d.ibus_ma = ibus_;
+    d.live_mw = (vbus_ >= 1000 && ibus_ >= 0) ? (static_cast<uint32_t>(vbus_) * static_cast<uint32_t>(ibus_) / 1000u) : 0u;
     d.vooc = vooc_;
     d.iq_ok = iq_have_ && iq_session_ == fusb302::session() && fusb302::interrogate_status().phase != pd::IqPhase::Idle;
     d.cable_mohm = current_cable_mohm(ctx_);
@@ -2353,6 +2514,8 @@ bool ConnectionPage::paint_body(const MatchResult &r, const pd::SourceCaps &caps
     d.fc = static_cast<fastcharge::Protocol>(fc_);
     d.in_use = link.inline_mode();
     d.vbus_mv = vbus_;
+    d.ibus_ma = ibus_;
+    d.live_mw = (vbus_ >= 1000 && ibus_ >= 0) ? (static_cast<uint32_t>(vbus_) * static_cast<uint32_t>(ibus_) / 1000u) : 0u;
     d.vooc = vooc_;
     d.iq_ok = iq_have_ && iq_session_ == fusb302::session() && fusb302::interrogate_status().phase != pd::IqPhase::Idle;
     d.cable_mohm = current_cable_mohm(ctx_);
@@ -2411,7 +2574,6 @@ void ConnectionPage::row_fn(void *ctx, int index, bool focused, kit::RowSpec &ou
         "save read to library",
         "view or arm saved clones",
         "spoof e-marker to charger",
-        "rescan source capabilities",
         "identify attached device",
     };
     static_assert(all_fit(kNotes, kLabelAdv, kit::kNoteMaxPx), "an action note is wider than the note box");
@@ -2467,8 +2629,7 @@ void ConnectionPage::row_fn(void *ctx, int index, bool focused, kit::RowSpec &ou
             case conn::Act::SaveCable:   out.note = kNotes[1]; break;
             case conn::Act::SavedCables: out.note = kNotes[2]; break;
             case conn::Act::SpoofAs:     out.note = kNotes[3]; break;
-            case conn::Act::Refresh:     out.note = kNotes[4]; break;
-            case conn::Act::Identify:    out.note = kNotes[5]; break;
+            case conn::Act::Identify:    out.note = kNotes[4]; break;
             default: break;
             }
         }
@@ -2646,6 +2807,8 @@ void ConnectionPage::update(uint32_t now_ms) {
     const int32_t vbus_mv = static_cast<int32_t>(
         vbus_h_.commit(uint32_t(typec_vbus_mv(ctx_.pm_online, ctx_.vbus_fast_mv)), now_ms));
     vbus_ = vbus_mv;
+    ibus_ = static_cast<int32_t>(
+        ibus_h_.commit(uint32_t(typec_ibus_ma(ctx_.pm_online, ctx_.pm_avg.current_ma)), now_ms));
     if (!ctx_.vooc.seen) vooc_ = 0;   // a session end clears the note at once
     else if (!vooc_ || uint32_t(now_ms - vooc_at_) >= kVoocNoteMs) { vooc_ = 1u << 16 | ctx_.vooc.r82; vooc_at_ = now_ms; }
     uint32_t c = 2166136261u;
@@ -2711,6 +2874,10 @@ void ConnectionPage::update(uint32_t now_ms) {
     c = mix_u32(c, uint32_t(cc1_));
     c = mix_u32(c, uint32_t(cc2_));
     c = mix_u32(c, uint32_t(vbus_));   // the Type-C row's VBUS (100 mV steps)
+    if (view_ == View::Overview && (!shown_caps.valid || !ct.valid || fusb302::self_powered())) {
+        c = mix_u32(c, uint32_t(ibus_));
+        c = mix_u32(c, uint32_t(ctx_.ui->link_reset_inline()));
+    }
     const uint32_t svs = survey_sig(view_ == View::Overview || tab_ == conn::Tab::Source);
     c = mix_u32(c, svs);
     const bool iq_ok = iq_have_ && iq_session_ == fusb302::session() && fusb302::interrogate_status().phase != pd::IqPhase::Idle;

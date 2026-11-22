@@ -118,6 +118,7 @@ emk_attached::ReadInfo last_cable_read() { return g_stub.cable_read; }
 void rescan() { g_stub.rescans++; }
 void set_inline(bool on) { g_stub.inl = on; }
 bool inline_mode() { return g_stub.inl; }
+bool sink_downstream() { return g_stub.inl || g_stub.sink_downstream; }
 void set_wait_kind(k2::raguard::WaitKind kind) { g_stub.wait_kind = kind; }
 k2::raguard::WaitKind wait_kind() { return g_stub.wait_kind; }
 bool caps_this_attach() { return g_stub.caps_this_attach; }

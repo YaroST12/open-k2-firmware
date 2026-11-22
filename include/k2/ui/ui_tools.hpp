@@ -69,6 +69,7 @@ struct Act {
 struct Acts { const Act *a; int n; };
 
 Acts actions(Place p);
+Acts tools();
 const char *place_name(Place p);
 const char *act_hint(const Act &a);
 

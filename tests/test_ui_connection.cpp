@@ -709,18 +709,21 @@ static void test_place_actions() {
     CHECK_EQ(int(act_slot(Act::ResetLink, false, false)), int(sl::Reset));
     CHECK_EQ(int(act_slot(Act::ResetLink, false, true)), int(sl::ResetShare));
 
-    // Source (Charger): 0 = Reset & re-read, 1 = Spec & offers, 2 = Read again, 3.. = Charger bench actions.
+    // Source (Charger): 0 = Reset & re-read, 1 = Spec & offers, 2.. = Charger bench actions (Read again merged into Reset & re-read).
     int n = place_actions(Tab::Source, a, it);
-    CHECK(n >= 4);
+    CHECK_EQ(n, 2 + bench::actions(bench::Place::Charger).n);
     CHECK_EQ(int(it[0].act), int(Act::ResetLink));
     CHECK_STR(it[0].label, "Reset & re-read");
     CHECK_STR(it[0].tag, "Link");
     CHECK_EQ(it[0].caution, false);
     CHECK_EQ(int(it[1].act), int(Act::Details));
     CHECK_STR(it[1].label, "Spec & offers");
-    CHECK_EQ(int(it[2].act), int(Act::Refresh));
-    CHECK_STR(it[2].label, "Read again");
-    CHECK_EQ(int(it[3].act), int(Act::Bench));
+    CHECK_EQ(int(it[2].act), int(Act::Bench));
+    for (int i = 0; i < n; i++) CHECK(it[std::size_t(i)].act != Act::Refresh);
+    a.reset_inline = true;
+    place_actions(Tab::Source, a, it);
+    CHECK_EQ(it[0].caution, true);
+    a.reset_inline = false;
 
     // Cable: 0 = Reset & re-read, 1 = Read e-marker, 2 = Chip details, bench actions, then Save cable, Saved cables, Spoof as...
     a.inline_sink = false;

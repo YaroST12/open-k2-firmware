@@ -114,6 +114,7 @@ PageIf *Ui::build_menu(Menu m) {
     case Menu::Battery: return pages_.push<BatteryPage>(ctx_);
     case Menu::Memory: return pages_.push<MemoryPage>(ctx_);
     case Menu::Display: return pages_.push<DisplayPage>(ctx_);
+    case Menu::Tools: return pages_.push<ToolsPage>(ctx_);
     default: return pages_.push<PdTriggerPage>(ctx_);
     }
 }
@@ -136,6 +137,7 @@ ListState Ui::list_state() {
         case Menu::Battery: return top_as<BatteryPage>().list_state();
         case Menu::Memory: return top_as<MemoryPage>().list_state();
         case Menu::Display: return top_as<DisplayPage>().list_state();
+        case Menu::Tools: return top_as<ToolsPage>().list_state();
         default: return ListState{};
         }
     }
@@ -496,7 +498,7 @@ Ui::Session Ui::session() {
         case Menu::Battery:
             rows = list_state().count > 0;
             break;
-        case Menu::Spoof: case Menu::UsbLink: case Menu::Autorotate: case Menu::BlackBox: case Menu::Display: rows = true; break;
+        case Menu::Spoof: case Menu::UsbLink: case Menu::Autorotate: case Menu::BlackBox: case Menu::Display: case Menu::Tools: rows = true; break;
         case Menu::Connection: {
             const ConnectionPage &cp = connection_page();
             s.sub = static_cast<uint8_t>(static_cast<uint8_t>(cp.tab()) & kSubTabMask);
@@ -1116,7 +1118,7 @@ UiAction Ui::dispatch_button(Event event, uint32_t now_ms) {
     const Dispatch d = depth_ ? dispatch_modal(event, current()) : dispatch(event, current());
     const bool short_back = event.button == Button::Back && event.press == Press::Short;
     // The place pages are menus over Lines (depth 1 is their top level); a menu over any other page is one level down from it.
-    const bool top_level = depth_ <= (page_ == Page::Lines ? 1 : 0);
+    const bool top_level = depth_ <= (page_ == Page::Lines || (depth_ == 1 && stack_[0] == Menu::Tools) ? 1 : 0);
     if (d.route == Route::Pop && ring::entered_back(Press::Short, top_level) == ring::Do::None) pop_menu(now_ms);
     else if (page_ == Page::ChargerTest && !depth_ && d.route == Route::Unhandled && short_back) open_place_actions(bench::Place::Charger, now_ms);   // up one level: the place's Actions
     else if (d.route == Route::Pop || d.global == Global::ToMeter || (d.route == Route::Unhandled && short_back && !depth_)) ring_leave(now_ms);
@@ -1215,6 +1217,7 @@ bool Ui::ring_page_rests() const {
     if (t.menu == Menu::Count || t.menu != stack_[0] || t.page != page_) return false;
     switch (t.menu) {
     case Menu::Connection: return connection_page().ring_rest();
+    case Menu::Tools: return true;
     case Menu::Battery: return battery_page()->ring_rest();
     case Menu::Diagnosis: return diagnosis_page().ring_rest();
     default: return false;
@@ -1457,9 +1460,27 @@ bool Ui::trigger_hard_reset(uint32_t now_ms, bool lab_inline) {
     return ok;
 }
 
+bool Ui::link_reset_inline() const {
+    if (link_.inline_mode() || ctx_.inline_mode || fusb302::inline_mode() || fusb302::sink_downstream())
+        return true;
+    const pd::SinkStatus &sk = fusb302::sink_status();
+    const bool k2_owns = sk.state == pd::SinkState::Ready || sk.held ||
+                         fusb302::pin_rd() != 0 || fusb302::rd_for_run_on() || fusb302::self_powered();
+    if (k2_owns) return false;
+    if (fusb302::contract().valid) return true;   // foreign contract sniffed on the wire
+    const uint8_t acc = fusb302::active_cc();
+    if (!link_.attached() || acc == 0) return false;
+    // Live VBUS above vSafe5V with no K2-owned contract, or an Rp/Rd divider in the sink band while K2
+    // is not pulling Rd, means an active downstream sink sits inline even if K2 attached mid-session.
+    if (ctx_.pm_online && ctx_.vbus_fast_mv > pd::kVSafe5MaxMv) return true;
+    const int32_t acc_mv = (ctx_.analog && acc == 1) ? ctx_.analog->cc1_mv
+                         : (ctx_.analog && acc == 2) ? ctx_.analog->cc2_mv : -1;
+    return acc_mv >= 0 && pd::sink_present(acc_mv);
+}
+
 Ui::LinkResetResult Ui::link_reset(bool confirmed, uint32_t now_ms) {
     if (ports_busy()) return LinkResetResult::Busy;
-    const bool inl = link_.inline_mode() || ctx_.inline_mode;
+    const bool inl = link_reset_inline();
     if (inl) {
         if (fusb302::self_powered() || power_source::bus_powered()) return LinkResetResult::SelfPowered;
         if (!confirmed) return LinkResetResult::NeedConfirm;
@@ -1467,6 +1488,15 @@ Ui::LinkResetResult Ui::link_reset(bool confirmed, uint32_t now_ms) {
         const bool sent = fusb302::sink_hard_reset(true);
         K2LOG("[UI] link reset (inline Hard Reset): %s\n", sent ? "sent" : "refused");
         return sent ? LinkResetResult::HardReset : LinkResetResult::NoLink;
+    }
+    const pd::SinkStatus &sk = fusb302::sink_status();
+    if (sk.state == pd::SinkState::Ready && !fusb302::self_powered() && !power_source::bus_powered()) {
+        held::clear_for_reset();
+        if (fusb302::sink_hard_reset(false)) {
+            if (!survey::running()) survey::on_refresh(rescan::Result::Cycled, false);
+            K2LOG("[UI] link reset (sink Hard Reset): sent\n");
+            return LinkResetResult::HardReset;
+        }
     }
     held::clear_for_reset();
     if (run_action(Action::PdRescan, now_ms)) return LinkResetResult::Cycled;

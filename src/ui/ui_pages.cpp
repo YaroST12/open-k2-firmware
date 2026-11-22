@@ -2575,6 +2575,101 @@ Strip DisplayPage::labels() const {
 }
 
 // ---------------------------------------------------------------------------------------
+// Ring position 7 TOOLS: triggers (Request voltage, Fast charge) and active bench utilities
+// ---------------------------------------------------------------------------------------
+
+namespace {
+Icon tool_row_icon(const bench::Act &a) {
+    if (a.kind != bench::ActKind::Tool) return Icon::Bolt;
+    switch (a.arg) {
+    case 0: return Icon::Bolt;
+    case 1: return Icon::Pd;
+    case 2: return Icon::Ghost;
+    case 3: return Icon::Res;
+    case 7: return Icon::Blackbox;
+    case 9: return Icon::Report;
+    case 11: return Icon::Phone;
+    case 12: return Icon::Cable;
+    case 13: return Icon::Wave;
+    default: return Icon::Bolt;
+    }
+}
+}  // namespace
+
+void ToolsPage::enter() {
+    const int n = bench::tools().n;
+    sel_ = n > 0 ? std::clamp(sel_, 0, n - 1) : 0;
+}
+
+void ToolsPage::draw_static() {
+    title_bar();
+    ctx_.rows.init(ctx_.content, kit::kBodyY, &ToolsPage::row_fn, this);
+    ctx_.rows.set_count(bench::tools().n);
+    ctx_.rows.select(sel_);
+}
+
+void ToolsPage::row_fn(void *ctx, int index, bool focused, kit::RowSpec &out) {
+    auto *self = static_cast<ToolsPage *>(ctx);
+    const bench::Acts b = bench::tools();
+    if (index < 0 || index >= b.n) return;
+    const bench::Act &a = b.a[index];
+    out.marker = kit::Marker::Icon;
+    out.icon = tool_row_icon(a);
+    out.text = a.name;
+    const SetupState ss = setup_state(self->ctx_);
+    const Readiness rd = a.kind == bench::ActKind::Tool ? tool_readiness(a.arg, ss, self->ctx_.pm_online) : Readiness{};
+    if (rd.level == ToolLevel::Blocked) {
+        out.text_color = kInk3;
+        out.tail = rd.tag;
+        out.tail_color = kInk3;
+        out.chevron = false;
+    } else {
+        if (rd.level == ToolLevel::Caution) {
+            out.tail = rd.tag;
+            out.tail_color = kCaution;
+        }
+        out.chevron = rd.level != ToolLevel::Caution;
+    }
+    if (focused) {
+        out.note = (rd.level != ToolLevel::Ready && rd.reason && rd.reason[0]) ? rd.reason : bench::act_hint(a);
+    }
+}
+
+void ToolsPage::update(uint32_t) {
+    title_badge(false);
+    const int n = bench::tools().n;
+    if (n > 0 && sel_ >= n) sel_ = n - 1;
+    ctx_.rows.set_count(n);
+    ctx_.rows.select(sel_);
+    ctx_.rows.draw(ctx_.now, ctx_.budget);
+}
+
+bool ToolsPage::on_event(Event e) {
+    if (e.press != Press::Short) return false;
+    const bench::Acts b = bench::tools();
+    if (b.n <= 0) return false;
+    if (e.button == Button::Plus || e.button == Button::Minus) {
+        sel_ = std::clamp(sel_ + (e.button == Button::Plus ? 1 : -1), 0, b.n - 1);
+        update(ctx_.now);
+        return true;
+    }
+    if (e.button == Button::Ok) {
+        open_bench_act(*ctx_.ui, b.a[sel_], ctx_.now);
+        return true;
+    }
+    return false;
+}
+
+Strip ToolsPage::labels() const {
+    Strip l = list_strip(base_labels());
+    const int n = bench::tools().n;
+    if (sel_ == 0) l[Button::Minus] = sl::UpDim;
+    if (sel_ >= n - 1) l[Button::Plus] = sl::DnDim;
+    l[Button::Ok] = sl::Open;
+    return l;
+}
+
+// ---------------------------------------------------------------------------------------
 // USB link submenu (what enumerates at the next boot)
 // ---------------------------------------------------------------------------------------
 

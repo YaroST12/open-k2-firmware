@@ -96,7 +96,7 @@ static void battery_frames(Ui& ui, uint32_t& t, const char* prefix) {
 // action rows of the places. Frames: ring<NN>_<name>, ring<NN>_<name>_in, ring<NN>_<name>_act; the K2 page also scrolled to its
 // Long Back row.
 static void ring_frames(Ui& ui, uint32_t& t) {
-    static const char* const kNames[ring::kCount] = {"home", "lines", "numbers", "graph", "ripple", "link", "battery", "log", "k2"};
+    static const char* const kNames[ring::kCount] = {"home", "lines", "numbers", "graph", "ripple", "link", "tools", "battery", "log", "k2"};
     const auto key = [&](Button b, ButtonEvent e = ButtonEvent::Short) { ui.on_button(b, e, t += 100); };
     char nm[48];
     ui.goto_page(uint8_t(Page::Home), t); key(Button::Back);   // entered Home -> the ring view on Home
@@ -182,9 +182,8 @@ int main() {
         // The empty places: the dim headline, its line, then the action rows.
         bare.goto_page(uint8_t(Page::Home), tb); tb += 100;
         bare.open_place(bench::Place::Charger, tb); render(bare, tb, "place_charger_empty");
-        // a blocked tool focused: its dimmed words stay readable on the focus fill
-        bare.on_button(Button::Ok, ButtonEvent::Short, tb += 100);     // the place's Actions
-        bare.on_button(Button::Plus, ButtonEvent::Short, tb += 100);   // Request voltage: no PD source
+        // a blocked tool focused in 7 TOOLS: its dimmed words stay readable on the focus fill
+        bare.goto_page(kMenuPageBase + static_cast<uint8_t>(Menu::Tools), tb += 100);
         render(bare, tb, "place_charger_blocked_focus");
         bare.goto_page(uint8_t(Page::Home), tb); tb += 100;
         bare.open_place(bench::Place::Cable, tb); render(bare, tb, "place_cable_empty");

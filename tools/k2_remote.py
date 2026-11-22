@@ -187,18 +187,18 @@ ACTIONS_NEED_CONFIRM = ("fc-scan",)
 SOPS = {"sop": 0, "sop1": 1, "sop2": 2}
 # Rotation pages (settable with `page`; they land entered, not in the ring view), then the submenus (opened from a ring page's
 # actions or from Settings): the state reports a showing submenu as 7 + its index. Connection and Diag can also be opened remotely.
-PAGES = ["home", "detail", "chargertest", "lines", "settings", "graphs", "ripple", "trigger", "emarker", "pdtrigger", "cabler", "blackbox", "spoof", "usblink", "autorotate", "cards", "share", "connection", "diag", "qrtest", "twin", "loopprobe", "pdstress", "diagnosis", "battery", "memory", "display"]
+PAGES = ["home", "detail", "chargertest", "lines", "settings", "graphs", "ripple", "trigger", "emarker", "pdtrigger", "cabler", "blackbox", "spoof", "usblink", "autorotate", "cards", "share", "connection", "diag", "qrtest", "twin", "loopprobe", "pdstress", "diagnosis", "battery", "memory", "display", "tools"]
 ROTATION_PAGES = 7
 # Names the old numbering used, still accepted by `page`: they open Connection on the matching tab. The firmware
 # reads kConnTabAlias + tab (include/k2/ui/ui_types.hpp) as "open Connection on that tab"; the state itself reports a
-# showing Connection as its menu index (16), whatever the tab.
+# showing Connection as its menu index (17), whatever the tab.
 CONN_ALIAS_BASE = len(PAGES)   # kConnTabAlias = kMenuPageBase + Menu::Count
 CONN_TABS = ["source", "cable", "sink"]
 CONN_ALIASES = {"source": CONN_ALIAS_BASE, "pd": CONN_ALIAS_BASE,
                 "cable": CONN_ALIAS_BASE + 1, "emarker": CONN_ALIAS_BASE + 1,
                 "sink": CONN_ALIAS_BASE + 2, "identify": CONN_ALIAS_BASE + 2}
-# Menu pages `page` can open directly (the firmware accepts kMenuPageBase + Menu for these two).
-OPENABLE_MENUS = ("connection", "diag")
+# Menu pages `page` can open directly (the firmware accepts kMenuPageBase + Menu for these).
+OPENABLE_MENUS = ("connection", "diag", "tools")
 
 
 def page_name(i):

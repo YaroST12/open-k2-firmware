@@ -36,10 +36,10 @@ and unplugged) and the digit/tint contrast (WCAG 2.x); `K2_DUMP=dir` writes the 
 
 ### 0.2 Navigation (ring, 2026-11-22)
 
-One carousel of nine pages replaced the eleven-page ring (collapsing Charger, Cable and Device back into one unified 3-slice `Link` page). `include/k2/ui/ui_ring.hpp` is the pure model (`tests/test_ui_ring.cpp`); `Ui::ring_*` wires it.
+One carousel of ten pages (Home through K2, with the unified 3-slice `6 LINK` page and dedicated `7 TOOLS` menu). `include/k2/ui/ui_ring.hpp` is the pure model (`tests/test_ui_ring.cpp`); `Ui::ring_*` wires it.
 
 ```
-Home > Lines > Numbers > Graph > Ripple > Link > Battery > Log > K2 > (Home)
+Home > Lines > Numbers > Graph > Ripple > Link > Tools > Battery > Log > K2 > (Home)
 ```
 
 | state | PLUS / MINUS | OK | short Back | long Back |
@@ -52,28 +52,35 @@ Home > Lines > Numbers > Graph > Ripple > Link > Battery > Log > K2 > (Home)
 - Home entered keeps Home 2c: PLUS / MINUS move the hero, OK cycles the span, long OK resets the energy, Back exits to the ring.
   Graph entered: OK = Zoom, PLUS / MINUS blank.
 - `6 LINK` is `ConnectionPage` in 3-slice Overview mode (`View::Overview`): full-height `208 x 238` (no permanent bottom footer),
-  three equal bands (`CHARGER` 79 px, `CABLE` 79 px, `SINK` 80 px) showing debounced port sense, provenance (`PROBED`, `PEAK`,
-  `SNIFFED`, `3A?`), cable resistance (`mΩ`), and bottleneck highlights. Entering (`OK`) enables Direct Slice Focus (`-/+` steps
-  across the three slices, `OK` opens that slice's `View::Actions` page).
+  three equal bands (`CHARGER` 79 px, `CABLE` 79 px, `SINK` 80 px) showing consistent `W` heroes alongside `V`/`A` when known
+  (including live debounced `W`/`V`/`A` on inline links when K2 attached mid-session without sniffing PD caps or Requests),
+  debounced port sense, provenance (`PROBED`, `PEAK`, `SNIFFED`, `LIVE`, `3A?`), cable resistance (`mΩ`), and bottleneck
+  highlights. Entering (`OK`) enables Direct Slice Focus (`-/+` steps across the three slices, `OK` opens that slice's
+  `View::Actions` page).
 - Slice Actions (`View::Actions`): compact slice header (`y 2..44`), pinned top `Reset & re-read` section (`Act::ResetLink`,
-  separated by a 2 px `RowSpec::section_before` rule — standalone runs rescan + survey; inline arms a 2-press Hard Reset confirm,
-  refused when VBUS-powered without USB host supply), followed by the slice's own interrogation & tool entries (including
-  `Spec & offers` / `Chip details` / `Sink details` opening the full scrollable `View::Spec` sheet).
+  separated by a 2 px `RowSpec::section_before` rule — merges `Read again` on Charger; inline links including mid-session
+  links arm a 2-press Hard Reset confirm refused when bus-powered; standalone K2-owned contracts send sink Hard Reset when
+  host-powered; other standalone/detached states run rescan + survey), followed by the slice's own interrogation & tool entries
+  (including `Spec & offers` / `Chip details` / `Sink details` opening the full scrollable `View::Spec` sheet).
+- `7 TOOLS` is `ToolsPage` (`Menu::Tools`, appended right before `Menu::Count` to preserve wire page IDs): full-height `kit::RowList`
+  putting `Request voltage` (`Menu::PdTrigger`) and `Fast charge` (`Menu::Trigger`) at the top (moved out of `6 LINK` Charger
+  Actions), followed by `Cable R`, `Spoof cable`, `Report cards`, `Black Box`, and opt-in bench tools with live readiness tags/notes.
 - Passive offer stability (`pd::HeldOffers::capture_settled`): 800 ms quiet-wire settle gate + high-water-mark protection prevents
   rapid multi-port renegotiation flicker and stops transient low fallback offers (e.g. 15 W / 60 W) from overwriting a known peak.
 - Battery is `BatteryPage`, Log is `DiagnosisPage::as_place`, K2 is `SettingsPage`. Pages with no actions (Battery, Log, K2, Meter
   faces) are scroll-only when entered.
-- A tool page opened from a place (Menu over Lines excepted) pops back to that place; Back from a tool over Lines exits to the
-  owner's ring page. A ring walk skips a target while `ports_busy()` refuses a menu target (charger test, release guard,
-  twin, PD stress, PD spec, loop probe).
+- A tool page opened from a place or `7 TOOLS` pops back to that page; Back from a tool over Lines exits to the
+  owner's ring page (`Menu::Trigger` and `Menu::PdTrigger` belong to `Pos::Tools`). A ring walk skips a target while `ports_busy()`
+  refuses a menu target (charger test, release guard, twin, PD stress, PD spec, loop probe).
 - ChargerTest: Back goes up to the Charger slice's Actions; long Back stops the run and shows the Link ring page.
-- Long Back target: `/prefs.cfg` optional 9th byte (written only when non-zero and below 9; older firmware reads a 9-byte
-  file as defaults). Settings row `Long Back` cycles the nine positions; Home is the default.
+- Long Back target: `/prefs.cfg` optional 9th byte (written only when non-zero and below 10; older firmware reads a 9-byte
+  file as defaults). Settings row `Long Back` cycles the ten positions; Home is the default.
 - Long PLUS is not used. The OK + Back 3 s reboot chord and the Back-Hold cancel are unchanged.
-- Ring vs entered is visible: the masthead (slot 0 of the opposite rail) shows the position and name (`6 LINK`) in the ring view and the page's
-  own title (`LINK`, `CHARGER`, `CABLE`, `DEVICE`) when entered. Session flag `RingView` (bit 6) is reported by GET_STATE (`ring_view`).
-- Remote page names: `tools` is gone from the rotation list. `page N` is 0..6 for Home, Detail, ChargerTest, Lines, Settings,
-  Graphs, Ripple; a showing submenu is 7 + its Menu index. Menu page names keep the `tools/` prefix.
+- Ring vs entered is visible: the masthead (slot 0 of the opposite rail) shows the position and name (`6 LINK`, `7 TOOLS`) in the
+  ring view and the page's own title (`LINK`, `CHARGER`, `CABLE`, `DEVICE`, `TOOLS`) when entered. Session flag `RingView` (bit 6)
+  is reported by GET_STATE (`ring_view`).
+- Remote page names: `page N` is 0..6 for Home, Detail, ChargerTest, Lines, Settings, Graphs, Ripple; a showing submenu is 7 + its
+  `Menu` index (`Menu::Tools` = index 20 -> page 27, `"tools/tools"`). Menu page names keep the `tools/` prefix.
 
 ### 0.3 Place page (Charger, Cable, Device)
 

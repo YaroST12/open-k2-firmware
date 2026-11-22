@@ -501,10 +501,10 @@ static void test_optional_rotated_buttons() {
     ui.on_button(Button::Back, ButtonEvent::Short, 7450);                // out to the ring on Link
     ui.on_button(Button::Minus, ButtonEvent::Short, 7500);
     ui.on_button(Button::Ok, ButtonEvent::Short, 7600);
-    CHECK_EQ(ui.menu() == Menu::Battery, true);                          // Battery place page ...
-    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Battery));          // rotation 2 swaps the direction: [-] walks on (Link -> Battery)
+    CHECK_EQ(ui.menu() == Menu::Tools, true);                            // Tools ring page ...
+    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Tools));            // rotation 2 swaps the direction: [-] walks on (Link -> Tools)
     ui.on_button(Button::Back, ButtonEvent::Short, 7700);
-    CHECK_EQ(ui.ring_view(), true);   // Battery -> out to the ring
+    CHECK_EQ(ui.ring_view(), true);   // Tools -> out to the ring
 
     const auto before_chord = ui.page();
     chord(ui, 7800);
@@ -663,10 +663,10 @@ static void test_remote_keys_are_logical() {
         else        { u.on_button(key, ButtonEvent::Short, 1300);        u.on_button(Button::Ok, ButtonEvent::Short, 1400); }
         return !u.ring_view() ? static_cast<int>(u.ring_position()) : -1;   // entered page opened from the ring
     };
-    const int battery = static_cast<int>(ring::Pos::Battery);
-    CHECK_EQ(pick(true, Button::Plus) == battery, true);    // remote plus = on (Link -> Battery)
-    CHECK_EQ(pick(false, Button::Minus) == battery, true);  // physical minus at rotation 2 = on
-    CHECK_EQ(pick(false, Button::Plus) == battery, false);  // physical plus at rotation 2 = back (Link -> Ripple)
+    const int tools = static_cast<int>(ring::Pos::Tools);
+    CHECK_EQ(pick(true, Button::Plus) == tools, true);    // remote plus = on (Link -> Tools)
+    CHECK_EQ(pick(false, Button::Minus) == tools, true);  // physical minus at rotation 2 = on
+    CHECK_EQ(pick(false, Button::Plus) == tools, false);  // physical plus at rotation 2 = back (Link -> Ripple)
     CHECK_EQ(pick(true, Button::Minus) == pick(false, Button::Plus), true);   // remote minus = back, like physical plus
 
     // Remote plus walks the ring on (Lines -> Numbers) at rotation 2, where a physical plus walks back.
@@ -725,8 +725,8 @@ static void test_remote_keys_are_logical() {
     ui.on_button(Button::Back, ButtonEvent::Short, 8150);   // out to the ring on Link
     ui.on_remote_button(Button::Plus, ButtonEvent::Short, 8200);
     ui.on_remote_button(Button::Ok, ButtonEvent::Short, 8300);
-    CHECK_EQ(ui.menu() == Menu::Battery, true);   // the Battery place page
-    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Battery));
+    CHECK_EQ(ui.menu() == Menu::Tools, true);   // the Tools ring page
+    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Tools));
 }
 
 int main() {

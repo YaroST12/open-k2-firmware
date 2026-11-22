@@ -185,11 +185,16 @@ static void test_place_items_per_tab() {
     ui.goto_page(kConnTabAlias, 20000);                              // Charger Spec
     ui.tick(20050);
     CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Source));
-    CHECK(cp(ui).item_count() >= 4);
-    CHECK_EQ(int(cp(ui).item(0).act), int(conn::Act::ResetLink));    // row 0: pinned Reset & re-read
+    CHECK_EQ(cp(ui).item_count(), 2 + bench::actions(bench::Place::Charger).n);
+    CHECK_EQ(int(cp(ui).item(0).act), int(conn::Act::ResetLink));    // row 0: pinned Reset & re-read (includes Read again)
     CHECK_EQ(cp(ui).item(0).enabled, true);
     CHECK_EQ(int(cp(ui).item(1).act), int(conn::Act::Details));
-    CHECK_EQ(int(cp(ui).item(2).act), int(conn::Act::Refresh));
+    CHECK_EQ(int(cp(ui).item(2).act), int(conn::Act::Bench));        // Test charger
+    for (int i = 0; i < cp(ui).item_count(); i++) {
+        CHECK(cp(ui).item(i).act != conn::Act::Refresh);
+        CHECK(std::strcmp(cp(ui).item(i).label, "Request voltage") != 0);
+        CHECK(std::strcmp(cp(ui).item(i).label, "Fast charge") != 0);
+    }
     ui.goto_page(kConnTabAlias + 1, 20300);                          // Cable Spec
     ui.tick(20350);
     CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Cable));
@@ -1030,17 +1035,17 @@ static void test_survey_nothing_active_before_refresh() {
     CHECK_EQ(g_stub.survey_refreshes, 0);
 }
 
-// Refresh ("Read again", row 2 on Charger [Actions]) starts the survey.
+// Standalone Reset & re-read (row 0 on Charger [Actions], with Read again merged in) starts the survey.
 static void test_survey_refresh_item_starts_it() {
     Ui &ui = fresh_ui();
     uint32_t t = 20000;
     attach_charger(ui, t);
+    g_stub.pm.vbus_mv = 5000;                                 // standalone 5 V charger (no external >5.5 V contract)
+    ui.tick(t += 100);
     show(ui, 0, t);
     g_stub.rescan_result = rescan::Result::Asked;
     ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);   // Spec -> Actions (row 0 = Reset & re-read)
-    ui.on_button(Button::Plus, ButtonEvent::Short, t += 10);  // row 1 = Spec & offers
-    ui.on_button(Button::Plus, ButtonEvent::Short, t += 10);  // row 2 = Read again
-    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);   // activate Read again
+    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);   // activate Reset & re-read
     CHECK_EQ(g_stub.survey_refreshes, 1);
     CHECK_EQ(int(g_stub.survey_last), int(rescan::Result::Asked));
 }
@@ -1465,22 +1470,22 @@ static void test_tools_rows_open_single_tools() {
     ui.on_button(Button::Back, ButtonEvent::Short, 20600);
     CHECK_EQ(ui.ring_view(), true);                                    // Overview -> out to the ring
 
-    // Charger Actions: 0=Reset & re-read, 1=Spec & offers, 2=Read again, 3=Test charger, 4=Request voltage
-    ui.context().keep.place_sel[static_cast<int>(bench::Place::Charger)] = 4;   // Request voltage
+    // Charger Actions: 0=Reset & re-read, 1=Spec & offers, 2=Test charger, 3=Report cards (triggers moved to 7 TOOLS)
+    ui.context().keep.place_sel[static_cast<int>(bench::Place::Charger)] = 3;   // Report cards
     ui.open_place(bench::Place::Charger, 24000);
     CHECK_EQ(cp(ui).overview_mode(), true);
     ui.on_button(Button::Ok, ButtonEvent::Short, 24050);
     CHECK_EQ(cp(ui).actions_mode(), true);
-    CHECK_EQ(cp(ui).action_row(), 4);
-    CHECK_STR(cp(ui).item(4).label, "Request voltage");
+    CHECK_EQ(cp(ui).action_row(), 3);
+    CHECK_STR(cp(ui).item(3).label, "Report cards");
     ui.on_button(Button::Ok, ButtonEvent::Short, 24100);
-    CHECK_EQ(int(ui.menu()), int(Menu::PdTrigger));
+    CHECK_EQ(int(ui.menu()), int(Menu::Cards));
     CHECK_EQ(int(ui.menu_depth()), 2);                                 // over the place page
     ui.on_button(Button::Back, ButtonEvent::Short, 24200);
     CHECK_EQ(on_pd(ui), 1);
     CHECK_EQ(cp(ui).actions_mode(), true);
-    ui.on_button(Button::Minus, ButtonEvent::Short, 24300);            // Test charger (row 3)
-    CHECK_EQ(cp(ui).action_row(), 3);
+    ui.on_button(Button::Minus, ButtonEvent::Short, 24300);            // Test charger (row 2)
+    CHECK_EQ(cp(ui).action_row(), 2);
     ui.on_button(Button::Ok, ButtonEvent::Short, 24400);
     CHECK_EQ(int(ui.page()), int(Page::ChargerTest));
     CHECK_EQ(int(ui.menu_depth()), 0);
@@ -1488,7 +1493,7 @@ static void test_tools_rows_open_single_tools() {
     CHECK_EQ(on_pd(ui), 1);
     CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Source));
     CHECK_EQ(cp(ui).actions_mode(), true);
-    CHECK_EQ(cp(ui).action_row(), 3);
+    CHECK_EQ(cp(ui).action_row(), 2);
     CHECK(ui.open_connection(conn::Tab::Cable, true, 25000));
     CHECK_EQ(int(ui.menu()), int(Menu::Spoof));
     ui.on_button(Button::Back, ButtonEvent::Short, 25100);
@@ -2450,6 +2455,210 @@ static void test_overview_provenance_throttled_and_bottleneck() {
     g_stub.em = {};
 }
 
+// Inline power fields populate on 6 LINK Overview even when K2 attached mid-session (no PD caps / Request sniffed yet),
+// and all 3 slices show W hero + W/V/A across full PD, plain 3A, bottlenecked cable, and live-inline scenes with 0 truncation.
+static void test_inline_overview_power_fields_and_w_hero_slices() {
+    auto count_ink = [](int y0, int y1) {
+        int ink = 0;
+        for (int y = y0; y < y1; y++)
+            for (int x = kOppRailThickness + 4; x < LCD_WIDTH - 4; x++)
+                if (g_panel[y * LCD_WIDTH + x] != kBg) ink++;
+        return ink;
+    };
+    // 1. Mid-session inline link (20V dock + laptop at 2.4A = 48W, NO caps and NO Request sniffed yet).
+    {
+        Ui &ui = fresh_ui();
+        g_stub.pm_online = true;
+        g_stub.cc = 1;
+        g_stub.pm.vbus_mv = 19838;
+        g_stub.pm_fast_set = true; g_stub.pm_fast_mv = 19838;
+        g_stub.pm.current_ma = 2400;
+        g_stub.pm.power_mw = 47611;
+        uint32_t t = 60000;
+        for (int i = 0; i < 4; i++) ui.tick(t += 100);
+        CHECK_EQ(ui.link().inline_mode(), true);
+        // Settle > 1.5 s so pd_verdict becomes None (missed handshake) — Overview must STILL show LIVE + INLINE power!
+        for (int i = 0; i < 20; i++) ui.tick(t += 100);
+        ui.open_place(bench::Place::Charger, t += 100);
+        settle(ui, t);
+        CHECK_EQ(cp(ui).overview_mode(), true);
+        // Slice 0 (Charger, y 2..80) and Slice 2 (Sink, y 160..239) both have bright hero + amber LIVE/INLINE chips.
+        CHECK(count_ink(20, 44) > 50);
+        CHECK(count_ink(178, 202) > 50);
+        // Both Charger and Sink slices paint kCaution (INLINE chip) instead of dim "Type-C" / empty.
+        int c0 = 0, c2 = 0;
+        for (int y = 20; y < 44; y++)
+            for (int x = kOppRailThickness; x < LCD_WIDTH; x++)
+                if (g_panel[y * LCD_WIDTH + x] == kCaution) c0++;
+        for (int y = 178; y < 202; y++)
+            for (int x = kOppRailThickness; x < LCD_WIDTH; x++)
+                if (g_panel[y * LCD_WIDTH + x] == kCaution) c2++;
+        CHECK(c0 > 20);
+        CHECK(c2 > 20);
+    }
+    // 2. Full PD link (96W dock, 100W cable, 96W laptop Request) + plain 3A cable (60W) + Request without caps across 4 rotations.
+    {
+        Ui &ui = fresh_ui();
+        make_inline(ui, 70000);
+        g_stub.pm_online = true; g_stub.pd_seen_attach = true;
+        g_stub.caps.valid = true; g_stub.caps.spec_rev = 2; g_stub.caps.num_pdos = 2;
+        g_stub.caps.pdos[0] = {pd::PdoType::Fixed, 0, 5000, 5000, 3000, 15000};
+        g_stub.caps.pdos[1] = {pd::PdoType::Fixed, 0, 20000, 20000, 4800, 96000};
+        g_stub.caps.rx_count++;
+        g_stub.contract.valid = true; g_stub.contract.ready = true; g_stub.contract.pos = 2;
+        g_stub.contract.mv = 20000; g_stub.contract.op_ma = g_stub.contract.max_ma = 4800;
+        g_stub.em.valid = true; g_stub.em.vid = 0x291A; g_stub.em.pid = 0x0001; g_stub.em.vendor_str = "Anker";
+        g_stub.em.max_current_a = 5; g_stub.em.max_voltage_v = 20; g_stub.em.max_power_w = 0;   // derived 100W hero
+        g_stub.em.speed_str = "USB4 Gen3"; g_stub.em.latency_str = "<10 ns (~1 m)";
+        uint32_t t = 71000;
+        for (int i = 0; i < 12; i++) ui.tick(t += 100);
+        for (uint8_t rot = 0; rot < 4; rot++) {
+            ui.set_rotation(rot, t += 50);
+            ui.open_place(bench::Place::Charger, t += 50);
+            settle(ui, t);
+            CHECK_EQ(cp(ui).overview_mode(), true);
+        }
+        // Request seen without Source_Capabilities: match_compute must preserve want_mv & want_mw.
+        pd::SourceCaps no_caps{};
+        pd::Contract c{};
+        c.valid = true; c.pos = 5; c.mv = 20000; c.op_ma = 4800; c.max_ma = 4800;
+        const MatchResult mr = match_compute({no_caps, c, Tri::Unknown, {}, 0});
+        CHECK_EQ(mr.request_seen, true);
+        CHECK_EQ(mr.want_mv, 20000u);
+        CHECK_EQ(mr.want_ma, 4800u);
+        CHECK_EQ(mr.want_mw, 96000u);
+    }
+#ifdef K2_TRUNC_LOG
+    CHECK_EQ(k2::trunc::failures(), 0);
+#endif
+}
+
+// Ui::link_reset handles mid-session inline links (low draw, no Request sniffed), K2-owned contracts, and standalone rescans.
+static void test_link_reset_mid_session_inline_and_k2_contract() {
+    // 1. Mid-session 20V inline link with low draw (< 50 mA, no Request sniffed): link.inline_mode() is false,
+    //    yet link_reset_inline() detects the live external link and sends inline Hard Reset after 2-press confirm.
+    {
+        Ui &ui = fresh_ui();
+        g_stub.pm_online = true;
+        g_stub.cc = 1;
+        g_stub.pm.vbus_mv = 19838;
+        g_stub.pm_fast_set = true; g_stub.pm_fast_mv = 19838;
+        g_stub.pm.current_ma = 10;
+        g_stub.self_powered = false;
+        uint32_t t = 80000;
+        for (int i = 0; i < 4; i++) ui.tick(t += 100);
+        CHECK_EQ(ui.link().attached(), true);
+        CHECK_EQ(ui.link().inline_mode(), false);
+        CHECK_EQ(ui.link_reset_inline(), true);
+        CHECK_EQ(int(ui.link_reset(false, t += 50)), int(Ui::LinkResetResult::NeedConfirm));
+        CHECK_EQ(g_stub.hard_resets, 0);
+        CHECK_EQ(int(ui.link_reset(true, t += 50)), int(Ui::LinkResetResult::HardReset));
+        CHECK_EQ(g_stub.hard_resets, 1);
+        CHECK_EQ(g_stub.lab_hard_resets, 1);
+    }
+    // 2. Mid-session 5V inline link with Rp/Rd divider in sink band on active CC while K2 is not pulling Rd.
+    {
+        Ui &ui = fresh_ui();
+        g_stub.pm_online = true;
+        g_stub.cc = 1;
+        g_stub.pm.vbus_mv = 5000;
+        g_stub.pm_fast_set = true; g_stub.pm_fast_mv = 5000;
+        g_stub.pm.current_ma = 10;
+        g_stub.self_powered = false;
+        adc::Reading r; r.cc1_mv = 1500; r.cc2_mv = 0;
+        g_stub.adc = r;
+        uint32_t t = 82000;
+        for (int i = 0; i < 4; i++) ui.tick(t += 100);
+        CHECK_EQ(ui.link().inline_mode(), false);
+        CHECK_EQ(ui.link_reset_inline(), true);
+        CHECK_EQ(int(ui.link_reset(false, t += 50)), int(Ui::LinkResetResult::NeedConfirm));
+        CHECK_EQ(int(ui.link_reset(true, t += 50)), int(Ui::LinkResetResult::HardReset));
+        CHECK_EQ(g_stub.lab_hard_resets, 1);
+    }
+    // 3. Standalone K2-owned PD contract (SinkState::Ready, non-bus-powered): single press sends sink Hard Reset (lab_inline=false).
+    {
+        Ui &ui = fresh_ui();
+        g_stub.pm_online = true; g_stub.cc = 1; g_stub.pm.vbus_mv = 9000;
+        g_stub.pm_fast_set = true; g_stub.pm_fast_mv = 9000;
+        g_stub.self_powered = false;
+        g_stub.sink.state = pd::SinkState::Ready;
+        g_stub.sink.mv = 9000;
+        uint32_t t = 84000;
+        for (int i = 0; i < 4; i++) ui.tick(t += 100);
+        CHECK_EQ(ui.link_reset_inline(), false);
+        CHECK_EQ(int(ui.link_reset(false, t += 50)), int(Ui::LinkResetResult::HardReset));
+        CHECK_EQ(g_stub.hard_resets, 1);
+        CHECK_EQ(g_stub.lab_hard_resets, 0);
+    }
+    // 4. Standalone K2-owned PD contract while bus-powered: falls back to safe PdRescan (Cycled), never unbridged Hard Reset.
+    {
+        Ui &ui = fresh_ui();
+        g_stub.pm_online = true; g_stub.cc = 1; g_stub.pm.vbus_mv = 9000;
+        g_stub.self_powered = true;
+        g_stub.sink.state = pd::SinkState::Ready;
+        uint32_t t = 86000;
+        for (int i = 0; i < 4; i++) ui.tick(t += 100);
+        CHECK_EQ(ui.link_reset_inline(), false);
+        CHECK_EQ(int(ui.link_reset(false, t += 50)), int(Ui::LinkResetResult::Cycled));
+        CHECK_EQ(g_stub.hard_resets, 0);
+    }
+    // 5. Standalone charger with open Rp (~3300 mV, no downstream sink): stays standalone PdRescan (Cycled).
+    {
+        Ui &ui = fresh_ui();
+        g_stub.pm_online = true; g_stub.cc = 1; g_stub.pm.vbus_mv = 5000;
+        g_stub.pm_fast_set = true; g_stub.pm_fast_mv = 5000;
+        g_stub.self_powered = false;
+        adc::Reading r; r.cc1_mv = 3300; r.cc2_mv = 0;
+        g_stub.adc = r;
+        uint32_t t = 88000;
+        for (int i = 0; i < 4; i++) ui.tick(t += 100);
+        CHECK_EQ(ui.link_reset_inline(), false);
+        CHECK_EQ(int(ui.link_reset(false, t += 50)), int(Ui::LinkResetResult::Cycled));
+        CHECK_EQ(g_stub.hard_resets, 0);
+    }
+}
+
+// 7 TOOLS sits right after 6 LINK with Request voltage & Fast charge at the top, preserving existing Menu wire IDs.
+static void test_tools_ring_position_and_triggers() {
+    static_assert(static_cast<uint8_t>(Menu::Display) == 19, "existing Menu wire IDs must not shift");
+    static_assert(static_cast<uint8_t>(Menu::Tools) == 20, "Menu::Tools appended right before Menu::Count");
+    Ui &ui = fresh_ui();
+    uint32_t t = 90000;
+    ui.goto_page(uint8_t(Page::Home), t);
+    ui.on_button(Button::Back, ButtonEvent::Short, t += 50);   // ring view on 1 HOME
+    for (int i = 0; i < 5; i++) ui.on_button(Button::Plus, ButtonEvent::Short, t += 50);
+    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Link));
+    ui.on_button(Button::Plus, ButtonEvent::Short, t += 50);
+    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Tools));
+    CHECK_EQ(ui.menu() == Menu::Tools, true);
+    CHECK_EQ(ui.ring_view(), true);
+    CHECK_EQ(ui.page_index(), kMenuPageBase + static_cast<uint8_t>(Menu::Tools));
+    // Enter 7 TOOLS -> Row 0 = Request voltage (PD trigger), Row 1 = Fast charge (FC trigger).
+    ui.on_button(Button::Ok, ButtonEvent::Short, t += 50);
+    settle(ui, t);
+    CHECK_EQ(ui.ring_view(), false);
+    CHECK_EQ(ui.context().keep.tools_sel, 0);
+    ui.on_button(Button::Ok, ButtonEvent::Short, t += 50);
+    CHECK_EQ(ui.menu() == Menu::PdTrigger, true);
+    ui.on_button(Button::Back, ButtonEvent::Short, t += 50);
+    CHECK_EQ(ui.menu() == Menu::Tools, true);
+    ui.on_button(Button::Plus, ButtonEvent::Short, t += 50);
+    CHECK_EQ(ui.context().keep.tools_sel, 1);
+    ui.on_button(Button::Ok, ButtonEvent::Short, t += 50);
+    CHECK_EQ(ui.menu() == Menu::Trigger, true);
+    ui.on_button(Button::Back, ButtonEvent::Short, t += 50);
+    CHECK_EQ(ui.menu() == Menu::Tools, true);
+    // Short Back from entered 7 TOOLS returns to ring view on Pos::Tools; Plus moves to 8 BATTERY.
+    ui.on_button(Button::Back, ButtonEvent::Short, t += 50);
+    CHECK_EQ(ui.ring_view(), true);
+    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Tools));
+    ui.on_button(Button::Plus, ButtonEvent::Short, t += 50);
+    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Battery));
+#ifdef K2_TRUNC_LOG
+    CHECK_EQ(k2::trunc::failures(), 0);
+#endif
+}
+
 int main() {
     test_sink_tab_pd_body_shows_the_raw_vooc_note();
     test_sink_tab_no_pd_shows_the_raw_vooc_note();
@@ -2506,5 +2715,8 @@ int main() {
     test_overview_3slice_focus_and_navigation();
     test_reset_link_actions_standalone_inline_selfpowered();
     test_overview_provenance_throttled_and_bottleneck();
+    test_inline_overview_power_fields_and_w_hero_slices();
+    test_link_reset_mid_session_inline_and_k2_contract();
+    test_tools_ring_position_and_triggers();
     return test_report("test_ui_connection_page");
 }
