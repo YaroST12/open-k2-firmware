@@ -2764,6 +2764,54 @@ static void unplug_charger(Ui &ui, uint32_t &t) {
     settle(ui, t);
 }
 
+// A detach ends the session: the held offers and cable stay readable but grey, a LAST pill, no amber and no green.
+static void test_overview_slices_go_stale_on_detach() {
+    Ui &ui = fresh_ui();
+    uint32_t t = 90000;
+    inline_pd_scene(ui, t);
+    g_stub.cable_seq++;                                  // the cable's SOP' exchange was decoded: a scanned cable
+    for (int i = 0; i < 3; i++) ui.tick(t += 100);
+    settle(ui, t);
+    CHECK_EQ(cp(ui).overview_mode(), true);
+    for (int i = 0; i < 3; i++) {
+        const SliceInk k = slice_ink(i);
+        CHECK_EQ(k.last, 0);
+        CHECK(k.hero > 0);
+    }
+    unplug_charger(ui, t);
+    CHECK_EQ(held::shown_caps().valid, true);            // the offers are still held
+    CHECK_EQ(held::cable_em().valid, true);
+    for (int i = 0; i < 2; i++) {                        // Charger and Cable
+        const SliceInk k = slice_ink(i);
+        CHECK(k.last > 0);
+        CHECK_EQ(k.amber, 0);
+        CHECK_EQ(k.green, 0);
+        CHECK_EQ(k.hero, 0);                             // the hero is grey, not full ink
+    }
+    CHECK_EQ(slice_ink(2).green, 0);
+    {   // one LAST pill, not a leftover chip's text with LAST appended
+        const Surface s{0, 0, LCD_WIDTH, LCD_HEIGHT};
+        gfx_fill(s, 0, 100, LCD_WIDTH, 20, kBg);
+        kit::draw_chip(s, 60, 102, "LAST", kStale, kBg);
+        const int ref = count_px(100, 120, 0, LCD_WIDTH, kStale);
+        CHECK_EQ(slice_ink(0).last, ref);
+    }
+    // The same charger comes back: the slices are live again once caps arrive (nothing grey is left behind).
+    g_stub.cc = 1; g_stub.pm.vbus_mv = 9000; g_stub.pm_online = true;
+    g_stub.caps.valid = true; g_stub.caps.spec_rev = 2; g_stub.caps.active_cc = 1; g_stub.caps.num_pdos = 1;
+    g_stub.caps.pdos[0] = {pd::PdoType::Fixed, 0, 5000, 5000, 3000, 15000};
+    g_stub.caps.raw_header = 0x1181; g_stub.caps.rx_count++;
+    g_stub.pd_seen_attach = true;
+    g_stub.session++;
+    for (int i = 0; i < 4; i++) ui.tick(t += 100);
+    settle(ui, t);
+    CHECK_EQ(slice_ink(0).last, 0);
+#ifdef K2_TRUNC_LOG
+    CHECK_EQ(k2::trunc::failures(), 0);
+#endif
+    g_stub.em = {}; g_stub.caps = {}; g_stub.contract = {};
+}
+
 // A new attach starts every slice from nothing at once: no offers, no cable, no Request of the last charger, whether or
 // not caps ever arrive (a plain source) and without waiting for a session change.
 static void test_new_attach_drops_the_last_session() {
@@ -2811,6 +2859,30 @@ static void test_standalone_cable_read_is_not_stale() {
     g_stub.cc = 1; g_stub.pm.vbus_mv = 5000;           // a charger arrives on the same cable
     for (int i = 0; i < 3; i++) ui.tick(t += 100);
     CHECK_EQ(held::cable_em().valid, true);
+    g_stub.em = {}; g_stub.caps = {}; g_stub.contract = {};
+}
+
+// The inline sink leaves while the charger stays: the last Request is a past one (LAST, no OK chip) until a sink asks again.
+static void test_sink_slice_goes_stale_when_the_sink_leaves() {
+    Ui &ui = fresh_ui();
+    uint32_t t = 90000;
+    inline_pd_scene(ui, t);
+    CHECK_EQ(slice_ink(2).last, 0);
+    CHECK(slice_ink(2).green > 0);
+    g_stub.pm.current_ma = 0;                           // the phone is unplugged; the charger's VBUS stays
+    for (int i = 0; i < 70; i++) ui.tick(t += 100);     // past the inline quiet window
+    CHECK_EQ(int(ui.link().attached()), 1);
+    CHECK_EQ(int(ui.link().inline_mode()), 0);
+    settle(ui, t);
+    CHECK(slice_ink(2).last > 0);
+    CHECK_EQ(slice_ink(2).green, 0);
+    CHECK_EQ(slice_ink(2).amber, 0);
+    CHECK_EQ(slice_ink(2).hero, 0);
+    g_stub.pm.current_ma = 2000;                        // another device draws behind the K2: a live session again
+    for (int i = 0; i < 4; i++) ui.tick(t += 100);
+    settle(ui, t);
+    CHECK_EQ(int(ui.link().inline_mode()), 1);
+    CHECK_EQ(slice_ink(2).last, 0);
     g_stub.em = {}; g_stub.caps = {}; g_stub.contract = {};
 }
 
@@ -2874,7 +2946,9 @@ int main() {
     test_inline_overview_power_fields_and_w_hero_slices();
     test_link_reset_mid_session_inline_and_k2_contract();
     test_tools_ring_position_and_triggers();
+    test_overview_slices_go_stale_on_detach();
     test_new_attach_drops_the_last_session();
     test_standalone_cable_read_is_not_stale();
+    test_sink_slice_goes_stale_when_the_sink_leaves();
     return test_report("test_ui_connection_page");
 }

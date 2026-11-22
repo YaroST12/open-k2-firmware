@@ -57,6 +57,10 @@ Home > Lines > Numbers > Graph > Ripple > Link > Tools > Battery > Log > K2 > (H
   debounced port sense, provenance (a dim `S` sniffed / `P` probed letter, first after the hero, plain text; `PEAK` stays its own chip; `LIVE`, `3A?`), cable resistance (`mΩ`), and bottleneck
   highlights. Entering (`OK`) enables Direct Slice Focus (`-/+` steps across the three slices, `OK` opens that slice's
   `View::Actions` page).
+- A detach ends the session: the held Charger and Cable slices stay readable but stale (grey hero, a `LAST` pill after the
+  provenance letter, no amber or green) until the next attach, which drops the old offers, e-marker and Request at once. A
+  sink that leaves while the charger stays shows its Sink slice stale the same way. `PEAK`-style peak latches are kept
+  within a session only.
 - Slice Actions (`View::Actions`): compact slice header (`y 2..44`), pinned top `Reset & re-read` section (`Act::ResetLink`,
   separated by a 2 px `RowSpec::section_before` rule — merges `Read again` on Charger; inline links including mid-session
   links arm a 2-press Hard Reset confirm refused when bus-powered; standalone K2-owned contracts send sink Hard Reset when
