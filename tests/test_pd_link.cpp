@@ -289,6 +289,31 @@ static void test_inline_clears_when_idle() {
     CHECK_EQ(l.inline_mode(), 0);       // the old Request count must not re-latch
 }
 
+// The sink that was inline is gone while the charger stays: its last Request is a past one until a sink asks again or a new
+// source attaches.
+static void test_sink_left_marks_the_last_request_past() {
+    Link l;
+    CHECK_EQ(l.sink_left(), 0);
+    const std::uint32_t t = latch_load(l, 0, 5000, 2000, 1);
+    CHECK_EQ(l.sink_left(), 0);               // latched: the Request is live
+    l.update(inl(t + 100, 5000, 0, 1));
+    l.update(inl(t + kInlineQuietMs + 1100, 5000, 0, 1));
+    CHECK_EQ(l.inline_mode(), 0);
+    CHECK_EQ(l.sink_left(), 1);
+    l.update(inl(t + kInlineQuietMs + 1200, 5000, 2000, 1));   // a load again: a sink is back
+    CHECK_EQ(l.inline_mode(), 1);
+    CHECK_EQ(l.sink_left(), 0);
+    l.update(inl(t + 2 * kInlineQuietMs + 3000, 5000, 0, 1));
+    l.update(inl(t + 3 * kInlineQuietMs + 5000, 5000, 0, 1));
+    CHECK_EQ(l.sink_left(), 1);
+    const std::uint32_t d = t + 3 * kInlineQuietMs + 6000;
+    l.update(in(d, 5000, 0));                 // the charger goes: CC lost, then back
+    l.update(in(d + 400, 5000, 0));
+    l.update(in(d + 1000, 5000, 1));
+    CHECK_EQ(l.attached(), 1);
+    CHECK_EQ(l.sink_left(), 0);               // a new session starts with no past sink
+}
+
 // A flip back to "standalone" needs proof, not a missed sample: a phone that sips less than 50 mA for a few seconds (full battery,
 // screen off) is still a phone. Hardware 2026-11-09: 2 s of quiet was enough to put the K2's Rd back on a hub - K2 - phone chain.
 static void test_a_short_lull_is_not_proof_of_a_standalone_k2() {
@@ -960,6 +985,7 @@ int main() {
     test_a_rise_long_after_the_own_trigger_does_not_latch_either();
     test_inline_by_request_then_vbus();
     test_inline_clears_when_idle();
+    test_sink_left_marks_the_last_request_past();
     test_inline_stays_while_active();
     test_a_short_lull_is_not_proof_of_a_standalone_k2();
     test_inline_survives_a_vbus_collapse_and_the_reattach();

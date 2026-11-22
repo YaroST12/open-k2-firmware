@@ -2744,6 +2744,76 @@ static void test_tools_ring_position_and_triggers() {
 #endif
 }
 
+// ---- a session ends with its charger: stale slices on a detach, a clean start on the next attach ----
+
+// One Overview slice's ink: the LAST pill (kStale fill) in the chip row, the amber and green chips, and the hero's full ink.
+struct SliceInk { int last, amber, green, hero; };
+static SliceInk slice_ink(int slice) {
+    const int sy = slice == 0 ? 2 : slice == 1 ? 81 : 160, x0 = kOppRailThickness, x1 = x0 + 208;
+    return {count_px(sy + 24, sy + 38, x0, x1, kStale),
+            count_px(sy + 1, sy + 77, x0, x1, kCaution) + count_px(sy + 1, sy + 77, x0, x1, kCautionT),
+            count_px(sy + 24, sy + 38, x0, x1, kOkT), count_px(sy + 19, sy + 43, x0, x1, kInk)};
+}
+
+// The charger and its cable go away (VBUS and CC down, the driver forgets the source, the far Request and the cable).
+static void unplug_charger(Ui &ui, uint32_t &t) {
+    g_stub.cc = 0; g_stub.pm.vbus_mv = 0; g_stub.pm.current_ma = 0;
+    g_stub.caps = {}; g_stub.contract = {}; g_stub.em = {}; g_stub.cable_full = {}; g_stub.cable_ans = {};
+    for (int i = 0; i < 80; i++) ui.tick(t += 100);   // past the inline hold
+    CHECK_EQ(int(ui.link().attached()), 0);
+    settle(ui, t);
+}
+
+// A new attach starts every slice from nothing at once: no offers, no cable, no Request of the last charger, whether or
+// not caps ever arrive (a plain source) and without waiting for a session change.
+static void test_new_attach_drops_the_last_session() {
+    Ui &ui = fresh_ui();
+    uint32_t t = 90000;
+    inline_pd_scene(ui, t);
+    g_stub.cable_seq++;
+    for (int i = 0; i < 3; i++) ui.tick(t += 100);
+    unplug_charger(ui, t);
+    CHECK_EQ(held::shown_caps().valid, true);
+    g_stub.cc = 1; g_stub.pm.vbus_mv = 5000; g_stub.pm.current_ma = 0;   // a plain 5 V source: no caps follow
+    for (int i = 0; i < 3; i++) ui.tick(t += 100);
+    CHECK_EQ(int(ui.link().attached()), 1);
+    CHECK_EQ(held::shown_caps().valid, false);          // dropped at the edge, before any new caps
+    CHECK_EQ(held::cable_em().valid, false);            // the CC detach made the cable stale
+    CHECK_EQ(int(held::offer_source()), int(pd::OfferSource::None));
+    for (int i = 0; i < 80; i++) ui.tick(t += 100);     // past the caps wait: the old list never comes back
+    settle(ui, t);
+    CHECK_EQ(held::shown_caps().valid, false);
+    for (int i = 0; i < 3; i++) {
+        const SliceInk k = slice_ink(i);
+        CHECK_EQ(k.last, 0);
+        CHECK_EQ(k.green, 0);
+    }
+    g_stub.em = {}; g_stub.caps = {}; g_stub.contract = {};
+}
+
+// A cable read on its own, after the charger left, is a fresh read: it is not grey, and the next attach keeps it.
+static void test_standalone_cable_read_is_not_stale() {
+    Ui &ui = fresh_ui();
+    uint32_t t = 90000;
+    inline_pd_scene(ui, t);
+    g_stub.cable_seq++;
+    for (int i = 0; i < 3; i++) ui.tick(t += 100);
+    unplug_charger(ui, t);
+    g_stub.em.valid = true; g_stub.em.vid = 0x0451; g_stub.em.pid = 0x1234; g_stub.em.vendor_str = "TI";
+    g_stub.em.speed_str = "USB4 Gen3"; g_stub.em.latency_str = "<10 ns (~1 m)";
+    g_stub.em.max_current_a = 3; g_stub.em.max_voltage_v = 20; g_stub.em.max_power_w = 60;
+    g_stub.cable_seq++;                                 // the K2 read the cable itself (VCONN, no charger)
+    for (int i = 0; i < 3; i++) ui.tick(t += 100);
+    settle(ui, t);
+    CHECK_EQ(int(ui.link().cable_stale()), 0);
+    CHECK_EQ(slice_ink(1).last, 0);
+    CHECK(slice_ink(1).hero > 0);
+    g_stub.cc = 1; g_stub.pm.vbus_mv = 5000;           // a charger arrives on the same cable
+    for (int i = 0; i < 3; i++) ui.tick(t += 100);
+    CHECK_EQ(held::cable_em().valid, true);
+    g_stub.em = {}; g_stub.caps = {}; g_stub.contract = {};
+}
+
 int main() {
     test_sink_tab_pd_body_shows_the_raw_vooc_note();
     test_sink_tab_no_pd_shows_the_raw_vooc_note();
@@ -2804,5 +2874,7 @@ int main() {
     test_inline_overview_power_fields_and_w_hero_slices();
     test_link_reset_mid_session_inline_and_k2_contract();
     test_tools_ring_position_and_triggers();
+    test_new_attach_drops_the_last_session();
+    test_standalone_cable_read_is_not_stale();
     return test_report("test_ui_connection_page");
 }

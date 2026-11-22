@@ -18,6 +18,9 @@ void poll();   // main loop: keeps the driver's lists
 void poll(std::uint32_t now_ms, bool inline_mode, bool probed = false);
 void reset();   // forget the held offers and cable (host tests start from nothing)
 void clear_for_reset();
+// A new attach ends the last session: its offers go at once (not at the first new caps), its cable too unless a cable
+// read since the detach is fresher (the link's cable_stale).
+void attach_edge(bool cable_stale);
 
 // The live caps when there are any, else the held ones (the debug fake list always wins).
 const pd::SourceCaps &shown_caps();

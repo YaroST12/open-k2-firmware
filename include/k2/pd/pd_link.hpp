@@ -137,6 +137,9 @@ public:
     // (kInlineQuietMs of quiet while attached, paused through a VBUS cut or a short detach, or a detach that outlasts the hold).
     bool inline_mode() const { return inline_; }
     InlineCause inline_cause() const { return inline_ ? cause_ : InlineCause::None; }
+    // The inline sink went quiet or its CC line opened while the charger stayed: the far Request the driver still holds is a past
+    // one. Cleared when a sink latches again and at every attach.
+    bool sink_left() const { return sink_left_; }
     std::uint32_t detached_for_s(std::uint32_t now_ms) const { return now_ms > detach_at_ ? (now_ms - detach_at_) / 1000 : 0; }
     // True once per attach edge: the caller drops the previous charger's decoded data when
     // the first new Source_Capabilities arrive.
@@ -161,6 +164,7 @@ private:
     bool forced_ K2_BSS_INIT(false);
     bool new_source_ K2_BSS_INIT(false);
     bool inline_ K2_BSS_INIT(false);
+    bool sink_left_ K2_BSS_INIT(false);
     InlineCause cause_ K2_BSS_INIT(InlineCause::None);
     std::uint32_t requests_at_attach_ K2_BSS_INIT(0), requests_seen_ K2_BSS_INIT(0), quiet_since_ K2_BSS_INIT(0);
     std::uint32_t paused_at_ K2_BSS_INIT(0);   // the last tick the quiet window was paused (a cut or a detach, see vbus_cut())
