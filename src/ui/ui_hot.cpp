@@ -9,6 +9,7 @@
 
 #include "k2/battery/battery_hw.hpp"
 #include "k2/core/gap_meter.hpp"
+#include "k2/core/held.hpp"
 #include "k2/core/hot.h"
 #include "k2/core/log.hpp"
 #include "k2/core/loop_guard.hpp"
@@ -348,7 +349,10 @@ K2_HOT UiAction Ui::tick(uint32_t now_ms) {
               unsigned(link_.caps_rx_this_attach()));
     }
     if (was_attached && !link_.attached()) fusb302::clear_source();   // one attach = one list
-    if (link_.take_new_source()) fusb302::new_source();
+    if (link_.take_new_source()) {
+        fusb302::new_source();
+        held::attach_edge(link_.cable_stale());   // the held offers and a stale cable belong to the last session
+    }
     if (fusb302::cable_seq() != cable_seq_seen_) {   // the source's own SOP' exchange was decoded
         cable_seq_seen_ = fusb302::cable_seq();
         ctx_.em_scanned = true;

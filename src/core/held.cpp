@@ -66,6 +66,12 @@ void clear_for_reset() {
     g_session = fusb302::session();
 }
 
+void attach_edge(bool cable_stale) {
+    g_held.clear();
+    if (cable_stale) g_cable.clear();
+    g_session = fusb302::session();
+}
+
 const pd::Emarker &cable_em() { return g_cable.em(); }
 const cable_full::Full &cable_extra() { return g_cable.full(); }
 emk_variant::Answered cable_answered() { return g_cable.answered(); }

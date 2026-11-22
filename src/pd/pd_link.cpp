@@ -14,6 +14,7 @@ void Link::set_attached(bool on, std::uint32_t at_ms) {
         waiting_ = false;
         // inline_ stays: a collapse of VBUS is not proof that the sink left (see kInlineHoldMs)
     } else {
+        sink_left_ = false;
         waiting_ = true;  // old data stays until new Source_Capabilities arrive (or kWaitingCapsMs pass)
         new_source_ = true;
         attach_at_ = at_ms;
@@ -136,6 +137,7 @@ void Link::update(const LinkInput& in) {
             const bool request = in.requests != requests_at_attach_;
             if (loaded || request) {
                 inline_ = true;
+                sink_left_ = false;
                 quiet_since_ = in.now_ms;
                 paused_seen_ = false;
                 open_rp_timing_ = false;
@@ -145,6 +147,7 @@ void Link::update(const LinkInput& in) {
             quiet_since_ = in.now_ms;    // live traffic: keep the guard
         } else if (in.now_ms - quiet_since_ > kInlineQuietMs && (!paused_seen_ || in.now_ms - paused_at_ >= kInlineResumeMs)) {
             inline_ = false;             // the sink left without a CC detach: Auto-CRC comes back
+            sink_left_ = true;
             requests_at_attach_ = in.requests;
             open_rp_timing_ = false;
             paused_seen_ = false;
@@ -163,6 +166,7 @@ void Link::update(const LinkInput& in) {
             if (in.now_ms - open_rp_since_ > kInlineOpenRpMs &&
                 (!attached_ || !paused_seen_ || in.now_ms - paused_at_ >= kInlineResumeMs)) {
                 inline_ = false;
+                sink_left_ = attached_;
                 requests_at_attach_ = in.requests;
                 open_rp_timing_ = false;
                 paused_seen_ = false;

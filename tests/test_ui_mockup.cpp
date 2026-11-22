@@ -483,6 +483,26 @@ int main() {
         g_stub.adc.reset();
     }
 
+    // The Link overview after an unplug: the held session stays readable, grey, with LAST pills (docs/UI_SYSTEM.md).
+    {
+        fixture();
+        static Ui gone;
+        gone.init(0);
+        gone.configure_rotation(false, rot_pages());
+        uint32_t tg = 1000;
+        gone.goto_page(uint8_t(Page::Home), tg);
+        gone.on_button(Button::Back, ButtonEvent::Short, tg += 100);
+        for (int i = 0; i < int(ring::Pos::Link); ++i) gone.on_button(Button::Plus, ButtonEvent::Short, tg += 100);
+        gone.on_button(Button::Ok, ButtonEvent::Short, tg += 100);
+        g_stub.cable_seq++;   // the cable's SOP' exchange was decoded: a scanned cable
+        for (int i = 0; i < 3; i++) gone.tick(tg += 100);
+        render(gone, tg, "ring05_link_live");
+        g_stub.cc = 0; g_stub.pm.vbus_mv = 0; g_stub.pm.current_ma = 0; g_stub.pm.power_mw = 0;
+        g_stub.contract = {}; g_stub.em = {}; g_stub.cable_full = {}; g_stub.cable_ans = {};
+        for (int i = 0; i < 80; i++) gone.tick(tg += 100);
+        render(gone, tg, "ring05_link_last");
+    }
+
     printf("mockups dumped\n");
     return 0;
 }

@@ -753,6 +753,9 @@ struct TabData {
     uint32_t vooc = 0;      // the Sink tab's raw VOOC note (ConnectionPage::vooc_), 0 = no live session
     bool iq_ok = false;     // fusb302::interrogate_status() belongs to the current session
     int32_t cable_mohm = -1;   // measured cable resistance in milliohms, -1 = none
+    // The shown data belongs to a session that ended: the charger detached, the cable was read before the last CC detach, the
+    // sink that sent the Request left. The slices show it grey with a LAST pill.
+    bool stale_charger = false, stale_cable = false, stale_sink = false;
 };
 
 int32_t current_cable_mohm(const UiContext &ctx) {
@@ -1849,11 +1852,12 @@ constexpr int16_t kSliceH[3] = {79, 79, 80};
 static_assert(kSliceY[2] + kSliceH[2] == kFooterY, "3-slice Overview tiles y 2..239");
 
 struct SliceSpec {
-    enum ChipKind : uint8_t { Solid, Ok, Warn, AmberOutline, Neutral };
+    // Tag: the provenance letter (S sniffed, P probed), plain dim text and always the first item after the hero.
+    enum ChipKind : uint8_t { Solid, Ok, Warn, AmberOutline, Neutral, Tag, Last };
     struct Chip { StrBuf<10> t; ChipKind k = Solid; };
     const char *tag = "";
     StrBuf<16> head;
-    Chip chip[2];
+    Chip chip[3];
     uint8_t n_chips = 0;
     StrBuf<40> l1;
     StrBuf<40> l2;
@@ -1862,9 +1866,21 @@ struct SliceSpec {
     bool dim = false;
     bool l2_warn = false;
     void add_chip(std::string_view t, ChipKind k) {
-        if (n_chips >= 2 || t.empty()) return;
+        if (n_chips >= 3 || t.empty()) return;
+        chip[n_chips].t.clear();
         chip[n_chips].t.put(t);
         chip[n_chips++].k = k;
+    }
+    // A past session's data: the words stay, the exception colours and chips go, a LAST pill ends the row.
+    void make_stale() {
+        uint8_t n = 0;
+        for (uint8_t i = 0; i < n_chips; i++)
+            if (chip[i].k == Tag) chip[n++] = chip[i];
+        n_chips = n;
+        add_chip("LAST", Last);
+        dim = true;
+        warn = false;
+        l2_warn = false;
     }
 };
 
@@ -1944,9 +1960,10 @@ void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
         if (best_mw == 0) best_mw = r.src_max_mw;
         put_w_hero(sl.head, best_mw);
         const pd::OfferSource src = held::offer_source();
-        if (held::offer_throttled()) sl.add_chip("PEAK", SliceSpec::Ok);
-        else if (src == pd::OfferSource::Probed) sl.add_chip("PROBED", SliceSpec::Ok);
-        else if (src == pd::OfferSource::Sniffed) sl.add_chip("SNIFFED", SliceSpec::AmberOutline);
+        if (src == pd::OfferSource::Probed) sl.add_chip("P", SliceSpec::Tag);
+        else if (src == pd::OfferSource::Sniffed) sl.add_chip("S", SliceSpec::Tag);
+        const bool throttled = held::offer_throttled() && !d.stale_charger;
+        if (throttled) sl.add_chip("PEAK", SliceSpec::Ok);
         uint32_t max_ma = 0;
         for (int i = 0; i < r.rows && i < int(pd::kMaxPdos); i++)
             if (caps.pdos[i].max_ma > max_ma) max_ma = caps.pdos[i].max_ma;
@@ -1954,10 +1971,8 @@ void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
             sl.add_chip("3A?", SliceSpec::Warn);
         } else if (caps.epr) {
             sl.add_chip("PD3.1", SliceSpec::Solid);
-        } else if (caps.spec_rev == 2) {
-            sl.add_chip("PD3.0", SliceSpec::Solid);
-        } else if (caps.spec_rev == 1) {
-            sl.add_chip("PD2.0", SliceSpec::Solid);
+        } else if (caps.spec_rev == 1 || caps.spec_rev == 2) {
+            sl.add_chip(pd::wire_revision_name(caps.spec_rev), SliceSpec::Solid);
         }
         if (best_mv > 0 && best_ma > 0) put_va(sl.l1, best_mv, best_ma);
         const pd::Identity &vid = fusb302::vdm().identity;
@@ -1980,7 +1995,7 @@ void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
             put_slice_if_fits(sl.l1, seg.view());
             if (caps.epr) put_slice_if_fits(sl.l1, " \xC2\xB7 EPR");
         }
-        if (held::offer_throttled()) {
+        if (throttled) {
             sl.l2_warn = true;
             sl.l2.put("Now offering ").put_u32(held::live_offer_mw() / 1000u).put("W \xC2\xB7 throttled");
         } else {
@@ -2103,13 +2118,9 @@ void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
     if (em.valid) {
         if (cable_w > 0) sl.head.put_u32(cable_w).put_char('W');
         else sl.head.put_u32(em.max_voltage_v).put("V ").put_u32(em.max_current_a).put_char('A');
-        if (cable_limits) {
-            sl.add_chip("LIMIT", SliceSpec::Warn);
-        } else if (held::cable_source() == pd::CableSource::Probed) {
-            sl.add_chip("PROBED", SliceSpec::Ok);
-        } else if (held::cable_source() == pd::CableSource::Sniffed) {
-            sl.add_chip("SNIFFED", SliceSpec::AmberOutline);
-        }
+        if (held::cable_source() == pd::CableSource::Probed) sl.add_chip("P", SliceSpec::Tag);
+        else if (held::cable_source() == pd::CableSource::Sniffed) sl.add_chip("S", SliceSpec::Tag);
+        if (cable_limits) sl.add_chip("LIMIT", SliceSpec::Warn);
         if (d.cable_mohm >= 0) {
             StrBuf<10> rc;
             put_mohm_chip(rc, d.cable_mohm);
@@ -2199,8 +2210,8 @@ void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
         else if (mv > 0 || ma > 0) put_va(sl.head, mv, ma);
         else sl.head.put("Request");
         const pd::Contract &ct = fusb302::contract();
+        sl.add_chip("S", SliceSpec::Tag);
         if (ct.ready) sl.add_chip("OK", SliceSpec::Ok);
-        sl.add_chip("SNIFFED", SliceSpec::AmberOutline);
         if (mv > 0 && ma > 0) {
             put_va(sl.l1, mv, ma);
             if (r.src_max_mw > 0) {
@@ -2253,7 +2264,7 @@ void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
         if (smw > 0) put_w_hero(sl.head, smw);
         else if (pid.valid && pid.vendor && pid.vendor[0] && text_width(kMid, pid.vendor) <= 132) sl.head.put(pid.vendor);
         else sl.head.put("Device read");
-        sl.add_chip("PROBED", SliceSpec::Ok);
+        sl.add_chip("P", SliceSpec::Tag);
         const uint32_t irev = fusb302::identify_status().revision;
         if (irev != 0) {
             StrBuf<10> rv;
@@ -2384,21 +2395,27 @@ void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
     const int16_t l1w = static_cast<int16_t>(text_width(kLabelFont, l1_v));
     const int16_t l2w = static_cast<int16_t>(text_width(kLabelFont, l2_v));
 
-    kit::Box holes[6];
+    // The provenance letter (font 16) sits on the baseline of the chips' font 12 text, whatever the slice.
+    const TextBounds sb = badge_text_bounds(kLabelFont, "S");
+    const int16_t src_y = static_cast<int16_t>(chip_y + (kit::kChipH - sb.h) / 2 - sb.y0 + kLabelFont.ascent - kSmall.ascent);
+    kit::Box holes[8];
     int nh = 0;
     if (tw > 0) holes[nh++] = {8, tag_y, tw, static_cast<int16_t>(kLabelFont.height)};
     if (hw > 0) holes[nh++] = {8, head_y, hw, static_cast<int16_t>(kMid.height)};
-    int16_t cx[2] = {};
+    int16_t cx[3] = {};
     int shown = 0;
     for (int16_t x = static_cast<int16_t>(8 + hw + 6); shown < sl.n_chips; shown++) {
-        const int16_t w = static_cast<int16_t>(badge_text_bounds(kLabelFont, sl.chip[shown].t.view()).w + 8);
+        const bool is_tag = sl.chip[shown].k == SliceSpec::Tag;
+        const int16_t w = is_tag ? static_cast<int16_t>(text_width(kSmall, sl.chip[shown].t.view()))
+                                 : static_cast<int16_t>(badge_text_bounds(kLabelFont, sl.chip[shown].t.view()).w + 8);
         if (x + w > c.w - 6) break;
         cx[shown] = x;
-        if (nh < 6) holes[nh++] = {x, chip_y, w, kit::kChipH};
+        if (nh < 8) holes[nh++] = is_tag ? kit::Box{x, src_y, w, static_cast<int16_t>(kSmall.height)}
+                                         : kit::Box{x, chip_y, w, kit::kChipH};
         x = static_cast<int16_t>(x + w + 4);
     }
-    if (l1w > 0 && nh < 6) holes[nh++] = {8, l1_y, l1w, static_cast<int16_t>(kLabelFont.height)};
-    if (l2w > 0 && nh < 6) holes[nh++] = {8, l2_y, l2w, static_cast<int16_t>(kLabelFont.height)};
+    if (l1w > 0 && nh < 8) holes[nh++] = {8, l1_y, l1w, static_cast<int16_t>(kLabelFont.height)};
+    if (l2w > 0 && nh < 8) holes[nh++] = {8, l2_y, l2w, static_cast<int16_t>(kLabelFont.height)};
 
     kit::fill_except(c, {gx, static_cast<int16_t>(y + 1), static_cast<int16_t>(c.w - gx), static_cast<int16_t>(sh - 1)},
                      holes, nh, bg_col);
@@ -2413,6 +2430,8 @@ void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
         case SliceSpec::Warn: kit::draw_chip(c, cx[i], chip_y, ch.t.view(), kCautionT, kCaution); break;
         case SliceSpec::AmberOutline: kit::draw_chip_frame(c, cx[i], chip_y, ch.t.view(), kCaution, kCaution, bg_col); break;
         case SliceSpec::Neutral: kit::draw_chip(c, cx[i], chip_y, ch.t.view(), kBg2, kInk); break;
+        case SliceSpec::Tag: gfx_text(c, kSmall, cx[i], src_y, ch.t.view(), inv ? kOnFocusDim : kDim, bg_col); break;
+        case SliceSpec::Last: kit::draw_chip(c, cx[i], chip_y, ch.t.view(), kStale, kBg); break;
         }
     }
     if (l1w > 0) gfx_text(c, kLabelFont, 8, l1_y, l1_v, l1_col, bg_col);
@@ -2422,13 +2441,21 @@ void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
 
 }  // namespace
 
+namespace {
+// The K2 is the sink only when no device is inline: self_powered() is the boot pin latch, which stays set while the
+// driver has the switches open for a device behind the K2.
+bool k2_is_sink(const pd::Link &link, bool ctx_inline) {
+    return fusb302::self_powered() && !link.inline_mode() && !ctx_inline;
+}
+}  // namespace
+
 bool ConnectionPage::paint_overview(const MatchResult &r, const pd::SourceCaps &caps, std::span<const uint32_t> sink) {
     const pd::Link &link = ctx_.ui->link();
     TabData d;
     d.r = &r; d.caps = &caps; d.sink = sink;
     d.ul = fusb302::usb_link(dp_, dm_);
     d.waiting = link.attached() && link.waiting();
-    d.k2_sink = fusb302::self_powered();
+    d.k2_sink = k2_is_sink(link, ctx_.inline_mode);
     d.k2_sink_ok = fusb302::pin_rd() == 1;
     d.fc = static_cast<fastcharge::Protocol>(fc_);
     d.in_use = ctx_.ui->link_reset_inline();
@@ -2438,6 +2465,10 @@ bool ConnectionPage::paint_overview(const MatchResult &r, const pd::SourceCaps &
     d.vooc = vooc_;
     d.iq_ok = iq_have_ && iq_session_ == fusb302::session() && fusb302::interrogate_status().phase != pd::IqPhase::Idle;
     d.cable_mohm = current_cable_mohm(ctx_);
+    // A detach ends the session: what the slices still hold is the last one's, grey with a LAST pill until the next attach.
+    d.stale_charger = !link.attached() && r.caps_seen;
+    d.stale_cable = link.cable_stale() && held::cable_em().valid;
+    d.stale_sink = link.sink_left() && r.request_seen && !d.k2_sink;
 
     const int focus_slice = ctx_.ui->ring_view() ? -1 : static_cast<int>(tab_);
     for (int i = 0; i < 3; i++) {
@@ -2446,6 +2477,7 @@ bool ConnectionPage::paint_overview(const MatchResult &r, const pd::SourceCaps &
         if (i == 0) build_slice_charger(sl, d, facts_, verdict_, none_why_);
         else if (i == 1) build_slice_cable(sl, d, facts_);
         else build_slice_sink(sl, d, facts_, verdict_, none_why_);
+        if (i == 0 ? d.stale_charger : i == 1 ? d.stale_cable : d.stale_sink) sl.make_stale();
         if (!paint_slice(ctx_.content, i, sl, slice_sig_[static_cast<std::size_t>(i)], ctx_.budget)) return false;
     }
     g_conn_body_passes++;
@@ -2454,7 +2486,7 @@ bool ConnectionPage::paint_overview(const MatchResult &r, const pd::SourceCaps &
 
 bool ConnectionPage::paint_actions_ident(const MatchResult &r, const pd::SourceCaps &caps, std::span<const uint32_t> sink) {
     const bool empty = conn::tab_empty(tab_, facts_) &&
-                       !(tab_ == conn::Tab::Sink && (fusb302::self_powered() || fusb302::identify_current()));
+                       !(tab_ == conn::Tab::Sink && (k2_is_sink(ctx_.ui->link(), ctx_.inline_mode) || fusb302::identify_current()));
     if (empty) {
         const conn::Empty e = conn::empty_state(tab_, facts_);
         return paint_ident_dim(ctx_.content, e.title, e.hint, id_sig_, ctx_.budget);
@@ -2467,7 +2499,7 @@ bool ConnectionPage::paint_actions_ident(const MatchResult &r, const pd::SourceC
     d.r = &r; d.caps = &caps; d.sink = sink;
     d.ul = fusb302::usb_link(dp_, dm_);
     d.waiting = link.attached() && link.waiting();
-    d.k2_sink = fusb302::self_powered();
+    d.k2_sink = k2_is_sink(link, ctx_.inline_mode);
     d.k2_sink_ok = fusb302::pin_rd() == 1;
     d.fc = static_cast<fastcharge::Protocol>(fc_);
     d.in_use = link.inline_mode();
@@ -2509,7 +2541,7 @@ bool ConnectionPage::paint_body(const MatchResult &r, const pd::SourceCaps &caps
     d.r = &r; d.caps = &caps; d.sink = sink;
     d.ul = fusb302::usb_link(dp_, dm_);          // the debounced ADC levels (Row D): a jittering pair repaints nothing
     d.waiting = link.attached() && link.waiting();
-    d.k2_sink = fusb302::self_powered();
+    d.k2_sink = k2_is_sink(link, ctx_.inline_mode);
     d.k2_sink_ok = fusb302::pin_rd() == 1;
     d.fc = static_cast<fastcharge::Protocol>(fc_);
     d.in_use = link.inline_mode();
@@ -2824,7 +2856,8 @@ void ConnectionPage::update(uint32_t now_ms) {
     c = mix_u32(c, uint32_t(link.attached()) | uint32_t(link.waiting()) << 1 | uint32_t(link.inline_mode()) << 2
               | uint32_t(pd::is_fake()) << 3 | uint32_t(fusb302::active_cc()) << 4
               | uint32_t(tab_) << 8 | fc_ << 16
-              | uint32_t(facts_.topo) << 24 | uint32_t(facts_.wait) << 26 | uint32_t(fusb302::self_powered()) << 28);
+              | uint32_t(facts_.topo) << 24 | uint32_t(facts_.wait) << 26 | uint32_t(fusb302::self_powered()) << 28
+              | uint32_t(link.cable_stale()) << 29 | uint32_t(link.sink_left()) << 30);
     c = mix_u32(c, uint32_t(verdict_) | uint32_t(none_why_) << 4);   // the no-PD gate's verdict settles at attach+1.5 s
     c = mix_u32(c, uint32_t(facts_.cable_fact));                     // the empty Cable tab's words: chip silent / no chip
     c = mix_u32(c, fusb302::session());
@@ -2963,7 +2996,7 @@ void ConnectionPage::update(uint32_t now_ms) {
         return;
     }
 
-    const bool empty = conn::tab_empty(tab_, facts_) && !(tab_ == conn::Tab::Sink && (fusb302::self_powered() || fusb302::identify_current()));
+    const bool empty = conn::tab_empty(tab_, facts_) && !(tab_ == conn::Tab::Sink && (k2_is_sink(ctx_.ui->link(), ctx_.inline_mode) || fusb302::identify_current()));
     if (empty) {
         match_valid_ = false;
         uint32_t h_base = mix_u32(2166136261u, uint32_t(tab_) | uint32_t(facts_.topo) << 4 | 1u << 8 | uint32_t(facts_.inline_sink) << 9

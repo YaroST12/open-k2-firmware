@@ -3,6 +3,7 @@
 // Connection (page level, real Ui): which tab it opens on, the passive port topology it senses from the CC
 // lines, the tab switching and the action pop-up (greyed Spoof while a device is inline), the Tools shortcut
 // to Spoof, and that merely showing an empty state never drives the lines.
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -2404,7 +2405,33 @@ static void test_reset_link_actions_standalone_inline_selfpowered() {
     }
 }
 
-// Track 2B: Overview provenance chips (SNIFFED / PROBED / PEAK), bottleneck Cable highlight, and Cable Res. row.
+static int count_px(int y0, int y1, int x0, int x1, uint16_t col) {
+    int n = 0;
+    for (int y = y0; y < y1; y++)
+        for (int x = x0; x < x1; x++)
+            if (g_panel[y * LCD_WIDTH + x] == col) n++;
+    return n;
+}
+
+// The provenance letter of one Overview slice: the kDim ink (only the letter has it in the chip row) as its left x and
+// bottom y relative to the slice top, and the gap to the hero's last kInk column. False when the slice has no letter.
+struct TagInk { int left = 0, bottom = 0, gap = 0; };
+static bool tag_ink(int slice_y, TagInk &t) {
+    const int x0 = kOppRailThickness, x1 = x0 + 208;
+    int left = 1 << 20, bottom = -1, hero_right = -1;
+    for (int y = slice_y + 22; y < slice_y + 43; y++)
+        for (int x = x0; x < x1; x++)
+            if (g_panel[y * LCD_WIDTH + x] == kDim) { left = std::min(left, x); bottom = std::max(bottom, y); }
+    for (int y = slice_y + 19; y < slice_y + 43; y++)
+        for (int x = x0; x < left && x < x1; x++)
+            if (g_panel[y * LCD_WIDTH + x] == kInk) hero_right = std::max(hero_right, x);
+    if (bottom < 0) return false;
+    t = {left - x0, bottom - slice_y, left - hero_right};
+    return true;
+}
+
+// Track 2B: Overview provenance tag (S sniffed / P probed, dim, first after the hero), PEAK chip, bottleneck Cable
+// highlight, and Cable Res. row.
 static void test_overview_provenance_throttled_and_bottleneck() {
     Ui &ui = fresh_ui();
     make_inline(ui, 50000);
@@ -2435,6 +2462,18 @@ static void test_overview_provenance_throttled_and_bottleneck() {
     const int x_bar = kOppRailThickness + 1;
     CHECK_EQ(g_panel[90 * LCD_WIDTH + x_bar], kCaution);
     CHECK_EQ(g_panel[155 * LCD_WIDTH + kOppRailThickness + 10], kCautionT);
+    // All three slices carry the same dim letter: same gap after the hero, same baseline, no frame or fill.
+    TagInk ti[3];
+    const int sy[3] = {2, 81, 160};
+    for (int i = 0; i < 3; i++) CHECK(tag_ink(sy[i], ti[i]));
+    CHECK_EQ(ti[1].gap, ti[0].gap);
+    CHECK_EQ(ti[2].gap, ti[0].gap);
+    CHECK_EQ(ti[1].bottom, ti[0].bottom);
+    CHECK_EQ(ti[2].bottom, ti[0].bottom);
+    CHECK_EQ(count_px(sy[0] + 24, sy[0] + 38, kOppRailThickness, kOppRailThickness + 208, kCaution), 0);   // no amber chip
+    // The sink slice puts the letter before the OK chip.
+    CHECK(count_px(sy[2] + 24, sy[2] + 38, kOppRailThickness + ti[2].left + 8, kOppRailThickness + ti[2].left + 40, kOkT) > 0);
+    CHECK_EQ(count_px(sy[2] + 24, sy[2] + 38, kOppRailThickness, kOppRailThickness + ti[2].left, kOkT), 0);
 
     // Throttle charger from 140W down to 60W and settle > 800 ms -> PEAK / offer_throttled().
     g_stub.caps.num_pdos = 2;
@@ -2443,6 +2482,9 @@ static void test_overview_provenance_throttled_and_bottleneck() {
     settle(ui, t);
     CHECK_EQ(held::offer_throttled(), true);
     CHECK_EQ(held::live_offer_mw(), 60000u);
+    // PEAK is its own chip after the letter, not a replacement for it.
+    CHECK(tag_ink(2, ti[0]));
+    CHECK(count_px(2 + 24, 2 + 38, kOppRailThickness + ti[0].left + 8, kOppRailThickness + 208, kOkT) > 0);
 
     // Cable Spec view includes measured Res. row.
     ui.goto_page(kConnTabAlias + 1, t += 100);
@@ -2452,6 +2494,49 @@ static void test_overview_provenance_throttled_and_bottleneck() {
 #ifdef K2_TRUNC_LOG
     CHECK_EQ(k2::trunc::failures(), 0);
 #endif
+    g_stub.em = {};
+}
+
+// Bring up the sniffed Request scene of the provenance test (20V 3A PD contract, caps, cable e-marker) on 6 LINK.
+static void inline_pd_scene(Ui &ui, uint32_t &t) {
+    make_inline(ui, t);
+    g_stub.pm_online = true;
+    g_stub.pd_seen_attach = true;
+    g_stub.caps.valid = true; g_stub.caps.spec_rev = 2; g_stub.caps.num_pdos = 2;
+    g_stub.caps.pdos[0] = {pd::PdoType::Fixed, 0, 5000, 5000, 3000, 15000};
+    g_stub.caps.pdos[1] = {pd::PdoType::Fixed, 0, 20000, 20000, 3000, 60000};
+    g_stub.caps.raw_header = 0x1181; g_stub.caps.rx_count++;
+    g_stub.contract.valid = true; g_stub.contract.ready = true; g_stub.contract.pos = 2;
+    g_stub.contract.mv = 20000; g_stub.contract.op_ma = g_stub.contract.max_ma = 3000;
+    g_stub.em.valid = true; g_stub.em.vid = 0x0451; g_stub.em.pid = 0x1234; g_stub.em.vendor_str = "TI";
+    g_stub.em.speed_str = "USB4 Gen3"; g_stub.em.latency_str = "<10 ns (~1 m)";
+    g_stub.em.max_current_a = 3; g_stub.em.max_voltage_v = 20; g_stub.em.max_power_w = 60;
+    t += 1000;
+    for (int i = 0; i < 12; i++) ui.tick(t += 100);
+    ui.open_place(bench::Place::Charger, t += 100);
+    settle(ui, t);
+}
+
+// The K2 counts as the sink only when nothing is inline: fusb302::self_powered() is the boot pin latch, which stays set
+// while a phone sits behind the K2 (the driver opens the switches, the latch stays).
+static void test_inline_sink_is_not_the_k2_with_boot_pin_latched() {
+    for (int latched = 0; latched < 2; latched++) {
+        Ui &ui = fresh_ui();
+        uint32_t t = 90000;
+        inline_pd_scene(ui, t);
+        g_stub.self_powered = latched != 0;
+        g_stub.pin = latched ? 2 : 0;
+        for (int i = 0; i < 6; i++) ui.tick(t += 100);
+        settle(ui, t);
+        CHECK_EQ(cp(ui).overview_mode(), true);
+        CHECK_EQ(ui.link().inline_mode(), true);
+        const int x0 = kOppRailThickness, x1 = x0 + 208;
+        // The sniffed Request slice has the green OK chip and no solid SELF chip (kChip fill) in its chip row.
+        CHECK(count_px(160 + 24, 160 + 38, x0, x1, kOkT) > 0);
+        CHECK_EQ(count_px(160 + 24, 160 + 38, x0, x1, kChip), 0);
+    }
+    g_stub.self_powered = false;
+    g_stub.pin = 0;
     g_stub.em = {};
 }
 
@@ -2659,6 +2744,170 @@ static void test_tools_ring_position_and_triggers() {
 #endif
 }
 
+// ---- a session ends with its charger: stale slices on a detach, a clean start on the next attach ----
+
+// One Overview slice's ink: the LAST pill (kStale fill) in the chip row, the amber and green chips, and the hero's full ink.
+struct SliceInk { int last, amber, green, hero; };
+static SliceInk slice_ink(int slice) {
+    const int sy = slice == 0 ? 2 : slice == 1 ? 81 : 160, x0 = kOppRailThickness, x1 = x0 + 208;
+    return {count_px(sy + 24, sy + 38, x0, x1, kStale),
+            count_px(sy + 1, sy + 77, x0, x1, kCaution) + count_px(sy + 1, sy + 77, x0, x1, kCautionT),
+            count_px(sy + 24, sy + 38, x0, x1, kOkT), count_px(sy + 19, sy + 43, x0, x1, kInk)};
+}
+
+// The charger and its cable go away (VBUS and CC down, the driver forgets the source, the far Request and the cable).
+static void unplug_charger(Ui &ui, uint32_t &t) {
+    g_stub.cc = 0; g_stub.pm.vbus_mv = 0; g_stub.pm.current_ma = 0;
+    g_stub.caps = {}; g_stub.contract = {}; g_stub.em = {}; g_stub.cable_full = {}; g_stub.cable_ans = {};
+    for (int i = 0; i < 80; i++) ui.tick(t += 100);   // past the inline hold
+    CHECK_EQ(int(ui.link().attached()), 0);
+    settle(ui, t);
+}
+
+// A detach ends the session: the held offers and cable stay readable but grey, a LAST pill, no amber and no green.
+static void test_overview_slices_go_stale_on_detach() {
+    Ui &ui = fresh_ui();
+    uint32_t t = 90000;
+    inline_pd_scene(ui, t);
+    g_stub.cable_seq++;                                  // the cable's SOP' exchange was decoded: a scanned cable
+    for (int i = 0; i < 3; i++) ui.tick(t += 100);
+    settle(ui, t);
+    CHECK_EQ(cp(ui).overview_mode(), true);
+    for (int i = 0; i < 3; i++) {
+        const SliceInk k = slice_ink(i);
+        CHECK_EQ(k.last, 0);
+        CHECK(k.hero > 0);
+    }
+    unplug_charger(ui, t);
+    CHECK_EQ(held::shown_caps().valid, true);            // the offers are still held
+    CHECK_EQ(held::cable_em().valid, true);
+    for (int i = 0; i < 2; i++) {                        // Charger and Cable
+        const SliceInk k = slice_ink(i);
+        CHECK(k.last > 0);
+        CHECK_EQ(k.amber, 0);
+        CHECK_EQ(k.green, 0);
+        CHECK_EQ(k.hero, 0);                             // the hero is grey, not full ink
+    }
+    CHECK_EQ(slice_ink(2).green, 0);
+    {   // one LAST pill, not a leftover chip's text with LAST appended
+        const Surface s{0, 0, LCD_WIDTH, LCD_HEIGHT};
+        gfx_fill(s, 0, 100, LCD_WIDTH, 20, kBg);
+        kit::draw_chip(s, 60, 102, "LAST", kStale, kBg);
+        const int ref = count_px(100, 120, 0, LCD_WIDTH, kStale);
+        CHECK_EQ(slice_ink(0).last, ref);
+    }
+    // The same charger comes back: the slices are live again once caps arrive (nothing grey is left behind).
+    g_stub.cc = 1; g_stub.pm.vbus_mv = 9000; g_stub.pm_online = true;
+    g_stub.caps.valid = true; g_stub.caps.spec_rev = 2; g_stub.caps.active_cc = 1; g_stub.caps.num_pdos = 1;
+    g_stub.caps.pdos[0] = {pd::PdoType::Fixed, 0, 5000, 5000, 3000, 15000};
+    g_stub.caps.raw_header = 0x1181; g_stub.caps.rx_count++;
+    g_stub.pd_seen_attach = true;
+    g_stub.session++;
+    for (int i = 0; i < 4; i++) ui.tick(t += 100);
+    settle(ui, t);
+    CHECK_EQ(slice_ink(0).last, 0);
+#ifdef K2_TRUNC_LOG
+    CHECK_EQ(k2::trunc::failures(), 0);
+#endif
+    g_stub.em = {}; g_stub.caps = {}; g_stub.contract = {};
+}
+
+// A new attach starts every slice from nothing at once: no offers, no cable, no Request of the last charger, whether or
+// not caps ever arrive (a plain source) and without waiting for a session change.
+static void test_new_attach_drops_the_last_session() {
+    Ui &ui = fresh_ui();
+    uint32_t t = 90000;
+    inline_pd_scene(ui, t);
+    g_stub.cable_seq++;
+    for (int i = 0; i < 3; i++) ui.tick(t += 100);
+    unplug_charger(ui, t);
+    CHECK_EQ(held::shown_caps().valid, true);
+    g_stub.cc = 1; g_stub.pm.vbus_mv = 5000; g_stub.pm.current_ma = 0;   // a plain 5 V source: no caps follow
+    for (int i = 0; i < 3; i++) ui.tick(t += 100);
+    CHECK_EQ(int(ui.link().attached()), 1);
+    CHECK_EQ(held::shown_caps().valid, false);          // dropped at the edge, before any new caps
+    CHECK_EQ(held::cable_em().valid, false);            // the CC detach made the cable stale
+    CHECK_EQ(int(held::offer_source()), int(pd::OfferSource::None));
+    for (int i = 0; i < 80; i++) ui.tick(t += 100);     // past the caps wait: the old list never comes back
+    settle(ui, t);
+    CHECK_EQ(held::shown_caps().valid, false);
+    for (int i = 0; i < 3; i++) {
+        const SliceInk k = slice_ink(i);
+        CHECK_EQ(k.last, 0);
+        CHECK_EQ(k.green, 0);
+    }
+    g_stub.em = {}; g_stub.caps = {}; g_stub.contract = {};
+}
+
+// A cable read on its own, after the charger left, is a fresh read: it is not grey, and the next attach keeps it.
+static void test_standalone_cable_read_is_not_stale() {
+    Ui &ui = fresh_ui();
+    uint32_t t = 90000;
+    inline_pd_scene(ui, t);
+    g_stub.cable_seq++;
+    for (int i = 0; i < 3; i++) ui.tick(t += 100);
+    unplug_charger(ui, t);
+    g_stub.em.valid = true; g_stub.em.vid = 0x0451; g_stub.em.pid = 0x1234; g_stub.em.vendor_str = "TI";
+    g_stub.em.speed_str = "USB4 Gen3"; g_stub.em.latency_str = "<10 ns (~1 m)";
+    g_stub.em.max_current_a = 3; g_stub.em.max_voltage_v = 20; g_stub.em.max_power_w = 60;
+    g_stub.cable_seq++;                                 // the K2 read the cable itself (VCONN, no charger)
+    for (int i = 0; i < 3; i++) ui.tick(t += 100);
+    settle(ui, t);
+    CHECK_EQ(int(ui.link().cable_stale()), 0);
+    CHECK_EQ(slice_ink(1).last, 0);
+    CHECK(slice_ink(1).hero > 0);
+    g_stub.cc = 1; g_stub.pm.vbus_mv = 5000;           // a charger arrives on the same cable
+    for (int i = 0; i < 3; i++) ui.tick(t += 100);
+    CHECK_EQ(held::cable_em().valid, true);
+    g_stub.em = {}; g_stub.caps = {}; g_stub.contract = {};
+}
+
+// The inline sink leaves while the charger stays: the last Request is a past one (LAST, no OK chip) until a sink asks again.
+static void test_sink_slice_goes_stale_when_the_sink_leaves() {
+    Ui &ui = fresh_ui();
+    uint32_t t = 90000;
+    inline_pd_scene(ui, t);
+    CHECK_EQ(slice_ink(2).last, 0);
+    CHECK(slice_ink(2).green > 0);
+    g_stub.pm.current_ma = 0;                           // the phone is unplugged; the charger's VBUS stays
+    for (int i = 0; i < 70; i++) ui.tick(t += 100);     // past the inline quiet window
+    CHECK_EQ(int(ui.link().attached()), 1);
+    CHECK_EQ(int(ui.link().inline_mode()), 0);
+    settle(ui, t);
+    CHECK(slice_ink(2).last > 0);
+    CHECK_EQ(slice_ink(2).green, 0);
+    CHECK_EQ(slice_ink(2).amber, 0);
+    CHECK_EQ(slice_ink(2).hero, 0);
+    g_stub.pm.current_ma = 2000;                        // another device draws behind the K2: a live session again
+    for (int i = 0; i < 4; i++) ui.tick(t += 100);
+    settle(ui, t);
+    CHECK_EQ(int(ui.link().inline_mode()), 1);
+    CHECK_EQ(slice_ink(2).last, 0);
+    g_stub.em = {}; g_stub.caps = {}; g_stub.contract = {};
+}
+
+// The Charger slice's revision chip is the wire revision the other views name (PD3.x for a rev 2 source), not a guessed PD3.0.
+static void test_charger_slice_revision_chip_names_the_wire_revision() {
+    Ui &ui = fresh_ui();
+    uint32_t t = 90000;
+    attach_charger(ui, t);                               // spec_rev 2 caps, no EPR
+    ui.open_place(bench::Place::Charger, t += 100);
+    settle(ui, t);
+    CHECK_EQ(cp(ui).overview_mode(), true);
+    const int x0 = kOppRailThickness, x1 = x0 + 208;
+    const int ink = count_px(2 + 24, 2 + 38, x0 + 4, x1, kChip);   // fill minus glyph ink tells "x" from "0"; x0+4 clears the focus bar
+    CHECK(ink > 0);
+    const Surface s{0, 0, LCD_WIDTH, LCD_HEIGHT};
+    auto ref_ink = [&](const char *txt) {
+        gfx_fill(s, 0, 100, LCD_WIDTH, 20, kBg);
+        kit::draw_chip(s, 60, 102, txt, kChip, kOnChip);
+        return count_px(100, 120, 0, LCD_WIDTH, kChip);
+    };
+    CHECK_EQ(ink, ref_ink(pd::wire_revision_name(2)));
+    CHECK(ink != ref_ink("PD3.0"));
+    g_stub.caps = {};
+}
+
 int main() {
     test_sink_tab_pd_body_shows_the_raw_vooc_note();
     test_sink_tab_no_pd_shows_the_raw_vooc_note();
@@ -2715,8 +2964,14 @@ int main() {
     test_overview_3slice_focus_and_navigation();
     test_reset_link_actions_standalone_inline_selfpowered();
     test_overview_provenance_throttled_and_bottleneck();
+    test_inline_sink_is_not_the_k2_with_boot_pin_latched();
     test_inline_overview_power_fields_and_w_hero_slices();
     test_link_reset_mid_session_inline_and_k2_contract();
     test_tools_ring_position_and_triggers();
+    test_overview_slices_go_stale_on_detach();
+    test_new_attach_drops_the_last_session();
+    test_standalone_cable_read_is_not_stale();
+    test_sink_slice_goes_stale_when_the_sink_leaves();
+    test_charger_slice_revision_chip_names_the_wire_revision();
     return test_report("test_ui_connection_page");
 }
