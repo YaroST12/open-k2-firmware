@@ -155,6 +155,8 @@ std::uint16_t g_mark_raw = 0;
 pd::IqPhase g_iq_phase{};
 pd::IqStep g_iq_step{};
 bool g_iq_inited = false;
+bool g_lim_inited = false;
+bool g_lim_on = false;
 #if K2_HOST_REPORT
 LoopHost* g_lh = nullptr;
 bool g_lh_dfp = false;
@@ -201,7 +203,8 @@ alignas(pd::Probe) std::uint8_t g_probe_raw[sizeof(pd::Probe)];   // report-card
 bool g_probe_inited;
 alignas(pd::Reread) std::uint8_t g_reread_raw[sizeof(pd::Reread)];   // source-cap re-read (after-contract conversation); never retries, ends within kRereadTotalMs
 bool g_reread_inited;
-alignas(pd::Interrogate) std::uint8_t g_iq_raw[sizeof(pd::Interrogate)];  // inline interrogation: the only inline transmitter, ends within pd::kIqTotalMs plus its resets
+alignas(pd::Interrogate) std::uint8_t g_iq_raw[sizeof(pd::Interrogate)];  // inline interrogation: an inline transmitter, ends within pd::kIqTotalMs plus its resets
+alignas(pd::Limiter) std::uint8_t g_lim_raw[sizeof(pd::Limiter)];  // PD limiter: the other inline transmitter; one forged list per kLimGapMs, at most kLimMaxInjections per arm
 
 std::uint32_t g_vconn_on_ms = 0;  // when it went on; the settled reading is logged ~5 ms later
 bool g_vconn_log_pending;
@@ -270,6 +273,13 @@ pd::Interrogate& iq() {
         g_iq_inited = true;
     }
     return *std::launder(reinterpret_cast<pd::Interrogate*>(g_iq_raw));
+}
+pd::Limiter& lim() {
+    if (!g_lim_inited) {
+        new (g_lim_raw) pd::Limiter();
+        g_lim_inited = true;
+    }
+    return *std::launder(reinterpret_cast<pd::Limiter*>(g_lim_raw));
 }
 bool ident_running() { return g_ident_inited && ident().running(); }
 bool probe_running() { return g_probe_inited && probe().running(); }
@@ -949,7 +959,10 @@ K2_HOT void handle_frame(pd::Sop sop, std::uint16_t header, std::span<const std:
     g_pd_seen_attach = true;
     // Every wire frame, also with no run going: the watch keeps the sniffed contract and the source's MessageID, so a run on a
     // fresh contract can skip its first reset.
-    if (wire) iq().on_message(sop, header, payload, systick::millis());
+    if (wire) {
+        iq().on_message(sop, header, payload, systick::millis());
+        if (g_lim_on) lim().on_message(sop, header, payload, systick::millis());
+    }
     // First capabilities after a re-attach: drop the previous charger's data so two sources never mix.
     if (g_new_source && sop == pd::Sop::Sop &&
         ((!ext && msg_type == 0x01 && num_do > 0) || (ext && msg_type == pd::kExtEprSourceCaps))) {
@@ -1325,7 +1338,7 @@ K2_HOT void active_tick() {
         // The TX choke point's input: the same demand that drives Auto-CRC (plus the explicit hard-reset tool).
         // transmit() refuses everything while this is false, so a passive K2 can never put a frame on CC.
         // A running inline interrogation may transmit too, without Auto-CRC (it is no part of the CRC demand).
-        g_tx_allowed = pd::crc_demand(d) || g_hr_tool_armed || iq_running();
+        g_tx_allowed = pd::crc_demand(d) || g_hr_tool_armed || iq_running() || (g_lim_on && lim().wants_tx());
         if (ready && !counts) contract_expired(now);
     }
     pd::TxMsg m;
@@ -1352,6 +1365,17 @@ K2_HOT void active_tick() {
             const bool ok = transmit(m);
             if (!hr) iq().on_tx_result(ok, now);
             sent = true;
+        }
+    }
+    if (g_lim_on) {   // the limiter's forged list: only inline, and only when nothing else sent this tick
+        if (!inline_now()) {
+            lim().on_detach();   // the latch dropped: nobody left to forge for
+        } else {
+            lim().tick(now);
+            if (!sent && lim().take_tx(m, now)) {
+                transmit(m);   // both PHYs GoodCRC it and collide: the result means nothing, the sink's next Request is the proof
+                sent = true;
+            }
         }
     }
     trace_sink();
@@ -1439,6 +1463,7 @@ void detach_reset(std::uint8_t status0) {
     g_vconn_applied = false;
     g_vconn.reset(pd::VconnWhy::Abort);
     if (iq_running()) iq().abort(pd::IqWhy::Detached, systick::millis());   // nobody left to ask or to reset
+    if (g_lim_on) lim().on_detach();
     // No SW_RES, on a plain or a pinned boot alike: it restores the chip's power-on SWITCHES0 (0x03, Rd on both
     // lines) until the next write - through the closed CC switches a pinned boot's source would see the Debug
     // Accessory pair for ~0.13 ms, and on a plain boot a host and a dock negotiating through the K2 can see it.
@@ -1679,6 +1704,7 @@ K2_HOT void service() {
             probe().abort();
             reread().on_link_reset();   // an attach still waiting for its contract goes on: the sink re-requests after a hard reset
             iq().on_hard_reset(systick::millis());   // the charger's or the device's: a run sniffs the renegotiation and goes on
+            if (g_lim_on) lim().on_hard_reset(systick::millis());
         }
 
         g_rx_nonempty = false;
@@ -1736,6 +1762,7 @@ K2_HOT void service() {
     else if (g_active_cc != 0) active_tick();
     else if (reread_running()) reread().tick(systick::millis(), false, reread_link());   // an attach whose source has not shown yet: its wait still ends
     if (g_iq_inited) iq_report();   // also after a detach ended a run
+    if (g_lim_on) lim_report();
     if (g_reread_log_pending || g_reread_owns_rd || g_reread_made_contract) reread_housekeeping(systick::millis());
     ident_result_gate(systick::millis());
     if (g_ident_wait || g_ident_was_running || g_ident_owns_rd) ident_service(systick::millis());

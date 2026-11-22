@@ -21,6 +21,7 @@
 #include "k2/pd/pd_engine.hpp"
 #include "k2/pd/pd_identify.hpp"
 #include "k2/pd/pd_interrogate.hpp"
+#include "k2/pd/pd_limiter.hpp"
 #include "k2/pd/pd_listen.hpp"
 #include "k2/pd/ra_guard.hpp"
 #include "k2/pd/pd_probe.hpp"
@@ -411,6 +412,16 @@ pd::IqRefusal interrogate_start(const pd::IqFacts& outside);
 void interrogate_abort();
 bool interrogate_running();
 const pd::IqStatus& interrogate_status();   // the latest run's, kept until the next start
+
+// PD limiter (k2/pd/pd_limiter.hpp): inline, the sink is sent the charger's own Source_Capabilities clamped to `limit_mw`, spoken
+// as the source (the second inline transmitter, never beside an interrogation or another owner). RAM only. `outside`: another
+// owner busy, as the caller knows it; the driver adds the CC, the inline latch and its own engines. Returns the refusal (None = armed).
+// Latency: the list goes out once PS_RDY has been seen and the line has been quiet for kLimQuietMs, so the sink draws at the
+// charger's real contract for that long; the clamp lands with its next Request, never before.
+pd::LimRefusal limit_arm(std::uint32_t limit_mw, const pd::LimFacts& outside);
+void limit_disarm();
+bool limit_armed();
+const pd::LimStatus& limit_status();   // kept after the stop: state off and why
 
 // Quick source probe for the charger report card (k2/pd/pd_probe.hpp): Discover Identity, Get_Manufacturer_Info and
 // Get_Source_Cap_Extended on SOP, one try each, over within ~1 s whatever the charger does. False when refused

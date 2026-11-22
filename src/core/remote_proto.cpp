@@ -330,6 +330,17 @@ size_t encode_stop(std::span<uint8_t> out, const StopInfo &s) {
     return w.size();
 }
 
+size_t encode_pd_limit(std::span<uint8_t> out, const LimitView &v) {
+    Writer w(out);
+    if (v.s == nullptr) return w.size();
+    const pd::LimStatus &s = *v.s;
+    w.u8(s.state != pd::LimState::Off ? 1 : 0); w.u8(static_cast<uint8_t>(s.state)); w.u8(static_cast<uint8_t>(s.why));
+    w.u8(s.injections); w.u8(s.rejects); w.u8(s.ignores); w.u8(s.forged_n); w.u8(s.req_pos);
+    w.u32(s.limit_mw); w.u32(s.req_mw); w.u32(s.req_rdo);
+    for (const uint32_t x : s.forged) w.u32(x);
+    return w.size();
+}
+
 size_t encode_lease(std::span<uint8_t> out, const LeaseInfo &l) {
     Writer w(out);
     w.u8(l.armed ? 1 : 0); w.u16(l.left_s); w.u16(l.length_s); w.u8(static_cast<uint8_t>(l.ended));

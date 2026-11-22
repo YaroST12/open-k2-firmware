@@ -1073,12 +1073,17 @@ bool reread_abort() {
     return true;
 }
 
+// The driver's own engines that own the wire: the two inline transmitters refuse to start beside them (or each other).
+static bool engines_busy() {
+    return ident_running() || g_ident_wait || probe_running() || reread_running() || g_prep.active() ||
+           g_vconn.state() != pd::VconnState::Off || g_getcap_armed || g_sop_prime_hook != nullptr;
+}
+
 pd::IqRefusal interrogate_start(const pd::IqFacts& outside) {
     pd::IqFacts f = outside;
     f.cc = g_active_cc != 0;
     f.inline_link = inline_now();
-    f.busy = f.busy || ident_running() || g_ident_wait || probe_running() || reread_running() || g_prep.active() ||
-             g_vconn.state() != pd::VconnState::Off || g_getcap_armed || g_sop_prime_hook != nullptr;
+    f.busy = f.busy || engines_busy() || g_lim_on;
     const pd::SinkStatus& ss = sink().status();
     f.own_contract = f.own_contract || ss.held || (ss.state != pd::SinkState::Idle && ss.state != pd::SinkState::Failed);
     f.self_powered = f.self_powered || self_powered();
@@ -1098,6 +1103,61 @@ pd::IqRefusal interrogate_start(const pd::IqFacts& outside) {
 void interrogate_abort() {
     if (iq_running()) iq().abort(pd::IqWhy::Stopped, systick::millis());
 }
+
+// PD limiter state the log has caught up with ([LIM] lines are written when the status moves).
+static pd::LimState g_lim_logged = pd::LimState::Off;
+static std::uint8_t g_lim_logged_inj = 0;
+static std::uint32_t g_lim_logged_rdo = 0;
+
+pd::LimRefusal limit_arm(std::uint32_t limit_mw, const pd::LimFacts& outside) {
+    pd::LimFacts f = outside;
+    f.cc = g_active_cc != 0;
+    f.inline_link = inline_now();
+    f.busy = f.busy || engines_busy() || iq_running();
+    const pd::LimRefusal r = pd::lim_gate(f, limit_mw);
+    if (r != pd::LimRefusal::None) {
+        K2LOG("[LIM] refused: %s\n", pd::lim_refusal_name(r));
+        return r;
+    }
+    lim().arm(limit_mw, systick::millis());
+    g_lim_on = true;
+    g_lim_logged = pd::LimState::Armed;
+    g_lim_logged_inj = 0;
+    g_lim_logged_rdo = 0;
+    K2LOG("[LIM] t=%u armed: limit %u mW\n", unsigned(systick::millis()), unsigned(limit_mw));
+    return r;
+}
+
+void limit_disarm() {
+    if (g_lim_on) lim().disarm();   // lim_report() logs it and lets the hot paths go
+}
+
+bool limit_armed() { return g_lim_on && lim().armed(); }
+const pd::LimStatus& limit_status() { return lim().status(); }
+
+namespace detail {
+void lim_report() {
+    const pd::LimStatus& s = lim().status();
+    const unsigned t = systick::millis();
+    if (s.injections != g_lim_logged_inj) {
+        g_lim_logged_inj = s.injections;
+        K2LOG("[LIM] t=%u forged list %u: %u objects, limit %u mW\n", t, unsigned(s.injections), unsigned(s.forged_n),
+              unsigned(s.limit_mw));
+        for (unsigned i = 0; i < s.forged_n; i++) K2LOG("[LIM] forged pos %u PDO 0x%08X\n", i + 1, unsigned(s.forged[i]));
+    }
+    if (s.req_rdo != g_lim_logged_rdo) {
+        g_lim_logged_rdo = s.req_rdo;
+        K2LOG("[LIM] t=%u sink Request pos %u RDO 0x%08X: %u mW (limit %u mW)\n", t, unsigned(s.req_pos), unsigned(s.req_rdo),
+              unsigned(s.req_mw), unsigned(s.limit_mw));
+    }
+    if (s.state != g_lim_logged) {
+        g_lim_logged = s.state;
+        if (s.state == pd::LimState::Off) K2LOG("[LIM] t=%u off: %s\n", t, pd::lim_why_name(s.why));
+        else K2LOG("[LIM] t=%u %s\n", t, pd::lim_state_name(s.state));
+    }
+    if (!lim().armed()) g_lim_on = false;
+}
+}  // namespace detail
 
 bool vconn_request() {
     if (g_active_cc == 0 || inline_now() || g_legacy_only || sink().status().state != pd::SinkState::Ready || !emkra::vconn_switch_allowed(g_ra)) {

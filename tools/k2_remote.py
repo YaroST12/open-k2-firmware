@@ -65,6 +65,7 @@ CMD_PD_HANDBACK = 0x49     # optional [flags]: bit0 confirm -> [HandbackVerdict]
 CMD_APPLE_READ = 0x4A      # lab-only Apple charger readout (SVID 0x05AC): [1] arm + re-request the current contract, [0, part] header (part 0) or one field (1..6)
 CMD_STOP = 0x4B            # no payload, no confirm: cancel a charger test, stop FC (measured 5 V release), release PD, disarm a spoof -> [active mask, vbus_mv i32, fc_release_busy]
 CMD_OPPO_PROBE = 0x4D      # lab-only OPPO / OnePlus probe (SVID 0x22D9): [0, part] status, [1, flags, steps, 4 x u32] start, [2] stop, [3, flags, mv u16, ma u16] request an advertised point
+CMD_PD_LIMIT = 0x4E       # PD limiter (inline): [0] status, [1, limit_mw u32] arm, [2] off -> 48-byte status (k2/pd/pd_limiter.hpp)
 CMD_LEASE = 0x4C           # host dead-man lease: [0] status, [1, seconds u16] set the length (0 = default 30 s, max 600) -> [armed, left_s u16, length_s u16, ended]
 CMD_DFU_ENTER = 0x30      # clear the app marker and reset into the bootloader
 CMD_DEBUG_FAULT = 0x31    # debug: provoke a CPU fault to exercise the [FAULT] handler
@@ -367,6 +368,8 @@ class RemoteError(RuntimeError):
             text += f" ({OPPO_REFUSALS[payload[1]]}{': nothing advertised serves that point' if payload[1] == 7 else ''})"
         elif cmd == CMD_OPPO_PROBE and len(payload) >= 1 and payload[0] < len(PD_ERRS) and payload[0] != 0:
             text += f" ({PD_ERRS[payload[0]]})"
+        if cmd == CMD_PD_LIMIT and len(payload) == 1 and payload[0] < len(LIM_REFUSALS):
+            text += f" ({LIM_REFUSALS[payload[0]]})"   # the arm refusal (pd::LimRefusal)
         if cmd == CMD_APPLE_READ and payload and payload[0] < len(APPLE_REFUSALS):
             text += f" ({APPLE_REFUSALS[payload[0]]})"   # the arm refusal reason (pd::AppleRefusal)
         if cmd == CMD_LAB and status == STATUS_BUSY and payload and payload[0] == SNIFF_REFUSED_NO_RAM:
@@ -4193,6 +4196,54 @@ def cmd_ufcs(link, a):
     raise SystemExit("unknown ufcs command")
 
 
+# ---- PD limiter (k2/pd/pd_limiter.hpp): CMD_PD_LIMIT 0x4E ----
+# Same order as pd::LimState / LimWhy / LimRefusal; tests/test_k2_remote.py checks the sync.
+LIM_STATES = ["off", "armed", "negotiating", "pending", "injected", "limited"]
+LIM_WHYS = ["none", "turned off", "detached", "EPR is not covered", "too many lists", "the charger resets", "the sink resets",
+            "the sink ignores it"]
+LIM_REFUSALS = ["none", "limit outside 5..100 W", "no CC", "not inline", "another feature is running"]
+LIM_OP_STATUS, LIM_OP_ARM, LIM_OP_OFF = 0, 1, 2
+
+
+def decode_pd_limit(p):
+    """48-byte status: armed state why injections rejects ignores forged_n req_pos (u8), limit_mw req_mw req_rdo (u32), 7 x u32 forged PDOs."""
+    _need(p, 48, "pd-limit")
+    u32 = lambda o: p[o] | p[o + 1] << 8 | p[o + 2] << 16 | p[o + 3] << 24
+    n = min(p[6], 7)
+    return {"armed": bool(p[0]), "state": _name_of(LIM_STATES, p[1]), "why": _name_of(LIM_WHYS, p[2]), "injections": p[3],
+            "rejects": p[4], "ignores": p[5], "req_pos": p[7], "limit_mw": u32(8), "req_mw": u32(12), "req_rdo": u32(16),
+            "forged": [u32(20 + 4 * i) for i in range(n)]}
+
+
+def cmd_pd_limit(link, a):
+    """pd-limit <watts>|off|status. Arming needs the K2 inline (charger -> K2 -> sink); it never loads the output."""
+    what = a.what.lower()
+    if what == "status":
+        payload = bytes([LIM_OP_STATUS])
+    elif what == "off":
+        payload = bytes([LIM_OP_OFF])
+    else:
+        try:
+            mw = int(round(float(what) * 1000))
+        except ValueError:
+            raise SystemExit("pd-limit: watts, 'off' or 'status'")
+        if not 5000 <= mw <= 100000:
+            raise SystemExit("pd-limit: the limit is 5..100 W")
+        payload = bytes([LIM_OP_ARM]) + mw.to_bytes(4, "little")
+    return {"pd_limit": decode_pd_limit(link.call(CMD_PD_LIMIT, payload).payload)}
+
+
+def render_pd_limit(r):
+    s = r["pd_limit"]
+    head = f"pd-limit {s['state']}" + (f" ({s['why']})" if s["state"] == "off" and s["why"] != "none" else "")
+    lines = [head + f", limit {s['limit_mw'] / 1000:g} W, {s['injections']} lists, {s['rejects']} rejected, {s['ignores']} ignored"]
+    if s["req_pos"]:
+        lines.append(f"  sink Request pos {s['req_pos']}: {s['req_mw'] / 1000:g} W (RDO 0x{s['req_rdo']:08X})")
+    lines += [f"  forged pos {i + 1}: PDO 0x{x:08X}" for i, x in enumerate(s["forged"])]
+    return "\n".join(lines)
+# ---- end PD limiter ----
+
+
 # ---- PD Stress (docs/PD_SPEC_CHECK.md): CMD_PD_STRESS 0x55 ----
 def decode_pdstress_status(p):
     """19-byte status block: state stop start seq_idx seq_total seq_cur reboots (u8), transitions u16, elapsed_ms u32,
@@ -5689,6 +5740,8 @@ def _render(name, r):
             lines.append(f"scan running, step {s['step'] + 1}")
         lines += [f"  {x['proto']} {x['outcome']}" + (f" {x['mv']} mV" if x["mv"] else "") for x in s["results"]]
         return "\n".join(lines)
+    if name == "pd-limit":     # PD limiter
+        return render_pd_limit(r)
     if name == "pd-stress":    # PD Stress
         return render_pdstress(r)
     if name == "pd-spec":      # PD Spec Check
@@ -5752,7 +5805,7 @@ COMMANDS = {"ping": cmd_ping, "info": cmd_info, "press": cmd_press, "state": cmd
             "adc-raw": cmd_adc_raw, "ripple": cmd_ripple, "fc": cmd_fc,
             "pd": cmd_pd, "identify-device": cmd_identify_device, "pd-reread": cmd_pd_reread, "apple-read": cmd_apple_read,
             "stop": cmd_stop, "lease": cmd_lease, "store": cmd_store, "blackbox": cmd_blackbox, "transcap": cmd_transcap,
-            "diagnose": cmd_diagnose, "cable-r": cmd_cable_r, "ufcs": cmd_ufcs, "pd-stress": cmd_pd_stress, "pd-spec": cmd_pd_spec, "loop-probe": cmd_loop_probe, "battery": cmd_battery, "lab": cmd_lab, "charger-legacy-tune": cmd_charger_legacy_tune, "qrtest": cmd_qrtest, "charger-test": cmd_charger_test, "charger-units": cmd_charger_units,
+            "diagnose": cmd_diagnose, "cable-r": cmd_cable_r, "ufcs": cmd_ufcs, "pd-stress": cmd_pd_stress, "pd-limit": cmd_pd_limit, "pd-spec": cmd_pd_spec, "loop-probe": cmd_loop_probe, "battery": cmd_battery, "lab": cmd_lab, "charger-legacy-tune": cmd_charger_legacy_tune, "qrtest": cmd_qrtest, "charger-test": cmd_charger_test, "charger-units": cmd_charger_units,
             "charger-cable": cmd_charger_cable, "charger-sweep": cmd_charger_sweep, "charger-avs-sweep": cmd_charger_avs_sweep, "charger-level": cmd_charger_level, "charger-svooc-cap": cmd_charger_svooc_cap, "cards": cmd_cards,
             "mi-cable-auth": cmd_mi_cable_auth,
             "twin": cmd_twin}
@@ -6250,6 +6303,10 @@ def build_parser():
     sus.add_parser("probe", help="start the probe (5 V only, refused inline or off 5 V); read it with `ufcs result`")
     sus.add_parser("stop", help="abort a running probe and release the lines")
     sus.add_parser("result", help="the last probe: handshake timings, UART errors, every TX frame and RX byte")
+    spl = sub.add_parser("pd-limit", help="PD limiter, inline only: the sink is sent the charger's own Source_Capabilities clamped "
+                         "to <watts> (5..100), spoken as the source; 'status' reads the state, forged list and the sink's Request, "
+                         "'off' disarms. SPR only; nothing is put on the output")
+    spl.add_argument("what", help="watts (5..100), 'off' or 'status'")
     # ---- PD Stress (docs/PD_SPEC_CHECK.md): parser ----
     sps = sub.add_parser("pd-stress", help="PD Stress: renegotiation stress run on the attached charger (inside the PD rules, "
                          "no load); score 0 = ideal. Start, watch, read the raw result, stop; tools/pd_stress.py records and rescored runs")

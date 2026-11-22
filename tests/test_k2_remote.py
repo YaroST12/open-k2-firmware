@@ -2028,6 +2028,64 @@ class Scripts(unittest.TestCase):
         self.assertIn("DFU", kr.timeout_message(alive=False))
 
 
+class PdLimitCli(unittest.TestCase):
+    """pd-limit <watts>|off|status (CMD_PD_LIMIT 0x4E): payloads, the 48-byte status, the refusal text."""
+
+    @staticmethod
+    def status(state=5, why=0, inj=2, req_mw=29900, forged=(0x0001912C, 0x0002D0C8)):
+        p = bytes([1 if state else 0, state, why, inj, 0, 0, len(forged), 2]) + (30000).to_bytes(4, "little")
+        p += req_mw.to_bytes(4, "little") + (0x20019064).to_bytes(4, "little")
+        return p + b"".join(x.to_bytes(4, "little") for x in forged) + bytes(4 * (7 - len(forged)))
+
+    def run_cmd(self, words, reply, sent):
+        class Link:
+            def call(self_, cmd, payload=b""):
+                sent.append((cmd, payload))
+                return kr.parse_response(rsp(cmd, 1, 0, reply))
+        a = kr.build_parser().parse_args(["pd-limit", *words])
+        return kr.COMMANDS["pd-limit"](Link(), a)
+
+    def test_payloads(self):
+        sent = []
+        self.assertEqual(kr.CMD_PD_LIMIT, 0x4E)
+        self.run_cmd(["30"], self.status(), sent)
+        self.run_cmd(["off"], self.status(0, 1), sent)
+        self.run_cmd(["status"], self.status(), sent)
+        self.assertEqual(sent[0], (0x4E, bytes([1]) + (30000).to_bytes(4, "little")))
+        self.assertEqual(sent[1], (0x4E, bytes([2])))
+        self.assertEqual(sent[2], (0x4E, bytes([0])))
+
+    def test_limit_range_and_words_are_checked_before_sending(self):
+        for bad in ("4", "101", "abc"):
+            sent = []
+            with self.assertRaises(SystemExit):
+                self.run_cmd([bad], b"", sent)
+            self.assertEqual(sent, [])
+
+    def test_decode_and_render(self):
+        r = self.run_cmd(["30"], self.status(), [])["pd_limit"]
+        self.assertEqual((r["state"], r["why"], r["injections"], r["limit_mw"], r["req_mw"], r["req_pos"]),
+                         ("limited", "none", 2, 30000, 29900, 2))
+        self.assertEqual(r["forged"], [0x0001912C, 0x0002D0C8])
+        text = kr.render("pd-limit", {"pd_limit": r})
+        self.assertIn("pd-limit limited, limit 30 W, 2 lists", text)
+        self.assertIn("sink Request pos 2: 29.9 W", text)
+        self.assertIn("forged pos 2: PDO 0x0002D0C8", text)
+        off = self.run_cmd(["off"], self.status(0, 5), [])["pd_limit"]
+        self.assertIn("pd-limit off (the charger resets)", kr.render("pd-limit", {"pd_limit": off}))
+
+    def test_refusal_text(self):
+        e = kr.RemoteError(kr.STATUS_BUSY, kr.CMD_PD_LIMIT, bytes([3]))   # Busy + LimRefusal::NotInline
+        self.assertIn("not inline", str(e))
+
+    def test_names_match_the_firmware_enums(self):
+        import re
+        hpp = (Path(__file__).resolve().parent.parent / "include/k2/pd/pd_limiter.hpp").read_text()
+        for name, table in (("LimState", kr.LIM_STATES), ("LimWhy", kr.LIM_WHYS), ("LimRefusal", kr.LIM_REFUSALS)):
+            body = re.search(r"enum class %s\s*:\s*std::uint8_t\s*\{([^}]*)\}" % name, hpp).group(1)
+            self.assertEqual(len([x for x in body.split(",") if x.strip()]), len(table), name)
+
+
 class FactoryWipe(unittest.TestCase):
     """factory-wipe --confirm: erase the file system and legacy stores, then DFU (reply comes first)."""
     OK = bytes([0]) + (152).to_bytes(2, "little") * 3 + bytes(2) + bytes(4) + bytes([0])

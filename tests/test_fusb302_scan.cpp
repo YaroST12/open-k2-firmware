@@ -4528,6 +4528,7 @@ void test_inline_interrogation_asks_once_per_question_without_auto_crc();
 void test_inline_interrogation_spoof_answers_only_inside_the_charger_query_window();
 void test_inline_interrogation_never_answers_a_device_vconn_swap();
 void test_inline_interrogation_spoof_answers_the_devices_cable_query();
+void test_inline_pd_limiter_injects_the_clamped_list_and_sees_the_sink_obey();
 void test_stress_soft_reset_goes_out_and_keeps_rd_when_the_source_answers();
 void test_stress_soft_reset_to_a_silent_source_asks_for_the_caps_with_rd_kept();
 void test_a_request_is_answered_in_the_service_pass_that_reads_it();
@@ -5673,6 +5674,7 @@ int main() {
     test_inline_interrogation_spoof_answers_only_inside_the_charger_query_window();   // the same, with the spoof armed
     test_inline_interrogation_never_answers_a_device_vconn_swap();
     test_inline_interrogation_spoof_answers_the_devices_cable_query();
+    test_inline_pd_limiter_injects_the_clamped_list_and_sees_the_sink_obey();
     test_stress_soft_reset_goes_out_and_keeps_rd_when_the_source_answers();   // each ends with a detach
     test_stress_soft_reset_to_a_silent_source_asks_for_the_caps_with_rd_kept();
     test_a_request_is_answered_in_the_service_pass_that_reads_it();   // ends with a detach
@@ -5937,6 +5939,83 @@ void test_inline_interrogation_spoof_answers_the_devices_cable_query() {
     fusb302::set_sop_prime_hook(nullptr);
     for (int i = 0; i < 400 && fusb302::interrogate_running(); i++) { g_ms += 20; fusb302::poll(); fusb302::service(); }
     end_inline_case();
+}
+
+// ---- PD limiter (k2/pd/pd_limiter.hpp) on the fake chip: the second inline transmitter ----
+
+// The data objects of the n-th frame loaded into the TX FIFO (tokens: 4 sync, PACKSYM, header lo/hi, then the objects).
+std::vector<std::uint32_t> tx_objects(std::size_t n) {
+    std::size_t seen = 0;
+    for (const std::string& s : g_log) {
+        if (s.rfind("FIFO 12 12 12 13 ", 0) != 0) continue;
+        if (seen++ != n) continue;
+        std::vector<unsigned> b;
+        for (std::size_t i = 5; i + 1 < s.size(); i += 3) b.push_back(unsigned(std::stoul(s.substr(i, 2), nullptr, 16)));
+        const unsigned num = (b[6] >> 4) & 7;
+        std::vector<std::uint32_t> out;
+        for (unsigned k = 0; k < num && 7 + 4 * k + 3 < b.size(); k++)
+            out.push_back(b[7 + 4 * k] | (b[8 + 4 * k] << 8) | (b[9 + 4 * k] << 16) | (std::uint32_t(b[10 + 4 * k]) << 24));
+        return out;
+    }
+    return {};
+}
+
+// Charger -> K2 -> sink at 15 V 3 A (45 W), limit 30 W: once PS_RDY has gone by and the line is quiet the K2 speaks as the source,
+// same two objects, the 15 V one at 2 A, with the id after the charger's next one. The sink's next Request inside the limit is
+// proof; the log says so. Refused without the inline latch or outside 5..100 W; a charger detach ends it.
+void test_inline_pd_limiter_injects_the_clamped_list_and_sees_the_sink_obey() {
+    attach_inline();
+    pd::LimFacts f;
+    fusb302::set_inline(false);
+    CHECK_EQ(int(fusb302::limit_arm(30000, f)), int(pd::LimRefusal::NotInline));
+    fusb302::set_inline(true);
+    CHECK_EQ(int(fusb302::limit_arm(1000, f)), int(pd::LimRefusal::BadLimit));
+    f.busy = true;
+    CHECK_EQ(int(fusb302::limit_arm(30000, f)), int(pd::LimRefusal::Busy));
+    f.busy = false;
+    CHECK_EQ(fusb302::limit_armed(), false);
+    CHECK_EQ(int(fusb302::limit_arm(30000, f)), int(pd::LimRefusal::None));
+    CHECK_EQ(fusb302::limit_armed(), true);
+    g_log.clear(); g_usb.clear();
+    // the charger's contract: caps id 0, Request, Accept id 1, PS_RDY id 2
+    push_frame(0xE0, hdr(1, 2, true, 0), {0x0A01912Cu, 0x0004B12Cu});
+    push_frame(0xE0, hdr(2, 1, false, 0), {0x2204B12Cu});
+    push_frame(0xE0, hdr(3, 0, true, 1), {});
+    push_frame(0xE0, hdr(6, 0, true, 2), {});
+    service_ms(2);
+    CHECK_EQ(tx_headers().size(), 0u);                                   // nothing before the quiet time has run
+    for (int i = 0; i < 100 && tx_headers().empty(); i++) { g_ms += 1; fusb302::service(); }
+    const std::vector<unsigned> h = tx_headers();
+    CHECK_EQ(h.size(), 1u);
+    CHECK_EQ(h.empty() ? 0u : h[0] & 0x1F, 1u);                          // Source_Capabilities
+    CHECK_EQ(h.empty() ? 0u : (h[0] >> 12) & 7, 2u);                     // same count
+    CHECK_EQ(h.empty() ? 0u : (h[0] >> 8) & 1, 1u);                      // as the source
+    CHECK_EQ(h.empty() ? 0u : (h[0] >> 9) & 7, 4u);                      // the charger's next id is 3: ours is the one after
+    const std::vector<std::uint32_t> o = tx_objects(0);
+    CHECK_EQ(o.size(), 2u);
+    CHECK_EQ(o.size() < 2 ? 0u : o[0], 0x0A01912Cu);                     // 5 V 3 A is under the limit already
+    CHECK_EQ(o.size() < 2 ? 0u : o[1], 0x0004B0C8u);                     // 15 V 3 A -> 2 A
+    for (const std::string& s : g_log)                                   // Auto-CRC (SWITCHES1 bit 2) never on
+        if (s.rfind("W 03=", 0) == 0) CHECK_EQ((std::stoul(s.substr(5), nullptr, 16) & 0x04u), 0u);
+    CHECK_EQ(int(fusb302::limit_status().state), int(pd::LimState::Injected));
+    CHECK_EQ(int(fusb302::limit_status().injections), 1);
+    // the sink asks inside the limit (position 2, 15 V 1.9 A): verified
+    push_frame(0xE0, hdr(2, 1, false, 1), {0x2002F8BEu});
+    service_ms(3);
+    CHECK_EQ(int(fusb302::limit_status().state), int(pd::LimState::Limited));
+    CHECK_EQ(fusb302::limit_status().req_mw, 28500u);
+    CHECK_EQ(usb_has("[LIM] "), true);
+    CHECK_EQ(usb_has("sink Request pos 2"), true);
+    fusb302::limit_disarm();
+    service_ms(3);
+    CHECK_EQ(fusb302::limit_armed(), false);
+    CHECK_EQ(int(fusb302::limit_status().why), int(pd::LimWhy::User));
+    CHECK_EQ(usb_has("off: turned off"), true);
+    // armed again, a detach disarms it
+    CHECK_EQ(int(fusb302::limit_arm(30000, f)), int(pd::LimRefusal::None));
+    end_inline_case();
+    CHECK_EQ(fusb302::limit_armed(), false);
+    CHECK_EQ(int(fusb302::limit_status().why), int(pd::LimWhy::Detached));
 }
 
 // ---- PD Stress Soft_Reset on a live contract (ROADMAP "PD Stress softreset unplugs the charger", Xiaomi 20K bank, 2026-11-12) ----
