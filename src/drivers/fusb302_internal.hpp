@@ -14,6 +14,7 @@
 #include "k2/pd/pd_engine.hpp"
 #include "k2/pd/pd_identify.hpp"
 #include "k2/pd/pd_interrogate.hpp"
+#include "k2/pd/pd_limiter.hpp"
 #include "k2/pd/pd_link.hpp"
 #include "k2/pd/pd_listen.hpp"
 #include "k2/pd/pd_passive.hpp"
@@ -127,6 +128,8 @@ extern pd::IqPhase g_iq_phase;
 extern pd::IqStep g_iq_step;
 extern std::uint8_t g_iq_closed;
 extern bool g_iq_inited;
+extern bool g_lim_inited;
+extern bool g_lim_on;   // the PD limiter is armed (or has a stop still to report): the hot paths feed and tick it only then
 #if K2_HOST_REPORT
 extern LoopHost* g_lh;
 extern bool g_lh_dfp;
@@ -143,6 +146,7 @@ pd::Identify& ident();
 pd::Probe& probe();
 pd::Reread& reread();
 pd::Interrogate& iq();
+pd::Limiter& lim();
 bool ident_running();
 bool probe_running();
 bool reread_running();
@@ -178,6 +182,7 @@ void log_cable(const pd::Emarker& e);
 void log_trigger(const pd::Choice& c, pd::Err e);
 void log_boot_notes();
 void iq_report();
+void lim_report();
 pd::RereadLink reread_link();
 void reread_housekeeping(std::uint32_t now);
 void ident_wait_refuse();

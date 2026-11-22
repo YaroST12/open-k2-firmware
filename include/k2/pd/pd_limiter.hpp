@@ -37,6 +37,14 @@ inline constexpr std::uint32_t kLimPendMs = 2000;      // a line that never goes
 inline constexpr std::uint8_t kLimMaxRejects = 2;
 inline constexpr std::uint8_t kLimMaxInjections = 20;
 
+// Arming gate: what the caller knows (another port owner busy) plus what the driver adds (CC, the inline latch, its own engines).
+enum class LimRefusal : std::uint8_t { None, BadLimit, NoCc, NotInline, Busy };
+struct LimFacts {
+    bool cc = false, inline_link = false, busy = false;
+};
+LimRefusal lim_gate(const LimFacts& f, std::uint32_t limit_mw);
+const char* lim_refusal_name(LimRefusal r);
+
 enum class LimState : std::uint8_t { Off, Armed, Negotiating, Pending, Injected, Limited };
 enum class LimWhy : std::uint8_t { None, User, Detached, Epr, Rate, ChargerResets, SinkResets, SinkIgnores };
 const char* lim_state_name(LimState s);
@@ -71,6 +79,7 @@ public:
     void disarm() { stop(LimWhy::User); }
     void on_detach() { stop(LimWhy::Detached); }
     bool armed() const { return st_.state != LimState::Off; }
+    bool wants_tx() const { return st_.state == LimState::Pending; }   // the driver opens its TX choke point for it
     const LimStatus& status() const { return st_; }
 
     // Every frame the sniffer sees (GoodCRCs too, they keep the line "busy"), and each Hard Reset.

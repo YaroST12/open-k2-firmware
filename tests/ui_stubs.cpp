@@ -223,6 +223,11 @@ void interrogate_abort() {
 }
 bool interrogate_running() { return g_stub.iq_running; }
 const pd::IqStatus& interrogate_status() { return g_stub.iq_status; }
+static pd::LimStatus g_stub_lim;
+pd::LimRefusal limit_arm(std::uint32_t, const pd::LimFacts&) { return pd::LimRefusal::None; }
+void limit_disarm() {}
+bool limit_armed() { return false; }
+const pd::LimStatus& limit_status() { return g_stub_lim; }
 void feed(uint8_t, uint16_t, std::span<const uint8_t>) {}
 pd::Err sink_request(const pd::Choice& c, bool confirmed, bool over_load) {
     g_stub.requests++;

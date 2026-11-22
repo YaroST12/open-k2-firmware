@@ -2884,6 +2884,52 @@ static void test_active_pd_commands() {
     CHECK_EQ(f.ar_calls, 0);
 }
 
+// PD_LIMIT (0x4E): [0] status, [1, limit_mw u32 LE] arm, [2] off; every answer is the 48-byte status (see encode_pd_limit).
+static void test_pd_limit_wire() {
+    Fake f;
+    Frame r;
+    f.pl_status.state = k2::pd::LimState::Limited;
+    f.pl_status.limit_mw = 30000;
+    f.pl_status.injections = 2;
+    f.pl_status.forged_n = 2;
+    f.pl_status.forged[0] = 0x0001912C;
+    f.pl_status.forged[1] = 0x0002D12C;
+    f.pl_status.req_pos = 2;
+    f.pl_status.req_mw = 27000;
+    f.pl_status.req_rdo = 0x20000010;
+    run(f, request(0x4E, 1, {0}), r);
+    check_header(r, 0x4E, 1, Status::Ok, kLimitRspBytes);
+    check_bytes(r, kRspHeader, {1, 5, 0, 2, 0, 0, 2, 2, 0x30, 0x75, 0, 0, 0x78, 0x69, 0, 0, 0x10, 0, 0, 0x20, 0x2C, 0x91, 0x01, 0x00});
+    check_bytes(r, kRspHeader + 24, {0x2C, 0xD1, 0x02, 0x00, 0, 0, 0, 0});   // the second forged slot, then an empty one
+    CHECK_EQ(f.pl_op, 0);
+    run(f, request(0x4E, 2, {1, 0x30, 0x75, 0, 0}), r);
+    check_header(r, 0x4E, 2, Status::Ok, kLimitRspBytes);
+    CHECK_EQ(f.pl_op, 1);
+    CHECK_EQ(f.pl_mw, 30000u);
+    run(f, request(0x4E, 3, {2}), r);
+    check_header(r, 0x4E, 3, Status::Ok, kLimitRspBytes);
+    CHECK_EQ(f.pl_op, 2);
+    f.pl_state = Status::Busy; f.pl_refusal = 4;   // refused: the pd::LimRefusal is the one-byte payload
+    run(f, request(0x4E, 4, {1, 0x30, 0x75, 0, 0}), r);
+    check_header(r, 0x4E, 4, Status::Busy, 1);
+    check_bytes(r, kRspHeader, {4});
+    f.pl_state = Status::Ok; f.pl_refusal = 0;
+    f.pl_calls = 0;
+    run(f, request(0x4E, 5, {3}), r);                    // unknown op
+    check_header(r, 0x4E, 5, Status::BadArg, 0);
+    run(f, request(0x4E, 6, {}), r);
+    check_header(r, 0x4E, 6, Status::BadLength, 0);
+    run(f, request(0x4E, 7, {1, 0x30, 0x75}), r);        // arm needs the limit
+    check_header(r, 0x4E, 7, Status::BadLength, 0);
+    run(f, request(0x4E, 8, {0, 0}), r);                 // status takes nothing
+    check_header(r, 0x4E, 8, Status::BadLength, 0);
+    run(f, request(0x4E, 9, {1, 0x87, 0x13, 0, 0}), r);  // 4999 mW: below the SPR floor
+    check_header(r, 0x4E, 9, Status::BadArg, 0);
+    run(f, request(0x4E, 10, {1, 0xA1, 0x86, 1, 0}), r); // 100001 mW: above the SPR ceiling
+    check_header(r, 0x4E, 10, Status::BadArg, 0);
+    CHECK_EQ(f.pl_calls, 0);
+}
+
 #if K2_OPPO_PROBE
 // OPPO_PROBE (0x4D), lab-only, chunked like APPLE_READ: [1, flags, steps, 4 x u32] starts -> part 0, [0, part] reads back,
 // [2] stops; [3, flags, mv, ma] asks an advertised point -> [err, why, pos, mv, ma] and arms the lease above 5 V.
@@ -3985,6 +4031,7 @@ int main() {
     test_debug_fault();
     test_build_response_pads_and_cuts();
     test_mi_cable_auth();
+    test_pd_limit_wire();
 #if K2_OPPO_PROBE
     test_oppo_probe_wire();
 #else

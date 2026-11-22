@@ -1217,6 +1217,15 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
 
 ## Not verified on hardware
 
+- **PD limiter** (k2/pd-limiter, built and host-tested only; `k2_remote.py pd-limit <watts>|off|status`, Cmd 0x4E). Inline only
+  (charger -> K2 -> sink): the sink is sent the charger's own Source_Capabilities, spoken as the source, same PDO count and
+  positions, each object clamped to P (current = min(I, P/V), PPS/AVS keep their range). Armed by the user, RAM only; injects
+  after PS_RDY once the line has been quiet 10 ms; the sink's next Request <= P is the proof (Limited); re-injects after every
+  real Source_Capabilities; a Hard Reset or Soft_Reset within 150 ms of a list counts as a rejection, two disarm it (ChargerResets /
+  SinkResets); an EPR contract or EPR_Source_Caps disarms it (SPR only); at most 20 lists per arm. Latency: the sink draws at the
+  charger's real contract until the clamp lands (PS_RDY + 10 ms quiet + the sink's Request response time, tens of ms by the PD timers, not measured); arming mid-contract
+  waits for the next real Source_Capabilities (replug). Refused without the inline latch, with CC down, outside 5..100 W or while
+  another feature owns the port. Check on hardware: see the run plan in the k2/pd-limiter report; watch `[LIM]` lines. No UI yet.
 - **Test layer reads, held data, depth-scaled preset counts** (k2/test-layer-reads: 2d2e9203, bae38bca, 7da8be65, 4e745924, cb4f51b4;
   host-tested only). Opening the Charger or Cable tab starts nothing; the offers come from a Light run with the PD pick, the cable
   from the Cable Actions row. Held data (same charger, same cable): offers stay until a different renegotiation replaces them,
@@ -1425,6 +1434,7 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
 | Extended messages, VDMs, SVID table | done | verified | `pd_ext`, `pd_vdm` | PASSIVE |
 | Attach/detach, inline-load detection and guard | done | verified | `pd_link`, `link`, `link_guard` | |
 | PD trigger (Request, PPS/AVS voltage, voltage-cap safety) | done | verified (lone charger) | `pd_sink` | HV |
+| PD limiter: forged Source_Capabilities clamped to P, inline | done (shell only) | not verified | `pd_limiter`, `fusb302` | inline TX |
 | PPS step-down of a running contract | done | partial: small steps verified, a direct 21 V to 13 V step aborts at the +10 % guard | `pd_sink` | HV |
 | PD Spec Check: no-load conformance of the attached charger, 21 checks against named spec limits, score 0 = ideal; its polite 27 checks are a Deep charger-test section (`docs/PD_SPEC_CHECK.md`) | done, opt-in (`K2_PDSPEC=1`) | not verified (engine, protocol, tools and the Deep section host-tested; see Not verified) | `k2::pdspec`, `PdSpecSession`, `specsec` | HV |
 | Identify (identity, SVIDs, modes, sink caps) | done (an action of the Connection page) | verified (Pixel) | `pd_identify` | |

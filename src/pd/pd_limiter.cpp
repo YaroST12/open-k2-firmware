@@ -46,6 +46,24 @@ const char* lim_why_name(LimWhy w) {
     return "?";
 }
 
+const char* lim_refusal_name(LimRefusal r) {
+    switch (r) {
+        case LimRefusal::None: return "none";
+        case LimRefusal::BadLimit: return "limit outside 5..100 W";
+        case LimRefusal::NoCc: return "no CC";
+        case LimRefusal::NotInline: return "not inline";
+        case LimRefusal::Busy: return "another feature is running";
+    }
+    return "?";
+}
+
+LimRefusal lim_gate(const LimFacts& f, std::uint32_t limit_mw) {
+    if (limit_mw < kLimMinMw || limit_mw > kLimMaxMw) return LimRefusal::BadLimit;
+    if (!f.cc) return LimRefusal::NoCc;
+    if (!f.inline_link) return LimRefusal::NotInline;
+    return f.busy ? LimRefusal::Busy : LimRefusal::None;
+}
+
 std::uint32_t request_mw(std::uint32_t rdo, std::span<const std::uint32_t> pdos) {
     const unsigned pos = rdo >> 28;
     if (pos < 1 || pos > pdos.size()) return 0;

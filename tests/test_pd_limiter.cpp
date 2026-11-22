@@ -449,6 +449,18 @@ int main() {
         CHECK_EQ(int(r.lim.status().state), int(LimState::Armed));
     }
 
+    // ---- the arming gate ----
+    {
+        const LimFacts ok{true, true, false};
+        CHECK_EQ(int(lim_gate(ok, 30000)), int(LimRefusal::None));
+        CHECK_EQ(int(lim_gate(ok, kLimMinMw - 1)), int(LimRefusal::BadLimit));
+        CHECK_EQ(int(lim_gate(ok, kLimMaxMw + 1)), int(LimRefusal::BadLimit));
+        CHECK_EQ(int(lim_gate({false, true, false}, 30000)), int(LimRefusal::NoCc));
+        CHECK_EQ(int(lim_gate({true, false, false}, 30000)), int(LimRefusal::NotInline));
+        CHECK_EQ(int(lim_gate({true, true, true}, 30000)), int(LimRefusal::Busy));
+        CHECK_STR(lim_refusal_name(LimRefusal::NotInline), "not inline");
+    }
+
     // ---- the names (the shell and the wire carry them) ----
     {
         CHECK_STR(lim_state_name(LimState::Limited), "limited");

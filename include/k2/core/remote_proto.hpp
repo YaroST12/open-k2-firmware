@@ -578,6 +578,7 @@
 #include "k2/pd/cable_full.hpp"
 #include "k2/pd/emk_learn.hpp"
 #include "k2/pd/emk_quirk.hpp"
+#include "k2/pd/pd_limiter.hpp"
 #if K2_OPPO_PROBE
 #include "k2/pd/oppo_probe.hpp"
 #endif
@@ -643,6 +644,7 @@ enum class Cmd : uint8_t {
     AppleRead = 0x4A,       // lab-only Apple charger readout (SVID 0x05AC, k2/pd/apple_readout.hpp): [op] 0 status, 1 arm + re-request the current contract -> AppleReadInfo; a refusal carries its pd::AppleRefusal as the one-byte payload
     Stop = 0x4B,            // no payload, no confirm (the safe direction): cancel a charger test, stop FC with the measured 5 V release, release PD, disarm a spoof -> [active mask (k2/core/stop.hpp), vbus_mv i32 LE, fc_release_busy]
     OppoProbe = 0x4D,       // lab-only OPPO / OnePlus probe (SVID 0x22D9, k2/pd/oppo_probe.hpp): [0, part] status, [1, flags, steps, 4 x u32 challenge] start, [2] stop -> encode_oppo part; [3, flags, mv u16, ma u16] request an advertised point -> [err, why, pos, mv u16, ma u16]; a refusal carries its pd::oppo::Refusal
+    PdLimit = 0x4E,         // PD limiter (k2/pd/pd_limiter.hpp), inline: [0] status, [1, limit_mw u32 LE] arm, [2] off -> encode_pd_limit; a refusal carries its pd::LimRefusal
     Lease = 0x4C,           // [0] status, or [1, seconds u16 LE] set the length (0 = default 30 s, max 600) -> [armed, left_s u16 LE, length_s u16 LE, ended] (k2/core/lease.hpp)
     DebugFault = 0x31,  // debug: provoke a CPU fault, needs kFaultMagic + kind
     Fc = 0x32,          // active fast-charge trigger, see the layout above
@@ -701,7 +703,7 @@ inline constexpr Cmd kCmdIds[] = {
     Cmd::CableR, Cmd::Lab, Cmd::Ufcs, Cmd::QRTest, Cmd::Store, Cmd::EmLib, Cmd::Cards, Cmd::Twin, Cmd::BlackBox, Cmd::TransCap, Cmd::ChargerTest,
     Cmd::ChargerUnits, Cmd::ChargerCable, Cmd::ChargerHunt, Cmd::ChargerSweep, Cmd::ChargerAvsSweep, Cmd::BootInfo, Cmd::Memory, Cmd::Power,
     Cmd::PdStress, Cmd::EmarkerProbe, Cmd::LoopProbe, Cmd::Diagnose, Cmd::TraceHid, Cmd::Battery, Cmd::ChargerSvoocCap,
-    Cmd::PdSpec, Cmd::ChargerLevel, Cmd::MiCableAuth,
+    Cmd::PdSpec, Cmd::ChargerLevel, Cmd::MiCableAuth, Cmd::PdLimit,
 };
 
 constexpr bool cmd_ids_unique() {
@@ -1475,6 +1477,12 @@ struct AppleReadInfo {
 };
 struct AppleReadResult { Status status = Status::Ok; uint8_t refusal = 0; AppleReadInfo info{}; };   // refusal: pd::AppleRefusal as the one-byte payload
 
+// PD limiter (Cmd::PdLimit). The view points at the driver's own status (never copied).
+constexpr uint8_t kLimitStatus = 0, kLimitArm = 1, kLimitOff = 2;
+constexpr size_t kLimitRspBytes = 20 + 4 * 7;   // 7 bytes of state, limit / request mW and RDO as u32, then seven forged PDO slots
+static_assert(kLimitRspBytes <= kMaxRspPayload);
+struct LimitView { Status status = Status::Ok; uint8_t refusal = 0; const pd::LimStatus* s = nullptr; };
+
 #if K2_OPPO_PROBE
 // Lab-only OPPO / OnePlus probe (Cmd::OppoProbe). The result is the sink's own record (never copied: `r` points at it).
 constexpr uint8_t kOppoStatus = 0, kOppoStart = 1, kOppoStop = 2, kOppoPower = 3;
@@ -1542,6 +1550,7 @@ size_t encode_apple_read(std::span<uint8_t> out, const AppleReadInfo &i, uint8_t
 size_t encode_oppo(std::span<uint8_t> out, const OppoView &v, uint8_t part);   // part 0 header, 1..5 one word list each
 #endif
 size_t encode_stop(std::span<uint8_t> out, const StopInfo &s);   // 6 bytes: active, vbus_mv i32 LE, fc_release_busy
+size_t encode_pd_limit(std::span<uint8_t> out, const LimitView &v);   // kLimitRspBytes: armed, state, why, injections, rejects, ignores, forged_n, req_pos | u32 limit_mw, req_mw, req_rdo | 7 x u32 forged PDOs (unused slots 0)
 size_t encode_lease(std::span<uint8_t> out, const LeaseInfo &l);   // 6 bytes: armed, left_s u16 LE, length_s u16 LE, ended
 size_t encode_adc_raw(std::span<uint8_t> out, const AdcRawSnapshot &a);
 size_t encode_vconn(std::span<uint8_t> out, const VconnSnapshot &v);
@@ -1678,6 +1687,7 @@ concept Backend = requires(B &b, uint8_t u8, uint16_t u16, bool on) {
     { b.ripple_info() } -> std::same_as<RippleInfo>;
     { b.identify_device(u8) } -> std::same_as<IdentifyResult>;
     { b.reread(u8, u8) } -> std::same_as<RereadResult>;   // op (0 status, 1 start, 2 abort), step mask
+    { b.pd_limit(u8, uint32_t{}) } -> std::same_as<LimitView>;   // op 0 status, 1 arm (limit_mw), 2 off
     { b.apple_read(u8) } -> std::same_as<AppleReadResult>;   // lab-only: op 0 status, 1 arm + re-request the current contract
 #if K2_OPPO_PROBE
     { b.oppo_probe(u8, std::declval<const pd::oppo::Config &>()) } -> std::same_as<OppoView>;   // lab-only: op 0 status, 1 start, 2 stop
@@ -2084,6 +2094,17 @@ template <Backend B>
         const AppleReadResult res = backend.apple_read(p[0]);
         if (res.status != Status::Ok) return reply_byte(f, res.status, res.refusal);
         return reply_ok(f, encode_apple_read(f.span(), res.info, part));
+    }
+    case Cmd::PdLimit: {
+        if (p.empty()) return reply_bad_len(f);
+        const uint8_t op = p[0];
+        if (op > kLimitOff) return reply_bad_arg(f);
+        if (p.size() != (op == kLimitArm ? 5u : 1u)) return reply_bad_len(f);
+        const uint32_t mw = op == kLimitArm ? rd32(&p[1]) : uint32_t{0};
+        if (op == kLimitArm && (mw < pd::kLimMinMw || mw > pd::kLimMaxMw)) return reply_bad_arg(f);
+        const LimitView v = backend.pd_limit(op, mw);
+        if (v.status != Status::Ok) return reply_byte(f, v.status, v.refusal);
+        return reply_ok(f, encode_pd_limit(f.span(), v));
     }
     case Cmd::OppoProbe: {
 #if !K2_OPPO_PROBE
@@ -2694,7 +2715,7 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
         return detail::handle_charger(cmd, p, backend, f);
     case Cmd::IdentifyDevice: case Cmd::PdReread: case Cmd::AppleRead: case Cmd::OppoProbe: case Cmd::PdRequest:
     case Cmd::PdReset: case Cmd::PdRelease: case Cmd::Stop: case Cmd::Lease:
-    case Cmd::PdAttach: case Cmd::PdHandback: case Cmd::PdTriggerStatus:
+    case Cmd::PdAttach: case Cmd::PdHandback: case Cmd::PdTriggerStatus: case Cmd::PdLimit:
         return detail::handle_pd(cmd, p, backend, f);
     case Cmd::Fc: case Cmd::CableR:
         return detail::handle_fc(cmd, p, backend, f);

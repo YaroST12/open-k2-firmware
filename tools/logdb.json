@@ -760,6 +760,13 @@
   "763": "[EMK] cable tx sop%d hdr 0x%04X id %d: %s%s\n",
   "764": "[EMK] full read: %s svids=%d modes=0x%02X active=%d id2=%d svids2=%d\n",
   "765": "[UI] link reset (inline Hard Reset): %s\n",
-  "766": "[UI] link reset (sink Hard Reset): sent\n"
+  "766": "[UI] link reset (sink Hard Reset): sent\n",
+  "767": "[LIM] refused: %s\n",
+  "768": "[LIM] t=%u armed: limit %u mW\n",
+  "769": "[LIM] t=%u forged list %u: %u objects, limit %u mW\n",
+  "770": "[LIM] forged pos %u PDO 0x%08X\n",
+  "771": "[LIM] t=%u sink Request pos %u RDO 0x%08X: %u mW (limit %u mW)\n",
+  "772": "[LIM] t=%u off: %s\n",
+  "773": "[LIM] t=%u %s\n"
  }
 }
