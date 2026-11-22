@@ -95,7 +95,19 @@ inline constexpr std::size_t kLongestMenuChain =
               arena_bytes<DiagnosisPage, BlackBoxPage, SharePage>(), arena_bytes<BlackBoxPage, SharePage>(),
               arena_bytes<BatteryPage, SharePage>(), arena_bytes<QrTestPage>(),
               arena_bytes<DiagPage, SharePage>(), arena_bytes<UsbLinkPage>(), arena_bytes<AutorotatePage>(), arena_bytes<MemoryPage>(),
-              arena_bytes<DisplayPage>()});
+              arena_bytes<DisplayPage>(), arena_bytes<ToolsPage, TriggerPage>(), arena_bytes<ToolsPage, PdTriggerPage>(),
+              arena_bytes<ToolsPage, CardsPage, SharePage>(), arena_bytes<ToolsPage, BlackBoxPage, SharePage>(),
+              arena_bytes<ToolsPage, SpoofPage>(), arena_bytes<ToolsPage, CableRPage>()
+#if K2_TWIN
+              , arena_bytes<ToolsPage, TwinPage>()
+#endif
+#if K2_LOOPPROBE
+              , arena_bytes<ToolsPage, LoopProbePage, SharePage>()
+#endif
+#if K2_PDSTRESS
+              , arena_bytes<ToolsPage, PdStressPage>()
+#endif
+              });
 inline constexpr std::size_t kLongestChain = kLargestBase + kLongestMenuChain;   // the deepest rotation page + the deepest menus
 inline constexpr std::size_t kPageArenaBytes = kLongestChain;
 // The named worst cases (each rotation page that has one, the review's reachable chains) hold by construction; spelled out so
@@ -201,9 +213,11 @@ public:
     void open_place_actions(bench::Place p, uint32_t now_ms); // Place::Charger/Cable/Device opened directly on its Actions sub-page
     // Opens the Charger / Cable / Device place (`tab`); `spoof` goes straight on to the Spoof list (the Tools shortcut).
     bool open_connection(conn::Tab tab, bool spoof, uint32_t now_ms);
-    // Reset the PD link and re-read the settlement: standalone runs rescan + survey; inline arms a 2-press confirm then sends
-    // one Hard Reset (refused when VBUS-powered with no USB host supply).
+    // Reset the PD link and re-read the settlement: standalone runs Hard Reset (when K2 holds a contract and is not
+    // bus-powered) or rescan + survey; inline arms a 2-press confirm then sends one Hard Reset (refused when VBUS-powered
+    // with no USB host supply).
     enum class LinkResetResult : uint8_t { Cycled, HardReset, NeedConfirm, SelfPowered, Busy, NoLink };
+    bool link_reset_inline() const;
     LinkResetResult link_reset(bool confirmed, uint32_t now_ms);
     // The comeback of a bridged Refresh (core/rescan.cpp): Connection on its Source tab, saying "Rescanned (rebooted)".
     bool land_rescanned(uint32_t now_ms);

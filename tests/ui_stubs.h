@@ -94,7 +94,7 @@ struct StubState {
     k2::pd::XiaomiTrace mi_xm{};
     k2::pd::SourceCaps epr_info_caps{};   // the list an informational EPR_Get_Source_Cap returned
     int epr_info_asks = 0; bool epr_info_forced = false; k2::pd::Err epr_info_err = k2::pd::Err::Ok;
-    bool link_inline = false, inl = false, scan_confirmed = false, self_powered = false;
+    bool link_inline = false, inl = false, sink_downstream = false, scan_confirmed = false, self_powered = false;
     k2::raguard::WaitKind wait_kind = k2::raguard::WaitKind::Unknown;   // fusb302::wait_kind / set_wait_kind
     bool caps_this_attach = false;        // fusb302::caps_this_attach()
     uint8_t pin = 0;                         // fusb302::pin_rd() override (0 = derive from self_powered: CC2)

@@ -13,11 +13,11 @@ static int g_n = 0, g_bad = 0;
 static Event ev(Button b, Press p) { return Event{b, p}; }
 
 int main() {
-    // The loop: next / prev wrap over all nine, in the user's order.
-    static_assert(kCount == 9);
+    // The loop: next / prev wrap over all ten, in the user's order.
+    static_assert(kCount == 10);
     CHECK(next(Pos::Home) == Pos::Lines && next(Pos::Lines) == Pos::Numbers && next(Pos::Numbers) == Pos::Graph);
-    CHECK(next(Pos::Graph) == Pos::Ripple && next(Pos::Ripple) == Pos::Link && next(Pos::Link) == Pos::Battery);
-    CHECK(next(Pos::Battery) == Pos::Log && next(Pos::Log) == Pos::K2 && next(Pos::K2) == Pos::Home);
+    CHECK(next(Pos::Graph) == Pos::Ripple && next(Pos::Ripple) == Pos::Link && next(Pos::Link) == Pos::Tools);
+    CHECK(next(Pos::Tools) == Pos::Battery && next(Pos::Battery) == Pos::Log && next(Pos::Log) == Pos::K2 && next(Pos::K2) == Pos::Home);
     CHECK(prev(Pos::Home) == Pos::K2);
     {
         Pos p = Pos::Home;
@@ -80,7 +80,8 @@ int main() {
     CHECK(owner(Page::Lines, Menu::Connection, 1) == Pos::Link);
     CHECK(owner(Page::Lines, Menu::Connection, 2) == Pos::Link);
     // Tool pages belong to the place that opens them; Share and the QR test follow the page they sit on.
-    CHECK(owner(Page::Lines, Menu::Trigger, 0) == Pos::Link && owner(Page::Lines, Menu::PdTrigger, 0) == Pos::Link);
+    CHECK(owner(Page::Lines, Menu::Trigger, 0) == Pos::Tools && owner(Page::Lines, Menu::PdTrigger, 0) == Pos::Tools);
+    CHECK(owner(Page::Lines, Menu::Tools, 0) == Pos::Tools);
     CHECK(owner(Page::Lines, Menu::Cards, 0) == Pos::Link && owner(Page::Lines, Menu::PdStress, 0) == Pos::Link);
     CHECK(owner(Page::Lines, Menu::Emarker, 0) == Pos::Link && owner(Page::Lines, Menu::CableR, 0) == Pos::Link);
     CHECK(owner(Page::Lines, Menu::Spoof, 0) == Pos::Link && owner(Page::Lines, Menu::LoopProbe, 0) == Pos::Link);
@@ -98,6 +99,7 @@ int main() {
         CHECK(owner(base, t.menu, t.tab) == p);
     }
     CHECK(target(Pos::Link).menu == Menu::Connection && target(Pos::Link).tab == 0);
+    CHECK(target(Pos::Tools).menu == Menu::Tools && target(Pos::Tools).tab == 0);
     CHECK(target(Pos::Log).menu == Menu::Diagnosis && target(Pos::Battery).menu == Menu::Battery);
     CHECK(target(Pos::K2).menu == Menu::Count && target(Pos::K2).page == Page::Settings);
 
@@ -115,10 +117,11 @@ int main() {
     }
     CHECK(std::strcmp(mast_name(Pos::Graph), "4 GRAPHS") == 0);
     CHECK(std::strcmp(mast_name(Pos::Link), "6 LINK") == 0);
+    CHECK(std::strcmp(mast_name(Pos::Tools), "7 TOOLS") == 0);
 
     // The persisted long-back target: out of range falls back to Home.
-    CHECK(sanitize_target(0) == Pos::Home && sanitize_target(8) == Pos::K2);
-    CHECK(sanitize_target(9) == Pos::Home && sanitize_target(255) == Pos::Home);
+    CHECK(sanitize_target(0) == Pos::Home && sanitize_target(9) == Pos::K2);
+    CHECK(sanitize_target(10) == Pos::Home && sanitize_target(255) == Pos::Home);
 
     // The ring strip: Prev / Next move, Enter dims where there is nothing to enter, Back goes Home (Jump names the long press).
     {

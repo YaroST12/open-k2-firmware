@@ -96,11 +96,26 @@ constexpr uint8_t pg(Page p) { return static_cast<uint8_t>(p); }
 // (Charger ID, Cable read, Device ID) are the page itself; these are the tools it adds.
 constexpr Act kCharger[] = {
     {"Test charger", K::Page, pg(Page::ChargerTest), "grades every offer"},
-    {"Request voltage", K::Tool, 1, nullptr},
-    {"Fast charge", K::Tool, 0, nullptr},
     {"Report cards", K::Tool, 9, nullptr},
 #if K2_PDSTRESS
     {"Stress test", K::Tool, 13, nullptr},
+#endif
+};
+constexpr Act kTools[] = {
+    {"Request voltage", K::Tool, 1, nullptr},
+    {"Fast charge", K::Tool, 0, nullptr},
+    {"Cable R", K::Tool, 3, nullptr},
+    {"Spoof cable", K::Tool, 2, nullptr},
+    {"Report cards", K::Tool, 9, nullptr},
+    {"Black Box", K::Tool, 7, nullptr},
+#if K2_TWIN
+    {"Device twins", K::Tool, 11, nullptr},
+#endif
+#if K2_LOOPPROBE
+    {"Loop probe", K::Tool, 12, nullptr},
+#endif
+#if K2_PDSTRESS
+    {"PD Stress", K::Tool, 13, nullptr},
 #endif
 };
 constexpr Act kCable[] = {
@@ -156,6 +171,8 @@ Acts actions(Place p) {
     }
     return {nullptr, 0};
 }
+
+Acts tools() { return acts(kTools); }
 
 const char *place_name(Place p) { return kPlaceNames[static_cast<int>(p) < kPlaces ? static_cast<int>(p) : 0]; }
 

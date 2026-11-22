@@ -1168,8 +1168,8 @@ int main() {
         test_screen(ui, "wiz_back_from_live", t); t += 200;    // back at CONFIRM
         press(Button::Back);                                   // CURRENT
         press(Button::Back);                                   // OFFER (fixed: no VOLTAGE)
-        press(Button::Back);                                   // exits: a menu over Lines is the Charger place, shown in the ring
-        CHECK_EQ(static_cast<int>(ui.menu()), static_cast<int>(Menu::Connection));
+        press(Button::Back);                                   // exits: a menu over Lines belongs to 7 TOOLS, shown in the ring
+        CHECK_EQ(static_cast<int>(ui.menu()), static_cast<int>(Menu::Tools));
         CHECK_EQ(ui.ring_view(), true);
         g_stub.sink = {};
     }
@@ -1570,25 +1570,19 @@ int main() {
         g_stub.pm.vbus_mv = 5000; g_stub.pm.current_ma = 1000;
         g_stub.em = {};               // no cable read
         ui.debug_fake_pdos(0, 30900); // release forced-link fixtures so the live load guard updates
-        ui.context().keep.place_sel[static_cast<int>(bench::Place::Charger)] = 0;
-        ui.open_place(bench::Place::Charger, 31200);                   // the Charger place page, entered: Info sub-page
-        ui.on_button(Button::Ok, ButtonEvent::Short, 31250);           // OK enters the Actions sub-page
+        ui.context().keep.tools_sel = 0;
+        ui.goto_page(kMenuPageBase + static_cast<uint8_t>(Menu::Tools), 31200);
         test_screen(ui, "bench_charger", 31300);
-        CHECK_EQ(ui.menu() == Menu::Connection, 1);
-        CHECK_EQ(ui.connection_page().actions_mode(), true);
-        auto row_y = [&](int act) { return kit::kPlaceListY + act * kit::kRowH; };   // RowList sits below slice identity block (y = kPlaceListY)
+        CHECK_EQ(ui.menu() == Menu::Tools, 1);
+        auto row_y = [&](int row) { return kit::kBodyY + row * kit::kRowH; };
         CHECK_EQ(g_panel[(row_y(0) + 10) * 240 + kOx + 134], k2::kFocusFill);
-        uint32_t bt = 31320;
-        while (ui.connection_page().action_row() >= 0 &&
-               std::string_view(ui.connection_page().item(ui.connection_page().action_row()).label) != "Request voltage")
-            ui.on_button(Button::Plus, ButtonEvent::Short, bt += 10);   // Request voltage: blocked by the load
-        const int req_row = ui.connection_page().action_row();
+        const int req_row = 0;                                         // Row 0 in 7 TOOLS: Request voltage (blocked by load)
         test_screen(ui, "bench_charger_blocked", 31500);
-        CHECK_EQ(count_colours(kOx, kit::kPlaceListY, kOx + 3, 240, {k2::kFocus}) > 0, true);
+        CHECK_EQ(count_colours(kOx, kit::kBodyY, kOx + 3, 240, {k2::kFocus}) > 0, true);
         ui.on_button(Button::Plus, ButtonEvent::Short, 31510);         // Fast charge: Request voltage unfocused
         ui.tick(31520);
-        const int req_off = ui.connection_page().list_state().offset;
-        const int req_y = kit::kPlaceListY + (req_row - req_off) * kit::kRowH;
+        const int req_off = ui.list_state().offset;
+        const int req_y = kit::kBodyY + (req_row - req_off) * kit::kRowH;
         CHECK_EQ(count_colours(kOx + 8, req_y + 2, kOx + 150, req_y + 24, {k2::kInk3}) > 0, true);   // blocked: dim
         CHECK_EQ(count_colours(kOx + 150, req_y, kOx + 204, req_y + kit::kRowH, {k2::kError}) > 0, false);  // its tail is not red
         g_stub.pm = saved_pm;

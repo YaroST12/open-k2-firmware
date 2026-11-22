@@ -116,6 +116,7 @@ struct UiContext {
         home::DiagDwell diag_dwell;                       // Home: when row 1 first showed each event finding
         uint8_t long_back K2_BSS_INIT(0);                // Settings: the ring position long Back jumps to (ring::Pos; Home = 0; uiprefs)
         int settings_sel K2_BSS_INIT(0);                  // Settings: the highlighted row
+        int tools_sel K2_BSS_INIT(0);                     // Tools: the highlighted row
         trig::Model trigger;                              // FC trigger: the draft (protocol, target) survives cancel()
         struct PdStress {                                 // Tools > PD Stress: the setup the next START uses
             std::uint16_t mask = pdstress::kDefaultSeqMask;   // picked sequences (bit = pdstress::Seq)
@@ -1054,9 +1055,9 @@ private:
             return value;
         }
     };
-    Held fc_h_, dp_h_, dm_h_, cc1_h_, cc2_h_, vbus_h_;
+    Held fc_h_, dp_h_, dm_h_, cc1_h_, cc2_h_, vbus_h_, ibus_h_;
     uint32_t fc_ = 0;                                   // the committed (debounced) values the paint reads
-    std::int32_t dp_ = -1, dm_ = -1, cc1_ = -1, cc2_ = -1, vbus_ = -1;
+    std::int32_t dp_ = -1, dm_ = -1, cc1_ = -1, cc2_ = -1, vbus_ = -1, ibus_ = -1;
     // The inline VOOC monitor's raw note (Sink tab, no PD): 0 = no live session, else 1 << 16 | the last 0x82 reply word,
     // sampled at most every kVoocNoteMs (the reply moves every ~45 ms; digits change at most 4 times a second).
     static constexpr uint32_t kVoocNoteMs = 250;
@@ -1388,6 +1389,23 @@ private:
     usbcfg::Setting pending_{};
     int sel_ = 0;
     Elem foot_;                  // footer element cache (draw_footer_cached)
+};
+
+// Ring position 7 TOOLS: triggers (Request voltage, Fast charge) and active bench utilities.
+class ToolsPage final : public PageBase {
+public:
+    explicit ToolsPage(UiContext &c) : PageBase(c, Page::Count, "Tools", Icon::Bolt), sel_(c.keep.tools_sel) {}
+    void enter() override;
+    void draw_static() override;
+    void update(uint32_t now_ms) override;
+    bool on_event(Event e) override;
+    Strip labels() const override;
+    void invalidate() override { ctx_.rows.invalidate(); }
+    ListState list_state() const { return ctx_.rows.state(); }
+    int selected() const { return sel_; }
+private:
+    static void row_fn(void *ctx, int index, bool focused, kit::RowSpec &out);
+    int &sel_;
 };
 
 // The QR scan-test screen (remote Cmd::QrTest op 1; the model is k2/ui/ui_qrtest.hpp): ONE full-screen QR over the

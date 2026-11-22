@@ -359,6 +359,7 @@ inline constexpr int kMaxItems = 9;
 struct ActFacts {
     bool more = false;          // the Source tab shows its second page (Details): the item goes back
     bool inline_sink = false;   // a live sink is inline: active tools that would reach it are refused
+    bool reset_inline = false;  // Reset & re-read will take the inline Hard Reset path (includes mid-session links)
     bool attached = false;      // a charger or a device answers on a port
     bool alone = false;         // a device is alone on the K2 (dual-role port, VBUS dark, no caps): active Identify is offered
     bool caps_valid = false;    // Source_Capabilities received
@@ -425,11 +426,10 @@ inline int place_actions(Tab t, const ActFacts &a, std::array<Item, kMaxItems> &
     int n = 0;
     auto put = [&](const Item &it) { if (n < kMaxItems) out[std::size_t(n++)] = it; };
     const bench::Acts b = bench::actions(place_of(t));
-    put({Act::ResetLink, tx::kActResetLink, true, "", -1, a.inline_sink, "Link"});
+    put({Act::ResetLink, tx::kActResetLink, true, "", -1, a.inline_sink || a.reset_inline, "Link"});
     switch (t) {
     case Tab::Source:
         put({Act::Details, tx::kActSpecOffers, true, ""});
-        put({Act::Refresh, "Read again", true, ""});
         for (int i = 0; i < b.n; i++) put({Act::Bench, b.a[i].name, true, "", static_cast<int8_t>(i)});
         break;
     case Tab::Cable:

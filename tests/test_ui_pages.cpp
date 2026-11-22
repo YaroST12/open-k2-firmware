@@ -962,7 +962,20 @@ static void open_act(Ui &ui, bench::Place p, int tool, uint32_t t) {
     ui.on_button(Button::Ok, ButtonEvent::Short, t + 10);
 }
 
-static void open_trigger(Ui &ui, uint32_t t) { open_act(ui, bench::Place::Charger, 0, t); }   // Charger > Fast charge
+static void open_tool(Ui &ui, int tool, uint32_t t) {
+    ui.context().keep.tools_sel = 0;
+    ui.goto_page(kMenuPageBase + static_cast<uint8_t>(Menu::Tools), t);
+    ui.tick(t + 2);
+    const bench::Acts a = bench::tools();
+    int target = 0;
+    for (int i = 0; i < a.n; i++) {
+        if (a.a[i].kind == bench::ActKind::Tool && a.a[i].arg == tool) { target = i; break; }
+    }
+    for (int i = 0; i < target; i++) ui.on_button(Button::Plus, ButtonEvent::Short, t + 5);
+    ui.on_button(Button::Ok, ButtonEvent::Short, t + 10);
+}
+
+static void open_trigger(Ui &ui, uint32_t t) { open_tool(ui, 0, t); }   // 7 TOOLS > Fast charge
 
 static void press(Ui &ui, Button b, ButtonEvent e, uint32_t t) { ui.on_button(b, e, t); }
 
@@ -996,23 +1009,23 @@ static void test_tools_hub() {
     press(ui, Button::Ok, ButtonEvent::Short, kT0 + 60);
     CHECK_EQ(ui.menu() == Menu::CableR, 1);
     press(ui, Button::Back, ButtonEvent::Short, kT0 + 70);
+    // Triggers (Fast charge and Request voltage) live in 7 TOOLS; Back returns to 7 TOOLS, a second Back to the ring.
     open_trigger(ui, kT0 + 90);
     CHECK_EQ(ui.menu() == Menu::Trigger, 1);
     press(ui, Button::Back, ButtonEvent::Short, kT0 + 100);
-    open_act(ui, bench::Place::Charger, 1, kT0 + 110);   // Request voltage: the PD trigger
+    CHECK_EQ(ui.menu() == Menu::Tools, 1);
+    open_tool(ui, 1, kT0 + 110);   // Request voltage: the PD trigger
     CHECK_EQ(ui.menu() == Menu::PdTrigger, 1);
     // Long +/- page nothing in a tool.
     press(ui, Button::Plus, ButtonEvent::Long, kT0 + 130);
     CHECK_EQ(ui.menu() == Menu::PdTrigger, 1);
     CHECK_STR(label(ui, Button::Back), "Back");
     press(ui, Button::Back, ButtonEvent::Short, kT0 + 140);
-    // BACK from the tool goes back to the Charger Actions page, a second BACK to its Info page, a third to the ring.
-    CHECK_EQ(ui.menu() == Menu::Connection, 1);
+    // BACK from the tool goes back to 7 TOOLS, a second BACK leaves to the ring on Pos::Tools.
+    CHECK_EQ(ui.menu() == Menu::Tools, 1);
     press(ui, Button::Back, ButtonEvent::Short, kT0 + 170);
-    CHECK_EQ(ui.connection_page().actions_mode(), false);
-    press(ui, Button::Back, ButtonEvent::Short, kT0 + 180);
     CHECK_EQ(ui.ring_view(), true);
-    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Link));
+    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Tools));
     CHECK_EQ(g_stub.fc_stops, 0);                  // nothing was triggered: leaving the trigger tool left the pins alone
 }
 
@@ -1025,18 +1038,15 @@ static void test_submenu_is_modal() {
     // Long +/- on protocol selection do nothing; the modal still suppresses paging.
     press(ui, Button::Plus, ButtonEvent::Long, kT0 + 100);
     press(ui, Button::Minus, ButtonEvent::Long, kT0 + 110);
-    CHECK_EQ(ui.page() == Page::Lines, 1);
     CHECK_EQ(ui.menu() == Menu::Trigger, 1);
     // A short BACK pops; nothing was triggered, so the bus is left alone (no dpdm reset pulse).
     press(ui, Button::Back, ButtonEvent::Short, kT0 + 120);
-    CHECK_EQ(ui.menu() == Menu::Connection, 1);   // back on the Charger place page
+    CHECK_EQ(ui.menu() == Menu::Tools, 1);   // back on 7 TOOLS
     CHECK_EQ(g_stub.fc_stops, stops);
-    // In the place page: Short Back flips Actions -> Info, and a second Short Back leaves to the ring, where Short Back goes Home.
+    // In 7 TOOLS: Short Back leaves to the ring on Pos::Tools, where Short Back goes Home.
     press(ui, Button::Back, ButtonEvent::Short, kT0 + 130);
-    CHECK_EQ(ui.menu() == Menu::Connection, 1);
-    CHECK_EQ(ui.connection_page().actions_mode(), false);
-    press(ui, Button::Back, ButtonEvent::Short, kT0 + 135);
     CHECK_EQ(ui.ring_view(), true);
+    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Tools));
     press(ui, Button::Back, ButtonEvent::Short, kT0 + 140);
     CHECK_EQ(ui.page() == Page::Home, 1);
     // Picking/editing/arming is passive; BACK retreats without resetting D+/D-.
@@ -1049,7 +1059,7 @@ static void test_submenu_is_modal() {
     press(ui, Button::Back, ButtonEvent::Short, kT0 + 170);
     press(ui, Button::Back, ButtonEvent::Short, kT0 + 172);
     press(ui, Button::Back, ButtonEvent::Short, kT0 + 174);
-    CHECK_EQ(ui.menu() == Menu::Connection, 1);
+    CHECK_EQ(ui.menu() == Menu::Tools, 1);
     CHECK_EQ(g_stub.fc_stops, s1);
     // Failed state still pending: BACK resets as well.
     open_trigger(ui, kT0 + 180);
@@ -1134,7 +1144,7 @@ static void test_trigger_submenu() {
     CHECK_EQ(int(ui.trigger({1, 0, 0}, t += 100, false).err), int(pd::Err::Busy));
     // Leaving during cleanup must not drop the guard.
     press(ui, Button::Back, ButtonEvent::Short, t += 100);
-    CHECK_EQ(ui.menu() == Menu::Connection, 1);
+    CHECK_EQ(ui.menu() == Menu::Tools, 1);
     CHECK_EQ(ui.ports_busy(), true);
     CHECK_EQ(ui.push_menu(Menu::PdTrigger, t += 100), false);
     CHECK_EQ(ui.goto_page(uint8_t(Page::ChargerTest), t += 100), true);

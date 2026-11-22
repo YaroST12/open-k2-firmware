@@ -50,7 +50,7 @@ void fixture() {
 // remains on the screenshot path (Ui::render_for_capture), which costs no wire time.
 // The walk is tests/ui_walk.h (shared with test_ui_capture); the budgets sit in the same order.
 constexpr unsigned kN = kWalkN;
-constexpr unsigned kFullMax[kN] = {0, 0, 57100, 27500, 0, 0, 55400, 56600, 0, 57800, 98000, 19900, 43800, 49500, 55000, 57700, 55000, 61000};   // measured Option B twin-rail costs; Diagnosis (the last) adds its floating verdict toast, laid over the body (2 720 px), raised again after a slice that covered it. Ripple: native-pixel scope face (b4d92f10); Connection: 21 px Info rows (3614728f)
+constexpr unsigned kFullMax[kN] = {0, 0, 57100, 27500, 0, 0, 55400, 56600, 0, 57800, 98000, 19900, 43800, 49500, 55000, 57700, 55000, 61000, 56000};   // measured Option B twin-rail costs; Diagnosis adds its floating verdict toast, Tools is the RowList menu (54537 px). Ripple: native-pixel scope face (b4d92f10); Connection: 21 px Info rows (3614728f)
 constexpr const WalkDest *kDests = kWalkDests;
 // The worst page switch, as a multiple of the screen (ratchet, see full_max). A menu reached from a menu is two switches
 // (goto_page pops to the base page, then pushes), which is what the worst cell is.

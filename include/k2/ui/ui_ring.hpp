@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
-// The page ring: nine pages in one loop (Home, Lines, Numbers, Graph, Ripple, Link, Battery, Log, K2).
+// The page ring: ten pages in one loop (Home, Lines, Numbers, Graph, Ripple, Link, Tools, Battery, Log, K2).
 // Pure (host-tested in tests/test_ui_ring.cpp); the Ui owns the one flag "ring view" and acts on what these return.
 //
 // In the ring view the keys only move: + next, - previous, OK enters the page, Back goes Home, long Back jumps to the page
@@ -14,8 +14,8 @@
 
 namespace k2::ring {
 
-enum class Pos : uint8_t { Home, Lines, Numbers, Graph, Ripple, Link, Battery, Log, K2 };
-inline constexpr int kCount = 9;
+enum class Pos : uint8_t { Home, Lines, Numbers, Graph, Ripple, Link, Tools, Battery, Log, K2 };
+inline constexpr int kCount = 10;
 
 constexpr Pos next(Pos p) { return static_cast<Pos>((static_cast<int>(p) + 1) % kCount); }
 constexpr Pos prev(Pos p) { return static_cast<Pos>((static_cast<int>(p) + kCount - 1) % kCount); }
@@ -25,13 +25,13 @@ constexpr bool can_enter(Pos p) { return p != Pos::Lines && p != Pos::Numbers; }
 
 // The masthead text in the ring view: 1-based position and the name, at most 9 characters (the rail's slot).
 constexpr const char *mast_name(Pos p) {
-    constexpr const char *kNames[kCount] = {"1 HOME", "2 LINES", "3 NUMBERS", "4 GRAPHS", "5 RIPPLE", "6 LINK", "7 BATTERY", "8 LOG", "9 K2"};
+    constexpr const char *kNames[kCount] = {"1 HOME", "2 LINES", "3 NUMBERS", "4 GRAPHS", "5 RIPPLE", "6 LINK", "7 TOOLS", "8 BATTERY", "9 LOG", "10 K2"};
     return kNames[static_cast<int>(p) < kCount ? static_cast<int>(p) : 0];
 }
 
 // The plain name for the Settings row's tail (at most 7 characters: the row's tail room).
 constexpr const char *name(Pos p) {
-    constexpr const char *kNames[kCount] = {"Home", "Lines", "Numbers", "Graphs", "Ripple", "Link", "Battery", "Log", "K2"};
+    constexpr const char *kNames[kCount] = {"Home", "Lines", "Numbers", "Graphs", "Ripple", "Link", "Tools", "Battery", "Log", "K2"};
     return kNames[static_cast<int>(p) < kCount ? static_cast<int>(p) : 0];
 }
 
@@ -49,7 +49,8 @@ constexpr Pos owner(Page base, Menu first, uint8_t /*tab*/) {
     else if (base == Page::Settings) own = Pos::K2;
     else if (base == Page::ChargerTest) own = Pos::Link;
     switch (first) {
-    case Menu::Trigger: case Menu::PdTrigger: case Menu::Cards: case Menu::PdStress:
+    case Menu::Trigger: case Menu::PdTrigger: case Menu::Tools: return Pos::Tools;
+    case Menu::Cards: case Menu::PdStress:
     case Menu::Emarker: case Menu::CableR: case Menu::Spoof: case Menu::LoopProbe:
     case Menu::Twin: case Menu::Connection: return Pos::Link;
     case Menu::Battery: return Pos::Battery;
@@ -70,6 +71,7 @@ constexpr Target target(Pos p) {
     case Pos::Graph: return {Page::Graphs, Menu::Count, 0};
     case Pos::Ripple: return {Page::Ripple, Menu::Count, 0};
     case Pos::Link: return {Page::Lines, Menu::Connection, 0};
+    case Pos::Tools: return {Page::Lines, Menu::Tools, 0};
     case Pos::Battery: return {Page::Lines, Menu::Battery, 0};
     case Pos::Log: return {Page::Lines, Menu::Diagnosis, 0};
     case Pos::K2: return {Page::Settings, Menu::Count, 0};

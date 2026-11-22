@@ -69,15 +69,19 @@ MatchResult match_compute(const MatchInput &in) {
     r.request_seen = in.contract.valid && in.contract.pos > 0;
     if (r.request_seen) {
         r.want_pos = in.contract.pos;
+        r.want_mv = in.contract.mv;
         r.want_ma = in.contract.max_ma ? in.contract.max_ma : in.contract.op_ma;
+        r.want_mw = r.want_mv * r.want_ma / 1000u;
     }
     if (!r.caps_seen) { r.verdict = Verdict::NoCaps; return r; }
 
     r.rows = std::min<int>(caps.num_pdos, int(pd::kMaxPdos));
     for (int i = 0; i < r.rows; i++) {
         if (!(in.offered >> i & 1)) { r.gone++; continue; }
-        r.src_max_mv = std::max<uint32_t>(r.src_max_mv, caps.pdos[i].max_mv);
-        r.src_max_mw = std::max<uint32_t>(r.src_max_mw, caps.pdos[i].max_mw);
+        const pd::Pdo &p = caps.pdos[i];
+        const uint32_t mw = p.max_mw ? p.max_mw : (p.max_mv > 0 && p.max_ma > 0 ? uint32_t(p.max_mv) * p.max_ma / 1000u : 0u);
+        r.src_max_mv = std::max<uint32_t>(r.src_max_mv, p.max_mv);
+        r.src_max_mw = std::max<uint32_t>(r.src_max_mw, mw);
     }
 
     pd::Pdo snk[pd::kMaxPdos];
