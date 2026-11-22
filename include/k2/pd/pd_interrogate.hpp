@@ -135,6 +135,19 @@ constexpr bool same_contract(const IqContract& a, const IqContract& b) {
     return a.ready && b.ready && a.pos == b.pos && a.rdo == b.rdo && a.src_pdo == b.src_pdo;
 }
 
+// Header field decoders (the inline tools and their tests share them).
+namespace wire {
+inline constexpr std::uint16_t kRoleBits = 0x0120;   // header bit 8 power role, bit 5 data role
+constexpr bool from_source(std::uint16_t h) { return (h & 0x0100) != 0; }
+constexpr std::uint8_t type_of(std::uint16_t h) { return std::uint8_t(h & 0x1F); }
+constexpr unsigned ndo_of(std::uint16_t h) { return (h >> 12) & 7; }
+constexpr bool ext_of(std::uint16_t h) { return (h & 0x8000) != 0; }
+constexpr std::uint8_t id_of(std::uint16_t h) { return std::uint8_t((h >> 9) & 7); }
+inline std::uint32_t le32(const std::uint8_t* p) {
+    return std::uint32_t(p[0]) | (std::uint32_t(p[1]) << 8) | (std::uint32_t(p[2]) << 16) | (std::uint32_t(p[3]) << 24);
+}
+}  // namespace wire
+
 // The passive half: the contract and the source's MessageID as the wire shows them. Always fed, also while no run is going
 // (that is how a fresh contract lets a run skip its first reset).
 class IqWatch {
@@ -147,6 +160,11 @@ public:
     std::uint8_t next_id() const { return src_known_ ? std::uint8_t((src_id_ + 1) & 7) : std::uint8_t(0); }
     std::uint16_t src_roles() const { return src_roles_; }   // header bits 8 (power role) and 5 (data role) of the source
     std::uint8_t src_rev() const { return src_rev_; }
+    // A source-role message of this header: the source's roles and the next MessageID (plus `skip` IDs).
+    std::uint16_t stamp(std::uint16_t h, std::uint8_t skip = 0) const {
+        return with_msg_id(std::uint16_t(h | src_roles_), std::uint8_t(next_id() + skip));
+    }
+    std::span<const std::uint32_t> pdos() const { return {pdos_.data(), n_pdos_}; }   // the source's latest list
     std::uint32_t psrdy_at() const { return psrdy_at_; }
     std::uint32_t last_frame_at() const { return last_at_; }
     bool heard() const { return heard_; }   // any frame since the reset

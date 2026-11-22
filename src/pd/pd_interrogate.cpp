@@ -11,17 +11,9 @@ namespace k2::pd {
 
 namespace {
 
-constexpr std::uint8_t kVdmIdentity = 1, kVdmSvids = 2, kVdmModes = 3;
-constexpr std::uint16_t kRoleBits = 0x0120;   // header bit 8 power role, bit 5 data role
+using namespace wire;
 
-constexpr bool from_source(std::uint16_t h) { return (h & 0x0100) != 0; }
-constexpr std::uint8_t type_of(std::uint16_t h) { return std::uint8_t(h & 0x1F); }
-constexpr unsigned ndo_of(std::uint16_t h) { return (h >> 12) & 7; }
-constexpr bool ext_of(std::uint16_t h) { return (h & 0x8000) != 0; }
-constexpr std::uint8_t id_of(std::uint16_t h) { return std::uint8_t((h >> 9) & 7); }
-std::uint32_t le32(const std::uint8_t* p) {
-    return std::uint32_t(p[0]) | (std::uint32_t(p[1]) << 8) | (std::uint32_t(p[2]) << 16) | (std::uint32_t(p[3]) << 24);
-}
+constexpr std::uint8_t kVdmIdentity = 1, kVdmSvids = 2, kVdmModes = 3;
 bool due(std::uint32_t now, std::uint32_t t) { return std::int32_t(now - t) >= 0; }
 
 }  // namespace
@@ -482,7 +474,7 @@ void Interrogate::build() {
         case IqStep::Status: m.header = make_header(kCtlGetStatus, 0, rev); break;
         case IqStep::Done: return;
     }
-    m.header = with_msg_id(std::uint16_t(m.header | watch_.src_roles()), watch_.next_id());
+    m.header = watch_.stamp(m.header);
     tx_ = m;
     tx_chunk_ = false;
     tx_pending_ = true;
@@ -498,7 +490,7 @@ void Interrogate::build_chunk_request() {
     const std::uint16_t req = std::uint16_t((1u << 15) | (1u << 10) | (1u << 11));
     m.data[0] = std::uint8_t(req);
     m.data[1] = std::uint8_t(req >> 8);
-    m.header = with_msg_id(std::uint16_t(m.header | watch_.src_roles()), watch_.next_id());
+    m.header = watch_.stamp(m.header);
     tx_ = m;
     tx_chunk_ = true;
     tx_pending_ = true;
