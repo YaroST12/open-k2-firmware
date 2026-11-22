@@ -86,7 +86,10 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
   K2 on cold attach (no side HID), SuperSpeed Gen 2 drops into `SS.Inactive` (`0xa4002c0` / `0xb0202a0`) and fails warm
   reset (`0x2802a0`); the T7's USB2 fallback (`usb5-port1` `0x6e1`) then drops mid-reset (`0x6f1 -> 0x2202a0`) while
   `usb6-port1` is still cycling `SS.Inactive`, leaving the T7 unenumerated (`~287 mA`, `D+/D- = 0 V`) until VBUS is
-  cut. Ruled out as a firmware bug: (a) once SuperSpeed trained, a 16-config automated sweep toggling `PB13`, `PB15`,
+  cut. 2026-11-22 night: a USB-C continuity tester through the K2 reads the SuperSpeed contacts at pins 10/11 of both rows
+  open in both orientations (TX1 in one), with every SuperSpeed pin lit on the cable alone: damaged connector contacts on
+  this unit's bottom receptacle: pulling the inserted cable sideways makes the open pins conduct (2026-11-23). Fix is a
+  connector replacement; no firmware route. Ruled out as a firmware bug: (a) once SuperSpeed trained, a 16-config automated sweep toggling `PB13`, `PB15`,
   `FUSB302`/`PC13-15`, `dpdm`/`dpsniff`, global `2 MHz` vs `50 MHz` slew, `LCD/PWM`, `load`, and `ADC`/`INA226` passed
   16/16 consecutive `usb5/6/authorized 0->1` warm resets at `10.0 Gb/s` (`uas`, 0 `SS.Inactive`, 0 drops), including
   full Open-K2 default; (b) cold-boot failures reproduce identically in bootloader DFU, a pure `wfi` idle binary, and an
