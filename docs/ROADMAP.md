@@ -80,6 +80,20 @@ Everything is C++23; there are no C files left in `src/` (TinyUSB and lwIP under
 
 Open defects, newest first. A row leaves this list when its fix is merged and seen on hardware.
 
+- **USB 3.2 Gen 2x1 (10 Gbps) / USB4 pass-through cold-attach failure — hardware limit, not firmware** (2026-11-22,
+  AMD USB4 `0000:c5:00.3` / `Bus 005` + `Bus 006`, 5 cm cable + Samsung PSSD T7 `04e8:4001`, plus ASMedia `246x` /
+  XFANIC USB4 dock, `runs/usb4-2026-11-22/`). Direct `5 cm cable -> T7` holds 10.0 Gb/s with zero errors. Through the
+  K2 on cold attach (no side HID), SuperSpeed Gen 2 drops into `SS.Inactive` (`0xa4002c0` / `0xb0202a0`) and fails warm
+  reset (`0x2802a0`); the T7's USB2 fallback (`usb5-port1` `0x6e1`) then drops mid-reset (`0x6f1 -> 0x2202a0`) while
+  `usb6-port1` is still cycling `SS.Inactive`, leaving the T7 unenumerated (`~287 mA`, `D+/D- = 0 V`) until VBUS is
+  cut. Ruled out as a firmware bug: (a) once SuperSpeed trained, a 16-config automated sweep toggling `PB13`, `PB15`,
+  `FUSB302`/`PC13-15`, `dpdm`/`dpsniff`, global `2 MHz` vs `50 MHz` slew, `LCD/PWM`, `load`, and `ADC`/`INA226` passed
+  16/16 consecutive `usb5/6/authorized 0->1` warm resets at `10.0 Gb/s` (`uas`, 0 `SS.Inactive`, 0 drops), including
+  full Open-K2 default; (b) cold-boot failures reproduce identically in bootloader DFU, a pure `wfi` idle binary, and an
+  all-peripherals-off build. Side note: holding `+` occasionally helped even in the `wfi`/all-off builds because `+`
+  is galvanically coupled to `CC2` (~5.2 kOhm hardware `Rd`, `docs/K2_PORTS_SPEC.md`), altering plug-in attach timing
+  independently of firmware.
+
 - **A legacy-only run (USB-A port, no PD) fails a PD row and a red Xiaomi "auth"** (2026-11-21, 1.1.0-217-53dee143,
   UGREEN 65 W USB-A port through an A-to-C cable, Deep full run, `runs/hw-2026-11-21/153343-ugreen-deep/`). The preflight
   said "no PD source capabilities after a rescan: legacy-only run", yet the PD unit planned a row that ended
@@ -959,16 +973,18 @@ and the hardware check). A row leaves this list when its fix is merged and the h
   - Validate: host tests of the decision table; hardware: (a) the CUKTECH 6 A planned re-attach still comes back with
     Rd from the first instruction, (b) unplug after a self-powered run, wait 10 s, plug into HID only: `k2_remote
     bootinfo` shows no Rd at any time (SWITCHES0 notes without PDWN bits).
-- **Both Rd for 0.13 ms at SW_RES** (2026-11-09, fixed in a605db3, hardware check pending): the FUSB302 soft reset on a
-  pinned boot leaves the chip default SWITCHES0 = 0x03 (both pull-downs) for 0.13 ms until the pin is written again.
-  Below every debounce; not seen to matter.
-  - Fix: on a pinned or comeback boot, skip SW_RES and use PD_RESET only, or write SWITCHES0 in the same I2C burst.
-    Done as the first option: init() and detach_reset() write PD_RESET only when g_pin_rd != 0 (key modes, the
-    inherited pin after a warm reset, the comeback marker); a plain boot keeps SW_RES at init and already used
-    PD_RESET at detach. park() (DFU teardown only) is unchanged.
-  - Validate: host fusb302 scan test asserting no SWITCHES0 value with both PDWN bits on a pinned boot
-    (test_pinned_boot_never_soft_resets_so_no_rd_pair_at_sw_res, red in 166ca72, green in a605db3);
-    `k2_remote bootinfo` notes on hardware show no 0x03.
+- **Both Rd for 0.13 ms at SW_RES** (2026-11-09, pinned path fixed in a605db3; plain-boot path fixed 2026-11-22,
+  hardware check pending): the FUSB302 soft reset leaves the chip default `SWITCHES0 = 0x03` (both pull-downs) for ~0.13 ms
+  until `SWITCHES0` is written again. On a pinned boot `init()` and `detach_reset()` use `PD_RESET` only; on a plain
+  boot (`g_pin_rd == 0`), `init()` previously closed `PC14`/`PC15` before `SW_RES`, briefly exposing `0x03` onto the CC
+  lines.
+  - Fix: pinned/comeback boots keep `PD_RESET` only; plain boots now open `PC14`/`PC15` (`cc_switches(false, 0)`) before
+    `SW_RES` and re-close them only after `wr(kSwitches0, 0)` clears both `PDWN` bits (`src/drivers/fusb302_cold.cpp`).
+    `park()` (DFU teardown only) is unchanged.
+  - Validate: host fusb302 scan tests asserting no `SWITCHES0` value with both `PDWN` bits on a pinned boot
+    (`test_pinned_boot_never_soft_resets_so_no_rd_pair_at_sw_res`, green in a605db3) and no `PDWN` bit while `PC14`/`PC15`
+    are closed on a plain cold or warm boot (`test_plain_boot_opens_cc_switches_during_sw_res`, not verified on hardware);
+    `k2_remote bootinfo` notes on hardware show no `0x03`.
 - **Self-powered source loss at the legacy -> PD boundary** (2026-11-09, Apple PD 2.0, step 16/49 on 091e80e): VBUS
   went away and the run stopped until a replug. The K2 takes no VBUS action there; the cause is unproven. Since 1e3b67b
   a self-powered run comes back by itself.

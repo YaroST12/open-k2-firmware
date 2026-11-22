@@ -479,11 +479,14 @@ bool init() {
     reg::crm().APB2EN |= reg::Crm::APB2EN_GPIOC;
 #endif
     for (const auto& p : {pins::cc_vconn_gnd, pins::cc1_switch, pins::cc2_switch}) p.mode(reg::Mode::OutPp50);
-    cc_switches(false, cc_mask());
-    K2LOG("[FUSB302] Hardware CC switches enabled (mask %d)\n", cc_mask());
+    // On a plain boot (g_pin_rd == 0), open PC14/PC15 before SW_RES so the chip's power-on default
+    // SWITCHES0 = 0x03 (Rd on both CC lines) cannot reach the live CC bus during the reset window.
+    // Pinned / comeback boots use PD_RESET only and keep the switches closed throughout.
+    cc_switches(false, g_pin_rd != 0 ? cc_mask() : std::uint8_t(0));
 
     if (!rd(kDeviceId, g_device_id)) {
         K2LOG("[FUSB302] ERROR: Failed to read DEVICE_ID\n");
+        if (g_pin_rd == 0) cc_switches(false, cc_mask());
         return false;
     }
     K2LOG("[FUSB302] Detected ID: 0x%02X (version 0x%X, rev 0x%X)\n", g_device_id,
@@ -491,6 +494,8 @@ bool init() {
 
     wr(kReset, g_pin_rd != 0 ? kPdReset : kSwReset);
     wr(kSwitches0, g_pin_rd);
+    if (g_pin_rd == 0) cc_switches(false, cc_mask());
+    K2LOG("[FUSB302] Hardware CC switches enabled (mask %d)\n", cc_mask());
     delay_ms(10);
     g_active_cc = 0;
     configure_passive();

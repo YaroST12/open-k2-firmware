@@ -3999,6 +3999,37 @@ void test_pinned_boot_never_soft_resets_so_no_rd_pair_at_sw_res() {
     }
 }
 
+// Plain boot follow-up: self_power_early() writes SWITCHES0 = 0x00 before closing PC14/PC15, and init()
+// later issues SW_RES (which restores SWITCHES0 = 0x03). PC14/PC15 must be open while SW_RES runs so no
+// PDWN bit ever reaches the CC lines on a passive boot (cold or warm).
+bool rd_exposed_on_cc_lines() {
+    bool pc14 = false, pc15 = false;
+    unsigned sw0 = 0x03;   // chip power-on default until the first SWITCHES0 write
+    for (const std::string& s : g_log) {
+        if (s == "PC14=0") pc14 = false;
+        else if (s == "PC14=1") pc14 = true;
+        else if (s == "PC15=0") pc15 = false;
+        else if (s == "PC15=1") pc15 = true;
+        else if (s.rfind("W 02=", 0) == 0) sw0 = std::stoul(s.substr(5), nullptr, 16);
+        else if (s.rfind("W 0C=", 0) == 0 && (std::stoul(s.substr(5), nullptr, 16) & 1u) != 0) sw0 = 0x03;
+        if ((pc14 && (sw0 & 1u) != 0) || (pc15 && (sw0 & 2u) != 0)) return true;
+    }
+    return false;
+}
+
+void test_plain_boot_opens_cc_switches_during_sw_res() {
+    for (bool warm : {false, true}) {
+        reset_world();
+        g_mark = 0;
+        fusb302::self_power_early(bootmode::Mode::Plain, warm);
+        fusb302::init();
+        CHECK_EQ(rd_exposed_on_cc_lines(), false);
+        CHECK_EQ(int(g_reg[0x02] & 3), 0);
+        CHECK_EQ(g_pin[1], true);   // PC14 closed again after SW_RES + SWITCHES0 = 0
+        CHECK_EQ(g_pin[2], true);   // PC15 closed again after SW_RES + SWITCHES0 = 0
+    }
+}
+
 // The over-load gate's far-PD-message half (k2/pps-overload review, finding 1): a far sink's control
 // message on SOP (power-role bit clear - its Get_Source_Cap, its GoodCRC) is a PD message from it, so
 // over_load_facts().far_pd_message must be true and pd::over_load_allowed() must refuse. The source's
@@ -5577,6 +5608,7 @@ int main() {
     test_the_far_sink_belongs_to_one_attach_for_the_rd_policy();
     test_a_sink_band_level_without_rd_of_our_own_is_no_evidence();
     test_pinned_boot_never_soft_resets_so_no_rd_pair_at_sw_res();   // last: ends with a detach / Rd off
+    test_plain_boot_opens_cc_switches_during_sw_res();
     test_a_far_sinks_control_message_is_a_far_pd_message_for_the_over_load_gate();   // last: ends with a detach / reset
     test_lab_pin_clears_when_the_far_end_detaches();            // last: each one ends with a detach / Rd off
     test_a_boot_pin_survives_the_far_end_detaching();
