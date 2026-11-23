@@ -37,10 +37,12 @@ std::uint32_t word(const TxMsg& m, unsigned i) {
 
 struct Rig {
     Limiter lim;
+    IqWatch watch;              // the driver's always-fed sniffer: what an arm mid-contract is seeded from
     std::uint32_t now = 10000;
     std::uint8_t last_id = 0;   // the charger's newest MessageID
 
     void rx(std::uint16_t header, std::vector<std::uint8_t> payload = {}) {
+        watch.on_message(Sop::Sop, header, payload, now);
         lim.on_message(Sop::Sop, header, payload, now);
         now += 1;
     }
@@ -196,7 +198,7 @@ int main() {
         CHECK_EQ(r.lim.status().injections, 2);
     }
 
-    // ---- armed mid-contract: no real list was seen, nothing to forge from ----
+    // ---- armed mid-contract with no seed: no real list was seen, nothing to forge from ----
     {
         Rig r;
         r.lim.arm(30000, r.now);
@@ -205,6 +207,80 @@ int main() {
         TxMsg m;
         CHECK_COND(!r.tx(m));
         CHECK_EQ(int(r.lim.status().state), int(LimState::Armed));
+    }
+
+    // ---- armed mid-contract, seeded from the sniffer: an over-limit contract is forged at once, no replug ----
+    {
+        Rig r;
+        r.negotiate(2, rq_fixed(4, 3000, 3000));   // 15 V 3 A = 45 W, before the arm: the limiter is off and hears nothing
+        r.now += 30;
+        CHECK_COND(r.lim.arm(10000, r.now, &r.watch));
+        CHECK_EQ(int(r.lim.status().state), int(LimState::Pending));
+        CHECK_EQ(r.lim.status().req_pos, 4);
+        CHECK_EQ(r.lim.status().req_mw, 45000);
+        TxMsg m;
+        CHECK_COND(r.tx(m));
+        CHECK_EQ(int(r.lim.status().state), int(LimState::Injected));
+        CHECK_EQ((m.header >> 9) & 7, (r.last_id + 2) & 7);   // the same MessageID rule as a list forged from the wire
+        CHECK_EQ(m.len, 24);
+        CHECK_EQ(word(m, 3), fixed(15000, 660));              // 10 W / 15 V = 0.66 A
+        CHECK_EQ(r.lim.status().injections, 1);
+        r.request(rq_fixed(4, 660, 660));                     // the sink obeys
+        CHECK_EQ(int(r.lim.status().state), int(LimState::Limited));
+    }
+    // ... a line that is still busy waits for the quiet time; a seeded contract within P just stays as it is
+    {
+        Rig r;
+        r.negotiate(0, rq_fixed(4, 3000, 3000));
+        r.now += 2;                                          // the PS_RDY GoodCRC was 2 ms ago
+        r.lim.arm(10000, r.now, &r.watch);
+        TxMsg m;
+        r.lim.tick(r.now);
+        CHECK_COND(!r.lim.take_tx(m, r.now));
+        CHECK_COND(r.tx(m, kLimQuietMs));
+        Rig w;
+        w.negotiate(0, rq_fixed(2, 1000, 1000));             // 9 W: already within 10 W
+        w.lim.arm(10000, w.now, &w.watch);
+        CHECK_EQ(int(w.lim.status().state), int(LimState::Limited));
+        CHECK_COND(!w.tx(m));
+        w.request(rq_fixed(4, 3000, 3000));                  // it asks for more: forged from the seeded list
+        w.accept_ready(2);
+        CHECK_EQ(int(w.lim.status().state), int(LimState::Pending));
+        CHECK_COND(w.tx(m));
+        // no contract in the sniffer: armed, waiting
+        Rig e;
+        e.caps(0);                                           // a list, but no Request / PS_RDY yet
+        e.lim.arm(10000, e.now, &e.watch);
+        CHECK_EQ(int(e.lim.status().state), int(LimState::Armed));
+        CHECK_COND(!e.tx(m));
+    }
+
+    // ---- the replay of hardware test 1: three list retries, the Request, Accept, PS_RDY sent twice ----
+    {
+        Rig r;
+        r.lim.arm(10000, r.now);                              // armed with the pair attached, then a replug: a fresh attach
+        r.lim.on_detach();
+        r.caps(0);
+        r.caps(1);
+        r.caps(2);                                            // the sink GoodCRCs the third
+        CHECK_EQ(int(r.lim.status().state), int(LimState::Negotiating));
+        r.request(rq_fixed(4, 3000, 3000));                   // 15 V 3 A
+        r.rx(hdr(3, 0, 2, kSrc, 3));                          // Accept
+        r.rx(hdr(1, 0, 1, kSnk, 3));
+        r.rx(hdr(6, 0, 2, kSrc, 4));                          // PS_RDY
+        r.rx(hdr(1, 0, 1, kSnk, 4));
+        CHECK_EQ(int(r.lim.status().state), int(LimState::Pending));
+        r.now += 2;
+        r.rx(hdr(6, 0, 2, kSrc, 5));                          // and again, 3 ms later: no new negotiation
+        r.rx(hdr(1, 0, 1, kSnk, 5));
+        CHECK_EQ(int(r.lim.status().state), int(LimState::Pending));
+        TxMsg m;
+        r.lim.tick(r.now);
+        CHECK_COND(!r.lim.take_tx(m, r.now));                 // the second PS_RDY restarted the quiet time
+        CHECK_COND(r.tx(m, kLimQuietMs));
+        CHECK_EQ((m.header >> 9) & 7, (5 + 2) & 7);           // two past the second PS_RDY
+        CHECK_EQ(r.lim.status().injections, 1);
+        CHECK_EQ(word(m, 3), fixed(15000, 660));
     }
 
     // ---- limited, then the sink asks for more again: forged again ----
@@ -421,20 +497,35 @@ int main() {
         CHECK_COND(d.lim.armed());
     }
 
-    // ---- detach ends it; disarmed, nothing is sent and nothing is tracked ----
+    // ---- a detach only waits: the armed limit survives it, nothing of the old link counts ----
     {
         Rig r;
         r.lim.arm(30000, r.now);
         r.negotiate(0, rq_fixed(5, 5000, 5000));
+        CHECK_EQ(int(r.lim.status().state), int(LimState::Pending));
+        r.lim.on_detach();
+        CHECK_COND(r.lim.armed());
+        CHECK_EQ(int(r.lim.status().state), int(LimState::Armed));
+        CHECK_EQ(int(r.lim.status().why), int(LimWhy::None));
+        TxMsg m;
+        CHECK_COND(!r.tx(m));                            // the old contract is gone: nothing to forge from
+        r.negotiate(0, rq_fixed(5, 5000, 5000));        // the next attach
+        CHECK_COND(r.tx(m));
+        CHECK_EQ(r.lim.status().injections, 1);
+        // the same after an injected list and a verified one
+        r.request(rq_fixed(5, 1500, 1500));
+        CHECK_EQ(int(r.lim.status().state), int(LimState::Limited));
+        r.lim.on_detach();
+        CHECK_EQ(int(r.lim.status().state), int(LimState::Armed));
+        r.now += kLimGapMs;
+        r.negotiate(0, rq_fixed(5, 5000, 5000));
+        CHECK_COND(r.tx(m));
+        CHECK_EQ(r.lim.status().injections, 2);
+        // a detach while off stays off; arming again starts clean
+        r.lim.disarm();
         r.lim.on_detach();
         CHECK_COND(!r.lim.armed());
-        CHECK_EQ(int(r.lim.status().why), int(LimWhy::Detached));
-        TxMsg m;
-        CHECK_COND(!r.tx(m));
-        r.negotiate(0, rq_fixed(5, 5000, 5000));
-        CHECK_COND(!r.tx(m));
-        CHECK_EQ(r.lim.status().injections, 0);
-        // arming again starts clean
+        CHECK_EQ(int(r.lim.status().why), int(LimWhy::User));
         CHECK_COND(r.lim.arm(20000, r.now));
         CHECK_EQ(int(r.lim.status().why), int(LimWhy::None));
         CHECK_EQ(r.lim.status().limit_mw, 20000);
@@ -451,14 +542,12 @@ int main() {
 
     // ---- the arming gate ----
     {
-        const LimFacts ok{true, true, false};
+        const LimFacts ok{false};   // nothing attached, or only a charger: it waits, no refusal
         CHECK_EQ(int(lim_gate(ok, 30000)), int(LimRefusal::None));
         CHECK_EQ(int(lim_gate(ok, kLimMinMw - 1)), int(LimRefusal::BadLimit));
         CHECK_EQ(int(lim_gate(ok, kLimMaxMw + 1)), int(LimRefusal::BadLimit));
-        CHECK_EQ(int(lim_gate({false, true, false}, 30000)), int(LimRefusal::NoCc));
-        CHECK_EQ(int(lim_gate({true, false, false}, 30000)), int(LimRefusal::NotInline));
-        CHECK_EQ(int(lim_gate({true, true, true}, 30000)), int(LimRefusal::Busy));
-        CHECK_STR(lim_refusal_name(LimRefusal::NotInline), "not inline");
+        CHECK_EQ(int(lim_gate({true}, 30000)), int(LimRefusal::Busy));
+        CHECK_STR(lim_refusal_name(LimRefusal::Busy), "another feature is running");
     }
 
     // ---- the names (the shell and the wire carry them) ----

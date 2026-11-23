@@ -2075,8 +2075,8 @@ class PdLimitCli(unittest.TestCase):
         self.assertIn("pd-limit off (the charger resets)", kr.render("pd-limit", {"pd_limit": off}))
 
     def test_refusal_text(self):
-        e = kr.RemoteError(kr.STATUS_BUSY, kr.CMD_PD_LIMIT, bytes([3]))   # Busy + LimRefusal::NotInline
-        self.assertIn("not inline", str(e))
+        e = kr.RemoteError(kr.STATUS_BUSY, kr.CMD_PD_LIMIT, bytes([2]))   # Busy + LimRefusal::Busy
+        self.assertIn("another feature is running", str(e))
 
     def test_names_match_the_firmware_enums(self):
         import re

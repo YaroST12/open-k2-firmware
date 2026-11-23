@@ -50,8 +50,6 @@ const char* lim_refusal_name(LimRefusal r) {
     switch (r) {
         case LimRefusal::None: return "none";
         case LimRefusal::BadLimit: return "limit outside 5..100 W";
-        case LimRefusal::NoCc: return "no CC";
-        case LimRefusal::NotInline: return "not inline";
         case LimRefusal::Busy: return "another feature is running";
     }
     return "?";
@@ -59,8 +57,6 @@ const char* lim_refusal_name(LimRefusal r) {
 
 LimRefusal lim_gate(const LimFacts& f, std::uint32_t limit_mw) {
     if (limit_mw < kLimMinMw || limit_mw > kLimMaxMw) return LimRefusal::BadLimit;
-    if (!f.cc) return LimRefusal::NoCc;
-    if (!f.inline_link) return LimRefusal::NotInline;
     return f.busy ? LimRefusal::Busy : LimRefusal::None;
 }
 
@@ -110,13 +106,28 @@ std::size_t forge_caps(std::span<const std::uint32_t> real, std::uint32_t limit_
     return n;
 }
 
-bool Limiter::arm(std::uint32_t limit_mw, std::uint32_t now) {
+bool Limiter::arm(std::uint32_t limit_mw, std::uint32_t now, const IqWatch* seed) {
     if (limit_mw < kLimMinMw || limit_mw > kLimMaxMw) return false;
     st_ = LimStatus{};
     st_.state = LimState::Armed;
     st_.limit_mw = limit_mw;
     watch_.reset();
     last_at_ = now;
+    if (seed && seed->contract().ready) {   // armed mid-contract: the list, the Request and the MessageID are already known
+        watch_ = *seed;
+        last_at_ = watch_.last_frame_at();
+        const IqContract& c = watch_.contract();
+        st_.req_rdo = c.rdo;
+        st_.req_pos = c.pos;
+        st_.req_mw = request_mw(c.rdo, watch_.pdos());
+        if (st_.req_mw > limit_mw) {
+            st_.state = LimState::Pending;
+            ready_at_ = now;
+        } else {
+            st_.state = LimState::Limited;
+            inj_at_ = now - kLimBlameMs - 1;   // no list of ours is in flight: a reset now is nobody's rejection
+        }
+    }
     return true;
 }
 

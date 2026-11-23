@@ -4201,7 +4201,7 @@ def cmd_ufcs(link, a):
 LIM_STATES = ["off", "armed", "negotiating", "pending", "injected", "limited"]
 LIM_WHYS = ["none", "turned off", "detached", "EPR is not covered", "too many lists", "the charger resets", "the sink resets",
             "the sink ignores it"]
-LIM_REFUSALS = ["none", "limit outside 5..100 W", "no CC", "not inline", "another feature is running"]
+LIM_REFUSALS = ["none", "limit outside 5..100 W", "another feature is running"]
 LIM_OP_STATUS, LIM_OP_ARM, LIM_OP_OFF = 0, 1, 2
 
 
