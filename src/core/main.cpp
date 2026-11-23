@@ -198,6 +198,7 @@ k2::mainloop::Context g_loop{g_ui, g_remote, g_bootscreen, g_accelerometer, rebo
         g_ui.restore_home_hero(prefs.home_hero);
         g_ui.restore_long_back(prefs.long_back);
         g_ui.charger_test_set_level(prefs.ct_level);   // Settings > Test level: the charger test's draft level (Medium by default)
+        g_ui.charger_test_set_sweep_depth(prefs.sweep_depth);   // Settings > Sweep depth: 200 mV by default
         k2::uiprefs::legacy_units_shown = prefs.legacy_units;   // Settings > Huawei/Samsung tests: hidden by default
         g_ui.charger_test_legacy_changed();
     }

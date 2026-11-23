@@ -95,6 +95,17 @@ static void test_plan_total_counts_the_points_of_the_depth() {
     CHECK_EQ(sw::plan_total_capped(caps, 36000, 9000, sw::Kind::Pps, Depth::Step200), 30u + 21u);   // a 9 V cable: 3.3-9 V, 5-9 V
 }
 
+static void test_depth_cycle_visits_every_depth_once_and_returns() {
+    using sw::Depth;
+    Depth d = Depth::Step200;
+    unsigned seen = 0;
+    for (unsigned i = 0; i < sw::kDepthCount; ++i) { seen |= 1u << unsigned(d); d = sw::next_depth(d); }
+    CHECK_EQ(seen, 0xFu);
+    CHECK_EQ(unsigned(d), unsigned(Depth::Step200));   // the default is the cycle's start
+    CHECK_STR(sw::depth_name(Depth::Step200), "200 mV");
+    CHECK_STR(sw::depth_name(Depth::Phone), "Phone");
+}
+
 static void test_summary_of_a_clean_track_names_peak_and_errors() {
     std::vector<int16_t> err;
     for (unsigned set = 5000; set <= 21000; set += 100) err.push_back(int16_t(set - 150 - int(set)));   // -150 mV throughout
@@ -662,6 +673,7 @@ int main() {
     test_point_current_is_1a_never_above_the_offer_or_cable();
     test_plan_total_counts_every_pps_apdo_within_the_budget();
     test_plan_total_counts_the_points_of_the_depth();
+    test_depth_cycle_visits_every_depth_once_and_returns();
     test_avs_plan_spr_only();
     test_avs_plan_spr_plus_epr_capped_at_the_ceiling();
     test_avs_point_current_never_above_the_pdp_limit_or_1a();

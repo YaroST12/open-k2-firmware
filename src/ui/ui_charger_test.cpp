@@ -1815,10 +1815,10 @@ bool sweep_row_shown(int family, int row, unsigned pps_points, unsigned avs_poin
 }
 
 unsigned ChargerTestSession::sweep_points() const {
-    return ctsweep::plan_total_capped(fusb302::caps(), ctx_.cap_mv, fusb302::physical_cable().max_mv);
+    return ctsweep::plan_total_capped(fusb302::caps(), ctx_.cap_mv, fusb302::physical_cable().max_mv, ctsweep::Kind::Pps, options_.sweep_depth);
 }
 unsigned ChargerTestSession::avs_sweep_points() const {
-    return ctsweep::plan_total_capped(fusb302::caps(), ctx_.cap_mv, fusb302::physical_cable().max_mv, ctsweep::Kind::Avs);
+    return ctsweep::plan_total_capped(fusb302::caps(), ctx_.cap_mv, fusb302::physical_cable().max_mv, ctsweep::Kind::Avs, options_.sweep_depth);
 }
 
 uint32_t ChargerTestSession::wait_total_ms() {
@@ -1967,9 +1967,23 @@ constexpr const char *kNoteCustom = "Choose families one by one", *kNoteLast = "
                      *kNotePdFixed = "Fixed offers: SPR + EPR", *kNotePps = "PPS + SPR/EPR AVS offers",
                      *kNoteClassB = "20 V; Class A shows a skip", *kNoteUfcs = "UART 5/9/12V; needs UFCS",
                      *kNoteVivo = "UART 5/9/11V, unproven", *kNoteHs = "5V handshake, not power",
-                     *kNoteEntry = "One entry of this family", *kNoteSweep = "Every 100mV, 1A; opt-in";
+                     *kNoteEntry = "One entry of this family", *kNoteSweep = "Every 100mV, 1A; opt-in",
+                     *kNoteSweep200 = "Every 200mV, 1A; opt-in", *kNoteSweepPhone = "100mV, 20mV in phone zones", *kNoteSweep20 = "Every 20mV, 1A; opt-in";
 constexpr const char *kNotes[] = {kNoteCustom, kNoteLast, kNoteFamily, kNoteXiaomi, kNotePdFixed, kNotePps, kNoteClassB,
-                                  kNoteUfcs, kNoteVivo, kNoteHs, kNoteEntry, kNoteSweep};
+                                  kNoteUfcs, kNoteVivo, kNoteHs, kNoteEntry, kNoteSweep,
+                                  kNoteSweep200, kNoteSweepPhone, kNoteSweep20};
+// A deep sweep line's note names the step; the AVS sweep steps 100 mV (its Request quantum) at Phone and 20 mV.
+const char *sweep_note(ctsweep::Depth d, bool avs) {
+    if (d == ctsweep::Depth::Step200) return kNoteSweep200;
+    if (avs || d == ctsweep::Depth::Step100) return kNoteSweep;
+    return d == ctsweep::Depth::Phone ? kNoteSweepPhone : kNoteSweep20;
+}
+// The words the Review value and the Running family label append: "Medium 200 mV" in 18 value cells, "USB PD 200 mV" in 16 label cells.
+constexpr const char *kDepthWords[ctsweep::kDepthCount] = {ctsweep::depth_name(ctsweep::Depth::Step100), ctsweep::depth_name(ctsweep::Depth::Step200),
+                                                           ctsweep::depth_name(ctsweep::Depth::Phone), ctsweep::depth_name(ctsweep::Depth::Step20)};
+static_assert(all_fit(kDepthWords, kSmallAdvPx, 6 * kSmallAdvPx), "a depth word is wider than its tail");
+static_assert(all_fit(kLevelItems, kSmallAdvPx, 11 * kSmallAdvPx), "a Level word and a depth word are wider than the Review value");
+static_assert(all_fit(kDepthWords, kLabelAdv, 9 * kLabelAdv), "a depth word after the family label is wider than its cells");
 static_assert(all_fit(kNotes, kLabelAdv, kit::kNoteMaxPx), "a note is wider than the row note");
 
 // The Group page's mask for row `row` of family `fam` (the PD family has two algorithm rows - fixed offers, the PPS /
@@ -2448,7 +2462,7 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
             out.state = avs ? s_.options_.avs_sweep : s_.options_.pps_sweep;
             out.text = avs ? "AVS sweep" : "PPS sweep";
             row_tail_.put_u32(avs ? s_.avs_sweep_points() : s_.sweep_points()).put(" pts");
-            if (focused) out.note = kNoteSweep;
+            if (focused) out.note = sweep_note(s_.options_.sweep_depth, avs);
             break;
         }
         out.state = (s_.options_.selected & m) == m;
@@ -2823,7 +2837,10 @@ void ChargerTestPage::paint_review() {
     // the PD spec stage's checks (Deep, K2_PDSPEC) are tests too
     buf.put_u32(s_.summary_.runnable + s_.summary_.spec_checks).put(" run, ").put_u32(s_.summary_.skipped).put(" skip");
     if (!kv(0, "Tests", buf.view(), s_.summary_.runnable ? kText : kCaution)) return;
-    if (!kv(1, "Depth", kLevelItems[level_segment(s_.options_.level)], kText)) return;
+    buf.clear();
+    buf.put(kLevelItems[level_segment(s_.options_.level)]);
+    if (s_.options_.pps_sweep || s_.options_.avs_sweep) buf.put_char(' ').put(ctsweep::depth_name(s_.options_.sweep_depth));   // the sweep's step, when a sweep runs
+    if (!kv(1, "Depth", buf.view(), kText)) return;
 
     buf.clear();
     const auto sel = ctx_.cables.selected();
@@ -3177,7 +3194,10 @@ void ChargerTestPage::paint_running(uint32_t now) {
         if (bg.admit(prog_.cost(done, total))) prog_.set(done, total);
         const int fam = st ? family(*st) : -1;
         // the family label (dim, 12 px) above the name; a sweep row's name moves up and the label goes to its right, baseline to baseline
-        const char *const fam_name = fam >= 0 ? kFamilyNames[fam] : "";
+        StrBuf<24> fam_buf;   // a sweep row's label also names the sweep step: "USB PD 200 mV"
+        fam_buf.put(fam >= 0 ? kFamilyNames[fam] : "");
+        if (sweeping) fam_buf.put_char(' ').put(ctsweep::depth_name(s_.options_.sweep_depth));
+        const char *const fam_name = fam_buf.c_str();
         if (sweeping) put_line(c, kLabelFont, runlay::kSweepFamX, L.name_y + kSmall.ascent - kLabelFont.ascent, fam_name, kDim, 16, cell_sig_[2], true, false, &bg);
         else put_line(c, kLabelFont, runlay::kLeftX, 32, fam_name, kDim, runlay::kFamCells, cell_sig_[2], false, false, &bg);
         buf.clear();

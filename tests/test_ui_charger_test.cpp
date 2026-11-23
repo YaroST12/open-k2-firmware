@@ -1092,6 +1092,31 @@ static bool start_cell_says(std::string_view hint) {
 // Review carries no alert band and no warning lines (user decision 2026-11-21): the other port is START's hint only. The table
 // starts at the body top, the rule and the 64 px ticket follow, and no amber is painted above the ticket (the Tests row is text).
 // The idle footer is empty: "Check the other port" only repeated the fixed warning, so no toast rides on a bare Review.
+// A fresh draft sweeps every 200 mV; Review names the step beside the level when a sweep runs, and says nothing of it when none does.
+static void test_review_names_the_sweep_step() {
+    fixture();
+    {
+        Ui ui; open(ui);
+        CHECK_EQ(unsigned(ui.charger_test_sweep_depth()), unsigned(ctsweep::Depth::Step200));
+        CHECK_EQ(ui.charger_test_set_sweep_depth(ctsweep::kDepthCount), false);
+        CHECK_EQ(unsigned(ui.charger_test_sweep_depth()), unsigned(ctsweep::Depth::Step200));
+    }
+    struct Case { bool pps, avs; ctsweep::Depth depth; const char* text; };
+    static const Case cases[] = {
+        {true, false, ctsweep::Depth::Step200, "Medium 200 mV     "},
+        {false, true, ctsweep::Depth::Phone, "Medium Phone      "},
+        {true, true, ctsweep::Depth::Step20, "Medium 20 mV      "},
+        {true, false, ctsweep::Depth::Step100, "Medium 100 mV     "},
+        {false, false, ctsweep::Depth::Step20, "Medium            "},   // no sweep: no step
+    };
+    for (const auto& c : cases) {
+        Ui ui; open(ui);
+        ui.charger_test_set_sweep(c.pps); ui.charger_test_set_avs_sweep(c.avs);
+        ui.charger_test_set_sweep_depth(uint8_t(c.depth));
+        review(ui);
+        check_text_at(kSmall, review_row_y(1), c.text, kText, kBg, 68);
+    }
+}
 static void test_review_carries_the_other_port_warning() {
     static_assert(kit::kBodyY + 5 * kit::kRowH <= kReviewRuleY && kReviewCellY + kReviewCellH <= kFooterY, "five rows, rule, ticket");
     for (unsigned mode = 0; mode < 2; ++mode) {
@@ -2285,6 +2310,7 @@ static void test_a_voltage_fold_reads_as_a_caution() {
     Ui ui; open(ui);
     CHECK_EQ(ui.charger_test_set_units(kPdOnly), true);
     ui.charger_test_set_sweep(true);
+    ui.charger_test_set_sweep_depth(unsigned(ctsweep::Depth::Step100));   // the record below is written cell by cell: every cell measured
     review(ui);
     start_press(ui, 1300); press(ui, Button::Ok, 1400);
     uint32_t t = 1500;
@@ -6819,7 +6845,7 @@ int main() {
     test_depth_row_cycles_and_shows_on_review();
     test_preset_counts_follow_the_depth();
     test_an_old_journal_resumes_without_the_default_sweep();
-    test_self_powered_review_note(); test_review_carries_the_other_port_warning(); test_phantom_evidence_does_not_refuse_a_run_but_a_load_does(); test_self_powered_run_is_on_the_card(); test_a_cable_read_once_stays_with_the_run();
+    test_self_powered_review_note(); test_review_carries_the_other_port_warning(); test_review_names_the_sweep_step(); test_phantom_evidence_does_not_refuse_a_run_but_a_load_does(); test_self_powered_run_is_on_the_card(); test_a_cable_read_once_stays_with_the_run();
     test_pps_wire_headroom_note();
     test_first_menu_and_pd_bundles();
     test_tests_step_presets();

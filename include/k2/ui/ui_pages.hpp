@@ -361,6 +361,9 @@ public:
     bool avs_sweep_on() const { return options_.avs_sweep; }
     void set_avs_sweep(bool on) { options_.avs_sweep = on; }
     charger_test::Level level() const { return options_.level; }
+    // Settings > Sweep depth: the deep sweeps' step. The draft keeps it (no other row changes it); the sweep rows' point counts follow it.
+    ctsweep::Depth sweep_depth() const { return options_.sweep_depth; }
+    void set_sweep_depth(ctsweep::Depth d) { options_.sweep_depth = d; invalidate_confirmation(); }
     void set_level(charger_test::Level l);   // with_level: the level and both deep sweeps; a START armed on the old plan is disarmed
     // Settings > Huawei/Samsung tests changed (or first read): the draft drops FCP, SCP and AFC, or takes them back when it was the default.
     void sync_legacy();
@@ -536,7 +539,8 @@ private:
     // The draft starts at Medium (no deep sweeps); boot applies the stored Settings > Test level (Ui::charger_test_set_level),
     // Review's Level row and the remote (Cmd 0x5B) change it, and Deep turns both deep sweeps on (with_level). The Tests list
     // lines and the remote knob (charger-sweep, Cmd 0x0F) still toggle each sweep on its own after that.
-    charger_test::Options options_{};
+    // The depth starts at 200 mV (the Options struct keeps Step100 = 0, what a journal without the field ran); boot applies the stored one.
+    charger_test::Options options_ = [] { charger_test::Options o; o.sweep_depth = ctsweep::Depth::Step200; return o; }();
     uint32_t run_extra_ K2_BSS_INIT(0);          // hidden-unit algorithm bits the run in flight was planned with (not in the draft; the journal header keeps them)
     bool legacy_hidden_seen_ K2_BSS_INIT(false);   // what sync_legacy() last applied to the draft (the draft starts as shown)
     charger_test::Summary summary_;
@@ -1324,10 +1328,11 @@ public:
     // The row count follows the build: the Screenshot row exists only with K2_SCREENSHOT=1 (the default is 0). ui_pages.cpp
     // static_asserts these against its SettingRow enum, and test_settings_rows0 pins the K2_SCREENSHOT=0 values.
     static constexpr int kScreenshotRows = K2_SCREENSHOT ? 1 : 0;
-    static constexpr int kRows = 12 + kScreenshotRows;
+    static constexpr int kRows = 13 + kScreenshotRows;
     static constexpr int kUnitsRow = 6 + kScreenshotRows;   // Huawei/Samsung: FCP, SCP, AFC in the charger test
-    static constexpr int kDisplayRow = 8 + kScreenshotRows;
-    static constexpr int kSystemRow = 9 + kScreenshotRows, kMemoryRow = 10 + kScreenshotRows, kBootRow = 11 + kScreenshotRows;
+    static constexpr int kSweepRow = 7 + kScreenshotRows;   // Sweep depth of the deep sweeps
+    static constexpr int kDisplayRow = 9 + kScreenshotRows;
+    static constexpr int kSystemRow = 10 + kScreenshotRows, kMemoryRow = 11 + kScreenshotRows, kBootRow = 12 + kScreenshotRows;
     static constexpr int16_t kIdHeadY = 3, kIdLineY = 24, kIdDashY = 41, kListY = 44;   // identity y0..43, the list under it
 private:
     static void row_fn(void *ctx, int index, bool focused, kit::RowSpec &out);   // reads the live settings: no value cache
@@ -1337,6 +1342,7 @@ private:
     Elem foot_, id_;
     uint8_t static_step_ = 0;
     uint8_t ct_level_ = 0;                // Test level: the stored default (uiprefs::Prefs::ct_level), read once in enter()
+    uint8_t sweep_depth_ = 1;             // Sweep depth: the stored one (uiprefs::Prefs::sweep_depth), read once in enter()
     mutable usbcfg::LinkNote usb_note_;   // the USB Link row's note, filled by row_fn and drawn at once
     mutable char display_tail_[16];       // the Display row's summary ("100%, 60s/5m")
 };

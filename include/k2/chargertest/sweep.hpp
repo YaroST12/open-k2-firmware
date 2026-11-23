@@ -40,6 +40,25 @@ inline constexpr unsigned kMaxRows = 12;      // one result row per APDO part (a
 //   Step20   every PPS quantum (20 mV); AVS keeps 100 mV, its Request granularity.
 // Every depth ends on the APDO top; a finding between two points is located by Refiner at finer steps (100 mV, then 20 mV).
 enum class Depth : uint8_t { Step100 = 0, Step200 = 1, Phone = 2, Step20 = 3 };
+inline constexpr unsigned kDepthCount = 4;
+// The Settings cycle (and Review's) runs 200 mV, 100 mV, Phone, 20 mV: coarse to fine, the default first.
+constexpr Depth next_depth(Depth d) {
+    switch (d) {
+    case Depth::Step200: return Depth::Step100;
+    case Depth::Step100: return Depth::Phone;
+    case Depth::Phone: return Depth::Step20;
+    default: return Depth::Step200;
+    }
+}
+// The depth's short name for the lists (fits a 12 px tail and a Review tail: no longer than "200 mV").
+constexpr const char* depth_name(Depth d) {
+    switch (d) {
+    case Depth::Step200: return "200 mV";
+    case Depth::Step100: return "100 mV";
+    case Depth::Phone: return "Phone";
+    default: return "20 mV";
+    }
+}
 inline constexpr int16_t kHole = INT16_MIN;     // an unmeasured cell of the point record
 inline constexpr unsigned kFineMv = 20;         // the PPS Request quantum
 inline constexpr unsigned kWinCount = 2;

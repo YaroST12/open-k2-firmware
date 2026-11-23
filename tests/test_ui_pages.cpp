@@ -1734,6 +1734,29 @@ static void test_settings_test_level_row() {
     press(ui, Button::Back, ButtonEvent::Short, kT0 + 90);
 }
 
+// Settings > Sweep depth: 200 mV out of the box; OK cycles 100 mV, Phone, 20 mV, 200 mV, stores it and moves the idle draft with it.
+static void test_settings_sweep_depth_row() {
+    Ui &ui = fresh_ui();
+    g_stub.prefs = {};
+    CHECK_EQ(g_stub.prefs.sweep_depth, 1);   // default 200 mV
+    CHECK_EQ(ui.charger_test_sweep_depth(), 1);
+    ui.context().keep.settings_sel = 0;
+    ui.open_place(bench::Place::K2, kT0);
+    for (int i = 0; i < SettingsPage::kSweepRow; i++) press(ui, Button::Plus, ButtonEvent::Short, kT0 + 10 + i);
+    CHECK_EQ(ui.context().keep.settings_sel, SettingsPage::kSweepRow);
+    CHECK_STR(label(ui, Button::Ok), "Cycle");
+    const int sets = g_stub.prefs_sets;
+    static constexpr uint8_t kNext[4] = {0, 2, 3, 1};   // 100 mV, Phone, 20 mV, back to 200 mV
+    for (int i = 0; i < 4; i++) {
+        press(ui, Button::Ok, ButtonEvent::Short, kT0 + 40 + i * 10);
+        CHECK_EQ(g_stub.prefs.sweep_depth, kNext[i]);
+        CHECK_EQ(ui.charger_test_sweep_depth(), kNext[i]);
+        CHECK_EQ(ui.page() == Page::Settings, true);
+    }
+    CHECK_EQ(g_stub.prefs_sets, sets + 4);
+    press(ui, Button::Back, ButtonEvent::Short, kT0 + 90);
+}
+
 // Settings > Huawei/Samsung: FCP, SCP and AFC in the charger test. Hidden out of the box (the stored flag is off), OK flips it,
 // stores it in uiprefs and moves the live flag and the idle draft with it.
 static void test_settings_units_row() {
@@ -2626,6 +2649,7 @@ int main() {
     test_log_place();
     test_k2_place();
     test_settings_test_level_row();
+    test_settings_sweep_depth_row();
     test_settings_units_row();
     test_settings_long_back_row();
     test_every_bench_act_is_a_row();
