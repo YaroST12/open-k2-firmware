@@ -41,6 +41,7 @@ public:
     // feeds panel_window() past its sink check), so every rotation and viewport map is already applied. Pills share one
     // band but differ in width, so the rectangle only grows, until a whole-panel window (a rotation, a full clear) drops
     // it. With no rectangle, watch_hit() is true: the caller repaints its overlay as if covered.
+    // Two overlays can be watched (kWatches): slot 0 the toast pill, slot 1 the shell-access band.
     void panel_window(std::uint16_t x0, std::uint16_t y0, std::uint16_t x1, std::uint16_t y1) {
         if (rec_) {
             if (x0 < r_[0]) r_[0] = x0;
@@ -49,21 +50,25 @@ public:
             if (y1 > r_[3]) r_[3] = y1;
             return;
         }
-        if (x0 == 0 && y0 == 0 && x1 >= kPanelMax && y1 >= kPanelMax) valid_ = false;
-        if (x0 <= w_[2] && x1 >= w_[0] && y0 <= w_[3] && y1 >= w_[1]) hit_ = true;
+        const bool whole = x0 == 0 && y0 == 0 && x1 >= kPanelMax && y1 >= kPanelMax;
+        for (unsigned i = 0; i < kWatches; i++) {
+            if (whole) valid_[i] = false;
+            if (x0 <= w_[i][2] && x1 >= w_[i][0] && y0 <= w_[i][3] && y1 >= w_[i][1]) hit_[i] = true;
+        }
     }
-    void watch_record() { rec_ = true; r_[0] = r_[1] = 0xFFFF; r_[2] = r_[3] = 0; }
+    void watch_record(unsigned slot = 0) { rec_ = true; slot_ = slot; r_[0] = r_[1] = 0xFFFF; r_[2] = r_[3] = 0; }
     void watch_set() {
         rec_ = false;
         if (r_[0] <= r_[2]) {
-            if (!valid_) { w_[0] = w_[1] = 0xFFFF; w_[2] = w_[3] = 0; }
-            for (int i = 0; i < 2; i++) if (r_[i] < w_[i]) w_[i] = r_[i];
-            for (int i = 2; i < 4; i++) if (r_[i] > w_[i]) w_[i] = r_[i];
-            valid_ = true;
-            hit_ = false;   // only a pill that reached the panel is uncovered (one drawn into a capture sink is not)
+            std::uint16_t (&w)[4] = w_[slot_];
+            if (!valid_[slot_]) { w[0] = w[1] = 0xFFFF; w[2] = w[3] = 0; }
+            for (int i = 0; i < 2; i++) if (r_[i] < w[i]) w[i] = r_[i];
+            for (int i = 2; i < 4; i++) if (r_[i] > w[i]) w[i] = r_[i];
+            valid_[slot_] = true;
+            hit_[slot_] = false;   // only an overlay that reached the panel is uncovered (one drawn into a capture sink is not)
         }
     }
-    bool watch_hit() const { return hit_ || !valid_; }
+    bool watch_hit(unsigned slot = 0) const { return hit_[slot] || !valid_[slot]; }
 
 private:
     struct Sums {
@@ -72,8 +77,10 @@ private:
     static Reading read(const Sums& s) { return {sat32(s.px), ms_of(s.lcd), ms_of(s.fs)}; }
     Sums cur_, base_;
     static constexpr std::uint16_t kPanelMax = 239;   // lcd::kWidth - 1 (this header stays free of driver headers)
-    std::uint16_t r_[4] = {0xFFFF, 0xFFFF, 0, 0}, w_[4] = {0xFFFF, 0xFFFF, 0, 0};
-    bool rec_ = false, hit_ = false, valid_ = false;
+    static constexpr unsigned kWatches = 2;
+    std::uint16_t r_[4] = {0xFFFF, 0xFFFF, 0, 0}, w_[kWatches][4] = {{0xFFFF, 0xFFFF, 0, 0}, {0xFFFF, 0xFFFF, 0, 0}};
+    unsigned slot_ = 0;
+    bool rec_ = false, hit_[kWatches] = {}, valid_[kWatches] = {};
 };
 
 inline Meter meter;

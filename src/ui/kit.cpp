@@ -419,6 +419,12 @@ void draw_alert_band(const Surface &s, int16_t y, bool error, std::string_view w
     gfx_fill(s, 0, static_cast<int16_t>(y + kAlertH + 2), s.w, static_cast<int16_t>(kAlertStripeH - 2), kBg);
 }
 
+void draw_notice_band(const Surface &s, int16_t y, std::string_view word) {
+    K2_OVERLAP_OK;   // floats over the page
+    draw_label_box(s, 0, y, s.w, static_cast<int16_t>(kNoticeH - 1), word, kInk, kBar);
+    gfx_fill(s, 0, static_cast<int16_t>(y + kNoticeH - 1), s.w, 1, kFocus);
+}
+
 namespace {
 void ticket_ground(const Surface &s, int16_t y, int16_t h, int16_t w, uint16_t fill) {
     gfx_fill(s, 0, y, kTicketInset, h, kBg);

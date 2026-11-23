@@ -343,6 +343,11 @@ void kv_row(const Surface &s, const KvLayout &l, int16_t y, std::string_view key
 constexpr int16_t kAlertH = 36;
 constexpr int16_t kAlertStripeH = 6;   // the hazard stripe painted under the band (y + kAlertH .. + 5): the page's lines start below it
 void draw_alert_band(const Surface &s, int16_t y, bool error, std::string_view word);
+// ---- NoticeBand ----------------------------------------------------------------------------------------------------------
+// A slim full-width band that floats over the top of the content (the shell-access notice): kBar ground, the word centred in
+// S12, a 1 px kFocus rule under it. Info colours: it states, it never alarms. The caller owns the overlay bookkeeping.
+constexpr int16_t kNoticeH = 16;
+void draw_notice_band(const Surface &s, int16_t y, std::string_view word);
 // A warning triangle of `sz` px (the lab's glyph): solid `color`, exclamation mark in `ink`.
 void draw_warn_triangle(const Surface &s, int16_t x, int16_t y, int16_t sz, uint16_t color, uint16_t ink);
 

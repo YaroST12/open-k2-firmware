@@ -839,6 +839,37 @@ static void test_home_idle_tick() {
     }
 }
 
+// The "Shell access" band over Home: the hero's trend sweep paints under it every tick, so each tick re-raises the band
+// (208x16 = 3.3 k px, ~2 ms of wire) while a shell session is up; the band costs nothing on pages that do not paint under it.
+static void test_shell_band_cost() {
+    for (const bool moving : {false, true}) {
+        unsigned mean[2] = {0, 0};
+        for (const bool band : {false, true}) {
+            fixture();
+            Ui ui;
+            ui.init(1000);
+            ui.set_rotation(0, 1000);
+            uint32_t now = 1000;
+            ui.goto_page(0, now);
+            for (int i = 0; i < 140; i++) { now += kPageTickMs; ui.tick(now); }
+            if (band) { ui.shell_control(now); for (int i = 0; i < 10; i++) { now += kPageTickMs; ui.tick(now); } }
+            unsigned sum = 0;
+            const int n = 20;
+            for (int i = 0; i < n; i++) {
+                if (moving) g_stub.pm.power_mw = 36753 + 1000 * (i & 1);   // the hero's last digits flip every tick
+                g_lcd_pixels = 0;
+                now += kPageTickMs;
+                if (band) ui.shell_control(now);
+                ui.tick(now);
+                sum += g_lcd_pixels;
+            }
+            mean[band] = sum / n;
+        }
+        std::printf("home %s tick: mean %u px without the band, %u px with it\n", moving ? "moving" : "steady", mean[0], mean[1]);
+        CHECK_EQ(mean[1] <= mean[0] + 4000u, true);
+    }
+}
+
 // The LCD pipeline under the world replay's cost model (tests/fake_lcd.h LcdTiming: wire at the boot divider, the calibrated
 // 1.65 us CPU per streamed glyph pixel, 2 us per call, 8 us per window): a +/- cycle through the six rotation pages, timed
 // with the driver as it was (serial: each pixel run waited for, windows sent at once, stream_end waited) and as it is
@@ -881,6 +912,7 @@ int main() {
     test_pipeline_model();
     test_tick_cost();
     test_home_idle_tick();
+    test_shell_band_cost();
     test_page_switch_budgets();
     test_scroll_budgets();
     test_convergence();

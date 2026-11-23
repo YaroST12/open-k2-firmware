@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include "k2/core/bss_zero.hpp"
+#include "k2/core/shell_toast.hpp"
 #include "k2/drivers/buttons.hpp"
 #include "k2/ui/gfx.hpp"
 #include "k2/ui/ui_calc.hpp"
@@ -441,6 +442,9 @@ public:
     const char *foreign_busy() const;
     // The runs that own the ports until they end, which the dead-man lease therefore leaves alone: a charger test or a PD Stress run.
     bool run_busy() const { return charger_test_busy() || pdstress_active() || pdspec_active(); }
+    // A control command from the shell (Remote::shell_control_seen): the "Shell access" band shows now, and stays for a run the shell started.
+    void shell_control(uint32_t now_ms) { if (shell_.control(now_ms)) paint_pending_ = true; }
+    bool shell_toast() const { return shell_.shown(); }
     // The remote `stop` (the lease expiry and the shell `stop` land there too): ends a charger test, a twin proof and a PD Stress run.
     // The run releases the source to 5 V itself on the next poll; a PD Stress run waiting to resume after a reboot is dropped.
     void cancel_runs();
@@ -514,6 +518,8 @@ private:
     bool pop_to(unsigned keep_depth, uint32_t now_ms);
     void draw_opp_slot(unsigned slot);
     void draw_toast_overlay(uint32_t now_ms);
+    void draw_shell_band();       // over the top of the content; paint watch slot 1, so a page paint that crosses it raises it again
+    shell::Band shell_;
     void draw_release_notice();   // the toast notices every page shares, and the battery recorder's running dot
     bool battery_dot() const;     // a battery run is in progress and the page may carry its dot
     static constexpr int16_t kBattDot = 5;
@@ -649,6 +655,9 @@ private:
     bool clear_full_lcd_ K2_BSS_INIT(false);
     bool chrome_gaps_pending_ K2_BSS_INIT(false);
     bool toast_clear_pending_ K2_BSS_INIT(false);
+    bool shell_drawn_ K2_BSS_INIT(false);          // the band is on the panel
+    bool shell_clear_pending_ K2_BSS_INIT(false);  // the band's rows are wiped before the page paints (hidden, or the page switched)
+    bool capture_shell_visible_ K2_BSS_INIT(false);
     bool capture_state_ K2_BSS_INIT(false);
     bool capture_toast_visible_ K2_BSS_INIT(false);
     bool capture_paint_critical_ K2_BSS_INIT(false);

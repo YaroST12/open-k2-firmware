@@ -85,6 +85,12 @@ K2_HOT void Ui::pump_paint(uint32_t now_ms) {
         gfx_fill(ctx_.content, 0, y, ctx_.content.w, static_cast<int16_t>(ctx_.content.h - y), kBg);
         toast_clear_pending_ = false;
     }
+    if (shell_clear_pending_) {
+        const int cost = static_cast<int>(ctx_.content.w) * kit::kNoticeH;
+        if (bg && !bg->admit(cost, true, true)) { paint_pending_ = true; return; }
+        gfx_fill(ctx_.content, 0, 0, ctx_.content.w, kit::kNoticeH, kBg);
+        shell_clear_pending_ = false;
+    }
     if (static_pending_) {
         current().draw_static();
         if (bg && bg->more) { paint_pending_ = true; return; }
@@ -121,7 +127,11 @@ K2_HOT void Ui::pump_paint(uint32_t now_ms) {
     current().update(now_ms);
     // Covered: the body painted, and a panel window crossed the pill since it was last drawn (paint_meter.hpp overlay watch).
     const bool body_painted = (!bg || bg->spent != toast_px0) && paint::meter.watch_hit();
-    const bool toast_dirty = !ctx_.toast.drawn || (toast_was_drawn && body_painted);    if (bg && bg->more) {
+    const bool toast_dirty = !ctx_.toast.drawn || (toast_was_drawn && body_painted);
+    // The shell band: not on the panel yet, or a page paint crossed it (watch slot 1).
+    const bool shell_dirty = shell_.shown() && !fctrig::paint_critical() &&
+                             (!shell_drawn_ || paint::meter.watch_hit(1));   // not the pill's spent-pixel test: a page's own fields are not all metered
+    if (bg && bg->more) {
         // A slice that covered the pill raises it again at once, so it never disappears mid-scroll; one that missed it costs nothing.
         if ((toast_dirty || rotation_notice_drawn_) && ctx_.toast.active(now_ms) && !fctrig::paint_critical()) {
             ctx_.toast.drawn = false;
@@ -129,6 +139,7 @@ K2_HOT void Ui::pump_paint(uint32_t now_ms) {
         } else if (toast_was_drawn && body_painted) {
             ctx_.toast.drawn = false;
         }
+        if (shell_dirty) draw_shell_band();
         paint_pending_ = true;
         return;
     }
@@ -136,6 +147,7 @@ K2_HOT void Ui::pump_paint(uint32_t now_ms) {
     ctx_.blank = false;
     paint_blank_ = false;
     paint_pending_ = false;
+    if (shell_dirty) draw_shell_band();   // before the release notice: the battery dot stays on top of it
     draw_release_notice();
     draw_rotation_notice(now_ms);
     if ((toast_dirty || rotation_notice_drawn_) && ctx_.toast.active(now_ms) && !fctrig::paint_critical()) {
@@ -394,6 +406,7 @@ K2_HOT UiAction Ui::tick(uint32_t now_ms) {
     const bool batt_run = battery::hw::service().rec().active();
     if (batt_dot_ && !batt_run && !hold_shown_ && menu() != Menu::Share && menu() != Menu::QrTest) repaint(now_ms);
     batt_dot_ = batt_run;
+    shell_.tick(now_ms, run_busy());   // the band's own clock; the repaint on its edges follows below (shell_drawn_ vs shown)
     if (ctx_.trig_armed && now_ms >= trig_until_) ctx_.trig_armed = false;
 
     const RebootChord::Step chord = chord_.step(now_ms);
@@ -415,6 +428,14 @@ K2_HOT UiAction Ui::tick(uint32_t now_ms) {
                 rotation_notice_until_ = 0;
                 notice_ = nullptr;
                 current().invalidate();
+                paint_pending_ = true;
+                pump_paint(now_ms);
+            }
+            if (!paint_pending_ && !fctrig::paint_critical() && shell_drawn_ && !shell_.shown()) {
+                shell_drawn_ = false;   // the band's rows are wiped, then the page paints over them
+                shell_clear_pending_ = true;
+                static_pending_ = true;   // the page's static ink in those rows went with the wipe
+                current().invalidate_for_capture();
                 paint_pending_ = true;
                 pump_paint(now_ms);
             }

@@ -940,6 +940,77 @@ void test_repaint_opaque() {
 }
 }  // namespace
 
+// The "Shell access" band over every walk page, in the four rotations: raised by a control command, kept through live ticks
+// and a page switch, gone 5 s later; each state equals a clean paint of the same state (no remnant, no hole under the band).
+namespace {
+int shell_clean_diff(Ui &ui) {
+    const std::vector<uint16_t> got(g_panel, g_panel + 240 * 240);
+    k2::lcd::fill(kBg);
+    ui.repaint(g_walk_t);
+    while (ui.painting()) ui.tick(g_walk_t);
+    int diff = 0;
+    for (size_t i = 0; i < got.size(); ++i) diff += got[i] != g_panel[i];
+    return diff;
+}
+
+int shell_band_ink() {   // rows 0..30 hold both the band fill and its focus rule somewhere (any rotation: the band hugs an edge)
+    int bar = 0, rule = 0;
+    for (int y = 0; y < 240; ++y)
+        for (int x = 0; x < 240; ++x) { bar += g_panel[y * 240 + x] == k2::kBar; rule += g_panel[y * 240 + x] == kFocus; }
+    return bar > 0 && rule > 0;
+}
+
+void test_shell_band() {
+    const auto old = g_stub;
+    auto holder = std::make_unique<Ui>();
+    Ui &ui = *holder;
+    fill_seven();
+    g_stub.pm_online = true; g_stub.pm.vbus_mv = 20030; g_stub.pm.current_ma = 1520; g_stub.pm.power_mw = 30456;
+    g_stub.pm.flow = k2::power::Flow::Forward;
+    ui.init(g_walk_t);
+    int bad = 0, shown_seen = 0;
+    for (uint8_t r = 0; r < 4; ++r) {
+        ui.set_rotation(r, g_walk_t += 10);
+        walk_settle(ui);
+        for (unsigned b = 0; b < kWalkN; ++b) {
+            walk_open(ui, b);
+            ui.shell_control(g_walk_t += 10);
+            walk_settle(ui);
+            shown_seen += ui.shell_toast();
+            int d_show = shell_clean_diff(ui);
+            if (!ui.shell_toast() || !shell_band_ink()) { std::printf("  shell %s r%u: band not up\n", kWalkDests[b].name, unsigned(r)); ++bad; }
+            // live digits change under the band: every tick equals a clean paint
+            int d_live = 0;
+            for (int k = 0; k < 3; ++k) {
+                g_stub.pm.power_mw += 1370; g_stub.pm.vbus_mv += 3;
+                ui.shell_control(g_walk_t += 10);   // a command per tick keeps it held
+                walk_settle(ui);
+                d_live += shell_clean_diff(ui);
+            }
+            // a page switch under the band
+            const unsigned b2 = (b + 1) % kWalkN;
+            const int d_switch = walk_switch_diff(ui, b2);
+            ui.shell_control(g_walk_t += 10);
+            walk_settle(ui);
+            // 5 s without a command: the band goes and the page is whole again
+            for (int k = 0; k < 50; ++k) ui.tick(g_walk_t += 120);
+            while (ui.painting()) ui.tick(g_walk_t);
+            const int d_hide = shell_clean_diff(ui);
+            if (ui.shell_toast()) { std::printf("  shell %s r%u: band still up\n", kWalkDests[b].name, unsigned(r)); ++bad; }
+            if (d_show || d_live || d_switch || d_hide) {
+                std::printf("  shell %s r%u: show %d live %d switch %d hide %d px differ from a clean paint\n", kWalkDests[b].name,
+                            unsigned(r), d_show, d_live, d_switch, d_hide);
+                ++bad;
+            }
+        }
+    }
+    CHECK_EQ(bad, 0);
+    CHECK_EQ(shown_seen, 4 * static_cast<int>(kWalkN));
+    ui.set_rotation(0, g_walk_t += 10);
+    g_stub = old;
+}
+}  // namespace
+
 int main() {
     setup_stubs();
     k2::g_missing_glyphs = 0;
@@ -1739,6 +1810,7 @@ int main() {
     CHECK_EQ(k2::g_missing_glyphs, 0u);
     test_switch_exact();
     test_repaint_opaque();
+    test_shell_band();
     // Entering and leaving the ring updates both rails and muted RowList pixel-accurately against render_for_capture.
     {
         Ui ring_ui;

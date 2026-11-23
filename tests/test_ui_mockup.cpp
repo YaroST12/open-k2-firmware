@@ -557,6 +557,20 @@ int main() {
         g_stub.lim = {};
     }
 
+    // The "Shell access" band over Home and two list pages, four rotations (a control command raised it; render() stays inside 5 s).
+    for (const Page pg : {Page::Home, Page::Lines, Page::Settings}) {
+        for (uint8_t rot = 0; rot < 4; ++rot) {
+            char nm[40];
+            ui.set_rotation(rot, t); t += 200;
+            ui.goto_page(uint8_t(pg), t); t += 100;
+            ui.shell_control(t);
+            std::snprintf(nm, sizeof nm, "shell_p%u_rot%u", unsigned(pg), unsigned(rot));
+            render(ui, t, nm);
+            t += 6000; ui.tick(t); ui.tick(t += 100);   // the band times out between frames
+        }
+    }
+    ui.set_rotation(rot_pages(), t);
+
     printf("mockups dumped\n");
     return 0;
 }

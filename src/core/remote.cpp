@@ -963,6 +963,8 @@ remote::MemorySnapshot Remote::memory() { return memstat::snapshot(); }
 
 void Remote::request_seen(bool state_changing) { idle_hw::request(state_changing, systick::millis()); }
 
+void Remote::shell_control_seen() { ui_.shell_control(systick::millis()); }
+
 remote::PowerSnapshot Remote::power() {
     const idle_hw::Status st = idle_hw::status();
     remote::PowerSnapshot s;

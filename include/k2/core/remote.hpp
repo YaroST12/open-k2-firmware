@@ -146,6 +146,7 @@ public:
     remote::PowerSnapshot power();     // idle power state and settings (k2/core/idle_hw.hpp)
     void power_set(const remote::PowerSet& s);
     void request_seen(bool state_changing);   // every request, before it runs: the idle machine counts it as activity
+    void shell_control_seen();                // a control request (remote::shell_control): the screen says the shell is driving
     remote::Status fc_cmd(uint8_t op, uint8_t proto, uint16_t mv, uint8_t flags);
     remote::FcInfo fc_info();
     remote::StoreInfo store_cmd(uint8_t op, uint8_t slot);   // explicit flash-store actions (k2::storage)
