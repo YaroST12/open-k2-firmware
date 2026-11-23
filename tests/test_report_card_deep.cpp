@@ -47,6 +47,7 @@ struct Decoded {
     std::vector<DMode> modes;
     bool has_spec = false, has_svooc = false;
     unsigned sweep_mask = 0;
+    int depth = -1;   // the step tail (-1 = none)
     unsigned sv_end = 0, sv_why = 0, sv_asks = 0, sv_word = 0, sv_vmax = 0, sv_stop = 0;
     unsigned sp_end = 0, sp_why = 0, sp_unconf = 0, sp_cells = 0;
     std::vector<DCell> cells;
@@ -111,6 +112,7 @@ static Decoded decode(const Bytes& blob) {
             d.modes.push_back(m);
         }
     }
+    if (d.bits - r.pos == 2) d.depth = int(r.get(2));   // the step tail, two bits: never taken as a Xiaomi section
     d.used = r.pos;
     return d;
 }
@@ -138,9 +140,9 @@ static rc::Card deep_card(unsigned ranges) {
     return c;
 }
 static Bytes run_build(const rc::Card& c, const ct::Evidence& ev, const Sweep& s, std::span<const ct::Step> steps = {},
-                       const specsec::Apdos* apdo = nullptr) {
+                       const specsec::Apdos* apdo = nullptr, ctsweep::Depth depth = ctsweep::Depth::Step100) {
     Bytes out(dp::kMaxBlob, 0xEE);
-    const std::size_t n = dp::build(c, steps, ev, s.view(), out, apdo);
+    const std::size_t n = dp::build(c, steps, ev, s.view(), out, apdo, depth);
     out.resize(n);
     return out;
 }
@@ -344,11 +346,12 @@ static void test_worst_case_is_the_budget() {
     // and four PPS / AVS ranges with their own spec cells (v13)
     specsec::Apdos ap;
     for (std::uint8_t p = 4; p <= 7; ++p) ap.add(sc::Check::PpsBand, {300000, 0, 0, 275000, std::uint8_t(p | 1 << 4), 50});
-    const Bytes b = run_build(c, ev, s, steps, &ap);
+    const Bytes b = run_build(c, ev, s, steps, &ap, ctsweep::Depth::Step20);   // the step tail rides in the worst case too
     const Decoded d = decode(b);
+    CHECK_EQ(d.depth, 3);
     CHECK_EQ(d.modes.size(), std::size_t(k2::mi_unlock::kMaxModes));
     CHECK_EQ(d.spec_ranges.size(), 4u);
-    CHECK_EQ(dp::kMaxBits, 3638u + 3u + 2u + 4u * 42u);
+    CHECK_EQ(dp::kMaxBits, 3638u + 3u + 2u + 4u * 42u + 2u);
     CHECK_EQ(dp::kMaxBlob, std::size_t(479));
     CHECK_EQ(d.bits, dp::kMaxBits);
     CHECK_EQ(d.used, dp::kMaxBits);
@@ -474,6 +477,50 @@ static void test_xiaomi_section() {
     CHECK_EQ(dp::read_mi(cut).chain, 0u);
 }
 
+// The step tail: two bits after the last section. No tail = 100 mV (every earlier card); the Xiaomi test needs 8 bits, so an old
+// reader never sees it; read_mi and read_depth both walk past the other's section.
+static void test_depth_tail() {
+    Sweep s;
+    s.row(1, 3300, 21000, 60, [](unsigned i) { return int(i % 5) - 2; });
+    const rc::Card dc = deep_card(1);
+    const Bytes plain = run_build(dc, no_ev(), s);
+    CHECK_EQ(decode(plain).depth, -1);
+    CHECK_EQ(int(dp::read_depth(plain)), int(ctsweep::Depth::Step100));
+    for (auto d : {ctsweep::Depth::Step200, ctsweep::Depth::Phone, ctsweep::Depth::Step20}) {
+        const Bytes b = run_build(dc, no_ev(), s, {}, nullptr, d);
+        CHECK_COND(dp::blob_valid(b));
+        CHECK_EQ(decode(b).depth, int(d));
+        CHECK_EQ(decode(b).bits, decode(plain).bits + 2);
+        CHECK_EQ(int(dp::read_depth(b)), int(d));
+        CHECK_EQ(dp::read_mi(b).chain, 0u);
+    }
+    // behind a Xiaomi section the tail still reads, and the section still reads
+    const std::vector<ct::Step> bank{mi_chain_row(k2::mi_unlock::kCodeVerified), mi_mode_row(6, 0xC0DC3264u, 11000, 5000, ct::Verdict::Pass)};
+    ct::Evidence ev{};
+    ev.mi_chain = k2::mi_unlock::kCodeVerified; ev.mi_n = 1; ev.mi[0] = {0xC0DC323Cu, 0xC0DC3264u, 6};
+    const Bytes withmi = run_build(dc, ev, s, bank, nullptr, ctsweep::Depth::Step200);
+    CHECK_EQ(int(dp::read_depth(withmi)), int(ctsweep::Depth::Step200));
+    CHECK_EQ(dp::read_mi(withmi) == dp::mi_of(bank, ev), true);
+    CHECK_EQ(decode(withmi).modes.size(), 1u);
+    // a block with no sweep carries no tail, and no block reads as 100 mV
+    rc::Card med = deep_card(0);
+    med.level = ct::Level::Medium;
+    const Bytes nosweep = run_build(med, ev, Sweep{}, bank, nullptr, ctsweep::Depth::Step200);
+    CHECK_EQ(decode(nosweep).depth, -1);
+    CHECK_EQ(int(dp::read_depth({})), int(ctsweep::Depth::Step100));
+}
+
+// A 200 mV sweep records every second 100 mV cell: the holes stay out of the bucket means.
+static void test_holes_stay_out_of_the_buckets() {
+    Sweep s;
+    s.row(1, 3300, 3300 + 63 * 100, 64, [](unsigned i) { return (i & 1) ? int(ctsweep::kHole) : 10; });
+    const ctsweep::View v = s.view();
+    const dp::Seg a{{}, 0}, b{{v.points.data(), 64}, 3300};
+    const dp::Bucket k = dp::bucket(a, b, 3300, 64, 0, 0);   // two cells per bucket: one measured, one hole
+    CHECK_EQ(int(k.mean), 10);
+    CHECK_EQ(int(k.up), 0); CHECK_EQ(int(k.down), 0);
+}
+
 static void test_blob_valid_checks() {
     CHECK_COND(!dp::blob_valid({}));
     const std::uint8_t two[2] = {0, 0};
@@ -498,6 +545,8 @@ int main() {
     test_nothing_to_carry();
     test_worst_case_is_the_budget();
     test_xiaomi_section();
+    test_depth_tail();
+    test_holes_stay_out_of_the_buckets();
     test_spec_ranges();
     test_blob_valid_checks();
     return test_report("test_report_card_deep");

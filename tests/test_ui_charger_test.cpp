@@ -1103,11 +1103,11 @@ static void test_review_names_the_sweep_step() {
     }
     struct Case { bool pps, avs; ctsweep::Depth depth; const char* text; };
     static const Case cases[] = {
-        {true, false, ctsweep::Depth::Step200, "Medium 200 mV     "},
-        {false, true, ctsweep::Depth::Phone, "Medium Phone      "},
-        {true, true, ctsweep::Depth::Step20, "Medium 20 mV      "},
-        {true, false, ctsweep::Depth::Step100, "Medium 100 mV     "},
-        {false, false, ctsweep::Depth::Step20, "Medium            "},   // no sweep: no step
+        {true, false, ctsweep::Depth::Step200, "Medium 200 mV"},
+        {false, true, ctsweep::Depth::Phone, "Medium Phone"},
+        {true, true, ctsweep::Depth::Step20, "Medium 20 mV"},
+        {true, false, ctsweep::Depth::Step100, "Medium 100 mV"},
+        {false, false, ctsweep::Depth::Step20, "Medium"},   // no sweep: no step
     };
     for (const auto& c : cases) {
         Ui ui; open(ui);

@@ -943,7 +943,7 @@ void ChargerTestSession::capture_identity() {
     // the card and the share link carries it.
     static_assert(ShareRecord::kBuffer >= report_card::deep::kMaxBlob, "build() needs the whole worst-case block");
     const std::size_t blk = report_card::deep::build(card_, runner_.steps(), runner_.evidence(), runner_.sweep_view(), ctx_.ui->share_buffer(),
-                                                       &runner_.spec_apdo());
+                                                       &runner_.spec_apdo(), runner_.sweep_depth());
     save_card_store(std::span<const uint8_t>(ctx_.ui->share_buffer()).first(blk));
 }
 // save_card's tail, on its own frame: it holds the charger's previous Card (292 B) that save_card used to keep

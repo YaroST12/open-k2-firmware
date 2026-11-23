@@ -22,6 +22,9 @@
 //            2 no answer, 4..13 stalled, 20 / 21 done) | n u3 (modes, at most mi_unlock::kMaxModes) | per mode in plan order:
 //            before u32 (the PDO before the chain; 0 = a new PDO, kBeforeLost = a resumed run lost it) | after u32 (the PDO the chain
 //            unlocked) | mv u9 (100 mV) | ma u7 (50 mA): the level the row asked | verdict u3 (ct::Verdict) | reason u6 (ct::Reason)
+//   depth    (appended) a card with a sweep that ran at a step other than 100 mV ends with step u2 (ctsweep::Depth). Two bits: a reader that
+//            takes the Xiaomi section only from 8 or more bits left (every earlier one) never sees it; no tail reads as 100 mV, what every
+//            earlier card ran. A step of 200 mV leaves every second 100 mV cell of the record empty, so a bucket of one cell can be empty.
 //
 // A sweep bucket covers the setpoint indices [b * n / buckets, (b + 1) * n / buckets) of the planned span. Its mean error is
 // the mean of the recorded points in it, in units of E = 2^scale mV (the smallest scale at which no bucket saturates, kMaxScale
@@ -63,14 +66,16 @@ inline constexpr unsigned kSpecRangeBits = 4 + 1 + 2 + 2 + 3 * unsigned(specsec:
 inline constexpr unsigned kSpecRangesBits = 3 + 2 + unsigned(pdspec::kMaxProg) * kSpecRangeBits;
 static_assert(kSpecRangesForm < 32 && pdspec::kMaxProg < 8);
 inline constexpr unsigned kMiHeadBits = 5 + 3;
+inline constexpr unsigned kDepthBits = 2;   // the step tail, below kMiHeadBits so the Xiaomi test (8 bits left) never takes it
+static_assert(kDepthBits < kMiHeadBits && unsigned(ctsweep::kDepthCount) <= (1u << kDepthBits));
 inline constexpr unsigned kMiModeBits = 32 + 32 + 9 + 7 + 3 + 6;
 inline constexpr std::uint32_t kBeforeLost = 0xFFFFFFFFu;   // a mode's PDO before the chain is not known (the run resumed; never a PDO)
 
 consteval unsigned worst_bits() {
     return kHdrBits + kSvoocBits + kSpecHeadBits + unsigned(specsec::kCells) * kCellFailBits + kSpecRangesBits + kMaxRanges * kRangeBits +
-           kMiHeadBits + unsigned(mi_unlock::kMaxModes) * kMiModeBits;
+           kMiHeadBits + unsigned(mi_unlock::kMaxModes) * kMiModeBits + kDepthBits;
 }
-inline constexpr unsigned kMaxBits = worst_bits();                       // every cell failing, four ranges, four full sweeps, four Xiaomi modes: 3811 (3638 before the v13 ranges)
+inline constexpr unsigned kMaxBits = worst_bits();                       // every cell failing, four ranges, four full sweeps, four Xiaomi modes, the step: 3813 (3811 before the step tail)
 inline constexpr std::size_t kMaxBlob = 2 + (kMaxBits + 7) / 8;           // the blob with its length: 479 B
 static_assert(kMaxBits < (1u << 12), "the link stream carries the block length in 12 bits");
 
@@ -100,6 +105,8 @@ constexpr unsigned bucket_count(unsigned n) { return n < kBuckets ? n : kBuckets
 // Bucket `i` of a span of `n` points starting at `lo_mv`, from the two parts of the record (the low part below 5 V and the part
 // from 5 V up, either may be empty), at scale `scale`. Setpoint indices the parts do not cover stay empty.
 Bucket bucket(const Seg& a, const Seg& b, unsigned lo_mv, unsigned n, unsigned i, unsigned scale);
+// The step the card's sweeps ran at (the tail above); Step100 for a block without one, one that does not parse, or no sweep.
+ctsweep::Depth read_depth(std::span<const std::uint8_t> blob);
 // The smallest scale at which no bucket of the span saturates (kMaxScale when none does).
 unsigned choose_scale(const Seg& a, const Seg& b, unsigned lo_mv, unsigned n);
 
@@ -134,7 +141,8 @@ unsigned mi_watts(const MiMode& m);
 // `c` that has a sweep, from the runner's evidence and sweep record; for any card the Xiaomi section when the run's chain row ran.
 // Returns the blob's length (0 when there is nothing to carry; then `out` is untouched). `out` needs kMaxBlob bytes.
 // `apdo`: each PPS / AVS range's spec cells (the Runner's spec_apdo; null or empty = the spec part without ranges, form kCells).
+// `depth`: the step the run's sweeps ran at; anything but Step100 is written as the tail when a sweep is carried.
 std::size_t build(const Card& c, std::span<const ct::Step> steps, const ct::Evidence& ev, ctsweep::View sweep, std::span<std::uint8_t> out,
-                  const specsec::Apdos* apdo = nullptr);
+                  const specsec::Apdos* apdo = nullptr, ctsweep::Depth depth = ctsweep::Depth::Step100);
 
 }  // namespace k2::report_card::deep

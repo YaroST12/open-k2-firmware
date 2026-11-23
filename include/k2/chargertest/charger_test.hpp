@@ -865,6 +865,7 @@ public:
     bool suspended() const { return suspended_; }
     Reason resume(Input, bool confirmed);
     uint8_t resumed() const { return resumed_; }
+    ctsweep::Depth sweep_depth() const { return opts_.sweep_depth; }   // the step of the run in hand (the card names it)
     Level level() const { return opts_.level; }   // the level of the run in hand (started or restored)
     uint8_t reattach_count() const { return reattach_; }   // how many times the run went through the planned re-attach
     bool busy() const { return (state_ >= State::Baseline && state_ <= State::Releasing) || state_ == State::Unsafe || state_ == State::Detach || state_ == State::Attach || state_ == State::Ceiling || state_ == State::Spec; }

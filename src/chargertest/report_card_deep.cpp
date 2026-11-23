@@ -49,7 +49,7 @@ bool at(const Seg& a, const Seg& b, unsigned lo_mv, unsigned s, int& e) {
     for (const Seg* g : {&a, &b}) {
         if (mv < g->lo_mv) continue;
         const unsigned i = (mv - g->lo_mv) / ctsweep::kStepMv;
-        if (i < g->err.size()) { e = g->err[i]; return true; }
+        if (i < g->err.size()) { e = g->err[i]; return e != ctsweep::kHole; }
     }
     return false;
 }
@@ -124,10 +124,9 @@ MiSection mi_of(std::span<const ct::Step> steps, const ct::Evidence& ev) {
     return m;
 }
 
-MiSection read_mi(std::span<const std::uint8_t> blob) {
-    MiSection m;
-    if (!blob_valid(blob)) return m;
-    BitR r{blob.data() + 2, blob_bits(blob)};
+namespace {
+// Leaves `r` at the block's tail (the Xiaomi section, then the step) past the header, SVOOC, spec and sweep parts; false when it does not parse.
+bool skip_to_tail(BitR& r) {
     const bool has_spec = r.get(1), has_sv = r.get(1);
     const unsigned mask = r.get(kMaxRanges);
     if (has_sv) r.skip(kSvoocBits);
@@ -151,11 +150,36 @@ MiSection read_mi(std::span<const std::uint8_t> blob) {
         r.skip(3);
         r.skip(bucket_count(n) * kBucketBits);
     }
-    if (r.bad || r.nbits - r.pos < kMiHeadBits) return {};
+    return !r.bad;
+}
+}  // namespace
+
+ctsweep::Depth read_depth(std::span<const std::uint8_t> blob) {
+    if (!blob_valid(blob)) return ctsweep::Depth::Step100;
+    BitR r{blob.data() + 2, blob_bits(blob)};
+    if (!skip_to_tail(r)) return ctsweep::Depth::Step100;
+    unsigned left = r.nbits - r.pos;
+    if (left >= kMiHeadBits) {   // the Xiaomi section sits before the step
+        r.skip(5);
+        const unsigned n = r.get(3);
+        if (n > mi_unlock::kMaxModes) return ctsweep::Depth::Step100;
+        r.skip(n * kMiModeBits);
+        if (r.bad) return ctsweep::Depth::Step100;
+        left = r.nbits - r.pos;
+    }
+    return left == kDepthBits ? ctsweep::Depth(r.get(kDepthBits)) : ctsweep::Depth::Step100;
+}
+
+MiSection read_mi(std::span<const std::uint8_t> blob) {
+    MiSection m;
+    if (!blob_valid(blob)) return m;
+    BitR r{blob.data() + 2, blob_bits(blob)};
+    if (!skip_to_tail(r) || r.nbits - r.pos < kMiHeadBits) return {};
     m.chain = std::uint8_t(r.get(5));
     m.n = std::uint8_t(r.get(3));
-    // the section is the block's tail, to the bit, and names a chain outcome: anything else is not one
-    if (m.n > m.mode.size() || r.nbits - r.pos != m.n * kMiModeBits || mi_unlock::chain_of(m.chain) == mi_unlock::Chain::None) return {};
+    // the section is the block's tail (the step may follow it), to the bit, and names a chain outcome: anything else is not one
+    const unsigned left = r.nbits - r.pos, want = m.n * kMiModeBits;
+    if (m.n > m.mode.size() || (left != want && left != want + kDepthBits) || mi_unlock::chain_of(m.chain) == mi_unlock::Chain::None) return {};
     for (unsigned k = 0; k < m.n; ++k) {
         MiMode& x = m.mode[k];
         x.before = r.get32(); x.after = r.get32();
@@ -166,7 +190,7 @@ MiSection read_mi(std::span<const std::uint8_t> blob) {
 }
 
 std::size_t build(const Card& c, std::span<const ct::Step> steps, const ct::Evidence& ev, ctsweep::View sweep, std::span<std::uint8_t> out,
-                  const specsec::Apdos* apdo) {
+                  const specsec::Apdos* apdo, ctsweep::Depth depth) {
     if (out.size() < kMaxBlob) return 0;
     const bool deep = c.level == ct::Level::Deep;
     const bool has_spec = deep && ev.spec.end != specsec::End::NotRun, has_sv = deep && ev.svooc_end != 0;
@@ -238,6 +262,7 @@ std::size_t build(const Card& c, std::span<const ct::Step> steps, const ct::Evid
             w.put(x.mv, 9); w.put(x.ma, 7); w.put(x.verdict, 3); w.put(x.reason, 6);
         }
     }
+    if (mask && depth != ctsweep::Depth::Step100) w.put(unsigned(depth), kDepthBits);
     out[0] = static_cast<std::uint8_t>(w.pos & 0xFFu);
     out[1] = static_cast<std::uint8_t>(w.pos >> 8);
     return 2u + (w.pos + 7u) / 8u;

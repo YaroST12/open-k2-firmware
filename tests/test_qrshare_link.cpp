@@ -275,7 +275,7 @@ static void test_worst_card_fits_one_code() {
         if (nbits % 8) b.back() &= std::uint8_t((1u << (nbits % 8)) - 1);
         return b;
     };
-    const unsigned v11_bits = rc::deep::kMaxBits - unsigned(qs::records::kMiWorstBits) - rc::deep::kSpecRangesBits;
+    const unsigned v11_bits = rc::deep::kMaxBits - unsigned(qs::records::kMiWorstBits) - rc::deep::kSpecRangesBits - rc::deep::kDepthBits;
     CHECK_EQ(v11_bits, 3274u);
     const Bytes blob = worst_blob(v11_bits);
     CHECK(rc::deep::blob_valid(blob));
