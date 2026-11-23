@@ -894,11 +894,13 @@ static void test_wake_candidate() {
     f = bank; f.vbus_mv = -1;       CHECK_EQ(wake_candidate(f), false);           // no VBUS monitor: nothing known
     f = bank; f.vbus_mv = 5000;     CHECK_EQ(wake_candidate(f), false);           // the rail is up
     f = bank; f.vbus_mv = raguard::kVbusAttachedMv - 1; CHECK_EQ(wake_candidate(f), true);
-    f = bank; f.wake_port_off = false; CHECK_EQ(wake_candidate(f), false);        // an idle Rd hold is already waking it
+    f = bank; f.wake_port_off = false; CHECK_EQ(wake_candidate(f), true);         // Wake sleeping port on, but no hold covers this port
+    f.idle_rd_held = true;             CHECK_EQ(wake_candidate(f), false);        // its idle Rd hold is already waking it
     f = bank; f.cross = raguard::CrossKind::Crossed; CHECK_EQ(wake_candidate(f), false);   // two parties on the lines
     f = bank; f.cross = raguard::CrossKind::Hint;    CHECK_EQ(wake_candidate(f), false);
-    f = bank; f.wait = raguard::WaitKind::ChargerWaiting; CHECK_EQ(wake_candidate(f), false);   // an Rp is already waiting for us
-    f = bank; f.wait = raguard::WaitKind::DualRolePort;   CHECK_EQ(wake_candidate(f), false);   // a dual-role port is looking itself
+    f = bank; f.wait = raguard::WaitKind::ChargerWaiting; CHECK_EQ(wake_candidate(f), true);    // Rp at standby level, VBUS off (Xiaomi idle)
+    f = bank; f.wait = raguard::WaitKind::DualRolePort;   CHECK_EQ(wake_candidate(f), true);    // the bank idles as a DRP: our Rd makes it source
+    f.inline_sink = true;                                 CHECK_EQ(wake_candidate(f), false);   // ... but never with a sink inline
     f = bank; f.open_cc_mv = 2950;  CHECK_EQ(wake_candidate(f), true);            // the standby signature is one more case, not required
 }
 

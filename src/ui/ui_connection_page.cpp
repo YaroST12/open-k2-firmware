@@ -649,6 +649,7 @@ void conn::sense_passive(Facts &f, const UiContext &ctx, const pd::Link &link, c
     f.open_cc_mv = pd::standby_signature(o1) ? o1 : pd::standby_signature(o2) ? o2 : -1;
     f.vbus_mv = ctx.pm_online ? ctx.vbus_fast_mv : -1;
     f.wake_port_off = !fusb302::idle_wake();
+    f.idle_rd_held = fusb302::idle_wake_line() != 0;
 }
 
 // No page on screen, so no peak window: one window holding the latest CC levels (the page's window holds up to 8).

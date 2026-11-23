@@ -58,6 +58,7 @@ struct Facts {
     std::int32_t open_cc_mv = -1;
     std::int32_t vbus_mv = -1;
     bool wake_port_off = true;
+    bool idle_rd_held = false;   // that setting's idle Rd hold is on a line now (fusb302::idle_wake_line)
 };
 
 // The idle "source asleep" verdict: an open CC line reading the standby signature (pd::standby_signature: >= 2.8 V
@@ -122,14 +123,15 @@ struct DebouncedSense {
 };
 
 // "Try to wake anything connected" (the Charger overview's auto wake): a dark port (VBUS < kVbusAttachedMv, a monitor present)
-// with no source seen, no inline or decoded sink, no crossed / flipped lines, no Rp-waiting or dual-role verdict and no idle Rd
-// hold running. It carries no CC-level test on purpose: a bank that idles dark (CC1 ~0, CC2 1.55 V) reads like the empty
+// with no source seen, no inline or decoded sink, no crossed / flipped lines and no idle Rd hold on a line. A waiting Rp and a
+// dual-role toggle are candidates: our Rd makes a DRP bank source, which is the intent. It carries no CC-level test on purpose: a bank that idles dark (CC1 ~0, CC2 1.55 V) reads like the empty
 // port's own bias net (CC2 1.64-1.71 V), so only the wake itself tells them apart. The standby signature is one case of it.
 constexpr bool wake_candidate(const Facts &f) {
-    if (f.sink_seen || !f.wake_port_off) return false;
+    if (f.sink_seen || (!f.wake_port_off && f.idle_rd_held)) return false;
     if (f.vbus_mv < 0 || f.vbus_mv >= raguard::kVbusAttachedMv) return false;
     const PortSense ps = classify_port_sense(f);
-    return ps == PortSense::NoCharger || ps == PortSense::SourceAsleep;
+    return ps == PortSense::NoCharger || ps == PortSense::SourceAsleep || ps == PortSense::ChargerWaiting ||
+           ps == PortSense::DualRolePort;
 }
 
 // Wakes a dark port once per episode while the Charger overview is open (the same CC cycle + survey as Refresh).

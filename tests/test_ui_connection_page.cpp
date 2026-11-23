@@ -1183,10 +1183,62 @@ static void test_wake_any_never_inline_or_blocked() {
         Ui &ui = fresh_ui();
         bank_port(ui);
         g_stub.idle_wake = true;                                // Wake sleeping port is already holding an Rd
+        g_stub.idle_wake_hold = 2;
         uint32_t t = open_overview(ui, 20000);
         run_ticks(ui, t, 50);
         CHECK_EQ(wake_asks(), 0);
     }
+}
+
+// The Baseus 100 W bank idles as a dual-role port (2026-11-23: VBUS ~0, CC1 ~2.0 V / CC2 ~2.7 V toggling). Our Rd makes it
+// source, which is the point: one wake through the Rd path, never the CC cycle that cannot wake it.
+static uint32_t drp_ticks(Ui &ui, uint32_t t, int n) {
+    for (int i = 0; i < n; i++) {
+        t += 100;
+        if ((t / 100) % 2 == 0) set_cc(2000, 2700); else set_cc(0, 0);
+        ui.tick(t);
+    }
+    return t;
+}
+
+static void test_wake_any_dual_role_bank_wakes_once() {
+    Ui &ui = fresh_ui();
+    g_stub.pm_online = true;
+    g_stub.rescan_result = rescan::Result::Cycled;
+    uint32_t t = drp_ticks(ui, 12000, 15);
+    CHECK_EQ(int(ui.link().wait_kind()), int(raguard::WaitKind::DualRolePort));
+    ui.open_place(bench::Place::Charger, t);
+    t = drp_ticks(ui, t, 12);
+    CHECK_EQ(g_stub.reread_starts, 1);
+    CHECK_EQ(g_stub.rescan_requests, 0);
+    t = drp_ticks(ui, t, 100);                                  // 10 s of a bank that stays dark: no second try
+    CHECK_EQ(wake_asks(), 1);
+}
+
+// A charger idling with its Rp at standby level and VBUS off (a Xiaomi-ID'd brick reads charger-waiting) is woken the same way.
+static void test_wake_any_charger_waiting_wakes_once() {
+    Ui &ui = fresh_ui();
+    g_stub.pm_online = true;
+    g_stub.rescan_result = rescan::Result::Cycled;
+    set_cc(3300, 8);                                            // steady Rp, no standby signature on the open reading
+    uint32_t t = run_ticks(ui, 12000, 10);
+    CHECK_EQ(int(ui.link().wait_kind()), int(raguard::WaitKind::ChargerWaiting));
+    t = open_overview(ui, t);
+    CHECK_EQ(g_stub.reread_starts, 1);
+    CHECK_EQ(g_stub.rescan_requests, 0);
+    t = run_ticks(ui, t, 100);
+    CHECK_EQ(wake_asks(), 1);
+}
+
+// Wake sleeping port on, but its idle Rd hold is not on this port (it only holds a standby-signature line): the page wakes it.
+static void test_wake_any_idle_setting_without_a_hold() {
+    Ui &ui = fresh_ui();
+    bank_port(ui);
+    g_stub.idle_wake = true;
+    g_stub.idle_wake_hold = 0;
+    uint32_t t = open_overview(ui, 20000);
+    run_ticks(ui, t, 50);
+    CHECK_EQ(wake_asks(), 1);
 }
 
 // Scrolling the ring past the Charger page is not opening it: no cycle, no toast holding the ring.
@@ -3510,6 +3562,9 @@ int main() {
     test_wake_any_bank_idle_port_wakes_once();
     test_wake_any_empty_port_one_attempt();
     test_wake_any_never_inline_or_blocked();
+    test_wake_any_dual_role_bank_wakes_once();
+    test_wake_any_charger_waiting_wakes_once();
+    test_wake_any_idle_setting_without_a_hold();
     test_wake_any_not_while_the_ring_passes();
     test_wake_any_dark_attach_blips_do_not_loop();
     test_sink_tab_pd_body_shows_the_raw_vooc_note();

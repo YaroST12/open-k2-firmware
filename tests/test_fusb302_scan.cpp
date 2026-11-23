@@ -4282,6 +4282,23 @@ void test_identify_started_log_format_when_not_alone() {
     end_alone_case();
 }
 
+// The Charger overview's auto wake now takes a dual-role bank and a waiting charger too (2026-11-23): on their dark, detached
+// line reread_start must present Rd (the only thing that makes them source), never a bare Request.
+void test_reread_presents_rd_on_a_dual_role_or_waiting_port() {
+    for (const auto kind : {raguard::WaitKind::DualRolePort, raguard::WaitKind::ChargerWaiting}) {
+        attach_phone_alone_detached();
+        fusb302::set_wait_kind(kind);
+        g_log.clear(); g_usb.clear();
+        CHECK_EQ(fusb302::reread_start(pd::kRereadDefault), true);
+        CHECK_EQ(usb_has("attach: no CC yet, Rd presented"), true);
+        CHECK_EQ(usb_has("Request PDO 1"), false);
+        fusb302::reread_abort();
+        end_alone_case();
+        settle_ms(4000);
+        end_start_test();
+    }
+}
+
 void test_charger_alone_identify_refused_as_today() {
     attach_phone_alone_detached();                       // a steady-Rp charger alone also detaches on dark VBUS
     fusb302::set_wait_kind(raguard::WaitKind::ChargerWaiting);   // the link's verdict for a steady Rp
@@ -5675,6 +5692,7 @@ int main() {
     test_alone_phone_identify_starts_while_still_attached();
     test_identify_started_log_format_when_not_alone();
     test_charger_alone_identify_refused_as_today();
+    test_reread_presents_rd_on_a_dual_role_or_waiting_port();
     test_alone_identify_waits_for_ready_before_the_first_vdm();
     test_alone_identify_timeout_refuses_and_releases_the_line();
     test_alone_identify_end_releases_the_line_and_the_result_survives();
