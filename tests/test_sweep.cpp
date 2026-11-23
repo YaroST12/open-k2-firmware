@@ -82,6 +82,19 @@ static void test_plan_total_counts_every_pps_apdo_within_the_budget() {
     CHECK_EQ(sw::plan_total(big, 36000), sw::kMaxPoints);
 }
 
+// The Tests-list count follows the depth: measured points, while the budget stays in record cells.
+static void test_plan_total_counts_the_points_of_the_depth() {
+    const auto caps = caps_with({pd::decode_pdo((100u << 10) | 300), pps_apdo(3300, 11000, 5000), pps_apdo(5000, 21000, 3200)});
+    using sw::Depth;
+    CHECK_EQ(sw::plan_total(caps, 36000, sw::Kind::Pps, Depth::Step100), 239u);
+    CHECK_EQ(sw::plan_total(caps, 36000, sw::Kind::Pps, Depth::Step200), 40u + 81u);      // 3.3-4.9 and 5-11 V; 5-21 V every 200 mV
+    CHECK_EQ(sw::plan_total(caps, 36000, sw::Kind::Pps, Depth::Step20), 382u + 801u);
+    // phone: 8-11 V on the APDO with the most current (slot 2: +120 points), 14-19 V on the only one that covers it (+200)
+    CHECK_EQ(sw::plan_total(caps, 36000, sw::Kind::Pps, Depth::Phone), 239u + 120u + 200u);
+    CHECK_EQ(sw::plan_total_capped(caps, 36000, 20000, sw::Kind::Pps, Depth::Step200), 121u);   // a 20 V cable still permits 21 V of PPS
+    CHECK_EQ(sw::plan_total_capped(caps, 36000, 9000, sw::Kind::Pps, Depth::Step200), 30u + 21u);   // a 9 V cable: 3.3-9 V, 5-9 V
+}
+
 static void test_summary_of_a_clean_track_names_peak_and_errors() {
     std::vector<int16_t> err;
     for (unsigned set = 5000; set <= 21000; set += 100) err.push_back(int16_t(set - 150 - int(set)));   // -150 mV throughout
@@ -648,6 +661,7 @@ int main() {
     test_point_plan_covers_the_apdo_in_100mv_steps();
     test_point_current_is_1a_never_above_the_offer_or_cable();
     test_plan_total_counts_every_pps_apdo_within_the_budget();
+    test_plan_total_counts_the_points_of_the_depth();
     test_avs_plan_spr_only();
     test_avs_plan_spr_plus_epr_capped_at_the_ceiling();
     test_avs_point_current_never_above_the_pdp_limit_or_1a();

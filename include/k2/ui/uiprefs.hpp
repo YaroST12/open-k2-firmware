@@ -11,9 +11,10 @@
 // on read (a stored Night or Paper loads as Classic) and written 0. Bits 6..7: Settings > Test level, the charger test's
 // default level (charger_test::Level: 0 Medium, the default, 1 Light, 2 Deep; 3 reads Medium); older firmware reads only
 // bits 0..3 (and 4..5) of the byte, so the file reads both ways.
-// Optional 9th byte: Settings > Long Back, the ring position long Back jumps to (ring::Pos, 0 Home = the default). Written
-// only when it is not 0, so the default keeps the 8-byte file older firmware wrote; a value past the ring reads Home. Older
-// firmware wants exactly 8 bytes: a file with a chosen target is a default file to it.
+// Optional 9th byte: bits 0..5 Settings > Long Back, the ring position long Back jumps to (ring::Pos, 0 Home = the default);
+// bits 6..7 Settings > Sweep depth, (ctsweep::Depth - 1) & 3 (0 = 200 mV, the default; 1 Phone, 2 20 mV, 3 100 mV). Written
+// only when either is not 0, so the defaults keep the 8-byte file older firmware wrote; a value past the ring reads Home. Older
+// firmware wants exactly 8 bytes: a file with a chosen target or depth is a default file to it.
 // Orientation byte (the last byte, written 0 by older firmware and never checked by its decode, so the file reads
 // both ways): bit0..1 manual rotation 0..3 (x 90 deg), bit2 manual (0 = automatic, the default), bit3 rotate
 // buttons (Settings > Rotate buttons, default off), bit4 wake sleeping port (Settings > Wake sleeping port, default
@@ -52,6 +53,7 @@ struct Prefs {
     std::uint8_t ct_level = 0;         // Settings > Test level: the charger test's default level (charger_test::Level; 0 Medium)
     std::uint8_t long_back = 0;        // Settings > Long Back: the ring::Pos long Back jumps to (0 Home)
     bool legacy_units = false;         // Settings > Huawei/Samsung tests: FCP, SCP and AFC in the charger test (off = hidden)
+    std::uint8_t sweep_depth = 1;      // Settings > Sweep depth: ctsweep::Depth of the deep sweeps (1 = Step200, the default)
     bool operator==(const Prefs&) const = default;
 };
 
@@ -74,9 +76,10 @@ constexpr std::array<std::uint8_t, 8> encode(Prefs p) {
 // The record with its optional 9th byte; record_len says how much of it is written.
 constexpr std::array<std::uint8_t, 9> encode_ext(Prefs p) {
     const auto r = encode(p);
-    return {r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], p.long_back < ring::kCount ? p.long_back : std::uint8_t{0}};
+    const std::uint8_t lb = p.long_back < ring::kCount ? p.long_back : std::uint8_t{0};
+    return {r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], static_cast<std::uint8_t>(lb | (((p.sweep_depth - 1u) & 3u) << 6))};
 }
-constexpr std::size_t record_len(Prefs p) { return p.long_back != 0 && p.long_back < ring::kCount ? 9 : 8; }
+constexpr std::size_t record_len(Prefs p) { return encode_ext(p)[8] != 0 ? 9 : 8; }
 
 // 8 bytes (the record) or 9 (with the ring target); any other length is no record.
 constexpr Prefs decode(std::span<const std::uint8_t> r) {
@@ -88,7 +91,8 @@ constexpr Prefs decode(std::span<const std::uint8_t> r) {
     return {(r[4] & 1) != 0, (r[4] & 2) == 0, sm, (r[7] & 4) != 0, static_cast<std::uint8_t>(r[7] & 3), (r[7] & 8) != 0, (r[7] & 16) != 0,
             static_cast<std::uint8_t>(((r[7] >> 5) & 3) == 3 ? 0 : (r[7] >> 5) & 3),
             static_cast<std::uint8_t>((r[6] >> 6) == 3 ? 0 : r[6] >> 6),
-            static_cast<std::uint8_t>(r.size() == 9 && r[8] < ring::kCount ? r[8] : 0), (r[7] & 128) != 0};
+            static_cast<std::uint8_t>(r.size() == 9 && (r[8] & 0x3Fu) < ring::kCount ? r[8] & 0x3Fu : 0), (r[7] & 128) != 0,
+            static_cast<std::uint8_t>(r.size() == 9 ? ((r[8] >> 6) + 1u) & 3u : 1u)};
 }
 
 inline Prefs load(fs::Fs& f) {

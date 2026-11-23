@@ -25,7 +25,7 @@ unsigned phone_wins(const pd::SourceCaps& caps, unsigned cap_mv, unsigned slot) 
     return mask;
 }
 
-unsigned plan_total(const pd::SourceCaps& caps, unsigned cap_mv, Kind kind) {
+unsigned plan_total(const pd::SourceCaps& caps, unsigned cap_mv, Kind kind, Depth depth) {
     if (!caps.valid) return 0;
     unsigned total = 0;
     const size_t n = std::min<size_t>(caps.num_pdos, caps.pdos.size());
@@ -36,9 +36,18 @@ unsigned plan_total(const pd::SourceCaps& caps, unsigned cap_mv, Kind kind) {
         const bool want = kind == Kind::Pps ? (!epr_slot && p.type == pd::PdoType::Pps)
                                              : (p.type == pd::PdoType::Avs && (!epr_slot || caps.epr));
         if (!want) continue;
-        const unsigned c = point_count(point_range(p.min_mv, p.max_mv, cap_mv));
+        const auto r = point_range(p.min_mv, p.max_mv, cap_mv);
+        const unsigned c = point_count(r);   // the record's cells: the budget is memory, whatever the depth
         if (total >= kMaxPoints) break;
-        total += std::min(c, kMaxPoints - total);
+        // The points measured: both parts of the split row, each stepped by the depth (the top point included).
+        unsigned n = 0;
+        const unsigned limit = std::min<unsigned>(p.max_mv, cap_mv), wins = kind == Kind::Pps ? phone_wins(caps, cap_mv, unsigned(i + 1)) : 0u;
+        for (const bool low : {false, true}) {
+            const auto part = part_range(r, low);
+            if (!part.empty()) n += plan_points(make_plan(depth, kind, part, limit, wins));
+        }
+        const unsigned room = kMaxPoints - total;
+        total += c <= room ? n : n * room / c;
     }
     return total;
 }

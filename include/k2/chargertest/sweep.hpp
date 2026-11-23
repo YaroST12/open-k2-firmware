@@ -120,13 +120,14 @@ unsigned phone_wins(const pd::SourceCaps& caps, unsigned cap_mv, unsigned slot);
 // APDOs in list order (the planner emits them in the same order). Kind::Pps sweeps the SPR PPS APDOs (slots 1..7);
 // Kind::Avs the AVS APDOs (SPR AVS in slots 1..7, EPR AVS in slots 8+ when the EPR list is in hand). cap_mv = the
 // effective ceiling already clamped by the caller to the monitor ceiling and the cable's voltage limit.
-unsigned plan_total(const pd::SourceCaps& caps, unsigned cap_mv, Kind kind = Kind::Pps);
+// It counts the points MEASURED at `depth` (a 200 mV sweep is half of the 100 mV cells); the budget stays in cells.
+unsigned plan_total(const pd::SourceCaps& caps, unsigned cap_mv, Kind kind = Kind::Pps, Depth depth = Depth::Step100);
 // The count with the caller's monitor ceiling and cable voltage limit applied (a 20 V cable class permits the 21 V
 // PPS ceiling, as cable_limit_mv does for Pps): what the Tests-list line and the planner both use.
 inline unsigned plan_total_capped(const pd::SourceCaps& caps, unsigned monitor_cap_mv, unsigned cable_mv,
-                                  Kind kind = Kind::Pps) {
+                                  Kind kind = Kind::Pps, Depth depth = Depth::Step100) {
     const unsigned cl = kind == Kind::Pps && cable_mv == 20000 ? 21000 : cable_mv;   // SPR PPS permits a 21 V request on a 20 V cable
-    return plan_total(caps, std::min(monitor_cap_mv, cl), kind);
+    return plan_total(caps, std::min(monitor_cap_mv, cl), kind, depth);
 }
 
 // The summary of one APDO's recorded points. err[i] = measured - setpoint of point i (setpoint = lo_mv + i*kStepMv),
