@@ -88,7 +88,19 @@ void draw_verdict(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, 
         if (st.marked) draw_run_mark(s, {x, y, w, h}, true);   // over the cell's rim, after the text
         return;
     }
-    // No label: the state's glyph, centred.
+    // No label: the state's glyph, centred, in a square cell kept at its native size like a row marker (a squeeze dropped rows of
+    // the cell and of its 1 px rims); `under` fills the rest of the mapped box.
+    if (ContentViewport::scaled()) {
+        const Rect m = ContentViewport::mapped_rect({static_cast<int16_t>(s.x + x), static_cast<int16_t>(s.y + y), w, h});
+        const Rect n = gfx_native_rect(s, x, y, w, h);
+        if (n.w != w || n.h != h) return;
+        ContentViewport::Pause unscaled;
+        const Surface panel{0, 0, kScreenW, kScreenH};
+        if (m.x + m.w > n.x + w) gfx_fill(panel, static_cast<int16_t>(n.x + w), m.y, static_cast<int16_t>(m.x + m.w - n.x - w), m.h, under);
+        if (m.y + m.h > n.y + h) gfx_fill(panel, m.x, static_cast<int16_t>(n.y + h), m.w, static_cast<int16_t>(m.y + m.h - n.y - h), under);
+        draw_verdict(panel, n.x, n.y, w, h, v, label, under, sweep);
+        return;
+    }
     int sz = (w < h ? w : h) - 4;
     if (sz > 12) sz = 12;
     const int16_t gx = static_cast<int16_t>(x + (w - sz) / 2), gy = static_cast<int16_t>(y + (h - sz) / 2);

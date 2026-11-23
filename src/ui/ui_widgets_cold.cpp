@@ -27,6 +27,10 @@ void draw_mark(const Surface &s, int16_t x, int16_t y, int size, bool check, uin
         {0x0000, 0x0000, 0x300C, 0x381C, 0x1C38, 0x0E70, 0x07E0, 0x03C0,
          0x03C0, 0x07E0, 0x0E70, 0x1C38, 0x381C, 0x300C, 0x0000, 0x0000},   // cross
     };
+    if (size == kIconSize) {   // the icon table's own 12 px glyphs: a 16 px source sampled to 12 drew a lopsided cross
+        draw_icon(s, x, y, check ? Icon::Check : Icon::Cross, fg, bg);
+        return;
+    }
     detail::stream_mono(s, x, y, size, 16, kMarkBits[check ? 0 : 1], 15, fg, bg);
 }
 

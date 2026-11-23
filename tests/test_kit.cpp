@@ -1596,7 +1596,42 @@ static void test_chip_native_in_every_rotation() {
         }
 }
 
+// The Diagnosis stamp's fail cell (a label-less 20 x 20 VerdictCell) draws the icon table's 12 px cross, native and whole, in
+// every rotation.
+static void test_stamp_cross_is_the_icon() {
+    const Rect dests[4] = {{16, 0, 208, 240}, {0, 16, 240, 208}, {0, 0, 208, 240}, {0, 16, 240, 208}};
+    const Surface s{0, 0, 208, 240};
+    const kit::VerdictStyle st = kit::verdict_style(kit::Verdict::Fail);
+    const uint16_t *bits = kIconBits[static_cast<int>(Icon::Cross)];
+    for (int r = 0; r < 4; ++r) {
+        ContentViewport viewport(dests[r], 208, 240);
+        std::fill(std::begin(g_panel), std::end(g_panel), kBase);
+        kit::draw_verdict(s, 4, 30, 20, 20, kit::Verdict::Fail, "", kBg);
+        const Rect cell = ContentViewport::native_rect({4, 30, 20, 20});
+        const Rect m{static_cast<int16_t>(cell.x + 4), static_cast<int16_t>(cell.y + 4), kIconSize, kIconSize};   // centred in the cell
+        int bad = 0;
+        for (int y = 0; y < kIconSize; y++)
+            for (int x = 0; x < kIconSize; x++)
+                bad += px(m.x + x, m.y + y) != ((bits[y] >> (kIconSize - 1 - x)) & 1 ? st.ink : st.fill);
+        if (bad) std::printf("  stamp cross rotation %d: %d px off the icon\n", r, bad);
+        CHECK_EQ(bad, 0);
+        // the cell itself is a native 20 x 20 square of the fail fill round the glyph, like a row marker
+        int outside = 0, hole = 0;
+        for (int y = 0; y < 240; y++)
+            for (int x = 0; x < 240; x++) {
+                const bool in = x >= cell.x && x < cell.x + 20 && y >= cell.y && y < cell.y + 20;
+                const bool glyph = x >= m.x && x < m.x + kIconSize && y >= m.y && y < m.y + kIconSize;
+                if (!in) outside += px(x, y) == st.fill;
+                else if (!glyph) hole += px(x, y) != st.fill;
+            }
+        if (outside || hole) std::printf("  stamp cell rotation %d: %d fill px outside, %d holes\n", r, outside, hole);
+        CHECK_EQ(outside, 0);
+        CHECK_EQ(hole, 0);
+    }
+}
+
 int main() {
+    test_stamp_cross_is_the_icon();
     test_chip_native_in_every_rotation();
     test_rail_link_icon_upright();
     test_rail_link_cell_fits();

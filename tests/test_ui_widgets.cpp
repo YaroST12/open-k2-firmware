@@ -119,6 +119,43 @@ static void test_icon_native_in_every_rotation() {
     }
 }
 
+// A verdict mark is a native square in every rotation. At 12 px it is the icon table's Check / Cross; a smaller cross is
+// mirror-symmetric both ways (sampling the 16 px source left a stray pixel on one side).
+static void test_mark_native_and_symmetric() {
+    const Rect dests[4] = {{16, 0, 208, 240}, {0, 16, 240, 208}, {0, 0, 208, 240}, {0, 16, 240, 208}};   // rotations 0..3
+    for (int r = 0; r < 4; ++r) {
+        ContentViewport viewport(dests[r], 208, 240);
+        const Surface s{0, 0, 208, 240};
+        for (int sz : {8, 9, 10, 12})
+            for (bool check : {false, true}) {
+                clear(0x0001);
+                draw_mark(s, 9, 101, sz, check, 0xFFFF, 0x2222);
+                const Rect m = ContentViewport::native_rect({9, 101, static_cast<int16_t>(sz), static_cast<int16_t>(sz)});
+                int outside = 0, wrong = 0, asym = 0;
+                for (int y = 0; y < LCD_HEIGHT; ++y)
+                    for (int x = 0; x < LCD_WIDTH; ++x) {
+                        const bool in = x >= m.x && x < m.x + sz && y >= m.y && y < m.y + sz;
+                        if (!in) { outside += px(x, y) != 0x0001; continue; }
+                        const bool on = px(x, y) == 0xFFFF;
+                        if (!on && px(x, y) != 0x2222) wrong++;
+                        if (sz == kIconSize) {
+                            const int i = static_cast<int>(check ? Icon::Check : Icon::Cross);
+                            wrong += on != ((kIconBits[i][y - m.y] >> (kIconSize - 1 - (x - m.x))) & 1);
+                        } else if (!check) {
+                            asym += on != (px(m.x + m.x + sz - 1 - x, y) == 0xFFFF);
+                            asym += on != (px(x, m.y + m.y + sz - 1 - y) == 0xFFFF);
+                        }
+                    }
+                if (outside || wrong || asym)
+                    std::printf("  mark %s %d px rotation %d: %d outside, %d wrong, %d asymmetric\n", check ? "check" : "cross", sz, r,
+                                outside, wrong, asym);
+                CHECK_EQ(outside, 0);
+                CHECK_EQ(wrong, 0);
+                CHECK_EQ(asym, 0);
+            }
+    }
+}
+
 // The fact line's tone table (Fieldbook): Info = the ground with a rule on top and ink2 text; Ok / Caution = the tint with
 // a 4 px bar of the tone and ink text; Error = solid red with the on-red ink.
 static void test_footer_tones() {
@@ -447,6 +484,7 @@ int main() {
     test_draw_frame();
     test_icon();
     test_icon_native_in_every_rotation();
+    test_mark_native_and_symmetric();
     test_sparkline();
     test_range_trace();
     return test_report("test_ui_widgets");
