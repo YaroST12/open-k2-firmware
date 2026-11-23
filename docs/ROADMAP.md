@@ -1250,9 +1250,10 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
     no replug; at most 3 auto wakes per page open (a port that flips by itself). The survey's auto read waits while the driver's own re-read runs (`AutoIn::reread_running`). Tests: `test_ui_connection`
     (`wake_candidate`, `AutoWake` replug / own release / cap), `test_pd_passive` (`HrRecovery`), `test_pd_survey` (deferral), `test_ui_connection_page` (bank,
     empty port, no loop, ring pass, inline, HR fallback, Rd path vs rescan, each caller), `test_fusb302_scan` (real driver: Rd after a
-    Hard Reset that took the Rp away, empty port bounded and released). Size +364 B text, +16 B bss vs e3b96127. Validate on hardware: bank on the
+    Hard Reset that took the Rp away, empty port bounded and released). Size +348 B text, +16 B bss vs e3b96127. Validate on hardware: bank on the
     top port, K2 on the PC: open the Charger overview: `Waking charger`, the bank wakes (Rd), 6 PDOs read; empty port: one toast, `NO
-    CHARGER`, no repeated Rd; Reset & re-read on a K2-owned contract with the bank: Hard Reset, VBUS drops, wake within ~2 s
+    CHARGER`, no repeated Rd; bank idling as dual-role-port and a charger-waiting brick: one `Waking charger`, PDOs read; after a wake that
+    worked, the ~30 s release brings no second toast; pull and replug the bank within 15 s: one more wake; Reset & re-read on a K2-owned contract with the bank: Hard Reset, VBUS drops, wake within ~2 s
     (`[UI] link reset: VBUS did not come back`), the read completes. Open: the survey's auto read may be refused while the re-read's
     own run is active (`[SURVEY] wire refused`; the re-read itself still fills the rows), the Rd made by the wake is released by the
     re-read, ~30 s after it; a bank that flips between an empty-looking idle (CC1 0 / CC2 1.55 V) and its toggle by itself reads as a replug (capped at 3 per page open); a source that keeps its Rp through the K2's Hard
