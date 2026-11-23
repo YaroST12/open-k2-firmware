@@ -19,6 +19,8 @@
 #include <cstdint>
 #include <optional>
 
+#include "k2/core/ringlog.hpp"
+
 namespace k2::boottrace {
 
 inline constexpr std::uint16_t kMagic = 0x7B54;
@@ -64,16 +66,7 @@ struct Trace {
     std::uint32_t at(std::size_t i) const { return ring[(count + kRing - 1 - i) % kRing]; }
 };
 
-constexpr std::uint16_t crc16(const std::array<std::uint16_t, kWords>& w) {
-    std::uint16_t crc = 0xFFFF;
-    for (std::size_t i = 2; i < kWords; i++) {
-        for (int byte = 0; byte < 2; byte++) {
-            crc = std::uint16_t(crc ^ (std::uint16_t(w[i] >> (8 * byte) & 0xFF) << 8));
-            for (int b = 0; b < 8; b++) crc = std::uint16_t((crc & 0x8000) ? (crc << 1) ^ 0x1021 : crc << 1);
-        }
-    }
-    return crc;
-}
+constexpr std::uint16_t crc16(const std::array<std::uint16_t, kWords>& w) { return ringlog::crc16_words(w); }
 
 constexpr std::array<std::uint16_t, kWords> encode(const Trace& t) {
     std::array<std::uint8_t, 22> b{};
