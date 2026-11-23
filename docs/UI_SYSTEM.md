@@ -517,7 +517,7 @@ It is drawn by the page today (`paint_detail`). It belongs in the kit beside Ale
 
 - **A Light run records without measuring.** What the PD family advertises (a Skip with reason `Advertised` in the PD group:
   a fixed PDO, a PPS or AVS APDO, an EPR level) is drawn with the **Pass look** (`kOkT` fill, `kOk` ink): "we have it", nothing was
-  requested (`result_layout::advertised`, `vmap` in `ui_charger_test.cpp`). Counts stay honest ("1 pass, 3 listed"; the
+  requested (`result_layout::advertised`, `vmap` in `ui_charger_test.cpp`). Light sends no PD Request at all (the 5 V PDO is a listed row too); counts stay honest ("7 listed, 2 skip"; the
   roll-up counts them as pass for tone only, `Tally::adv`), the footer word is "advertised", the Step detail band says `LISTED`.
   The card agrees: the PD group and a range with nothing measured read green and say "Advertised" (the sheet's Verdict word,
   the JSON/summary "✓ advertised", the page's `advertised` word); the card's head is green when PD is listed and nothing failed.
