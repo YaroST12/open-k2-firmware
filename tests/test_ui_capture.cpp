@@ -1054,11 +1054,11 @@ void test_pc_link_icon() {
 }
 
 // The rail reads the same in every rotation: with the page title active, its cell (the solid accent ground) spans reading
-// positions 0..53 of the rail, whatever the page, title or rotation. u counts from where the rail's text starts (the bottom of a
-// left rail, the top of a right one, the left of a horizontal one).
+// positions 0..53 of the rail, whatever the page, title or rotation. u counts from where the rail's text starts (the bottom of
+// either side rail, the left of a horizontal one).
 int rail_reading_pos(unsigned rot, int i) {
     const int x = i % 240, y = i / 240;
-    return rot == 0 ? 239 - y : rot == 2 ? y : x;
+    return rot == 0 || rot == 2 ? 239 - y : x;
 }
 
 // The 1 px line against the content: accent along the title cell, a hairline elsewhere (the readouts' spots are accent too).

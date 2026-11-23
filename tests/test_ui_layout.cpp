@@ -135,7 +135,7 @@ static void test_opp_slots_keep_reading_order() {
         const Orientation o = orientation_for(rot);
         const Layout l = compute_layout(o.edge, kCenters, 60, kOppRailThickness);
         const PanelEdge opp = opposite_edge(o.edge);
-        const TextDir dir = panel_text_dir(o.edge);
+        const TextDir dir = rail_text_dir(o.edge);
         const bool column = panel_is_column(opp);
         for (unsigned s = 0; s < 4; ++s) {
             const Rect r = opp_slot_rect(l.opp_rail, opp, dir, s);
@@ -151,8 +151,26 @@ static void test_opp_slots_keep_reading_order() {
     }
 }
 
+// The two side rails (rotations 0 and 2) look the same to the reader: text read bottom-to-top, the title at the bottom and
+// the readouts above it, the same spans along the edge. Only the side of the screen differs.
+static void test_side_rails_read_alike() {
+    const Orientation o0 = orientation_for(0), o2 = orientation_for(2);
+    CHECK_EQ(static_cast<int>(rail_text_dir(o0.edge)), static_cast<int>(TextDir::Ccw));
+    CHECK_EQ(static_cast<int>(rail_text_dir(o2.edge)), static_cast<int>(TextDir::Ccw));
+    const Layout l0 = compute_layout(o0.edge, kCenters, 60, kOppRailThickness);
+    const Layout l2 = compute_layout(o2.edge, kCenters, 60, kOppRailThickness);
+    for (unsigned s = 0; s < 4; ++s) {
+        const Rect a = opp_slot_rect(l0.opp_rail, opposite_edge(o0.edge), rail_text_dir(o0.edge), s);
+        const Rect b = opp_slot_rect(l2.opp_rail, opposite_edge(o2.edge), rail_text_dir(o2.edge), s);
+        CHECK_EQ(a.y, b.y);
+        CHECK_EQ(a.h, b.h);
+    }
+    CHECK_EQ(opp_slot_rect(l2.opp_rail, PanelEdge::Right, rail_text_dir(o2.edge), 0).y, kScreenH - kOppSlotLen[0]);   // title at the bottom
+}
+
 int main() {
     test_opp_slots_keep_reading_order();
+    test_side_rails_read_alike();
     test_unequal_slots_tile_the_edge();
     test_shipped_style_tiles();
     test_thin_panel_gives_wider_content();

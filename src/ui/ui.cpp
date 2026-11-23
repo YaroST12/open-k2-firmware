@@ -986,7 +986,7 @@ void Ui::draw_opp_slot(unsigned slot) {
     ContentViewport::Pause unscaled_rail;
     const PanelEdge opp_edge = opposite_edge(orient_.edge);
     const OppCells oc = build_opp_cells(ctx_, opp_spec(), !ring_view_, pc_state_);
-    const TextDir dir = panel_text_dir(orient_.edge);
+    const TextDir dir = rail_text_dir(orient_.edge);
     const Rect sr = opp_slot_rect(layout_.opp_rail, opp_edge, dir, slot);   // slot 0 is the title in every rotation
     opp_sig_[slot] = opp_cell_sig(opp_edge, panel_is_column(opp_edge) ? sr.y : sr.x, oc.c[slot]);
     kit::draw_opp_slot(surface_of(sr), opp_edge, dir, slot, oc.c[slot]);
@@ -1002,7 +1002,7 @@ void Ui::sync_opp_rail() {
     ContentViewport::Pause unscaled_rail;
     const PanelEdge opp_edge = opposite_edge(orient_.edge);
     const OppCells oc = build_opp_cells(ctx_, opp_spec(), !ring_view_, pc_state_);
-    const TextDir dir = panel_text_dir(orient_.edge);
+    const TextDir dir = rail_text_dir(orient_.edge);
     for (unsigned i = 0; i < 4; i++) {
         const Rect sr = opp_slot_rect(layout_.opp_rail, opp_edge, dir, i);
         const uint32_t sig = opp_cell_sig(opp_edge, panel_is_column(opp_edge) ? sr.y : sr.x, oc.c[i]);
