@@ -470,7 +470,7 @@ void sheet_verdict(CardSheet &s, tone::Tone t, const char *word) {
         const char *why = rc::group_why(idx, r);
         // "request failed" under a silent VOOC family's skip would read as a failure: its why says it all
         const bool no_answer = (rc::vooc_group(idx) && r.detail == uint8_t(fc::Fail::NoAnswer)) || rc::silent_skip(idx, r);
-        const char *reason = r.reason && !no_answer && r.reason != uint8_t(charger_test::Reason::NoQc3Plus) ? charger_test::name(charger_test::Reason(r.reason)) : nullptr;
+        const char *reason = r.reason && !no_answer && r.reason != uint8_t(charger_test::Reason::NoQc3Plus) && r.reason != uint8_t(charger_test::Reason::LinesOpen) ? charger_test::name(charger_test::Reason(r.reason)) : nullptr;
         const uint16_t wc = gt == tone::Tone::Skip ? kDim : kCaution;
         if (!reason || std::strcmp(reason, why) == 0) {
             sheet_add(out, "Reason", wc, why);

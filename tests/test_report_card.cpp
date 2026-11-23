@@ -296,6 +296,9 @@ static void test_group_why_names() {
     CHECK_STR(rc::group_why(unsigned(ct::Group::SuperVooc), r), "detected");
     r.detail = uint8_t(k2::fc::Fail::NoChange);                    // an SCP row that was acked and never moved VBUS
     CHECK_STR(rc::group_why(unsigned(ct::Group::Scp), r), "acked, no change");
+    r = {rc::GV::Skip, 0, 0, uint8_t(ct::Reason::LinesOpen)};     // open D+/D-: the card says the cause, not a silent skip
+    CHECK_STR(rc::group_why(unsigned(ct::Group::Qc2), r), ct::kLinesOpenCell);
+    r = {rc::GV::Fail, 0, 0, uint8_t(ct::Reason::Request)};
     r.detail = 77;                                                 // not a known code: fall back to the reason
     CHECK_STR(rc::group_why(unsigned(ct::Group::Qc3), r), ct::name(ct::Reason::Request));
     // An EPR skip's detail sits above 128 + pd::Err: the PD group names it, it is never taken for an engine code

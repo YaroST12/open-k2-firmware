@@ -87,7 +87,7 @@ inline constexpr unsigned kMaxRanges = 4;
 inline constexpr unsigned kSpreadLevels = 4;   // v9: the setpoint errors kept per APDO (the plan has at most 4 distinct levels)
 inline constexpr int8_t kSpreadNone = -128;     // an empty spread slot
 inline constexpr unsigned kNameMax = 20;
-inline constexpr unsigned kReasonCount = unsigned(ct::Reason::ProgCheck) + 1;   // 54 values fit the card's 6-bit reason field
+inline constexpr unsigned kReasonCount = unsigned(ct::Reason::LinesOpen) + 1;   // 55 values fit the card's 6-bit reason field
 static_assert(kReasonCount <= 64, "the card stores a reason in 6 bits");
 inline constexpr uint8_t kMagic = 0xA6, kTypeCard = 1, kTypeDelete = 2;
 inline constexpr uint8_t kFormat = 13;  // payload byte 33: v4 adds per-EPR-level verdicts, v5 the cable block (Card carries it), v6 the UFCS modes, v7 the repeat counter, v8 the source's mid-run re-balance count, v9 the per-level setpoint-error spread, v10 the deep-sweep summary per range, v11 the Deep block beside a Deep card (no payload change), v12 the Xiaomi section in that block (any level; no payload change), v13 each PPS / AVS range's spec word in that block (no payload change)
@@ -259,7 +259,8 @@ constexpr unsigned vooc_lead(const Card& c) {
 constexpr bool folded(const Card& c, unsigned g) { return vooc_group(g) && g != vooc_lead(c); }
 // A skipped group whose protocol never answered (VIVO, UFCS, AFC, FCP, SCP: not offered). The VOOC family has its own words.
 constexpr bool silent_skip(unsigned g, const GroupResult& r) {
-    return r.verdict == GV::Skip && !vooc_group(g) && g < kGroups && charger_test::never_answered(charger_test::Group(g), fc::Fail(r.detail));
+    return r.verdict == GV::Skip && r.reason != uint8_t(charger_test::Reason::LinesOpen) && !vooc_group(g) && g < kGroups &&
+           charger_test::never_answered(charger_test::Group(g), fc::Fail(r.detail));   // LinesOpen keeps the engine's word as detail but names its own cause
 }
 // The group's name as a card view shows it: "VOOC" for the whole family, else the group's own name.
 inline const char* group_word(unsigned g) {

@@ -108,6 +108,7 @@ uint8_t legacy_reason(charger_test::Reason r, const charger_test::Step* step = n
     case R::Folded: return static_cast<uint8_t>(R::None);                     // schema 1 has no "output folds back": a plain pass (the step passed)
     case R::ProgCheck: return static_cast<uint8_t>(R::None);                  // schema 1 has no "transition check": a plain pass (the step passed)
     case R::MiChain: return static_cast<uint8_t>(R::NoOffer);                 // schema 1 has no "Xiaomi chain": the chain row is "not advertised"
+    case R::LinesOpen: return static_cast<uint8_t>(R::Request);               // schema 1 has no "lines open": the "no reply" skip it replaces (detail kept)
     case R::NoContract: return static_cast<uint8_t>(R::NoSource);
     case R::EprRefused: return static_cast<uint8_t>(R::Request);
     case R::StayedPd: case R::BlockedByPd: return static_cast<uint8_t>(R::PdActive);
@@ -143,7 +144,7 @@ size_t encode_charger_test(std::span<uint8_t> out, const ChargerTestSnapshot& s,
     if (modern) {
         const auto& e = s.evidence;
         static_assert(unsigned(charger_test::Algorithm::Count) <= 28, "the run's level sits above the algorithm bits");
-        w.u32((e.selected & 0x0FFFFFFFu) | (uint32_t(s.level) & 3u) << 28); w.u32(s.configured);
+        w.u32((e.selected & 0x0FFFFFFFu) | (uint32_t(s.level) & 3u) << 28 | (uint32_t(e.dpdm) & 3u) << 30); w.u32(s.configured);   // bits 30..31: the D+/D- check
         w.u8((e.wire_rev & 3) | ((s.stage & 15) << 2) | (std::min<unsigned>(s.resumed, 3) << 6));
         w.u8((e.reported.rev_major << 4) | e.reported.rev_minor); w.u8(e.flags);
         w.u16(e.monitor_mv); w.u16(e.cable_mv); w.u16(e.cable_ma);

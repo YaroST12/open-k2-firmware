@@ -87,6 +87,7 @@ uint32_t fnv_step(uint32_t h, uint8_t b) { return (h ^ b) * 16777619u; }
 
 const char* group_why(unsigned group, const GroupResult& r) {
     if (r.reason == uint8_t(ct::Reason::NoQc3Plus)) return "no QC3+";
+    if (r.reason == uint8_t(ct::Reason::LinesOpen)) return ct::kLinesOpenCell;   // the cell word; the full cause is the reason's name
     if (r.detail) {
         if (group == unsigned(ct::Group::Pd)) {
             if (const char* epr = ct::epr_detail_name(r.detail)) return epr;

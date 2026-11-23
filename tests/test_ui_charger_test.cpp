@@ -6498,6 +6498,63 @@ static void test_silent_qc_reads_no_reply_not_a_fail() {
         std::snprintf(name, sizeof name, "qc_none_rot%u", unsigned(rot)); dump_panel(name);
     }
 }
+// pattern usb-a-dpdm-open: a source that never spoke PD, D+/D- read open by the DCP check. The first QC unit's silence is the one
+// confirming attempt; every D+/D- unit then reads "lines open", one "No D+/D-" word in Results, the cause in the footer. A PD source
+// with the same reading gets no cause (the check does not run there), and short lines keep the plain "No reply".
+static void open_lines_run(Ui& ui, uint32_t& t, uint8_t rot, bool pd_source, int dcp) {
+    fixture();
+    if (pd_source) six_pdo_fixture(); else { g_stub.caps.valid = false; g_stub.caps.num_pdos = 0; g_stub.caps.active_cc = 0; }
+    g_stub.dcp_lines = dcp;
+    constexpr uint8_t kUnits[] = {uint8_t(ct::Unit::Qc2), uint8_t(ct::Unit::Qc3), uint8_t(ct::Unit::Ufcs)};
+    open(ui); ui.set_rotation(rot, 1050); settle(ui, 1050);
+    CHECK_EQ(ui.charger_test_set_units(kUnits), true);
+    CHECK_EQ(ui.charger_test_set_level(uint8_t(ct::Level::Medium)), true);
+    review(ui);
+    start_press(ui, 1300); press(ui, Button::Ok, 1400);
+    g_stub.fc_start_hook = qc_silent;
+    t = 1500;
+    for (; t <= 900000 && ui.charger_test_busy(); t += 100) ui.tick(t);
+    g_stub.fc_start_hook = nullptr;
+    g_stub.fc_status_fail = g_stub.fc_status_ident = 0;
+    CHECK_EQ(ui.charger_test_stage(), 6);
+    ui.tick(t); t += 200; ui.tick(t); t += 200;
+    settle(ui, t);
+}
+static void test_open_dpdm_lines_read_one_cause() {
+    for (uint8_t rot = 0; rot < 4; ++rot) {
+        Ui ui; uint32_t t;
+        open_lines_run(ui, t, rot, false, 1);
+        unsigned open_rows = 0, other = 0;
+        for (const auto& s : ui.charger_test_results().steps()) {
+            if (s.group == ct::Group::Pd) continue;
+            if (s.reason == ct::Reason::LinesOpen) { ++open_rows; CHECK_EQ(result_layout::is_lines_open(s), true); }
+            else ++other;
+        }
+        CHECK_EQ(open_rows >= 5, true);
+        CHECK_EQ(other, 0u);
+        CHECK_EQ(int(ui.charger_test_results().evidence().dpdm), int(ct::Lines::Open));
+        // the Results fold says it in one word, and the focused word's footer names both causes
+        unsigned n = 0;
+        bool footer = false;
+        for (; n < 12 && !footer; ++n) { footer = view_says(ui, "Open: flip or data cable"); if (!footer) { press(ui, Button::Plus, t); ui.tick(t += 100); settle(ui, t); } }
+        CHECK_EQ(footer, true);
+        if (rot == 0) CHECK_EQ(footer_shows("Open: flip or data cable", kCaution), true);   // the pill helper draws the unrotated toast rect only
+        char name[64];
+        std::snprintf(name, sizeof name, "dpdm_open_rot%u", unsigned(rot)); dump_panel(name);
+        press(ui, Button::Ok, t); ui.tick(t += 100); settle(ui, t);   // the rows behind the word: the unit's reason cell
+        std::snprintf(name, sizeof name, "dpdm_open_rows_rot%u", unsigned(rot)); dump_panel(name);
+    }
+    {   // a PD source: the same reading gives no cause, the units keep their plain no-reply skips
+        Ui ui; uint32_t t;
+        open_lines_run(ui, t, 0, true, 1);
+        for (const auto& s : ui.charger_test_results().steps()) CHECK_EQ(s.reason == ct::Reason::LinesOpen, false);
+    }
+    {   // short lines: a genuine no reply stays a no reply
+        Ui ui; uint32_t t;
+        open_lines_run(ui, t, 0, false, 2);
+        for (const auto& s : ui.charger_test_results().steps()) CHECK_EQ(s.reason == ct::Reason::LinesOpen, false);
+    }
+}
 static void test_vooc_family_results_read_watts_levels() {
     struct Scene { const char* name; ct::Level level; uint16_t ceiling; int32_t vmax_mv; };
     // deep69: the ladder stood at 6.3 A under 11.0 V (69 W): 50 and 65 W claimed, 100 and 120 W not reached
@@ -6973,6 +7030,7 @@ int main() {
     test_vooc_family_silent_reads_no_answer();
     test_silent_vivo_reads_no_reply_not_a_fail();
     test_silent_qc_reads_no_reply_not_a_fail();
+    test_open_dpdm_lines_read_one_cause();
     test_xiaomi_unit_scenes();
     test_transient_current_spike_does_not_abort_run();
     return test_report("test_ui_charger_test");

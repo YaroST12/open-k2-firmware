@@ -58,6 +58,8 @@ Tone roll_up(const Tally&);
 bool noted(const charger_test::Step& s);
 // A row skipped because its unit never answered (Skip, Request, ct::no_reply: VOOC NoAnswer, or a protocol's NoResponse / Unsupported): folds as "No reply", not "Skipped".
 bool is_no_answer(const charger_test::Step& s);
+// A D+/D- row skipped because the DCP check found the lines open (Reason::LinesOpen): folds as "No D+/D-", the one cause for the family.
+bool is_lines_open(const charger_test::Step& s);
 // A PD offer a Light run lists without asking for it (a fixed PDO, a PPS / AVS APDO, an EPR level the source listed): the source
 // advertises it, so it is drawn with the pass look (kit::Verdict::Pass) while its band word stays LISTED. Not UFCS, SCP or a legacy level.
 bool advertised(const charger_test::Step& s);
@@ -251,7 +253,7 @@ enum class CompactKind : uint8_t {
 struct CompactRow {
     CompactKind kind = CompactKind::Header;
     uint8_t algo = 0;      // charger_test::Algorithm, Section (Header), or Tone (Fact / Collapsed label tone)
-    uint16_t mv = 0;       // Pd: bit 0 = fold (skipped EPR levels get no chip), Fact label pool offset, or Collapsed (0=absent, 1=skipped)
+    uint16_t mv = 0;       // Pd: bit 0 = fold (skipped EPR levels get no chip), Fact label pool offset, or Collapsed (0=absent, 1=skipped, 2=lines open)
     uint8_t first = 0;     // Fact: first fact_tok index; Levels: first oem_watts::kLevels index
     uint8_t count = 0;     // Fact: fact_tok count; Levels: level count
 };
@@ -275,7 +277,7 @@ struct CompactGrid {
     std::array<CompactRow, kMaxRows> rows{};
     std::array<FactToken, kMaxFactTokens> fact_toks{};
     std::array<char, kCompactPoolBytes> pool{};
-    std::array<uint32_t, 2> collapsed_masks{};   // [0]=absent, [1]=skipped
+    std::array<uint32_t, 3> collapsed_masks{};   // [0]=absent, [1]=skipped, [2]=lines open
     uint8_t row_count = 0, fact_count = 0, pool_used = 0, cuts = 0;
 };
 struct RowTokens {

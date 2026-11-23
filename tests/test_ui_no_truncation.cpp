@@ -797,7 +797,7 @@ void test_card_screens() {
 void test_reason_words() {
     char buf[kFitBuf];
     trunc::context("reason words");
-    for (unsigned r = 0; r <= static_cast<unsigned>(ct::Reason::NeedsLoad); ++r) {   // every reason word must fit the toast pill
+    for (unsigned r = 0; r <= static_cast<unsigned>(ct::Reason::LinesOpen); ++r) {   // every reason word must fit the toast pill
         const char *text = ct::refusal_words(static_cast<ct::Reason>(r));
         CHECK_EQ(fits_px(kLabelAdv, text, kToastTextPx), true);
         if (!fits_px(kLabelAdv, text, kToastTextPx)) std::printf("reason %u too long: \"%s\"\n", r, text);

@@ -33,6 +33,14 @@ constexpr bool never_answered(Group g, fc::Fail f) {
 // A VOOC family that clocked no opener after either wake (NoAnswer): a skip too, an unloaded adapter may stay silent.
 constexpr bool silent_vooc(Group g, fc::Fail f) { return g >= Group::Vooc && g <= Group::SuperVooc65 && f == fc::Fail::NoAnswer; }
 constexpr bool no_reply(Group g, fc::Fail f) { return never_answered(g, f) || silent_vooc(g, f); }
+// The engine word a unit's silence has (the one no_reply() accepts for its group): what a LinesOpen row keeps as its detail, so a decoder
+// that does not know the reason still reads "no reply".
+constexpr fc::Fail silent_code(Group g) {
+    return g == Group::Afc || g == Group::Fcp || g == Group::Scp ? fc::Fail::Unsupported :
+           g == Group::Vivo ? fc::Fail::NoResponse : g >= Group::Vooc && g <= Group::SuperVooc65 ? fc::Fail::NoAnswer : fc::Fail::NoHandshake;
+}
+// What the DCP check (fastcharge::dcp_lines) found on D+/D-. The wire value of Evidence::dpdm; Unknown = not checked or not readable.
+enum class Lines : uint8_t { Unknown, Open, Short };
 static_assert(unsigned(Algorithm::Count) < 32);
 inline constexpr uint32_t kAllAlgorithms = (1u << unsigned(Algorithm::Count)) - 1;
 inline constexpr size_t kMaxSteps = pd::kMaxPdos * 6 + 46;   // 40 + the six default Class B rows (Qc2ClassB 1, Qc3ClassB 5); the journal's one-block section assert caps this
@@ -90,8 +98,10 @@ enum class Reason : uint8_t {
                          // same APDO at or above the first folded setpoint that read below the peak - never a fail (Summary::fold_mv)
     MiChain,             // the Xiaomi unit's chain row (is_mi_chain): detail = mi_unlock::chain_code. Pass = the 0x2717 chain finished
                          // (with or without new modes), Skip = no SVID 0x2717, no answer or a stall; nothing is requested on this row
-    ProgCheck            // a Deep PPS / AVS row whose transition capture broke a spec limit (progcheck::Flag bits in detail: overshoot, slow rise,
+    ProgCheck,           // a Deep PPS / AVS row whose transition capture broke a spec limit (progcheck::Flag bits in detail: overshoot, slow rise,
                          // transient, level off): a CAUTION on a Pass, never a fail - the level was delivered
+    LinesOpen            // a D+/D- unit skipped because the DCP check found the lines open (Lines::Open) on a source that never spoke PD and the first
+                         // attempt got no reply: one cause for the whole D+/D- family. detail = silent_code(group), the same word as its no-reply skip
 };
 // Step.detail of a PPS step-walk row while it is Pending/Running (finish() overwrites it with the result); sits above every
 // engine code and the EPR skip codes so the card and the tools never mistake it for one.
@@ -455,6 +465,7 @@ struct Input {
     // D+/D- are free for the ceiling stage's trigger: no owner holds them and they sit at the passive idle (the trigger's own
     // start check, svooc_trig::lines_free()). False for 500 ms after a legacy session's release (the engine's 0 V discharge).
     bool lines_free = true;
+    Lines lines = Lines::Unknown;   // fastcharge::dcp_lines(): the verdict of the once-per-attach DCP check (kept until VBUS drops)
 };
 // The runner waits for the source probe at most this long, so a charger that ignores it costs the run under 1 s.
 inline constexpr uint32_t kProbeMaxMs = 1000;
@@ -526,6 +537,8 @@ struct Evidence {
     // (the median gap between the last kCutOnsets onsets, in 100 ms units; 0 = fewer than two cuts seen or over 25.5 s). Only cut_retries
     // is exported (timing byte bits 3..7, saturating at 31: the 42-byte page header is full); the period is a [CT] cut period log line.
     uint8_t cut_retries = 0, cut_period_ds = 0;
+    // The DCP check's last verdict seen in the run (Lines); exported in bits 30..31 of the run-selected word (older firmware always sends 0 there).
+    Lines dpdm = Lines::Unknown;
     pd::Revision reported{};
     // The Xiaomi unit (Runner::mi_latch): the chain outcome (mi_unlock::chain_code, 0 = not run) and the unlocked modes, before and
     // after word and slot. Not journaled; the card carries it in its extension block (report_card_deep.hpp).
@@ -546,6 +559,8 @@ pd::SourceCaps nominal_caps();
 // (caps.valid false) it plans the nominal one, so the count still scales with the depth.
 unsigned planned_tests(const pd::SourceCaps&, Options, Input);
 const char* explanation(const Step&);
+// The short word for a LinesOpen row in a 16-cell value column (explanation, the card's Why); name(Reason::LinesOpen) is the full cause.
+inline constexpr const char* kLinesOpenCell = "lines open";
 // The step-walk caution's note, "steps 100mV, not 20mV" (the mean move, rounded to 10 mV from 50 up, then the nominal step) or
 // "steps ignored"; or a transition check's finding, "overshoot +1" (the first flag, then how many more); 0 characters for any other reason.
 // NUL-terminated within `out`, 24 characters at most.
@@ -945,7 +960,9 @@ private:
     void next(const Input&);
     size_t pick() const;
     size_t scp_next(const Input&, bool passed) const;
-    void skip_group_rows(Group g, bool raises_only, uint8_t detail);   // every Pending row of g (only those above 5 V) ends Skip / Request
+    void skip_group_rows(Group g, bool raises_only, uint8_t detail);
+    bool lines_open_cause(const Input&) const;   // the DCP check found D+/D- open on a source that never spoke PD, and no D+/D- row has answered
+    void lines_open_sweep();                      // every D+/D- row still Pending, or ended "no reply", reads LinesOpen
     void skip_pending(Reason);
     void suspend();
     bool unfinished() const;   // a row is still Pending or Running

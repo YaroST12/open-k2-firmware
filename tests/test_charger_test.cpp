@@ -22,6 +22,15 @@ using A = ct::Algorithm;
 static constexpr ct::Options kPd{.selected = ct::bit(A::Pd3Fixed) | ct::bit(A::Pps)};
 // kPd plus the Deep checks: the step walk is planned only with pps_sweep / avs_sweep.
 static constexpr ct::Options kPdWalk = [] { ct::Options o = kPd; o.pps_sweep = true; return o; }();
+// The engine word of a silent unit of each protocol (what ct::silent_code names per group).
+static fc::Fail silent_fail(fc::Proto p) {
+    switch (p) {
+    case fc::Proto::Afc: case fc::Proto::Fcp: case fc::Proto::Scp: return fc::Fail::Unsupported;
+    case fc::Proto::Vivo: return fc::Fail::NoResponse;
+    case fc::Proto::Vooc: case fc::Proto::SuperVooc: case fc::Proto::SuperVooc65: return fc::Fail::NoAnswer;
+    default: return fc::Fail::NoHandshake;
+    }
+}
 struct Fake final : ct::Env {
     ct::Input in;
     pd::SourceCaps caps;
@@ -92,6 +101,8 @@ struct Fake final : ct::Env {
     fc::Proto unsupported_proto = fc::Proto::Count;
     // A port that speaks no QC (JT-P18 USB-C, 2026-11-07): every request of the protocol ends in the engine's NoHandshake, VBUS stays at 5 V.
     fc::Proto no_handshake_proto = fc::Proto::Count;
+    // pattern usb-a-dpdm-open: every D+/D- protocol ends in its own "no reply" word (the lines go nowhere), whatever the unit.
+    bool silent_legacy = false;
     // A source still announcing (PD quiet under kLegacyQuietMs) spoils a new session's first try: race_kind Inline = the request is refused,
     // anything else = the engine's handshake fails with it. race_load also plugs a sink in at the refusal.
     fc::Fail race_kind = fc::Fail::None; bool race_load = false; int race_hits = 0;
@@ -330,6 +341,7 @@ struct Fake final : ct::Env {
         if (redetect_gap_ms && !retarget && (p == fc::Proto::Qc2 || p == fc::Proto::Qc3) && fc_released && in.now - fc_released_at < redetect_gap_ms) {
             ++redetect_refused; in.fc_state = fc::State::Failed; in.fc_fail = fc::Fail::NoHandshake; in.vbus_mv = 5000; return fc::Fail::None;
         }
+        if (silent_legacy) { in.fc_state = fc::State::Failed; in.fc_fail = silent_fail(p); in.vbus_mv = 5000; return fc::Fail::None; }
         if (no_handshake_proto == p) { in.fc_state = fc::State::Failed; in.fc_fail = fc::Fail::NoHandshake; in.vbus_mv = 5000; return fc::Fail::None; }
         if (unsupported_proto == p) { in.fc_state = fc::State::Failed; in.fc_fail = fc::Fail::Unsupported; in.vbus_mv = 5000; return fc::Fail::None; }
         if (no_change_proto == p && (mv >= 5300 || mv <= 4700)) {
@@ -2052,6 +2064,72 @@ static void test_a_handshake_that_answered_then_fails_stays_a_fail() {
         CHECK_EQ(int(r.steps()[1].detail), int(fc::Fail::NoHandshake));
         CHECK_EQ(result_layout::is_no_answer(r.steps()[1]), false);
     }
+}
+// pattern usb-a-dpdm-open (2026-11-23, A-to-C cable the wrong way round): the DCP check found D+/D- open on a port that never spoke PD and the
+// first D+/D- unit got no reply. One cause for the whole family, one confirming attempt: every other D+/D- row is a skip LinesOpen, no unit
+// after the first asks the engine, and the run's evidence names the lines.
+static const uint32_t kDpdmUnits = ct::bit(A::Qc2) | ct::bit(A::Qc2ClassB) | ct::bit(A::Qc3) | ct::bit(A::Qc3Plus) | ct::bit(A::Ufcs) | ct::bit(A::Vivo);
+static size_t lines_open_rows(const ct::Runner& r) {
+    size_t n = 0;
+    for (const auto& s : r.steps()) n += s.verdict == ct::Verdict::Skip && s.reason == ct::Reason::LinesOpen;
+    return n;
+}
+static void test_open_lines_give_one_cause_after_one_attempt() {
+    Fake f; f.caps = {}; f.silent_legacy = true; f.in.lines = ct::Lines::Open;
+    ct::Runner r(f);
+    r.start(f.caps, {.selected = kDpdmUnits}, f.in, true);
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 300000), true);
+    CHECK_EQ(f.fc_requests, 1);   // the confirming attempt; the other units never got a session
+    CHECK_EQ(int(r.evidence().dpdm), int(ct::Lines::Open));
+    for (const auto& s : r.steps()) {
+        CHECK_EQ(s.verdict, ct::Verdict::Skip); CHECK_EQ(s.reason, ct::Reason::LinesOpen);
+        CHECK_EQ(int(s.detail), int(ct::silent_code(s.group)));   // an old decoder still reads "no reply"
+        CHECK_EQ(result_layout::is_no_answer(s), false);
+    }
+    CHECK_EQ(lines_open_rows(r), r.steps().size());
+}
+// The verdict comes late (the check runs on its own after the PD attach): the units that already ran read "no reply", the first unit after
+// the verdict is the confirming attempt and takes them all with it.
+static void test_late_open_verdict_relabels_the_earlier_no_reply_rows() {
+    Fake f; f.caps = {}; f.silent_legacy = true;
+    ct::Runner r(f);
+    r.start(f.caps, {.selected = kDpdmUnits}, f.in, true);
+    CHECK_EQ(run_until(f, r, [&] { return r.steps()[0].verdict == ct::Verdict::Skip; }, 300000), true);
+    CHECK_EQ(int(r.steps()[0].reason), int(ct::Reason::Request));   // judged before the verdict: a plain "no reply"
+    f.in.lines = ct::Lines::Open;
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 300000), true);
+    CHECK_EQ(lines_open_rows(r), r.steps().size());
+    CHECK_EQ(f.fc_requests, 2);   // the unit before the verdict and the confirming one; the late verdict ended the family at the next unit
+}
+// A port whose lines read short (or unread) that gets no reply is a plain "no reply" per unit, every unit tried: unchanged.
+static void test_short_or_unknown_lines_keep_the_no_reply_rows() {
+    for (const auto lines : {ct::Lines::Short, ct::Lines::Unknown}) {
+        Fake f; f.caps = {}; f.silent_legacy = true; f.in.lines = lines;
+        ct::Runner r(f);
+        r.start(f.caps, {.selected = kDpdmUnits}, f.in, true);
+        CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 300000), true);
+        CHECK_EQ(lines_open_rows(r), 0u);
+        CHECK_EQ(f.fc_requests >= 4, true);
+        for (const auto& s : r.steps()) CHECK_EQ(result_layout::is_no_answer(s), true);
+        CHECK_EQ(int(r.evidence().dpdm), int(lines));
+    }
+}
+// A source that sent PD is not a D+/D- port: open lines are no cause there, whatever the lines read.
+static void test_open_lines_on_a_pd_source_give_no_hint() {
+    Fake f; f.silent_legacy = true; f.in.lines = ct::Lines::Open;   // the fixture's source lists PDOs
+    ct::Runner r(f);
+    r.start(f.caps, {.selected = ct::bit(A::Qc2) | ct::bit(A::Qc3)}, f.in, true);
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 300000), true);
+    CHECK_EQ(lines_open_rows(r), 0u);
+}
+// A unit that answered proves the lines carry data: no hint, whatever the verdict said.
+static void test_open_lines_but_an_answering_unit_give_no_hint() {
+    Fake f; f.caps = {}; f.in.lines = ct::Lines::Open; f.no_handshake_proto = fc::Proto::Qc3;
+    ct::Runner r(f);
+    r.start(f.caps, {.selected = ct::bit(A::Qc2) | ct::bit(A::Qc3)}, f.in, true);
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 300000), true);
+    CHECK_EQ(lines_open_rows(r), 0u);
+    CHECK_EQ(int(r.steps()[0].verdict), int(ct::Verdict::Pass));
 }
 // The same units against a charger that answers the handshake: the 5 V row passes, and only because the engine ran.
 static void test_answered_handshake_passes_the_5v_row() {
@@ -5837,7 +5915,7 @@ static void test_the_7s_cut_sequence_over_the_5v_steps_of_the_cuktech_run() {
     // the export carries the count: timing byte bits 3..7 of the schema-2 page header
     std::array<uint8_t, 58> page{};
     CHECK_EQ(remote::encode_charger_test(page, remote::charger_test_snapshot(r), 0, false, 2), remote::kChargerTestHeader2);
-    CHECK_EQ(unsigned(page[40] >> 3), unsigned(r.evidence().cut_retries));
+    CHECK_EQ(unsigned(page[40] >> 3 & 7), unsigned(r.evidence().cut_retries));
 }
 // The whole 10-unit run of the CUKTECH port, with a silent VOOC family (the port's real answer), the first cut swept over the whole
 // period (every 200 ms) once the first engine session has opened: whatever unit or row it lands in (a row, the Baseline or the detach
@@ -9550,7 +9628,7 @@ int main() {
     test_a_cut_short_list_without_a_xiaomi_chain_is_still_offers_changed();
     test_an_unsolicited_list_change_during_a_normal_row_replans_per_row();
     test_plan_and_run(); test_an_auto_hold_counts_as_released(); test_quiet_is_exactly_the_row_in_flight(); test_paint_blocked_needs_flight_and_an_engine_window(); test_refusals(); test_hold_keeps_the_baseline_until_released(); test_safe5_baseline();test_cancel_and_failed_release(); test_release_waits_for_the_sink_verification_and_its_hard_reset();
-    test_faults(); test_loop_lock_refuses_and_aborts(); test_timeouts_and_skips(); test_one_second_holds(); test_qc2_settles_within_two_percent(); test_qc2_5v_accepts_vsafe5_reading(); test_legacy_5v_accepts_vsafe5_reading(); test_qc3_rows_use_an_asymmetric_band(); test_legacy_rows_use_a_five_percent_band(); test_legacy_5v_row_uses_the_vsafe5_window(); test_scp_4v5_row_judges_the_adapter_readback(); test_qc3plus_without_response_is_a_distinct_skip(); test_unsupported_protocol_skips_its_other_rows(); test_silent_source_fails_every_handshake_row(); test_silent_first_handshake_is_no_reply(); test_a_handshake_that_answered_then_fails_stays_a_fail(); test_answered_handshake_passes_the_5v_row(); test_svooc_row_follows_the_adapter_ramp(); test_svooc_detected_is_a_pass(); test_vooc_family_shares_one_session(); test_ceiling_off_runs_no_stage(); test_ceiling_is_deep_only_and_the_ident_is_kept(); test_ceiling_judged_ladder_is_the_result(); test_ceiling_refusal_is_recorded_and_the_run_goes_on(); test_ceiling_no_adapter_and_early_abort(); test_ceiling_cap_stops_a_session_that_is_never_judged(); test_ceiling_cancel_stops_the_trigger(); test_ceiling_needs_a_detected_svooc_family(); test_ceiling_waits_for_the_lines_after_the_family_release(); test_ceiling_lines_never_free_is_a_recorded_refusal(); test_ceiling_usb_a_mode_is_the_plain_on(); test_ceiling_quiet_adapter_is_stopped_at(); test_ceiling_runner_guard_names_its_cause(); test_ceiling_vbus_lost_after_the_stage_is_recovered_by_an_rd_cycle(); test_ceiling_vbus_that_never_returns_ends_the_run(); test_ceiling_adapter_ramp_is_part_of_the_stage(); test_ceiling_vbus_stuck_high_after_the_stage_is_unsafe(); test_vivo_no_response_skips_the_other_vivo_rows(); test_vivo_that_answered_then_fails_stays_a_fail(); test_pps_min_step_accepts_unloaded_floor(); test_pps_up_step_uses_the_tight_band();
+    test_faults(); test_loop_lock_refuses_and_aborts(); test_timeouts_and_skips(); test_one_second_holds(); test_qc2_settles_within_two_percent(); test_qc2_5v_accepts_vsafe5_reading(); test_legacy_5v_accepts_vsafe5_reading(); test_qc3_rows_use_an_asymmetric_band(); test_legacy_rows_use_a_five_percent_band(); test_legacy_5v_row_uses_the_vsafe5_window(); test_scp_4v5_row_judges_the_adapter_readback(); test_qc3plus_without_response_is_a_distinct_skip(); test_unsupported_protocol_skips_its_other_rows(); test_silent_source_fails_every_handshake_row(); test_silent_first_handshake_is_no_reply(); test_a_handshake_that_answered_then_fails_stays_a_fail(); test_open_lines_give_one_cause_after_one_attempt(); test_late_open_verdict_relabels_the_earlier_no_reply_rows(); test_short_or_unknown_lines_keep_the_no_reply_rows(); test_open_lines_on_a_pd_source_give_no_hint(); test_open_lines_but_an_answering_unit_give_no_hint(); test_answered_handshake_passes_the_5v_row(); test_svooc_row_follows_the_adapter_ramp(); test_svooc_detected_is_a_pass(); test_vooc_family_shares_one_session(); test_ceiling_off_runs_no_stage(); test_ceiling_is_deep_only_and_the_ident_is_kept(); test_ceiling_judged_ladder_is_the_result(); test_ceiling_refusal_is_recorded_and_the_run_goes_on(); test_ceiling_no_adapter_and_early_abort(); test_ceiling_cap_stops_a_session_that_is_never_judged(); test_ceiling_cancel_stops_the_trigger(); test_ceiling_needs_a_detected_svooc_family(); test_ceiling_waits_for_the_lines_after_the_family_release(); test_ceiling_lines_never_free_is_a_recorded_refusal(); test_ceiling_usb_a_mode_is_the_plain_on(); test_ceiling_quiet_adapter_is_stopped_at(); test_ceiling_runner_guard_names_its_cause(); test_ceiling_vbus_lost_after_the_stage_is_recovered_by_an_rd_cycle(); test_ceiling_vbus_that_never_returns_ends_the_run(); test_ceiling_adapter_ramp_is_part_of_the_stage(); test_ceiling_vbus_stuck_high_after_the_stage_is_unsafe(); test_vivo_no_response_skips_the_other_vivo_rows(); test_vivo_that_answered_then_fails_stays_a_fail(); test_pps_min_step_accepts_unloaded_floor(); test_pps_up_step_uses_the_tight_band();
     test_missing_samples_and_wrap();
     test_fixed_band_judges_a_burst_mode_ripple_on_its_mean(); test_fixed_band_still_fails_a_steady_low_or_high_level(); test_fixed_band_keeps_the_per_sample_overvoltage_guards();
     test_pps_renewal();
