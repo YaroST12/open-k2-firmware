@@ -189,11 +189,11 @@ test("the all-pass card: every badge green, nothing grey", () => {
   assert.ok(b.every((x) => x.tone === "pass"));
   const h = K2Card.header(card);
   assert.equal(h.title, "Desk 65W");
-  assert.deepEqual(h.facts, ["65W", "Xiaomi", "Samsung SFC 3.0"]);   // the fixture's spec_rev is 3, which is not a revision a source can send
+  assert.deepEqual(h.facts, ["65W", "XIAOMI", "Samsung SFC 3.0"]);   // the fixture's spec_rev is 3, which is not a revision a source can send
   assert.equal(h.fingerprint, "00C0FFEE");
   assert.match(h.ident, /^Card #\d+ · run \d+ · boot \d+ · up .* · fingerprint 00C0FFEE$/);
-  assert.deepEqual(K2Card.header({ ...card, spec_rev: 2 }).facts, ["PD 3.x", "65W", "Xiaomi", "Samsung SFC 3.0"]);
-  assert.deepEqual(K2Card.header({ ...card, spec_rev: 1, qc: "QC4+" }).facts, ["PD 2.0", "65W", "Xiaomi", "QC4+"]);
+  assert.deepEqual(K2Card.header({ ...card, spec_rev: 2 }).facts, ["PD 3.x", "65W", "XIAOMI", "Samsung SFC 3.0"]);
+  assert.deepEqual(K2Card.header({ ...card, spec_rev: 1, qc: "QC4+" }).facts, ["PD 2.0", "65W", "XIAOMI", "QC4+"]);
 });
 
 test("the passive OEM label follows the firmware's rule: Moto TurboPower, Samsung SFC 2.0 and 3.0", () => {
@@ -306,8 +306,8 @@ test("the page loads nothing from the network", () => {
 
 test("the brand table is the firmware's vendor table", () => {
   assert.equal(K2Card.BRANDS[0x19D2], "ZTE");
-  assert.equal(K2Card.BRANDS[0x291A], "Anker");   // not Hynetek (0x2E99)
-  assert.equal(K2Card.BRANDS[0x339B], "Honor");
+  assert.equal(K2Card.BRANDS[0x291A], "ANKER");   // not Hynetek (0x2E99)
+  assert.equal(K2Card.BRANDS[0x339B], "HONOR");
   assert.equal(K2Card.BRANDS[0x1234], undefined);
 });
 

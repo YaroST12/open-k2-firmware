@@ -66,8 +66,8 @@ FORMAT = 13   # payload byte 33: 13 = the block's spec part may carry each range
              # 5 = the 16-byte cable block at offset 162 (seq, vid/pid, max mV/mA, kind, flags),
              # 6 = the UFCS modes at offset 178 (4 x u24: lo 100 mV, hi 100 mV, current in 50 mA),
              # 7 = the repeat block at offset 190 (times, last boot, last uptime of identical re-runs)
-# VID -> vendor name: the firmware's table (pd::vendor_find), read from tools/vendors.csv.
-BRANDS = {r.vid: r.name for r in gen_vendors.load(gen_vendors.CSV)}
+# VID -> vendor name in capitals: the firmware's table (pd::vendor_find), read from tools/vendors.csv.
+BRANDS = {r.vid: r.display for r in gen_vendors.load(gen_vendors.CSV)}
 
 
 class BadCard(ValueError):

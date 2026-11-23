@@ -67,7 +67,7 @@ def test_format_2_carries_pdp_and_auto_name_flag():
     rec = bytearray(PAYLOAD)
     rec[33] = 2; rec[54] = 65; rec[55] = 1
     c = report_card.decode(bytes(rec))
-    assert (c["brand"], c["pdp_w"], c["name_auto"]) == ("Apple", 65, True)
+    assert (c["brand"], c["pdp_w"], c["name_auto"]) == ("APPLE", 65, True)
     assert list(c)[:8] == ["no", "name", "fp", "vid", "pid", "brand", "pdp_w", "name_auto"]
     old = bytearray(PAYLOAD)
     old[33] = 1; old[54] = 65; old[55] = 1            # format 1: those bytes are name padding, not data
