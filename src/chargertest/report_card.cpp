@@ -386,7 +386,7 @@ void fold_repeat(const Card& prev, Card& c) {
 
     struct GroupAcc {
         uint8_t passes = 0, fails = 0, skips = 0;
-        bool have_fail = false, have_skip = false, no_response = false, proven = false;
+        bool have_fail = false, have_skip = false, no_response = false, proven = false, listed = false;
         uint8_t pass_detail = 0;
         GroupResult first_fail{}, first_skip{};
     };
@@ -425,6 +425,7 @@ void fold_repeat(const Card& prev, Card& c) {
             if (acc.skips < 255) ++acc.skips;
             if (!acc.have_skip) { acc.have_skip = true; acc.first_skip = why; }
             if (s.reason == ct::Reason::NoQc3Plus) acc.no_response = true;
+            if (s.reason == ct::Reason::Advertised && s.group == ct::Group::Pd) acc.listed = true;   // a Light run asks no PD row: the list is its pass
         }
 
         if (ct::UfcsMode m; ct::ufcs_mode_of(s, m) && m.max_mv != 0) {
@@ -518,7 +519,7 @@ void fold_repeat(const Card& prev, Card& c) {
     for (unsigned g = 0; g < kGroups; ++g) {
         const GroupAcc& acc = ga[g];
         GroupResult& r = c.group[g];
-        r.verdict = acc.fails ? GV::Fail : acc.no_response ? GV::Skip : acc.passes ? GV::Pass : acc.skips ? GV::Skip : GV::None;
+        r.verdict = acc.fails ? GV::Fail : acc.no_response ? GV::Skip : acc.passes || acc.listed ? GV::Pass : acc.skips ? GV::Skip : GV::None;
         if (r.verdict == GV::Fail) { r.detail = acc.first_fail.detail; r.reason = acc.first_fail.reason; r.fail_mv = acc.first_fail.fail_mv; }
         else if (r.verdict == GV::Pass) r.detail = acc.proven ? uint8_t(0) : acc.pass_detail;
         else if (r.verdict == GV::Skip) { r.detail = acc.first_skip.detail; r.reason = acc.first_skip.reason; }

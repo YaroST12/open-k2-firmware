@@ -2788,7 +2788,7 @@ static void test_step_label_gallery() {
         // A grid row's footer counts the listing apart from the results; a listed range reads "advertised" in the Ok
         // tone (the source has it, nothing was asked), never a shortfall in amber.
         ui.set_rotation(0, t); top(ui, t); settle(ui, t);   // the text checks read rotation 0's panel
-        CHECK_EQ(footer_shows("PD: 1 pass, 6 listed", kOk), true);   // one PD block: the fixed chips and both PPS ranges count together
+        CHECK_EQ(footer_shows("PD: 7 listed, 2 skip", kOk), true);   // one PD block: the fixed chips (the 5 V one too) and both PPS ranges, none asked
         bool avs = false;
         for (int n = 0; n < 12 && !avs; ++n) {
             avs = view_says(ui, "AVS: advertised");

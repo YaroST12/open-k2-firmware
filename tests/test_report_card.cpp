@@ -816,6 +816,20 @@ static void test_codec_identity_fields_and_old_formats() {
     CHECK_EQ(rc::decode_card({buf.data() + 4, rc::kPayload}, d), 0);
 }
 
+// A Light run asks no PD row: its PD group is only Advertised rows, and it still reads as a pass (an older Light card had the 5 V row
+// passed beside them), never as a skipped group. A group with nothing listed stays a skip.
+static void test_light_pd_group_of_listed_rows_is_a_pass() {
+    std::vector<ct::Step> steps = {
+        step(A::Pd3Fixed, ct::Group::Pd, 1, 5000, V::Skip, 0, ct::Reason::Advertised),
+        step(A::Pd3Fixed, ct::Group::Pd, 2, 9000, V::Skip, 0, ct::Reason::Advertised),
+        step(A::Pps, ct::Group::Pd, 3, 11000, V::Skip, 0, ct::Reason::Advertised, kPps),
+    };
+    rc::Card c = rc::build(steps, evidence(), {}, {}, {}, ct::State::Done, ct::Reason::None);
+    CHECK_EQ(int(c.group[unsigned(ct::Group::Pd)].verdict), int(rc::GV::Pass));
+    steps = {step(A::Pd3Fixed, ct::Group::Pd, 1, 5000, V::Skip, 0, ct::Reason::NoOffer)};
+    c = rc::build(steps, evidence(), {}, {}, {}, ct::State::Done, ct::Reason::None);
+    CHECK_EQ(int(c.group[unsigned(ct::Group::Pd)].verdict), int(rc::GV::Skip));
+}
 // The run's level rides in the v8 block's spare byte (197): Light / Deep survive the record, an older card (the byte 0, or a format
 // before 8) reads Medium, and a Light card is never "the same results" as a Medium card of the same charger.
 static void test_v8_level_roundtrip() {
@@ -1300,7 +1314,7 @@ static void test_a_silent_protocol_survives_the_build_as_a_silent_skip() {
 int main() {
     test_a_silent_protocol_survives_the_build_as_a_silent_skip();
     test_xiaomi_rows_stay_off_the_card();
-    test_v8_level_roundtrip();
+    test_v8_level_roundtrip(); test_light_pd_group_of_listed_rows_is_a_pass();
     test_spr_avs_range_limits();
     test_late_reasons_and_states_roundtrip();
     test_legacy_fingerprint();
