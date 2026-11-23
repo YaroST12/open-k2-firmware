@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Yaraslau Furman
 // Remote-control framing and payload encoders. Pure, see remote_proto.hpp for the layouts.
 #include "k2/core/remote_proto.hpp"
+#include "k2/chargertest/step_label.hpp"
 #include <algorithm>
 
 namespace k2::remote {
@@ -200,6 +201,16 @@ size_t encode_charger_test_spec(std::span<uint8_t> out, const ChargerTestSnapsho
         specsec::to_wire(s.evidence.spec, wire);
         for (size_t i = 0; i < n; ++i) w.u8(wire[off + i]);
     }
+    return w.size();
+}
+
+size_t encode_charger_test_now(std::span<uint8_t> out, const ChargerTestSnapshot& s) {
+    const auto il = static_cast<charger_test::Interlude>(s.interlude);
+    const auto name = il == charger_test::Interlude::None ? step_label::Text{} : step_label::interlude_label(il, s.spec_pt);
+    if (out.size() < kChargerTestNowFixed + name.len) return 0;
+    Writer w(out);
+    w.u8(s.interlude); w.u8(static_cast<uint8_t>(s.spec_pt.what)); w.u8(s.spec_pt.pos); w.u16(s.spec_pt.mv);
+    w.text(name.view());
     return w.size();
 }
 

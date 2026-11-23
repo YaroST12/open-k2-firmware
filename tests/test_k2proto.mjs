@@ -343,9 +343,36 @@ test("charger-test view decodes the screen as data", async () => {
   assert.throws(() => P.decodeChargerTestView(u8(...TEST_VIEW, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41)), P.FrameError);
   const badStage = new Uint8Array(TEST_VIEW); badStage[0] = 99;
   assert.throws(() => P.decodeChargerTestView(badStage), P.FrameError);
-  const { remote, sent } = chargerRig([TEST_VIEW]);
+  const { remote, sent } = chargerRig([TEST_VIEW, TEST_NOW_ROW]);
   assert.equal((await remote.chargerTest("view")).stage, "review");
-  assert.deepEqual(sent, [[0x0B, [3]]]);
+  assert.deepEqual(sent, [[0x0B, [3]], [0x0B, [10]]]);
+});
+
+// 0x0B req [10] (the now): the vectors of tests/test_k2_remote_charger_test.py and test_remote_proto.cpp.
+const TEST_NOW_ROW = [0, 0, 0, 0, 0];
+const text = (s) => [...s].map((c) => c.charCodeAt(0));
+const TEST_NOW_SPEC = [3, 2, 2, 0x54, 0x1F, ...text("PPS 8.02V")];
+const TEST_NOW_CEILING = [2, 0, 0, 0, 0, ...text("SVOOC ceiling")];
+test("charger-test now names the interlude and the spec point", async () => {
+  assert.deepEqual(P.decodeChargerTestNow(u8(...TEST_NOW_SPEC)),
+    { interlude: "spec", name: "PPS 8.02V", spec_point: { what: "pps", pos: 2, mv: 8020 } });
+  assert.deepEqual(P.decodeChargerTestNow(u8(...TEST_NOW_CEILING)), { interlude: "ceiling", name: "SVOOC ceiling", spec_point: null });
+  assert.deepEqual(P.decodeChargerTestNow(u8(...TEST_NOW_ROW)), { interlude: "row", name: null, spec_point: null });
+  assert.equal(P.decodeChargerTestNow(u8(1, 0, 0, 0, 0, ...text("Charger ID"))).interlude, "probe");
+  assert.equal(P.decodeChargerTestNow(u8(3, 4, 0, 0, 0, ...text("Hard Reset"))).spec_point.what, "hard-reset");
+  for (const bad of [TEST_NOW_ROW.slice(0, 4), [...TEST_NOW_CEILING, 0x41], [4, 0, 0, 0, 0], [3, 5, 0, 0, 0], [...TEST_NOW_CEILING.slice(0, 17), 0xFF]])
+    assert.throws(() => P.decodeChargerTestNow(u8(...bad)), P.FrameError);
+  // status and view carry it next to the unchanged index; an older firmware leaves it out
+  const a = chargerRig([TEST_HEADER2, TEST_NOW_SPEC]);
+  const s = await a.remote.chargerTest("status");
+  assert.equal(s.now.spec_point.mv, 8020); assert.equal(s.current, 1);
+  assert.deepEqual(a.sent, [[0x0B, [2]], [0x0B, [10]]]);
+  assert.equal((await chargerRig([TEST_VIEW, TEST_NOW_CEILING]).remote.chargerTest("view")).now.name, "SVOOC ceiling");
+  for (const status of [P.STATUS.BAD_ARG, P.STATUS.BAD_LENGTH]) {
+    assert.equal("now" in (await chargerRig([TEST_HEADER2, new P.RemoteError(status, 0x0B)]).remote.chargerTest("status")), false);
+    assert.equal("now" in (await chargerRig([TEST_VIEW, new P.RemoteError(status, 0x0B)]).remote.chargerTest("view")), false);
+  }
+  await assert.rejects(() => chargerRig([TEST_HEADER2, new P.RemoteError(P.STATUS.BUSY, 0x0B)]).remote.chargerTest("status"), P.RemoteError);
 });
 
 test("charger-test view on older firmware reports the missing form", async () => {
@@ -528,10 +555,10 @@ test("charger-test schema2 maximum and empty retrieval are bounded", async () =>
 
 test("charger-test schema1 fallback preserves layout and labels missing evidence honestly", async () => {
   for (const status of [P.STATUS.BAD_LENGTH, P.STATUS.BAD_ARG]) {
-    const { remote, sent } = chargerRig([new P.RemoteError(status, 0x0B), TEST_HEADER]);
+    const { remote, sent } = chargerRig([new P.RemoteError(status, 0x0B), TEST_HEADER, TEST_NOW_ROW]);
     const r = await remote.chargerTest("status");
     assert.equal(r.schema, 1); assert.equal(r.selection, null); assert.equal(r.stage, null); assert.equal(r.evidence, null);
-    assert.deepEqual(sent, [[0x0B, [2]], [0x0B, []]]);
+    assert.deepEqual(sent, [[0x0B, [2]], [0x0B, []], [0x0B, [10]]]);
   }
   const legacyRows = TEST_ROWS.map((r, i) => u8([2, 0, 4][i], ...r.slice(1)));
   const { remote, sent } = chargerRig([TEST_HEADER, testPage(TEST_HEADER, 0, legacyRows.slice(0, 2)),
@@ -2213,6 +2240,13 @@ test("chargerTestRun: refusals come back as values, never as a thrown error", as
   // nothing happens: a bounded wait, then a timeout value
   ({ remote } = ctRig((cmd, p) => p[0] === 4 ? [0, 0, 0, 0] : p[0] === 3 ? viewAt("review", true) : withRunId(7)));
   assert.equal((await remote.chargerTestRun({ confirm: true, sleep })).stage, "timeout");
+});
+
+test("the live page names the stage and lights no running dot between rows", async () => {
+  const html = await (await import("node:fs/promises")).readFile(new URL("../tools/web/k2.html", import.meta.url), "utf8");
+  assert.match(html, /var il = st\.now && st\.now\.interlude !== "row" \? st\.now : null;/);
+  assert.match(html, /current: il \? null : st\.current,/);
+  assert.match(html, /k2\.chargerTest\("view", \{ now: false \}\)/);
 });
 
 test("http: charger-test START carries confirm=1; status, view and CANCEL do not", async () => {

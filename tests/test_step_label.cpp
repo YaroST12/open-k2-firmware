@@ -280,7 +280,19 @@ static void test_the_spec_stage_names_the_engines_point() {
     CHECK_EQ(int(ct::spec_step({W::HardReset, 0, 0}).mv), 0);
 }
 
+// The Running header's name in a stage that is no plan row: the words say what the K2 is doing, the spec stage keeps the point's own.
+static void test_an_interlude_names_what_the_k2_is_doing() {
+    using I = ct::Interlude;
+    CHECK_STR(stl::interlude_label(I::Probe, {}).c_str(), "Charger ID");
+    CHECK_STR(stl::interlude_label(I::Ceiling, {}).c_str(), "SVOOC ceiling");
+    CHECK_STR(stl::interlude_label(I::Spec, {ct::SpecWhat::Pps, 6, 8000}).c_str(), "PPS 8V");
+    CHECK_STR(stl::interlude_label(I::Spec, {ct::SpecWhat::HardReset, 0, 0}).c_str(), "Hard Reset");
+    CHECK_STR(stl::interlude_label(I::None, {}).c_str(), "");
+    for (const I i : {I::Probe, I::Ceiling, I::Spec}) CHECK_EQ(stl::interlude_label(i, {}).len <= stl::kInterludeCells, true);
+}
+
 int main() {
+    test_an_interlude_names_what_the_k2_is_doing();
     test_the_spec_stage_names_the_engines_point();
     test_a_sweep_row_names_the_range_it_sweeps();
     test_the_golden_labels();

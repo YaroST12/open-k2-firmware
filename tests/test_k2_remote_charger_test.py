@@ -34,6 +34,12 @@ EXPECTED_ROWS = [
 ]
 
 
+# 0x0B req [10] (the now): interlude, what, pos, mv(2), then the name; the vectors of test_remote_proto.cpp test_charger_test_now_wire.
+NOW_ROW = bytes(5)
+NOW_SPEC = bytes([3, 2, 2, 0x54, 0x1F]) + b"PPS 8.02V"   # the PD spec stage at PPS pos 2, 8020 mV
+NOW_CEILING = bytes([2, 0, 0, 0, 0]) + b"SVOOC ceiling"
+
+
 class Link:
     def __init__(self, payloads):
         self.payloads = list(payloads)
@@ -61,11 +67,13 @@ class ChargerTest(unittest.TestCase):
         self.assertEqual(frame, bytes([0xA5, 0x4B, 0x0B, 9, 9, 0, 4, 3, 2, 1, 8, 7, 6, 5]) + bytes(50))
 
     def test_exact_status_and_wire(self):
-        link = Link([HEADER])
+        link = Link([HEADER, NOW_ROW])
         expected = {"schema": 1, "run_id": 0x01020304, "revision": 0x05060708, "state": "holding",
-                    "reason": "none", "total": 3, "current": 1, "steps": [], **LEGACY}
+                    "reason": "none", "total": 3, "current": 1, "steps": [], **LEGACY,
+                    "now": {"interlude": "row", "name": None, "spec_point": None}}
         self.assertEqual(kr.cmd_charger_test(link, self.args("status")), expected)
-        self.assertEqual(link.sent, [(0x0B, b"\x02")])
+        self.assertEqual(link.sent, [(0x0B, b"\x02"), (0x0B, b"\x0a")])
+        expected.pop("now")
         wire = bytes([0xA6, 0x4B, 0x0B, 9, 0, 47]) + page(HEADER, 0, [ROW0, ROW1]) + bytes(11)
         self.assertEqual(len(wire), 64)
         decoded = kr.decode_charger_test(kr.parse_response(wire).payload)
@@ -581,10 +589,10 @@ class ChargerTest(unittest.TestCase):
 
     def test_legacy_fallback_only_on_rejected_version(self):
         for status in (kr.STATUS_BAD_LENGTH, kr.STATUS_BAD_ARG):
-            link = Link([kr.RemoteError(status, kr.CMD_CHARGER_TEST), HEADER])
+            link = Link([kr.RemoteError(status, kr.CMD_CHARGER_TEST), HEADER, NOW_ROW])
             r = kr.cmd_charger_test(link, self.args("status"))
             self.assertEqual(r["schema"], 1); self.assertIsNone(r["evidence"])
-            self.assertEqual(link.sent, [(0x0B, b"\x02"), (0x0B, b"")])
+            self.assertEqual(link.sent, [(0x0B, b"\x02"), (0x0B, b""), (0x0B, b"\x0a")])
         for error in (kr.RemoteError(kr.STATUS_BUSY, kr.CMD_CHARGER_TEST), kr.RemoteTimeout(), b"bad"):
             link = Link([error])
             with self.assertRaises((kr.RemoteError, kr.RemoteTimeout, kr.FrameError)):
@@ -903,9 +911,9 @@ class ChargerTestViewTest(unittest.TestCase):
             kr.decode_charger_test_view(bytes(b))
 
     def test_command_sends_the_view_request_and_nothing_else(self):
-        link = Link([VIEW])
+        link = Link([VIEW, NOW_ROW])
         r = kr.cmd_charger_test(link, self.args("view"))
-        self.assertEqual(link.sent, [(0x0B, b"\x03")])
+        self.assertEqual(link.sent, [(0x0B, b"\x03"), (0x0B, b"\x0a")])
         self.assertEqual(r["stage"], "review")
         self.assertIn("Press again to start", kr._render("charger-test", r))
         self.assertIn("review", kr._render("charger-test", r))
@@ -927,6 +935,47 @@ class ChargerTestViewTest(unittest.TestCase):
         link = Link([kr.RemoteError(kr.STATUS_BUSY, 0x0B)])
         with self.assertRaises(kr.RemoteError):
             kr.cmd_charger_test(link, self.args("view"))
+
+
+class ChargerTestNowTest(unittest.TestCase):
+    """0x0B req [10]: the name the Running screen shows in an interlude, which `current` (the next unit's row) does not give."""
+    def args(self, *args):
+        return kr.build_parser().parse_args(["charger-test", *args])
+
+    def test_decode_the_spec_stage_point_and_words(self):
+        self.assertEqual(kr.decode_charger_test_now(NOW_SPEC),
+                         {"interlude": "spec", "name": "PPS 8.02V", "spec_point": {"what": "pps", "pos": 2, "mv": 8020}})
+        self.assertEqual(kr.decode_charger_test_now(bytes([3, 4, 0, 0, 0]) + b"Hard Reset")["spec_point"],
+                         {"what": "hard-reset", "pos": 0, "mv": 0})
+        self.assertEqual(kr.decode_charger_test_now(NOW_CEILING),
+                         {"interlude": "ceiling", "name": "SVOOC ceiling", "spec_point": None})
+        self.assertEqual(kr.decode_charger_test_now(bytes([1, 0, 0, 0, 0]) + b"Charger ID")["interlude"], "probe")
+
+    def test_bad_shapes_are_frame_errors(self):
+        for bad in (NOW_ROW[:4], NOW_CEILING + b"x", bytes([4, 0, 0, 0, 0]), bytes([3, 5, 0, 0, 0]), NOW_CEILING[:-1] + b"\xff"):
+            with self.assertRaises(kr.FrameError):
+                kr.decode_charger_test_now(bad)
+
+    def test_status_and_view_carry_the_screens_words(self):
+        link = Link([HEADER, NOW_SPEC])
+        s = kr.cmd_charger_test(link, self.args("status"))
+        self.assertEqual(s["current"], 1)   # the index is unchanged: the new key is the screen's own point
+        self.assertEqual(s["now"]["spec_point"], {"what": "pps", "pos": 2, "mv": 8020})
+        self.assertIn("spec stage: PPS 8.02V", kr._render("charger-test", s))
+        link = Link([VIEW, NOW_CEILING])
+        v = kr.cmd_charger_test(link, self.args("view"))
+        self.assertEqual(v["now"]["name"], "SVOOC ceiling")
+        self.assertIn("now: ceiling stage, SVOOC ceiling", kr._render("charger-test", v))
+
+    def test_old_firmware_keeps_the_index_and_no_now(self):
+        for status in (kr.STATUS_BAD_ARG, kr.STATUS_BAD_LENGTH):
+            s = kr.cmd_charger_test(Link([HEADER, kr.RemoteError(status, 0x0B)]), self.args("status"))
+            self.assertNotIn("now", s)
+            self.assertEqual(s["current"], 1)
+            v = kr.cmd_charger_test(Link([VIEW, kr.RemoteError(status, 0x0B)]), self.args("view"))
+            self.assertNotIn("now", v)
+        with self.assertRaises(kr.RemoteError):   # any other refusal is real
+            kr.cmd_charger_test(Link([HEADER, kr.RemoteError(kr.STATUS_BUSY, 0x0B)]), self.args("status"))
 
 
 def meta2(run_id):

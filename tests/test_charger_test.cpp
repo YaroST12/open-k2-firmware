@@ -9029,6 +9029,88 @@ static void test_spec_stage_names_the_engines_point() {
     CHECK_EQ(run_until(f, r, [&] { return r.state() != ct::State::Spec; }, 60000), true);
     CHECK_EQ(int(r.spec_point().what), int(ct::SpecWhat::None));          // outside the stage there is none
 }
+// What the Running page rests its grid window on while no plan row is in flight (an interlude: the identity probe, the SVOOC ceiling,
+// the PD spec stage). The plan's index already sits on the next unit in the probe and the spec stage, so the window stays on the
+// last row done there; in the spec stage it stays on the last level the engine was on, so a Hard Reset point does not jump it.
+static const ct::Options& two_units_deep() {
+    static const ct::Options o = ct::with_level(with_units(ct::kDefaultAlgorithms, {ct::Unit::Pd, ct::Unit::Qc2}), ct::Level::Deep);
+    return o;
+}
+static void test_window_holds_on_the_last_level_across_a_hard_reset_point() {
+    Fake f; f.caps = level_caps(); f.spec_engine = true; f.spec_run_ms = 0; f.spec_result = spec_cells();
+    ct::Runner r(f);
+    CHECK_EQ(r.start(f.caps, two_units_deep(), f.in, true), ct::Reason::None);
+    CHECK_EQ(int(r.interlude()), int(ct::Interlude::None));
+    f.spec_pt = {ct::SpecWhat::Pps, 6, 8000};
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Spec; }, 400000), true);
+    f.tick(r, 100);
+    CHECK_EQ(int(r.interlude()), int(ct::Interlude::Spec));
+    const size_t last_pd = r.index() - 1;   // the stage starts with the index on the next unit's first row
+    CHECK_EQ(r.steps()[r.index()].algorithm == ct::Algorithm::Qc2, true);
+    CHECK_EQ(int(r.window_step().algorithm), int(ct::Algorithm::Pps)); CHECK_EQ(int(r.window_step().pos), 6); CHECK_EQ(int(r.window_step().mv), 8000);
+    f.spec_pt = {ct::SpecWhat::Avs, 9, 21000};
+    f.tick(r, 100);
+    CHECK_EQ(int(r.window_step().algorithm), int(ct::Algorithm::EprAvs)); CHECK_EQ(int(r.window_step().mv), 21000);
+    {   // the remote reads the same point and words (0x0B [10]), while its `current` is still the next unit's row
+        const auto snap = remote::charger_test_snapshot(r);
+        CHECK_EQ(int(snap.interlude), int(ct::Interlude::Spec));
+        CHECK_EQ(int(snap.spec_pt.what), int(ct::SpecWhat::Avs)); CHECK_EQ(int(snap.spec_pt.mv), 21000);
+        uint8_t b[remote::kMaxRspPayload];
+        const size_t n = remote::encode_charger_test_now(b, snap);
+        CHECK_EQ(n, remote::kChargerTestNowFixed + 7);
+        CHECK_EQ(std::string_view(reinterpret_cast<const char*>(b) + remote::kChargerTestNowFixed, 7) == "AVS 21V", true);
+    }
+    f.spec_pt = {ct::SpecWhat::HardReset, 0, 0};
+    f.tick(r, 100);
+    CHECK_EQ(int(r.spec_point().what), int(ct::SpecWhat::HardReset));
+    CHECK_EQ(int(r.window_step().algorithm), int(ct::Algorithm::EprAvs));   // held: the last level, not a step of the plan
+    CHECK_EQ(int(r.window_step().pos), 9); CHECK_EQ(int(r.window_step().mv), 21000);
+    f.spec_pt = {ct::SpecWhat::None, 0, 0};
+    f.tick(r, 100);
+    CHECK_EQ(int(r.window_step().mv), 21000);   // between two points, too
+    (void)last_pd;
+}
+static void test_window_of_a_hard_reset_first_stays_on_the_last_row_done() {
+    Fake f; f.caps = level_caps(); f.spec_engine = true; f.spec_run_ms = 0; f.spec_result = spec_cells();
+    ct::Runner r(f);
+    CHECK_EQ(r.start(f.caps, two_units_deep(), f.in, true), ct::Reason::None);
+    f.spec_pt = {ct::SpecWhat::HardReset, 0, 0};
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Spec; }, 400000), true);
+    f.tick(r, 100);
+    const ct::Step w = r.window_step();
+    const ct::Step& last = r.steps()[r.index() - 1];
+    CHECK_EQ(int(w.algorithm), int(last.algorithm)); CHECK_EQ(int(w.mv), int(last.mv)); CHECK_EQ(int(w.pos), int(last.pos));
+    CHECK_EQ(int(w.group), int(ct::Group::Pd)); CHECK_EQ(int(last.verdict) != int(ct::Verdict::Pending), true);
+    // a second stage never inherits the first one's level
+    f.spec_pt = {ct::SpecWhat::Pps, 6, 8000}; f.tick(r, 100);
+    f.spec_run_ms = 1; f.spec_pt = {};
+    CHECK_EQ(run_until(f, r, [&] { return r.state() != ct::State::Spec; }, 60000), true);
+    CHECK_EQ(int(r.interlude()), int(ct::Interlude::None));
+    CHECK_EQ(int(r.window_step().algorithm), int(r.steps()[std::min(r.index(), r.steps().size() - 1)].algorithm));
+}
+static void test_the_identity_probe_window_is_an_interlude() {
+    Fake f; f.in.pd.state = pd::SinkState::Ready; f.probe_mode = 2; ct::Runner r(f);   // 2 = the charger ignores the probe: the window runs to its cap
+    const auto o = with_units(ct::kDefaultAlgorithms, {ct::Unit::Pd, ct::Unit::Qc2});
+    CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+    CHECK_EQ(run_until(f, r, [&] { return r.probing(); }, 60000), true);
+    CHECK_EQ(int(r.interlude()), int(ct::Interlude::Probe));
+    const ct::Step& last = r.steps()[r.index() - 1];
+    CHECK_EQ(int(last.group), int(ct::Group::Pd));   // the unit just done, not the next one's first row
+    CHECK_EQ(int(r.window_step().group), int(last.group)); CHECK_EQ(int(r.window_step().mv), int(last.mv));
+    CHECK_EQ(run_until(f, r, [&] { return !r.probing(); }, 60000), true);
+    CHECK_EQ(int(r.interlude()), int(ct::Interlude::None));
+}
+static void test_the_svooc_ceiling_stage_is_an_interlude() {
+    Fake f; f.caps = {}; f.ceil_judged_ms = 3000;
+    ct::Runner r(f);
+    ceiling_run(f, r, sc::Mode::On);
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Ceiling; }, 120000), true);
+    CHECK_EQ(int(r.interlude()), int(ct::Interlude::Ceiling));
+    const ct::Step& done = r.steps()[std::min(r.index(), r.steps().size() - 1)];   // the index did not move: the family row just detected
+    CHECK_EQ(int(r.window_step().group), int(done.group)); CHECK_EQ(done.verdict == ct::Verdict::Pass, true);
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 120000), true);
+    CHECK_EQ(int(r.interlude()), int(ct::Interlude::None));
+}
 // The stage is Deep only, and needs a build with the engine: Light and Medium never start it, a build without the engine (the
 // Env's default answer) records nothing and shows no section.
 static void test_spec_stage_is_deep_only() {
@@ -9546,7 +9628,7 @@ int main() {
     test_epr_spoof_identity_tests_epr_and_avs(); test_epr_capable_list_never_gives_epr_rows_not_offered(); test_epr_spoof_identity_at_light_makes_no_requests();
     test_a_resumed_light_run_stays_light();
     test_the_page_names_the_run_level();
-    test_spec_stage_runs_once_in_a_deep_pd_unit(); test_spec_stage_names_the_engines_point(); test_spec_stage_is_deep_only(); test_spec_refusal_is_recorded_and_the_run_goes_on(); test_spec_cancel_ends_in_order();
+    test_spec_stage_runs_once_in_a_deep_pd_unit(); test_spec_stage_names_the_engines_point(); test_window_holds_on_the_last_level_across_a_hard_reset_point(); test_window_of_a_hard_reset_first_stays_on_the_last_row_done(); test_the_identity_probe_window_is_an_interlude(); test_the_svooc_ceiling_stage_is_an_interlude(); test_spec_stage_is_deep_only(); test_spec_refusal_is_recorded_and_the_run_goes_on(); test_spec_cancel_ends_in_order();
     test_spec_leaves_the_source_at_5v_before_the_detach(); test_spec_watchdog_bounds_a_stuck_engine(); test_spec_runner_guard_stops_the_engine();
     test_spec_resumed_run_never_repeats_the_stage(); test_spec_preview_counts_the_stage();
     test_deep_run_feeds_its_moves_to_the_spec_section(); test_deep_run_feeds_its_epr_avs_moves(); test_feeding_the_spec_section_changes_no_verdict(); test_no_spec_feed_without_a_stage();

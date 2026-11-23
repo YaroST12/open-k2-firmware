@@ -120,6 +120,14 @@ Text spec_label(const ct::SpecPoint& p) {
     return label(ct::spec_step(p));
 }
 
+Text interlude_label(ct::Interlude i, const ct::SpecPoint& p) {
+    if (i == ct::Interlude::Spec) return spec_label(p);
+    Text t;
+    Out o{t};
+    o.put(i == ct::Interlude::Probe ? "Charger ID" : i == ct::Interlude::Ceiling ? "SVOOC ceiling" : "");
+    return t;
+}
+
 Text label(const ct::Step& s, const ct::Step* prev) {
     if (ct::is_sweep(s)) {   // the deep-sweep row names the range it sweeps, not its first point ("PPS 5-21V", "AVS 9-20V")
         Text t = protocol(s);

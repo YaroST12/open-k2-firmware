@@ -59,6 +59,10 @@ class Firmware(unittest.TestCase):
         self.assertEqual(constexpr_u8("kChargerTestStartReq"), 4)
         self.assertEqual(constexpr_u8("kChargerTestCancelReq"), 5)
 
+    def test_now_request_and_layout(self):
+        self.assertEqual(constexpr_u8("kChargerTestNowReq"), 10)
+        self.assertEqual(constexpr_u8("kChargerTestNowFixed"), 5)
+
     def test_stop_names_are_the_session_enum(self):
         names = enum_names(PAGES_HPP, "Stopped")
         self.assertEqual([n.lower() for n in names], ["nothing", "run", "wait", "confirmation", "refusal", "resume"])
@@ -72,6 +76,11 @@ class K2Remote(unittest.TestCase):
         self.assertEqual(kr.CT_START_CONFIRM, constexpr_u8("kCtStartConfirm"))
         self.assertEqual(kr.CT_START_ALL_TESTS, constexpr_u8("kCtStartAllTests"))
         self.assertEqual(kr.CT_STOPPED, [n.lower() for n in enum_names(PAGES_HPP, "Stopped")])
+
+    def test_now_ids_and_words(self):
+        self.assertEqual((kr.CT_NOW_REQ, kr.CT_NOW_FIXED), (constexpr_u8("kChargerTestNowReq"), constexpr_u8("kChargerTestNowFixed")))
+        self.assertEqual(kr.CT_INTERLUDES, ["row"] + [n.lower() for n in enum_names(CT_HPP, "Interlude")[1:]])
+        self.assertEqual(kr.CT_SPEC_WHATS, [re.sub(r"(?<!^)(?=[A-Z])", "-", n).lower() for n in enum_names(CT_HPP, "SpecWhat")])
 
     def test_states_cover_the_firmware_enum(self):
         self.assertEqual(len(kr.TEST_STATES), len(enum_names(CT_HPP, "State")))
@@ -98,6 +107,14 @@ class K2Proto(unittest.TestCase):
             self.assertEqual(js_strings(js, "CT_STOPPED"), kr.CT_STOPPED)
             self.assertEqual(js_strings(js, "CT_CABLE_KINDS"), kr.CABLE_KINDS)
             self.assertEqual(re.search(r'var CT_GUARD_REFUSAL = "([^"]*)";', js).group(1), kr.CT_GUARD_REFUSAL)
+        self.each(check)
+
+    def test_now_ids_and_words(self):
+        def check(js):
+            m = re.search(r"var CT_NOW_REQ = (\d+), CT_NOW_FIXED = (\d+), CT_NOW_NAME = (\d+);", js)
+            self.assertEqual([int(g) for g in m.groups()], [kr.CT_NOW_REQ, kr.CT_NOW_FIXED, kr.CT_NOW_NAME])
+            self.assertEqual(js_strings(js, "CT_INTERLUDES"), kr.CT_INTERLUDES)
+            self.assertEqual(js_strings(js, "CT_SPEC_WHATS"), kr.CT_SPEC_WHATS)
         self.each(check)
 
     def test_units_follow_the_firmware(self):
