@@ -1559,11 +1559,11 @@ static void test_rail_link_cell_fits() {
                 kit::draw_opp_slot(roomy, e, dir, 3, c);
                 const int want_val = count(kInk), want_tag = count(kDim);
                 CHECK_EQ(want_val > 5 && want_tag > 2, true);
-                c.link = pclink::State::Power;   // glass in kInk3: the text inks stay countable
+                c.link = pclink::State::Power;   // socket in kInk2: the text inks stay countable
                 lcd::fill(kBase);
                 kit::draw_opp_slot(tight, e, dir, 3, c);
                 CHECK_EQ(count(kInk), want_val);
-                CHECK_EQ(count(kDim), want_tag);
+                CHECK_EQ(count(kDim), want_tag + 48);   // kInk2 == kDim: 48 socket pixels share the tag ink on tight cell
                 c.link = pclink::State::Shell;
                 lcd::fill(kBase);
                 kit::draw_opp_slot(tight, e, dir, 3, c);
@@ -1581,7 +1581,7 @@ static void test_rail_link_cell_fits() {
 static void test_rail_link_icon_upright() {
     const PanelEdge edges[4] = {PanelEdge::Left, PanelEdge::Top, PanelEdge::Right, PanelEdge::Bottom};
     struct Case { pclink::State st; Icon icon; uint16_t ink; };
-    const Case cases[2] = {{pclink::State::Power, Icon::Socket, kInk3}, {pclink::State::Host, Icon::Monitor, kInk}};
+    const Case cases[2] = {{pclink::State::Power, Icon::Socket, kInk2}, {pclink::State::Host, Icon::Monitor, kInk}};
     for (const PanelEdge e : edges)
         for (const TextDir dir : {TextDir::Cw, TextDir::Ccw})
             for (const Case &k : cases) {
@@ -1603,6 +1603,25 @@ static void test_rail_link_icon_upright() {
                 if (found != 1) std::printf("  link icon %d edge %d dir %d: %d upright matches\n", static_cast<int>(k.icon), static_cast<int>(e), static_cast<int>(dir), found);
                 CHECK_EQ(found, 1);
             }
+    // Bottom horizontal rail anchors icon at male-plug end (x=1..12) with left-to-right text strictly to its right.
+    {
+        const Surface s{0, 0, 62, 16};
+        kit::OppCell c{};
+        c.tag = "D+ ";
+        c.value = "3.30V";
+        c.link = pclink::State::Power;
+        lcd::fill(kBase);
+        kit::draw_opp_slot(s, PanelEdge::Bottom, TextDir::Ccw, 3, c);
+        int icon_min_x = 999, icon_max_x = -1, text_min_x = 999;
+        for (int y = 0; y < 16; ++y)
+            for (int x = 0; x < 62; ++x) {
+                const uint16_t pxv = g_panel[y * 240 + x];
+                if (x >= 1 && x <= 12 && pxv == kInk2) { icon_min_x = std::min(icon_min_x, x); icon_max_x = std::max(icon_max_x, x); }
+                if (pxv == kInk) text_min_x = std::min(text_min_x, x);
+            }
+        CHECK_EQ(icon_min_x >= 1 && icon_max_x <= 12, true);
+        CHECK_EQ(text_min_x >= 14, true);
+    }
 }
 
 // A chip (solid or outlined) is its native w x 14 box in every rotation, all four edges whole: a landscape viewport squeezes

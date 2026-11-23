@@ -127,10 +127,18 @@ static void test_text_direction_follows_the_edge() {
     CHECK_EQ(panel_is_column(PanelEdge::Top) || panel_is_column(PanelEdge::Bottom), 0);
 }
 
-// The telemetry rail reads the same in every rotation: the page title first, then the readouts, at fixed lengths. A column
-// rail whose text reads bottom-to-top (rotation 0) lays its slots out from the bottom up, so the reading order never flips.
+// Every rotation keeps the telemetry rail anchored to the same physical pixels on the panel: opposite the button edge
+// (physical col 0..15), slot 0 (title) at the female-port end (phys row 186..239) and slot 3 at the male-plug end (phys row 0..61).
 static void test_opp_slots_keep_reading_order() {
-    static const int16_t kWant[4] = {0, 54, 116, 178};
+    auto to_phys = [](uint8_t rot, Rect r) -> Rect {
+        switch (rot & 3) {
+        case 0: return r;
+        case 1: return {static_cast<int16_t>(kScreenW - r.y - r.h), r.x, r.h, r.w};
+        case 2: return {static_cast<int16_t>(kScreenW - r.x - r.w), static_cast<int16_t>(kScreenH - r.y - r.h), r.w, r.h};
+        default: return {r.y, static_cast<int16_t>(kScreenH - r.x - r.w), r.h, r.w};
+        }
+    };
+    const Layout l0 = compute_layout(orientation_for(0).edge, kCenters, 60, kOppRailThickness);
     for (uint8_t rot = 0; rot < 4; ++rot) {
         const Orientation o = orientation_for(rot);
         const Layout l = compute_layout(o.edge, kCenters, 60, kOppRailThickness);
@@ -139,38 +147,34 @@ static void test_opp_slots_keep_reading_order() {
         const bool column = panel_is_column(opp);
         for (unsigned s = 0; s < 4; ++s) {
             const Rect r = opp_slot_rect(l.opp_rail, opp, dir, s);
-            const int along = column ? l.opp_rail.h : l.opp_rail.w;
-            const int len = column ? r.h : r.w;
-            const int lo = column ? r.y - l.opp_rail.y : r.x - l.opp_rail.x;
-            const int u = (column && dir == TextDir::Ccw) ? along - lo - len : lo;   // distance from where reading starts
-            CHECK_EQ(len, kOppSlotLen[s]);
-            CHECK_EQ(u, kWant[s]);
+            const Rect p0 = opp_slot_rect(l0.opp_rail, opposite_edge(orientation_for(0).edge), rail_text_dir(orientation_for(0).edge), s);
+            const Rect p = to_phys(rot, r);
+            CHECK_EQ(p.x, p0.x);
+            CHECK_EQ(p.y, p0.y);
+            CHECK_EQ(p.w, p0.w);
+            CHECK_EQ(p.h, p0.h);
+            CHECK_EQ(column ? r.h : r.w, kOppSlotLen[s]);
             CHECK_EQ(column ? r.w : r.h, kOppRailThickness);
-            CHECK_EQ(column ? r.x : r.y, column ? l.opp_rail.x : l.opp_rail.y);
         }
     }
 }
 
-// The two side rails (rotations 0 and 2) look the same to the reader: text read bottom-to-top, the title at the bottom and
-// the readouts above it, the same spans along the edge. Only the side of the screen differs.
-static void test_side_rails_read_alike() {
+// Physical bezel anchoring vs button strip: Rot 0 and Rot 2 mirror along Y so the title stays at the physical female-port end
+// (y=186..239 in Rot 0, y=0..53 in Rot 2), while side-rail text stays readable in panel_text_dir.
+static void test_side_rails_bezel_pinned() {
     const Orientation o0 = orientation_for(0), o2 = orientation_for(2);
     CHECK_EQ(static_cast<int>(rail_text_dir(o0.edge)), static_cast<int>(TextDir::Ccw));
-    CHECK_EQ(static_cast<int>(rail_text_dir(o2.edge)), static_cast<int>(TextDir::Ccw));
+    CHECK_EQ(static_cast<int>(rail_text_dir(o2.edge)), static_cast<int>(TextDir::Cw));
     const Layout l0 = compute_layout(o0.edge, kCenters, 60, kOppRailThickness);
     const Layout l2 = compute_layout(o2.edge, kCenters, 60, kOppRailThickness);
-    for (unsigned s = 0; s < 4; ++s) {
-        const Rect a = opp_slot_rect(l0.opp_rail, opposite_edge(o0.edge), rail_text_dir(o0.edge), s);
-        const Rect b = opp_slot_rect(l2.opp_rail, opposite_edge(o2.edge), rail_text_dir(o2.edge), s);
-        CHECK_EQ(a.y, b.y);
-        CHECK_EQ(a.h, b.h);
-    }
-    CHECK_EQ(opp_slot_rect(l2.opp_rail, PanelEdge::Right, rail_text_dir(o2.edge), 0).y, kScreenH - kOppSlotLen[0]);   // title at the bottom
+    CHECK_EQ(opp_slot_rect(l0.opp_rail, opposite_edge(o0.edge), rail_text_dir(o0.edge), 0).y, kScreenH - kOppSlotLen[0]);
+    CHECK_EQ(opp_slot_rect(l2.opp_rail, opposite_edge(o2.edge), rail_text_dir(o2.edge), 0).y, 0);
+    CHECK_EQ(opp_slot_rect(l2.opp_rail, opposite_edge(o2.edge), rail_text_dir(o2.edge), 3).y, kScreenH - kOppSlotLen[3]);
 }
 
 int main() {
     test_opp_slots_keep_reading_order();
-    test_side_rails_read_alike();
+    test_side_rails_bezel_pinned();
     test_unequal_slots_tile_the_edge();
     test_shipped_style_tiles();
     test_thin_panel_gives_wider_content();

@@ -228,18 +228,17 @@ K2_HOT void draw_opp_slot(const Surface &s, PanelEdge opp_edge, TextDir dir, uns
         if (!lcd::clip_to_band(by, bh)) return;
     }
     const bool vertical = panel_is_column(opp_edge);
-    const bool rev = opp_reversed(opp_edge, dir);   // the text starts at the cell's high end (a column read bottom-to-top)
+    const bool rev = opp_reversed(opp_edge, dir);   // high-end -> low-end placement along the rail (Left bottom-up, Bottom right-to-left)
+    const bool text_rev = vertical && rev;          // horizontal text always runs left-to-right even when cells run right-to-left
     const bool active_mast = cell.masthead && cell.active;
     const uint16_t bg = active_mast ? kAccent : kBg2;
     const uint16_t border_col = active_mast ? kAccent : kRule;
     const int16_t along = vertical ? s.h : s.w;
     const int16_t fh = static_cast<int16_t>(kLabelFont.height);
-    // Everything below is laid out in reading order: u counts pixels from where the text starts, and at() turns a run
-    // [u, u + len) into the cell coordinate. The cell looks the same, mirrored, in every rotation.
+    // at() maps cell progression [u, u + len) along the rail; text_rev only mirrors inner item order inside vertical Ccw cells.
     const auto at = [&](int u, int len) { return static_cast<int16_t>(rev ? along - u - len : u); };
 
-    // Inner divider (1 px along content-facing edge) + the 1 px rule across the cell: at the end of the reading for the
-    // masthead, at its start for slots 2 and 3 (slot 1 starts after the masthead's rule).
+    // Inner divider (1 px along content-facing edge) + the 1 px rule across the cell: after the masthead, before slots 2 and 3.
     Box body{0, 0, s.w, s.h};
     if (vertical) {
         const int16_t div_x = opp_edge == PanelEdge::Left ? static_cast<int16_t>(s.w - 1) : 0;
@@ -264,24 +263,27 @@ K2_HOT void draw_opp_slot(const Surface &s, PanelEdge opp_edge, TextDir dir, uns
         body.y = opp_edge == PanelEdge::Top ? 0 : 1;
         body.h = static_cast<int16_t>(s.h - 1);
         if (cell.masthead) {
-            gfx_fill(s, static_cast<int16_t>(s.w - 1), body.y, 1, body.h, active_mast ? kBg : kRule);
+            gfx_fill(s, at(along - 1, 1), body.y, 1, body.h, active_mast ? kBg : kRule);
             body.w = static_cast<int16_t>(s.w - 1);
+            if (rev) body.x = 1;
         } else if (slot > 1) {
-            gfx_fill(s, 0, body.y, 1, 2, bg);
-            gfx_fill(s, 0, static_cast<int16_t>(body.y + 2), 1, static_cast<int16_t>(body.h > 4 ? body.h - 4 : body.h), kRule);
-            if (body.h > 4) gfx_fill(s, 0, static_cast<int16_t>(body.y + body.h - 2), 1, 2, bg);
-            body.x = 1;
+            const int16_t rx = at(0, 1);
+            gfx_fill(s, rx, body.y, 1, 2, bg);
+            gfx_fill(s, rx, static_cast<int16_t>(body.y + 2), 1, static_cast<int16_t>(body.h > 4 ? body.h - 4 : body.h), kRule);
+            if (body.h > 4) gfx_fill(s, rx, static_cast<int16_t>(body.y + body.h - 2), 1, 2, bg);
             body.w = static_cast<int16_t>(s.w - 1);
+            if (!rev) body.x = 1;
         }
     }
 
     const uint8_t dots = cell.dot_count > 5 ? 5 : cell.dot_count;
     const int spot_w = cell.spot ? 5 : 0;
     const int dots_w = dots > 0 ? static_cast<int>(dots) * 5 : 0;
-    // A link cell keeps the icon at the end of the reading (1 px gap before it, 1 px after); the text centres in the rest,
+    // A link cell keeps the icon at the far bezel end (1 px gap before it, 1 px after); the text centres in the rest,
     // with 2 px of padding instead of 4 (a "D+ 3.30V" cell in the narrowest slot still fits whole).
     const bool linked = cell.link != pclink::State::None && !cell.masthead;
     const int zone = linked ? along - (kLinkIconPx + 2) : along;
+    const int text_offset = (!vertical && rev && linked) ? (kLinkIconPx + 2) : 0;
     const int avail = std::max<int>(zone - (linked ? 2 : 4) - spot_w - dots_w, 0);
     std::string_view tag_src = cell.tag;
     if (linked && !tag_src.empty() && tag_src.back() == ' ' &&
@@ -300,10 +302,11 @@ K2_HOT void draw_opp_slot(const Surface &s, PanelEdge opp_edge, TextDir dir, uns
     int nh = 0;
     Box spot_box{}, tag_box{}, val_box{}, dot_box[5]{}, link_box{};
     const int16_t pp = vertical ? (opp_edge == PanelEdge::Left ? int16_t(1) : int16_t(3)) : (opp_edge == PanelEdge::Top ? int16_t(1) : int16_t(3));
-    // A run of `len` px at reading position u, `plen` px thick at offset `po` across the cell.
+    // A run of `len` px at inner item offset u, `plen` px thick at offset `po` across the cell.
     const auto run = [&](int u, int len, int po, int plen) {
-        return vertical ? Box{static_cast<int16_t>(pp + po), at(u, len), static_cast<int16_t>(plen), static_cast<int16_t>(len)}
-                        : Box{at(u, len), static_cast<int16_t>(pp + po), static_cast<int16_t>(len), static_cast<int16_t>(plen)};
+        const int16_t pos = static_cast<int16_t>(text_rev ? along - u - len : text_offset + u);
+        return vertical ? Box{static_cast<int16_t>(pp + po), pos, static_cast<int16_t>(plen), static_cast<int16_t>(len)}
+                        : Box{pos, static_cast<int16_t>(pp + po), static_cast<int16_t>(len), static_cast<int16_t>(plen)};
     };
     int cur = (zone - total) / 2;
     if (cell.spot) {
@@ -333,7 +336,7 @@ K2_HOT void draw_opp_slot(const Surface &s, PanelEdge opp_edge, TextDir dir, uns
         holes[nh++] = link_box;
     }
     fill_except(s, body, holes, nh, bg);
-    if (linked) paint_link_icon(s, link_box, cell.link, bg, cell.link == pclink::State::Power ? kInk3 : kInk, kFocus);
+    if (linked) paint_link_icon(s, link_box, cell.link, bg, cell.link == pclink::State::Power ? kInk2 : kInk, kFocus);
     if (cell.spot) gfx_fill(s, spot_box.x, spot_box.y, spot_box.w, spot_box.h, cell.spot);
     if (tag_w > 0) {
         if (vertical) gfx_text_rot(s, kLabelFont, tag_box.x, tag_box.y, tag_v, cell.tag_color, bg, dir);
@@ -351,7 +354,7 @@ K2_HOT void draw_opp_slot(const Surface &s, PanelEdge opp_edge, TextDir dir, uns
             gfx_fill(s, dot_box[i].x, dot_box[i].y, 3, 3, dot_col);
             if (i + 1 < dots) {
                 if (vertical) {
-                    const int16_t gy = rev ? static_cast<int16_t>(dot_box[i].y - 2) : static_cast<int16_t>(dot_box[i].y + 3);
+                    const int16_t gy = text_rev ? static_cast<int16_t>(dot_box[i].y - 2) : static_cast<int16_t>(dot_box[i].y + 3);
                     gfx_fill(s, dot_box[i].x, gy, 3, 2, bg);
                 } else {
                     gfx_fill(s, static_cast<int16_t>(dot_box[i].x + 3), dot_box[i].y, 2, 3, bg);

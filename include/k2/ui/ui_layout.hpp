@@ -73,16 +73,19 @@ enum class TextDir : uint8_t { Ccw, Cw };
 // horizontal text, returned as Ccw but not used).
 constexpr TextDir panel_text_dir(PanelEdge edge) { return edge == PanelEdge::Left ? TextDir::Cw : TextDir::Ccw; }
 constexpr bool panel_is_column(PanelEdge edge) { return edge == PanelEdge::Right || edge == PanelEdge::Left; }
-// The telemetry rail's text reads bottom-to-top on either side, so both side rotations show the title at the bottom and the
-// readouts above it (rotation 2 read top-down, title at the top, and looked flipped against rotation 0). The strip keeps
-// panel_text_dir.
-constexpr TextDir rail_text_dir(PanelEdge) { return TextDir::Ccw; }
+// The telemetry rail's cells and PC/outlet icon stay anchored to the physical K2 bezel in every rotation: Slot 0
+// (title) sits at the physical female-port end, Slots 1..3 run toward the physical male-plug end, and the PC/outlet
+// icon stays at the physical male-plug corner. Side rails follow panel_text_dir so Rot 0 reads bottom-up and Rot 2 reads
+// top-down (matching physical bottom->top in both); horizontal rails draw left-to-right (Rot 3) or right-to-left (Rot 1).
+constexpr TextDir rail_text_dir(PanelEdge edge) { return panel_text_dir(edge); }
 
-// The telemetry rail's four cells in reading order (page title, then the readouts); the lengths and the order are the same in
-// every rotation. A column rail whose text reads bottom-to-top (TextDir::Ccw) lays them out from the bottom up.
+// The telemetry rail's four cells in physical bezel order (title at female-port end, readouts toward male-plug end);
+// lengths match across every rotation.
 constexpr int16_t kOppSlotLen[4] = {54, 62, 62, 62};
 static_assert(kOppSlotLen[0] + kOppSlotLen[1] + kOppSlotLen[2] + kOppSlotLen[3] == kScreenH);   // the rail spans the whole edge
-constexpr bool opp_reversed(PanelEdge opp_edge, TextDir dir) { return panel_is_column(opp_edge) && dir == TextDir::Ccw; }
+constexpr bool opp_reversed(PanelEdge opp_edge, TextDir dir) {
+    return panel_is_column(opp_edge) ? (dir == TextDir::Ccw) : (opp_edge == PanelEdge::Bottom);
+}
 Rect opp_slot_rect(const Rect &rail, PanelEdge opp_edge, TextDir dir, unsigned slot);
 
 // Which physical button the i-th slot shows. Right edge, rotation 0: BACK, MINUS, OK, PLUS.
