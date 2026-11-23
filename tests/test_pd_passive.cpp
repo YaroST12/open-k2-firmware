@@ -5,7 +5,53 @@
 
 using namespace k2::pd;
 
+// The fallback after the K2's own sink Hard Reset: a source whose VBUS never comes back is asked to wake once (a bank that sleeps
+// after the reset); one that comes back, or never went dark, or a tool/inline owner, is left alone.
+static void test_hr_recovery() {
+    CHECK_EQ(int(kHrBackMs), 1960);   // 35 + 650 + 1000 + 275 ms
+    {   // dark for the whole window: one Wake, once
+        HrRecovery h;
+        h.arm(1000, false);
+        CHECK_EQ(int(h.step(1010, 9000, false)), int(HrRecovery::Act::None));   // the rail not down yet
+        CHECK_EQ(int(h.step(1100, 0, false)), int(HrRecovery::Act::None));
+        CHECK_EQ(int(h.step(1000 + kHrBackMs - 1, 0, false)), int(HrRecovery::Act::None));
+        CHECK_EQ(int(h.step(1000 + kHrBackMs, 0, false)), int(HrRecovery::Act::Wake));
+        CHECK_EQ(int(h.step(1000 + kHrBackMs + 100, 0, false)), int(HrRecovery::Act::None));   // spent
+        CHECK_EQ(h.armed(), false);
+    }
+    {   // VBUS returned inside the window: nothing, and nothing later even if it sags again
+        HrRecovery h;
+        h.arm(0, false);
+        CHECK_EQ(int(h.step(100, 0, false)), int(HrRecovery::Act::None));
+        CHECK_EQ(int(h.step(1200, 5000, false)), int(HrRecovery::Act::None));
+        CHECK_EQ(int(h.step(5000, 0, false)), int(HrRecovery::Act::None));
+    }
+    {   // a rail that never dropped is alive: no fallback
+        HrRecovery h;
+        h.arm(0, false);
+        CHECK_EQ(int(h.step(kHrBackMs + 50, 9000, false)), int(HrRecovery::Act::None));
+    }
+    {   // a tool / inline owner or no VBUS reading: never act blind
+        HrRecovery h;
+        h.arm(0, false);
+        CHECK_EQ(int(h.step(100, 0, false)), int(HrRecovery::Act::None));
+        CHECK_EQ(int(h.step(kHrBackMs + 50, 0, true)), int(HrRecovery::Act::None));
+        HrRecovery u;
+        u.arm(0, false);
+        CHECK_EQ(int(u.step(100, 0, false)), int(HrRecovery::Act::None));
+        CHECK_EQ(int(u.step(kHrBackMs + 50, -1, false)), int(HrRecovery::Act::None));
+    }
+    {   // a reset out of EPR mode has the longer recover
+        HrRecovery h;
+        h.arm(0, true);
+        CHECK_EQ(int(h.step(100, 0, false)), int(HrRecovery::Act::None));
+        CHECK_EQ(int(h.step(kHrBackMs + 50, 0, false)), int(HrRecovery::Act::None));
+        CHECK_EQ(int(h.step(kHardResetVbusMaskMs, 0, false)), int(HrRecovery::Act::Wake));
+    }
+}
+
 int main() {
+    test_hr_recovery();
     // A Hard Reset takes VBUS to vSafe0V on purpose (tPSHardReset + tSafe0V + tSrcRecover, EPR max, + tSrcTurnOn): VBUS low inside
     // that window is the reset, not a detach (Anker IQ4, hardware 2026-11-14: ~0.93 s under 3 V against the 1 s rule).
     {

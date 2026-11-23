@@ -21,6 +21,9 @@ inline constexpr std::uint32_t kRdHoldMs = 1500;       // Rd off after a detach:
 // the reset, not a detach; the 1 s rule alone fired inside a compliant reset (Anker IQ4: ~0.93 s under 3 V, hardware 2026-11-14).
 inline constexpr std::uint32_t kHardResetVbusMaskMs =
     spec::kPsHardResetMaxMs + spec::kSafe0VMs + spec::kSrcRecoverEprMaxMs + spec::kSrcTurnOnMs;
+// The same window with the normal tSrcRecover (derived, 1960 ms): a source still dark after it did not come back on its own.
+inline constexpr std::uint32_t kHrBackMs =
+    spec::kPsHardResetMaxMs + spec::kSafe0VMs + spec::kSrcRecoverMaxMs + spec::kSrcTurnOnMs;
 
 // A real sink's Rd on the active line, measured with none of our own Rd on it: the voltage sits near
 // 1.5 V (Rp 80 uA into 5.1 k = 0.4 V .. 3 A Rp 330 uA = 1.7 V), open Rp rises to the rail. Unknown (-1)
@@ -112,6 +115,30 @@ private:
     bool vbus_low_ = false, cc_gone_ = false, vbus_seen_ = false, sink_gone_ = false, sink_seen_ = false, hr_ = false;
     std::uint32_t vbus_since_ = 0, cc_since_ = 0, sink_since_ = 0, hr_at_ = 0;
     DetachReason reason_ = DetachReason::None;
+};
+
+// After the K2's own sink Hard Reset a bank may drop VBUS and fall asleep (DRP idle) instead of coming back, and then nothing is read.
+// One Wake, once, when VBUS is still dark at the end of the reset window; a rail that came back, a tool or inline owner, or an
+// unknown reading never gets one.
+class HrRecovery {
+public:
+    enum class Act : std::uint8_t { None, Wake };
+    void arm(std::uint32_t now, bool epr) { armed_ = true; due_ = now + (epr ? kHardResetVbusMaskMs : kHrBackMs); dropped_ = false; }
+    void cancel() { armed_ = false; }
+    bool armed() const { return armed_; }
+    Act step(std::uint32_t now, std::int32_t vbus_mv, bool blocked) {
+        if (!armed_) return Act::None;
+        const bool dark = vbus_mv >= 0 && vbus_mv < kHrDarkMv;
+        if (dark) dropped_ = true;
+        else if (vbus_mv >= 0 && dropped_) { armed_ = false; return Act::None; }   // it came back
+        if (std::int32_t(now - due_) < 0) return Act::None;
+        armed_ = false;
+        return dark && !blocked ? Act::Wake : Act::None;
+    }
+private:
+    static constexpr std::int32_t kHrDarkMv = 1000;   // above vSafe0V with room: a source back on its way up is not dark
+    bool armed_ = false, dropped_ = false;
+    std::uint32_t due_ = 0;
 };
 
 // Trigger gate, one for the wizard and the remote. A live sink on the far side already has a contract
