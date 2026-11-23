@@ -20,7 +20,8 @@ records what the charger advertises and asks for nothing above 5 V, medium (the 
 sweeps, deep adds the PPS and AVS deep sweeps, the PD spec section (a build with the PD spec engine; the summary lists its
 verdicts, nothing is asked above what the charger advertises) and the SuperVOOC ceiling stage (after a detected VOOC family; ct_start
 sends its mode on every deep run: --svooc-cap usb-a, else on; usb-a is a no-op, the ceiling stage runs as on). --avs-sweep or --svooc-cap without --level means deep;
---sweep / --no-sweep override the level's PPS sweep for this run. The summary ends with the VOOC family's ident and, on a
+--sweep / --no-sweep override the level's PPS sweep for this run. --sweep-depth 200|100|phone|20 (mV, `charger-sweep-depth`) sets the
+sweeps' step, sent right after the level. The summary ends with the VOOC family's ident and, on a
 deep run, the ceiling stage's words.
 
 --units sends the unit list (names and order) with `charger-units` before START: only those test units run, in that
@@ -236,6 +237,9 @@ def parse_args(argv=None):
     ap.add_argument("--level", choices=kr.TEST_LEVELS,
                     help="light: what is advertised, nothing above 5 V; medium (default): the full run, no deep sweeps; "
                          "deep: medium plus the PPS and AVS deep sweeps and the PD spec section")
+    ap.add_argument("--sweep-depth", choices=kr.SWEEP_DEPTHS,
+                    help="step of the PPS and AVS deep sweeps in mV: 200 (the device default), 100, phone (100 mV plus 20 mV points in "
+                         "the 8-11 V and 14-19 V PPS windows), 20 (every PPS quantum); sent before START, the device keeps it")
     ap.add_argument("--path")
     sweep = ap.add_mutually_exclusive_group()
     sweep.add_argument("--sweep", action="store_true",
@@ -333,6 +337,13 @@ def main(argv=None):
             return 1
         print("level: " + level + {"light": " (what is advertised, nothing above 5 V)", "medium": " (no deep sweeps)",
                                    "deep": " (PPS and AVS deep sweeps, PD spec section)"}[level], file=sys.stderr)
+        if a.sweep_depth:
+            try:
+                kr.charger_sweep_depth(link, a.sweep_depth)
+            except kr.RemoteError as e:
+                print(f"could not set the sweep depth {a.sweep_depth}: {e}", file=sys.stderr)
+                return 1
+            print(f"sweep depth: {a.sweep_depth} mV" if a.sweep_depth != "phone" else "sweep depth: phone", file=sys.stderr)
         if pps_sweep(a) is not None:
             kr.charger_sweep(link, pps_sweep(a))
             print("PPS deep sweep: " + ("on (every 100 mV per PPS APDO, 1 A)" if pps_sweep(a) else "off (--no-sweep)"),

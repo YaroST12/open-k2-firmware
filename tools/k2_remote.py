@@ -136,6 +136,7 @@ PDS_STOPS = ["running", "done", "cancelled", "run time cap", "transition cap", "
 # ---- PD Spec Check (docs/PD_SPEC_CHECK.md): constants ----
 CMD_PD_SPEC = 0x5A        # PD Spec Check: status / start / result (chunked) / stop (k2/core/remote_proto.hpp, tools/pd_spec.py)
 CMD_CHARGER_LEVEL = 0x5B  # [level(1)] the level of the next charger run (0 medium, 1 light, 2 deep); Deep sets both deep sweeps
+CMD_CHARGER_SWEEP_DEPTH = 0x5D  # [] reads, [depth(1)] sets the deep-sweep step of the next charger run (0 100 mV, 1 200 mV, 2 phone, 3 20 mV)
 CMD_MI_CABLE_AUTH = 0x5C  # Xiaomi cable-side auth (emk_spoof::MiAuthCfg): [0] read, [1, on, key, trailing u32 LE, half, reply, payload] set; rsp [on, key, trailing(4), half, reply, payload]
 PSC_STATUS, PSC_START, PSC_READ, PSC_STOP = 0, 1, 2, 3
 PSC_CHUNK = 48
@@ -279,6 +280,7 @@ TEST_SWEEP_BIT = 1 << 31   # draft_selected bit 31 = the PPS deep sweep on (remo
 TEST_AVS_SWEEP_BIT = 1 << 30   # draft_selected bit 30 = the AVS deep sweep on (remote_proto.hpp)
 TEST_LEVEL_SHIFT = 28          # draft_selected bits 28..29 = the level of the next run (charger_test::Level)
 TEST_LEVEL_MASK = 3 << TEST_LEVEL_SHIFT
+SWEEP_DEPTHS = ["100", "200", "phone", "20"]   # ctsweep::Depth order (mV; phone = 100 mV plus 20 mV windows, PPS only)
 TEST_LEVELS = ["medium", "light", "deep"]   # charger_test::Level order: Medium 0 (the default), Light 1, Deep 2
 TEST_STATES = ["idle", "baseline", "requesting", "holding", "releasing", "done", "stopped", "unsafe", "detach charger", "initializing...",
                "svooc ceiling", "pd spec"]
@@ -1927,6 +1929,19 @@ def charger_level(link, level):
     return TEST_LEVELS[p[0]] if p[0] < len(TEST_LEVELS) else str(p[0])
 
 
+def charger_sweep_depth(link, depth=None):
+    """Read (no argument) or set the deep-sweep step of the next charger-test run: "200" (the default), "100", "phone" (100 mV
+    plus 20 mV points in the 8-11 V and 14-19 V windows on PPS; AVS stays 100 mV) or "20" (every PPS quantum; AVS 100 mV), or
+    the index. A sweep only runs where the level asks for it. Refused while a run is in progress. Returns the depth name."""
+    if depth is None:
+        p = link.call(CMD_CHARGER_SWEEP_DEPTH, b"").payload
+    else:
+        idx = SWEEP_DEPTHS.index(str(depth)) if str(depth) in SWEEP_DEPTHS else int(depth)
+        p = link.call(CMD_CHARGER_SWEEP_DEPTH, bytes([idx])).payload
+    _need(p, 1, "charger sweep depth")
+    return SWEEP_DEPTHS[p[0]] if p[0] < len(SWEEP_DEPTHS) else str(p[0])
+
+
 def mi_cable_auth(link, on=None, key=None, trailing=None, half=None, reply=None, payload=None):
     """Xiaomi cable-side auth config (SOP' 0x27170104 answer while a spoof is armed).
     No arguments: read back. Otherwise set (on, key, trailing, half, reply, payload).
@@ -2023,6 +2038,10 @@ def cmd_charger_avs_sweep(link, a):
 
 def cmd_charger_level(link, a):
     return {"level": charger_level(link, a.level)}
+
+
+def cmd_charger_sweep_depth(link, a):
+    return {"sweep_depth": charger_sweep_depth(link, a.depth)}
 
 
 def cmd_mi_cable_auth(link, a):
@@ -5812,7 +5831,7 @@ COMMANDS = {"ping": cmd_ping, "info": cmd_info, "press": cmd_press, "state": cmd
             "pd": cmd_pd, "identify-device": cmd_identify_device, "pd-reread": cmd_pd_reread, "apple-read": cmd_apple_read,
             "stop": cmd_stop, "lease": cmd_lease, "store": cmd_store, "blackbox": cmd_blackbox, "transcap": cmd_transcap,
             "diagnose": cmd_diagnose, "cable-r": cmd_cable_r, "ufcs": cmd_ufcs, "pd-stress": cmd_pd_stress, "pd-limit": cmd_pd_limit, "pd-spec": cmd_pd_spec, "loop-probe": cmd_loop_probe, "battery": cmd_battery, "lab": cmd_lab, "charger-legacy-tune": cmd_charger_legacy_tune, "qrtest": cmd_qrtest, "charger-test": cmd_charger_test, "charger-units": cmd_charger_units,
-            "charger-cable": cmd_charger_cable, "charger-sweep": cmd_charger_sweep, "charger-avs-sweep": cmd_charger_avs_sweep, "charger-level": cmd_charger_level, "charger-svooc-cap": cmd_charger_svooc_cap, "cards": cmd_cards,
+            "charger-cable": cmd_charger_cable, "charger-sweep": cmd_charger_sweep, "charger-avs-sweep": cmd_charger_avs_sweep, "charger-level": cmd_charger_level, "charger-sweep-depth": cmd_charger_sweep_depth, "charger-svooc-cap": cmd_charger_svooc_cap, "cards": cmd_cards,
             "mi-cable-auth": cmd_mi_cable_auth,
             "twin": cmd_twin}
 
@@ -5866,6 +5885,9 @@ def build_parser():
     cl = sub.add_parser("charger-level", help="level of the NEXT charger run: light = nothing above 5 V (what is advertised), "
                         "medium = the default run, deep = medium + the PPS and AVS deep sweeps")
     cl.add_argument("level", choices=TEST_LEVELS)
+    csd = sub.add_parser("charger-sweep-depth", help="deep-sweep step of the NEXT charger run, in mV: 200 (default), 100, phone (100 mV plus "
+                         "20 mV points in the 8-11 V and 14-19 V PPS windows), 20; no argument reads it")
+    csd.add_argument("depth", nargs="?", choices=SWEEP_DEPTHS)
     lt = sub.add_parser("charger-legacy-tune", help="Legacy timing knobs of the charger test, RAM only (the constants again at boot): no argument "
                         "lists them, a knob reads it, a knob and a value in ms sets it (quiet_ms 0: start the first handshake at once)")
     lt.add_argument("knob", nargs="?", choices=LEGACY_KNOBS)

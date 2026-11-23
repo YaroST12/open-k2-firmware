@@ -3524,6 +3524,27 @@ static void test_charger_level() {
     CHECK_EQ(run(f, request(0x5B, 7, {1}), r), 1); check_header(r, 0x5B, 7, Status::Busy, 0);
 }
 
+// Cmd::ChargerSweepDepth (0x5D): [] reads, [depth(1)] sets the sweep step of the next run (0 100 mV, 1 200 mV, 2 Phone, 3 20 mV),
+// rsp [depth]; BadArg from 4 up, BadLength past one byte; Busy while a run is active.
+static void test_charger_sweep_depth() {
+    Fake f; Frame r;
+    CHECK_EQ(run(f, request(0x5D, 1, {}), r), 1); check_header(r, 0x5D, 1, Status::Ok, 1); check_bytes(r, kRspHeader, {1});
+    CHECK_EQ(f.depth_sets, 0);
+    for (uint8_t d = 0; d < 4; ++d) {
+        CHECK_EQ(run(f, request(0x5D, uint8_t(2 + d), {d}), r), 1);
+        check_header(r, 0x5D, uint8_t(2 + d), Status::Ok, 1); check_bytes(r, kRspHeader, {d});
+        CHECK_EQ(f.depth_set, d);
+    }
+    CHECK_EQ(f.depth_sets, 4);
+    CHECK_EQ(run(f, request(0x5D, 7, {}), r), 1); check_header(r, 0x5D, 7, Status::Ok, 1); check_bytes(r, kRspHeader, {3});
+    const int calls = f.calls;
+    CHECK_EQ(run(f, request(0x5D, 8, {1, 1}), r), 1); check_header(r, 0x5D, 8, Status::BadLength, 0);
+    CHECK_EQ(run(f, request(0x5D, 9, {4}), r), 1); check_header(r, 0x5D, 9, Status::BadArg, 0);
+    CHECK_EQ(f.calls, calls);
+    f.depth_status = Status::Busy;
+    CHECK_EQ(run(f, request(0x5D, 10, {1}), r), 1); check_header(r, 0x5D, 10, Status::Busy, 0);
+}
+
 // Cmd::ChargerSvoocCap (0x59): no payload reads, [mode(1)] sets the ceiling stage of the next run (0 off, 1 on, 2 USB-A); the
 // reply is always [mode, end, why, asks, word(2), vmax_mv(2), stop_ms(2)] (the stage's result of the latest run; the last two
 // appended for "stopped at": the highest VBUS the trigger saw and the adapter's last edge after the wake; then the VOOC family's
@@ -3951,6 +3972,7 @@ int main() {
     test_charger_test_start_cancel_wire();
     test_charger_avs_sweep();
     test_charger_level();
+    test_charger_sweep_depth();
     test_charger_svooc_cap();
     test_charger_test_wire(); test_charger_test_view_wire(); test_charger_test_spec_wire();
 #if K2_SPECROWS

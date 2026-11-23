@@ -416,6 +416,17 @@ class SendLevel(unittest.TestCase):
             self.assertIsNone(ct_start.send_level(None, "deep"))
 
 
+class SweepDepthOption(unittest.TestCase):
+    """--sweep-depth names the step in mV (or phone); without it nothing is sent and the device keeps its own choice."""
+
+    def test_the_choices_and_the_default(self):
+        self.assertEqual(ct_start.parse_args([]).sweep_depth, None)
+        for d in ("200", "100", "phone", "20"):
+            self.assertEqual(ct_start.parse_args(["--sweep-depth", d]).sweep_depth, d)
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+            ct_start.parse_args(["--sweep-depth", "50"])
+
+
 class SweepOption(unittest.TestCase):
     """The PPS deep sweep follows the level (Deep on, Light and Medium off): ct_start sends a sweep state only when
     --sweep or --no-sweep is given, after the level, so the flag overrides the level's choice for this run."""
@@ -558,6 +569,7 @@ class LockReleaseAfterStart(unittest.TestCase):
         events = []          # ("A"|"R"|"start"|"poll"|"call", lock depth after the event)
         sweeps = []          # the PPS deep sweep states sent (kr.charger_sweep)
         levels = []          # the levels sent (kr.charger_level)
+        depths = []          # the sweep depths sent (kr.charger_sweep_depth)
         depth = 0
 
         def acquire(wait_s=None, report=None):
@@ -625,12 +637,14 @@ class LockReleaseAfterStart(unittest.TestCase):
                           lambda link, choice=None: {"choice": "builtin", "choice_seq": 1, "run": "off"}), \
              patch.object(ct_start.kr, "charger_sweep", lambda link, on: sweeps.append(on) or on), \
              patch.object(ct_start.kr, "charger_level", lambda link, level: levels.append(level) or level), \
+             patch.object(ct_start.kr, "charger_sweep_depth", lambda link, d=None: depths.append(d) or d), \
              patch.object(ct_start.charger_summary, "summarize", lambda r: "SUMMARY"), \
              contextlib.redirect_stderr(io.StringIO()):
-            rc = ct_start.main(["--wait", "5"])
+            rc = ct_start.main(["--wait", "5", "--sweep-depth", "phone"])
         self.assertEqual(rc, 0)
         self.assertEqual(levels, ["medium"])                # the level is sent on every start (default Medium)
         self.assertEqual(sweeps, [])                        # no sweep flag: the level decides, no sweep command
+        self.assertEqual(depths, ["phone"])                 # --sweep-depth is sent before START
         self.assertEqual(depth, 0)                          # every acquire was released
         kinds = [e for e, _ in events]
         start, first_poll = kinds.index("start"), kinds.index("poll")
