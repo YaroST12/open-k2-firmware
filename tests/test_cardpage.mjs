@@ -296,7 +296,7 @@ test("the LZ4 reader refuses a back-reference before the start and a run past th
 });
 
 test("the page loads nothing from the network", () => {
-  for (const f of ["index.html", "card.js", "deep.js", "records.js", "view.js"]) {
+  for (const f of ["index.html", "vendors.js", "card.js", "deep.js", "records.js", "view.js"]) {
     const src = readFileSync(new URL(`../docs/site/r/${f}`, import.meta.url), "utf8");
     // the one other address is the SVG namespace name view.js gives createElementNS: a name, nothing is loaded from it
     assert.doesNotMatch(src, /https?:\/\/(?!yarost12\.github\.io|github\.com\/YaroST12|www\.w3\.org\/2000\/svg)/, f);
@@ -304,9 +304,11 @@ test("the page loads nothing from the network", () => {
   }
 });
 
-test("the brand table names ZTE and leaves out vendors usb.ids does not list", () => {
+test("the brand table is the firmware's vendor table", () => {
   assert.equal(K2Card.BRANDS[0x19D2], "ZTE");
-  for (const vid of [0x339B, 0x2D95, 0x2B01]) assert.equal(K2Card.BRANDS[vid], undefined);
+  assert.equal(K2Card.BRANDS[0x291A], "Anker");   // not Hynetek (0x2E99)
+  assert.equal(K2Card.BRANDS[0x339B], "Honor");
+  assert.equal(K2Card.BRANDS[0x1234], undefined);
 });
 
 test("the OPPO SVID flag (src_flags bit 0 of the cable block) decodes as a bare key, only when set", () => {

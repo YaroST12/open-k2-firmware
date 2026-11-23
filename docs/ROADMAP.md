@@ -80,6 +80,10 @@ Everything is C++23; there are no C files left in `src/` (TinyUSB and lwIP under
 
 Open defects, newest first. A row leaves this list when its fix is merged and seen on hardware.
 
+- **Vendor database follow-ups** (2026-11-23): VID 0x0716 (this K2's own, Oxus Research on the USB-IF list) is left unlabeled;
+  0x2B01 is listed as "ZMI" while CUKTECH products report it; `kSvids` in `pd_vdm.cpp` still names 0x2E87 "Cuktech" and
+  0x2B16 "UGREEN", which do not match the USB-IF list (0x2E87 is Injoinic); `rl::vendor_oem_name` is a separate table.
+
 - **USB 3.2 Gen 2x1 (10 Gbps) / USB4 pass-through cold-attach failure — hardware limit, not firmware** (2026-11-22,
   AMD USB4 `0000:c5:00.3` / `Bus 005` + `Bus 006`, 5 cm cable + Samsung PSSD T7 `04e8:4001`, plus ASMedia `246x` /
   XFANIC USB4 dock, `runs/usb4-2026-11-22/`). Direct `5 cm cable -> T7` holds 10.0 Gb/s with zero errors. Through the
@@ -1428,6 +1432,7 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
 | Test levels: Light (what is advertised, VBUS stays at 5 V), Medium (default, no deep sweeps), Deep (+ PPS and AVS deep sweeps); Review Level row, Settings > Test level, `charger-level` (0x5B), `ct_start.py --level`, level on the card and in the QR record; the Noted verdict for what a Light run did not measure | done | not verified | `chargertest`, `ui_charger_test`, `kit` |
 | Idle power: backlight PWM (PB7), Active -> Dim -> Off with VBUS stopping at Dim, panel sleep, low AHB clock in Off, Settings > Display, remote 0x37 (`k2_remote.py power`) | done, host-tested (`test_idle`, `test_idle_cfg`, `test_ui_display`) | not verified. Validate: a brightness step changes the K2's own draw on the meter (PB7 timer mapping is inferred); Off with nothing attached falls well under the warm 0.52 W; USB and `k2_remote` still answer after the low clock; the wake press does nothing else | `idle`, `idle_cfg`, `idle_hw`, `lcd`, `crm`, `ui_display` |
 | A Legacy row waits through a source output restart (up to 10 s) instead of failing it | done | not verified | `chargertest` |
+| Vendor database: 165 USB-IF-verified VIDs (`tools/vendors.csv`, brand names only, no PIDs) feed one packed table (`pd::vendor_find`/`vendor_name`, `vendor_table.hpp`), the report-card auto name ("Anker 100W"), cable e-marker names, the PD page and twin auto names; mirrored in `docs/site/r/vendors.js` and `tools/report_card.py`; `tools/gen_vendors.py --check` keeps all three in step (`test_vendors.py`). Chip/cable/PSU makers are weak: a charger's own manufacturer text wins. +1.1 KB text | done | not verified (host tests only) | `pd`, `chargertest`, `emname` |
 
 ## USB-PD
 

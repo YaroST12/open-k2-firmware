@@ -10,6 +10,8 @@ The name tables mirror src/chargertest/charger_test.cpp; tests/test_report_card_
 import json
 import sys
 
+import gen_vendors   # tools/vendors.csv, the one vendor table
+
 PAYLOAD = 198   # v8 size, kept for the QR expand path; v9 cards are 214, v10 250
 PAYLOAD_V9 = 214   # v9: + the 16-byte spread block at V9_AT
 PAYLOAD_V10 = 250   # v10: + the 36-byte deep-sweep summary at V10_AT
@@ -64,10 +66,8 @@ FORMAT = 13   # payload byte 33: 13 = the block's spec part may carry each range
              # 5 = the 16-byte cable block at offset 162 (seq, vid/pid, max mV/mA, kind, flags),
              # 6 = the UFCS modes at offset 178 (4 x u24: lo 100 mV, hi 100 mV, current in 50 mA),
              # 7 = the repeat block at offset 190 (times, last boot, last uptime of identical re-runs)
-# VID -> brand, mirrors report_card::brand(); tests/test_report_card_py.py parses the header and compares.
-BRANDS = {0x05AC: "Apple", 0x04E8: "Samsung", 0x18D1: "Google", 0x2717: "Xiaomi", 0x12D1: "Huawei", 0x17EF: "Lenovo",
-          0x413C: "Dell", 0x03F0: "HP", 0x2A70: "OnePlus", 0x22D9: "OPPO", 0x0B05: "ASUS", 0x050D: "Belkin",
-          0x22B8: "Motorola", 0x19D2: "ZTE", 0x291A: "Anker"}
+# VID -> vendor name: the firmware's table (pd::vendor_find), read from tools/vendors.csv.
+BRANDS = {r.vid: r.name for r in gen_vendors.load(gen_vendors.CSV)}
 
 
 class BadCard(ValueError):
