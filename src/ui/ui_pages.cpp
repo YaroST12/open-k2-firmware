@@ -819,7 +819,7 @@ void MemoryPage::update(uint32_t) {
         if (lv != memstat::Level::Ok) {
             draw_toast(ctx_.content, tone, fv);
         } else if (had_toast && !ctx_.toast.active(ctx_.now)) {
-            gfx_fill(ctx_.content, 0, static_cast<int16_t>(ctx_.content.h - 20), ctx_.content.w, 16, kBg);
+            erase_toast(ctx_.content);
         }
     });
 }

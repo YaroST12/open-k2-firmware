@@ -60,11 +60,11 @@ static void test_native_menu_fonts() {
         const int pill_w = text_w + 16;
         const int pill_x = (logical.w - pill_w) / 2;
         Rect inner;
-        {   // the pill keeps its native size, centred on its mapped box; the label centres inside its 1 px frame
+        {   // the pill keeps its native size hanging from its mapped box's top row; the label centres inside its 1 px frame
             ContentViewport viewport(box);
             const Rect pill = ContentViewport::native_box({static_cast<int16_t>(pill_x),
                                                            static_cast<int16_t>(logical.h - kToastH - kToastMarginBottom),
-                                                           static_cast<int16_t>(pill_w), kToastH});
+                                                           static_cast<int16_t>(pill_w), kToastH}, true);
             inner = {static_cast<int16_t>(pill.x + 1), static_cast<int16_t>(pill.y + 1), static_cast<int16_t>(pill_w - 2),
                      static_cast<int16_t>(kToastH - 2)};
         }

@@ -2096,10 +2096,9 @@ bool ChargerTestPage::foot(FooterTone tone, std::string_view text) {
     if (show) {
         ctx_.toast.show(tone, text, ctx_.now);
         if (ctx_.toast.erase_pending) {
-            gfx_fill(ctx_.content, 0, static_cast<int16_t>(ctx_.content.h - kToastH - kToastMarginBottom),
-                     ctx_.content.w, kToastH, kBg);
+            const int16_t band_y = erase_toast(ctx_.content);
             ctx_.toast.erase_pending = false;
-            grid_.invalidate_from(static_cast<int16_t>(ctx_.content.h - kToastH - kToastMarginBottom));
+            grid_.invalidate_from(band_y);
             action_.invalidate();
             ctx_.rows.invalidate();
         }

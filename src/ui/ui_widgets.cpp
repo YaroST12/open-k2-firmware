@@ -223,8 +223,9 @@ namespace {
 // The pill itself; `erase` first clears the band either side of it (a footer line repaints over its previous pill).
 void toast_pill(const Surface &s, FooterTone tone, std::string_view text, bool erase K2_TRUNC_DEF) {
     const int16_t py = static_cast<int16_t>(s.h - kToastH - kToastMarginBottom);
+    const int16_t eh = ContentViewport::scaled() ? static_cast<int16_t>(s.h - py) : kToastH;   // see erase_toast
     if (text.empty() || s.w < 32 || s.h < kToastH + kToastMarginBottom) {
-        if (erase && py >= 0) gfx_fill(s, 0, py, s.w, kToastH, kBg);
+        if (erase && py >= 0) erase_toast(s);
         return;
     }
     if (tone == FooterTone::Error) g_footer_error = true;
@@ -243,12 +244,18 @@ void toast_pill(const Surface &s, FooterTone tone, std::string_view text, bool e
     const int16_t px = static_cast<int16_t>((s.w - pw) / 2);
     K2_OVERLAP_OK;   // a pill floats over the page
     if (erase) {
-        if (px > 0) gfx_fill(s, 0, py, px, kToastH, kBg);
-        if (s.w - px - pw > 0) gfx_fill(s, static_cast<int16_t>(px + pw), py, static_cast<int16_t>(s.w - px - pw), kToastH, kBg);
+        if (px > 0) gfx_fill(s, 0, py, px, eh, kBg);
+        if (s.w - px - pw > 0) gfx_fill(s, static_cast<int16_t>(px + pw), py, static_cast<int16_t>(s.w - px - pw), eh, kBg);
     }
-    draw_pill_box(s, px, py, pw, kToastH, fitted, ink, fill, border, kBg);
+    draw_pill_box(s, px, py, pw, kToastH, fitted, ink, fill, border, kBg, true);
 }
 }  // namespace
+
+int16_t erase_toast(const Surface &s) {
+    const int16_t py = static_cast<int16_t>(s.h - kToastH - kToastMarginBottom);
+    gfx_fill(s, 0, py, s.w, ContentViewport::scaled() ? static_cast<int16_t>(s.h - py) : kToastH, kBg);
+    return py;
+}
 
 // A page's status line: the toast pill, repainted over its own previous pill (the band beside it is the page ground).
 K2_HOT void draw_footer(const Surface &s, FooterTone tone, std::string_view text K2_TRUNC_DEF) {

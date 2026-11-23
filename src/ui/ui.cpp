@@ -320,7 +320,7 @@ bool Ui::restore_under_toast() {
     ctx_.toast.drop_erase();
     ctx_.toast.drawn = false;
     if (depth_ == 0 && page_ == Page::ChargerTest) {   // its grid keeps the band clean itself
-        gfx_fill(ctx_.content, 0, static_cast<int16_t>(ctx_.content.h - kToastH - kToastMarginBottom), ctx_.content.w, kToastH, kBg);
+        erase_toast(ctx_.content);
         return false;
     }
     toast_clear_pending_ = true;

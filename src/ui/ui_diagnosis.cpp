@@ -210,7 +210,7 @@ void DiagnosisPage::update(uint32_t now_ms) {
         return;
     }
     if (pill_) {   // the finding is gone: take its pill off, the rows under it repaint
-        gfx_fill(ctx_.content, 0, static_cast<int16_t>(ctx_.content.h - kToastH - kToastMarginBottom), ctx_.content.w, kToastH, kBg);
+        erase_toast(ctx_.content);
         ctx_.rows.invalidate();
         foot_.invalidate();
         pill_ = false;
