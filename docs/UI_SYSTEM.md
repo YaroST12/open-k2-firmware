@@ -44,7 +44,7 @@ Home > Lines > Numbers > Graph > Ripple > Link > Tools > Battery > Log > K2 > (H
 
 | state | PLUS / MINUS | OK | short Back | long Back |
 |---|---|---|---|---|
-| Ring view (the page is shown, the masthead carries its numbered name) | previous / next page, wrapping | enter the page (Lines and Numbers only look: no entry) | Home | the page chosen in Settings > Long Back |
+| Ring view (the page is shown, the masthead carries its 4-char name) | previous / next page, wrapping | enter the page (Lines and Numbers only look: no entry) | Home | the page chosen in Settings > Long Back |
 | Entered (the page's own rows and actions) | scroll the rows (or step Charger / Cable / Sink slice on Link) | the focused slice / row's action | up one level; at the top level back to the ring view | the ring view on the same page |
 
 - Boot lands on Home in the ring view. `Ui::goto_page`, the remote `page N`, `open_connection`, `open_place` and a started
@@ -84,8 +84,8 @@ Home > Lines > Numbers > Graph > Ripple > Link > Tools > Battery > Log > K2 > (H
   units from the charger test (presets, Custom list, plan, Results). Stored as bit 7 of the `/prefs.cfg` orientation byte (set =
   shown, so old files read hidden); remote view flag bit 15 (set = shown).
 - Long PLUS is not used. The OK + Back 3 s reboot chord and the Back-Hold cancel are unchanged.
-- Ring vs entered is visible: the masthead (slot 0 of the opposite rail) shows the position and name (`6 LINK`, `7 TOOLS`) in the
-  ring view and the page's own title (`LINK`, `CHARGER`, `CABLE`, `DEVICE`, `TOOLS`) when entered. Session flag `RingView` (bit 6)
+- Ring vs entered is visible: the masthead (slot 0 of the opposite rail) shows the page's own 4-character rail name (`LINK`, `TOOL`)
+  in the ring view, and the place's name (`LINK`, `CHRG`, `CABL`, `DEV`, `TOOL`) when entered. Session flag `RingView` (bit 6)
   is reported by GET_STATE (`ring_view`).
 - Remote page names: `page N` is 0..6 for Home, Detail, ChargerTest, Lines, Settings, Graphs, Ripple; a showing submenu is 7 + its
   `Menu` index (`Menu::Tools` = index 20 -> page 27, `"tools/tools"`). Menu page names keep the `tools/` prefix.
@@ -193,6 +193,12 @@ markers at native size (`draw_marker`).
 | floating near bottom | 16 | transient action/error toast, 4 px from the edge | `draw_toast` |
 
 There is no permanent horizontal TopBar or Footer. Page names, wizard dots and live telemetry live on `OppRail`.
+
+The rail reads in one fixed order in every rotation: title (54 px), then three telemetry cells (62 px each), then the PC-link icon at
+the end of the last cell (`kOppSlotLen`, `opp_slot_rect`). "First" is first in the reading direction, so the title sits at the
+bottom of a Left rail (rotation 0) and at the start of a top, bottom or right rail; the rail never reflows. A title is at most
+4 characters (`rail::Title`, `include/k2/ui/rail_title.hpp`: consteval, a compile-time width check, unique names). Icons
+(`Icon`, 12x12) are always drawn at native pixel scale; a landscape viewport stretches fills around them, never the bitmap.
 
 ### 2.3 Columns
 

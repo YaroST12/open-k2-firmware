@@ -9,6 +9,7 @@
 #include "k2/ui/font_aa.hpp"
 #include "k2/ui/home_cell.hpp"
 #include "k2/ui/text.hpp"
+#include "k2/ui/ui_viewport.hpp"
 
 using namespace k2;
 using namespace k2::home;
@@ -100,6 +101,38 @@ static void test_link_item() {
     CHECK_EQ(glass, line);
     CHECK_EQ(fillc, sand);
     CHECK_EQ(other, 0);
+}
+
+// In a landscape rotation the stretch widens the fills around the PC-link icon, but the icon stays a native 12 x 12.
+static void test_link_item_native_in_landscape() {
+    const Item it[] = {link(20, 10, 3, 0x1111, 0x2222)};
+    Cell c;
+    c.bg = 0x0ABC;
+    c.items = it;
+    c.x0 = 0; c.x1 = 223;
+    c.geom = kVoltCell;
+    for (auto &p : g_panel) p = 0;
+    ContentViewport viewport({0, 16, 240, 224});
+    paint(c, 0, 0, 223, 69);
+    const Rect m = ContentViewport::native_rect({20, 10, kLinkBox, kLinkBox});
+    int bad = 0, glass = 0, sand = 0;
+    for (int y = 0; y < LCD_HEIGHT; y++)
+        for (int x = 0; x < LCD_WIDTH; x++) {
+            const uint16_t p = g_panel[y * LCD_WIDTH + x];
+            const bool in = x >= m.x && x < m.x + kLinkBox && y >= m.y && y < m.y + kLinkBox;
+            const int h = in ? link_hit(3, x - m.x, y - m.y) : 0;
+            glass += p == 0x1111;
+            sand += p == 0x2222;
+            if (h == 1 && p != 0x1111) bad++;
+            if (h == 2 && p != 0x2222) bad++;
+            if (h == 0 && (p == 0x1111 || p == 0x2222)) bad++;
+        }
+    int line = 0, fillc = 0;
+    for (int y = 0; y < kLinkBox; y++)
+        for (int x = 0; x < kLinkBox; x++) { line += link_hit(3, x, y) == 1; fillc += link_hit(3, x, y) == 2; }
+    CHECK_EQ(bad, 0);
+    CHECK_EQ(glass, line);
+    CHECK_EQ(sand, fillc);
 }
 
 static void test_sweep_cursor_and_load() {
@@ -392,6 +425,7 @@ int main() {
     test_items_layer_in_order();
     test_arrow_and_warn_items();
     test_link_item();
+    test_link_item_native_in_landscape();
     test_paint_streams_the_composed_rows();
     test_ledger_sweep_and_narrow_cell();
     test_digit_field_changed_range();

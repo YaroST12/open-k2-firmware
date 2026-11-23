@@ -86,8 +86,7 @@ struct OppRailSpec {
 constexpr int kLinkIconPx = kIconSize;   // the PC-link icon's box (a rail cell reserves kLinkIconPx + 2 px for it)
 
 struct OppCell {
-    pclink::State link = pclink::State::None;   // the PC-link icon at the cell's far end (the rail's last cell only)
-    int16_t len = 60;
+    pclink::State link = pclink::State::None;   // the PC-link icon at the end of the reading (the rail's last cell only)
     bool masthead = false;
     bool active = true;
     uint16_t spot = 0;

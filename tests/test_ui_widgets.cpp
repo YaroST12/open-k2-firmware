@@ -6,6 +6,7 @@
 #include "k2/ui/ui_widgets.hpp"
 #include "k2/ui/ui_style.hpp"
 #include "k2/ui/text.hpp"
+#include "k2/ui/ui_viewport.hpp"
 #include <array>
 #include <algorithm>
 #include <string.h>
@@ -91,6 +92,31 @@ static void test_icon() {
     CHECK_EQ(px(5 + 12, 7 + 4), 0x0001);  // outside the box: the clear colour
     CHECK_EQ(kIconCount, 32);
     CHECK_EQ(static_cast<int>(Icon::Sand) + 1, kIconCount);   // Sand (the PC-link hourglass fill) is the last icon
+}
+
+// An icon is a native 12x12 square in every rotation: a landscape viewport stretches the fills around it, never the bitmap.
+static void test_icon_native_in_every_rotation() {
+    const Rect dests[4] = {{16, 0, 208, 240}, {0, 16, 240, 208}, {0, 0, 208, 240}, {0, 16, 240, 208}};   // rotations 0..3
+    for (int r = 0; r < 4; ++r) {
+        ContentViewport viewport(dests[r], 208, 240);
+        const Surface s{0, 0, 208, 240};
+        for (int i = 0; i < kIconCount; ++i) {
+            clear(0x0001);
+            draw_icon(s, 9, 101, static_cast<Icon>(i), 0xFFFF, 0x2222);
+            const Rect m = ContentViewport::native_rect({9, 101, kIconSize, kIconSize});
+            int bad = 0, outside = 0;
+            for (int y = 0; y < LCD_HEIGHT; ++y)
+                for (int x = 0; x < LCD_WIDTH; ++x) {
+                    const bool in = x >= m.x && x < m.x + kIconSize && y >= m.y && y < m.y + kIconSize;
+                    if (!in) { outside += px(x, y) != 0x0001; continue; }
+                    const bool on = kIconBits[i][y - m.y] >> (kIconSize - 1 - (x - m.x)) & 1;
+                    bad += px(x, y) != (on ? 0xFFFF : 0x2222);
+                }
+            if (bad || outside) std::printf("  icon %d rotation %d: %d px wrong inside, %d outside the 12x12 box\n", i, r, bad, outside);
+            CHECK_EQ(bad, 0);
+            CHECK_EQ(outside, 0);
+        }
+    }
 }
 
 // The fact line's tone table (Fieldbook): Info = the ground with a rule on top and ink2 text; Ok / Caution = the tint with
@@ -420,6 +446,7 @@ int main() {
     test_geometry();
     test_draw_frame();
     test_icon();
+    test_icon_native_in_every_rotation();
     test_sparkline();
     test_range_trace();
     return test_report("test_ui_widgets");

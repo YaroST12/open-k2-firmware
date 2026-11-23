@@ -229,12 +229,11 @@ void model_row_text(StrBuf<24> &s) {
 // ---------------------------------------------------------------------------------------
 
 // Short bar names of the base pages, in Page order (a place page names itself: bar_icon_ + title_).
-static constexpr const char *kBarNames[] = {"HOME", "NUMBERS", "TEST", "LINES", "SETTINGS", "GRAPHS", "RIPPLE"};
+static constexpr rail::Title kBarNames[] = {rail::kHome, rail::kNum, rail::kTest, rail::kLine, rail::kK2, rail::kGraph, rail::kRipple};
 static_assert(sizeof kBarNames / sizeof *kBarNames == static_cast<size_t>(Page::Count), "one bar name per rotation page");
 
 kit::OppRailSpec PageBase::opp_rail() const {
-    const char *name = (is_menu() || bar_icon_) ? title_ : kBarNames[static_cast<int>(id_)];
-    return {name ? std::string_view(name) : std::string_view{}, 0, 0, kit::OppTelemetry::Vaw};
+    return {(is_menu() || bar_icon_) ? title_ : kBarNames[static_cast<int>(id_)], 0, 0, kit::OppTelemetry::Vaw};
 }
 
 // Option B (Pure 2-Side-Bar): title, pager dots and live telemetry live on the 16 px Opposite Telemetry Rail,
@@ -2500,9 +2499,9 @@ void DisplayPage::show(View v) {
         const idle::Config &c = idle_hw::config();
         const int at = v == View::PickDim ? uidisp::index_of(uidisp::kDimAfter, c.dim_after_s) : uidisp::index_of(uidisp::kOffAfter, c.off_after_s);
         pick_ = at < 0 ? 0 : at;   // a value set from the remote and not in the list starts on the first option
-        title_ = v == View::PickDim ? "Dim after" : "Off after";
+        title_ = v == View::PickDim ? rail::kDim : rail::kOff;
     } else {
-        title_ = "Display";
+        title_ = rail::kDisplay;
     }
     if (!ctx_.blank) pg::clear_body(ctx_.content, kit::kBelowBar);
     title_bar();
@@ -2637,7 +2636,7 @@ int ToolsPage::rows() const { return bench::tools().n + 1; }   // the tools, the
 
 void ToolsPage::enter() {
     view_ = View::List;
-    title_ = "Tools";
+    title_ = rail::kTools;
     sel_ = std::clamp(sel_, 0, rows() - 1);
     seen_ = fusb302::limit_status().state;   // a give-up while elsewhere shows on the Charger slice, not as a late result
 }
@@ -2651,12 +2650,12 @@ void ToolsPage::show(View v) {
         pick_ = 0;   // Off, or the level in force
         for (int i = 0; s.state != pd::LimState::Off && i < npicks_; i++)
             if (picks_[i].mw == s.limit_mw) pick_ = i + 1;
-        title_ = text::tools::kLimName;
+        title_ = rail::kLimit;
         drop_confirm();
         if (npicks_ == 0)
             ctx_.toast.show(FooterTone::Info, held::shown_caps().valid ? text::tools::kLimToastNoLower : text::tools::kLimToastNoOffers, ctx_.now);
     } else {
-        title_ = "Tools";
+        title_ = rail::kTools;
         drop_confirm();
     }
     if (!ctx_.blank) pg::clear_body(ctx_.content, kit::kBelowBar);

@@ -16,12 +16,12 @@ namespace k2 {
 
 class GraphsPage final : public PageBase {
 public:
-    explicit GraphsPage(UiContext &c) : PageBase(c, Page::Graphs, "") {}
+    explicit GraphsPage(UiContext &c) : PageBase(c, Page::Graphs, rail::kNone) {}
     void draw_static() override {}   // update() lays every pixel on its first pass (the page is opaque)
     void update(uint32_t now_ms) override;
     bool on_event(Event e) override;
     Strip labels() const override;
-    kit::OppRailSpec opp_rail() const override { return {"GRAPHS", 0, 0, kit::OppTelemetry::PeakSagR}; }
+    kit::OppRailSpec opp_rail() const override { return {rail::kGraph, 0, 0, kit::OppTelemetry::PeakSagR}; }
     void invalidate() override;
 
     // What a column shows, in rows from the graph's top. kNoRow = nothing; lo == kUnknown = the panel is not known (the

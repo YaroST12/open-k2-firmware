@@ -4,6 +4,7 @@
 #include "k2/ui/ui_ring.hpp"
 #include <cstdio>
 #include <cstring>
+#include <string_view>
 #include "k2/ui/ui_labels.hpp"
 using namespace k2;
 using namespace k2::ring;
@@ -103,21 +104,15 @@ int main() {
     CHECK(target(Pos::Log).menu == Menu::Diagnosis && target(Pos::Battery).menu == Menu::Battery);
     CHECK(target(Pos::K2).menu == Menu::Count && target(Pos::K2).page == Page::Settings);
 
-    // The masthead names are 1-based and fit the rail's 9 characters.
-    for (int i = 0; i < kCount; ++i) CHECK(mast_name(static_cast<Pos>(i))[0] != 0 && std::strlen(mast_name(static_cast<Pos>(i))) <= 9);
-
-    // One name per page: the masthead is the plain name in capitals behind its number ("4 GRAPHS" = "Graphs"), the page's own rail says GRAPHS.
+    // The masthead is the page's own rail name: non-empty, at most 4 characters, one per position.
     for (int i = 0; i < kCount; ++i) {
-        const char *m = mast_name(static_cast<Pos>(i)), *n = name(static_cast<Pos>(i));
-        while (*m >= '0' && *m <= '9') ++m;
-        ++m;
-        bool same = std::strlen(m) == std::strlen(n);
-        for (size_t k = 0; same && n[k]; ++k) same = m[k] == (n[k] >= 'a' && n[k] <= 'z' ? n[k] - 'a' + 'A' : n[k]);
-        CHECK(same);
+        const std::string_view m = mast_name(static_cast<Pos>(i));
+        CHECK(!m.empty() && m.size() <= 4);
+        for (int j = i + 1; j < kCount; ++j) CHECK(m != std::string_view(mast_name(static_cast<Pos>(j))));
     }
-    CHECK(std::strcmp(mast_name(Pos::Graph), "4 GRAPHS") == 0);
-    CHECK(std::strcmp(mast_name(Pos::Link), "6 LINK") == 0);
-    CHECK(std::strcmp(mast_name(Pos::Tools), "7 TOOLS") == 0);
+    CHECK(std::string_view(mast_name(Pos::Graph)) == "GRPH");
+    CHECK(std::string_view(mast_name(Pos::Link)) == "LINK");
+    CHECK(std::string_view(mast_name(Pos::Tools)) == "TOOL");
 
     // The persisted long-back target: out of range falls back to Home.
     CHECK(sanitize_target(0) == Pos::Home && sanitize_target(9) == Pos::K2);

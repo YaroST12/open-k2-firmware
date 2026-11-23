@@ -846,19 +846,13 @@ void fmt_opp_adc_v(StrBuf<12> &out, const std::optional<adc::Reading> &r, int32_
 
 OppCells build_opp_cells(const UiContext &ctx, const kit::OppRailSpec &spec, bool active, pclink::State link) {
     OppCells oc{};
-    if (spec.title.size() > 9) K2_TRUNC_NOTE_HERE(trunc::Kind::Cut, spec.title, 0);   // the masthead cell holds 9 characters
-    // Slot 0: uppercase MastheadCell
+    // Slot 0: uppercase MastheadCell; the names come from rail_title.hpp (at most 4 characters, checked at compile time)
+    static_assert(rail::kTitleMax * 6 <= kOppSlotLen[0] - 4, "a rail name fits the title cell");
     for (char ch : spec.title) {
-        if (oc.txt[0].view().size() >= 9) break;
+        if (oc.txt[0].view().size() >= rail::kTitleMax) break;
         if (ch >= 'a' && ch <= 'z') ch = static_cast<char>(ch - 'a' + 'A');
         oc.txt[0].put_char(ch);
     }
-    const bool wide0 = spec.dot_count > 0 || oc.txt[0].view().size() > 7;
-    const int16_t lens[4] = {wide0 ? int16_t(64) : int16_t(54),
-                             wide0 ? int16_t(59) : int16_t(62),
-                             wide0 ? int16_t(59) : int16_t(62),
-                             wide0 ? int16_t(58) : int16_t(62)};
-    for (int i = 0; i < 4; i++) oc.c[i].len = lens[i];
     oc.c[3].link = link;   // the PC-link icon ends the rail, after the readout
     oc.c[0].masthead = true;
     oc.c[0].active = active;
@@ -963,7 +957,7 @@ OppCells build_opp_cells(const UiContext &ctx, const kit::OppRailSpec &spec, boo
 uint32_t opp_cell_sig(PanelEdge opp_edge, int16_t pos, const kit::OppCell &c) {
     uint32_t h = mix_init();
     h = mix_u32(h, static_cast<uint32_t>(opp_edge) | (static_cast<uint32_t>(pos) << 4) |
-                   (static_cast<uint32_t>(c.len) << 14) | (static_cast<uint32_t>(c.masthead) << 24) |
+                   (static_cast<uint32_t>(c.masthead) << 24) |
                    (static_cast<uint32_t>(c.dot_count) << 25) | (static_cast<uint32_t>(c.dot_cur) << 28) |
                    (static_cast<uint32_t>(c.active) << 31));
     h = mix_u32(h, static_cast<uint32_t>(c.spot) | (static_cast<uint32_t>(c.value_color) << 16));
@@ -979,14 +973,10 @@ void Ui::draw_opp_slot(unsigned slot) {
     ContentViewport::Pause unscaled_rail;
     const PanelEdge opp_edge = opposite_edge(orient_.edge);
     const OppCells oc = build_opp_cells(ctx_, opp_spec(), !ring_view_, pc_state_);
-    int16_t pos = 0;
-    for (unsigned i = 0; i < slot; i++) pos = static_cast<int16_t>(pos + oc.c[i].len);
-    const Rect &r = layout_.opp_rail;
-    const Rect sr = panel_is_column(opp_edge)
-                        ? Rect{r.x, static_cast<int16_t>(r.y + pos), r.w, oc.c[slot].len}
-                        : Rect{static_cast<int16_t>(r.x + pos), r.y, oc.c[slot].len, r.h};
-    opp_sig_[slot] = opp_cell_sig(opp_edge, pos, oc.c[slot]);
-    kit::draw_opp_slot(surface_of(sr), opp_edge, panel_text_dir(orient_.edge), slot, oc.c[slot]);
+    const TextDir dir = panel_text_dir(orient_.edge);
+    const Rect sr = opp_slot_rect(layout_.opp_rail, opp_edge, dir, slot);   // slot 0 is the title in every rotation
+    opp_sig_[slot] = opp_cell_sig(opp_edge, panel_is_column(opp_edge) ? sr.y : sr.x, oc.c[slot]);
+    kit::draw_opp_slot(surface_of(sr), opp_edge, dir, slot, oc.c[slot]);
 }
 
 void Ui::draw_opp_rail() {
@@ -999,18 +989,13 @@ void Ui::sync_opp_rail() {
     ContentViewport::Pause unscaled_rail;
     const PanelEdge opp_edge = opposite_edge(orient_.edge);
     const OppCells oc = build_opp_cells(ctx_, opp_spec(), !ring_view_, pc_state_);
-    int16_t pos = 0;
-    const Rect &r = layout_.opp_rail;
+    const TextDir dir = panel_text_dir(orient_.edge);
     for (unsigned i = 0; i < 4; i++) {
-        const uint32_t sig = opp_cell_sig(opp_edge, pos, oc.c[i]);
-        if (sig != opp_sig_[i]) {
-            opp_sig_[i] = sig;
-            const Rect sr = panel_is_column(opp_edge)
-                                ? Rect{r.x, static_cast<int16_t>(r.y + pos), r.w, oc.c[i].len}
-                                : Rect{static_cast<int16_t>(r.x + pos), r.y, oc.c[i].len, r.h};
-            kit::draw_opp_slot(surface_of(sr), opp_edge, panel_text_dir(orient_.edge), i, oc.c[i]);
-        }
-        pos = static_cast<int16_t>(pos + oc.c[i].len);
+        const Rect sr = opp_slot_rect(layout_.opp_rail, opp_edge, dir, i);
+        const uint32_t sig = opp_cell_sig(opp_edge, panel_is_column(opp_edge) ? sr.y : sr.x, oc.c[i]);
+        if (sig == opp_sig_[i]) continue;
+        opp_sig_[i] = sig;
+        kit::draw_opp_slot(surface_of(sr), opp_edge, dir, i, oc.c[i]);
     }
 }
 

@@ -1052,6 +1052,56 @@ void test_pc_link_icon() {
     ui.set_rotation(0, g_walk_t += 10);
     g_stub = old;
 }
+
+// The rail reads the same in every rotation: with the page title active, its cell (the solid accent ground) spans reading
+// positions 0..53 of the rail, whatever the page, title or rotation. u counts from where the rail's text starts (the bottom of a
+// left rail, the top of a right one, the left of a horizontal one).
+int rail_reading_pos(unsigned rot, int i) {
+    const int x = i % 240, y = i / 240;
+    return rot == 0 ? 239 - y : rot == 2 ? y : x;
+}
+
+// The 1 px line against the content: accent along the title cell, a hairline elsewhere (the readouts' spots are accent too).
+bool on_rail_divider(unsigned rot, int i) {
+    const int x = i % 240, y = i / 240;
+    return rot == 0 ? x == 15 : rot == 1 ? y == 224 : rot == 2 ? x == 224 : y == 15;
+}
+
+void test_rail_reading_order() {
+    const auto old = g_stub;
+    auto holder = std::make_unique<Ui>();
+    Ui &ui = *holder;
+    fill_seven();
+    g_stub.pm_online = true; g_stub.pm.vbus_mv = 20030; g_stub.pm.current_ma = 1520; g_stub.pm.power_mw = 30456;
+    g_stub.pm.flow = k2::power::Flow::Forward;
+    g_stub.adc.reset(); g_stub.usb_configured = false;
+    ui.init(g_walk_t);
+    int bad = 0, seen = 0;
+    for (uint8_t r = 0; r < 4; ++r) {
+        ui.set_rotation(r, g_walk_t += 10);
+        walk_settle(ui);
+        for (unsigned b = 0; b < kWalkN; ++b) {
+            walk_open(ui, b);
+            for (int k = 0; k < 4; ++k) ui.tick(g_walk_t += 120);
+            walk_settle(ui);
+            if (!ui.uses_opp_rail()) continue;
+            if (ui.current_opp_rail().title.size() > 4 || ui.current_opp_rail().title.empty()) {   // the rail names are 1..4 characters
+                std::printf("  rail %s r%u: title \"%s\"\n", kWalkDests[b].name, unsigned(r), std::string(ui.current_opp_rail().title).c_str());
+                ++bad;
+            }
+            int lo = 1000, hi = -1;
+            for (int i = 0; i < 240 * 240; ++i)
+                if (in_opp_band(r, i) && on_rail_divider(r, i) && g_panel[i] == kAccent) { lo = std::min(lo, rail_reading_pos(r, i)); hi = std::max(hi, rail_reading_pos(r, i)); }
+            if (hi < 0) continue;   // the ring view dims the title: no accent ground to measure
+            ++seen;
+            if (lo != 0 || hi != 53) { std::printf("  rail %s r%u: title cell spans %d..%d, want 0..53\n", kWalkDests[b].name, unsigned(r), lo, hi); ++bad; }
+        }
+    }
+    CHECK_EQ(bad, 0);
+    CHECK_EQ(seen > 4 * 8, true);
+    ui.set_rotation(0, g_walk_t += 10);
+    g_stub = old;
+}
 }  // namespace
 
 int main() {
@@ -1854,6 +1904,7 @@ int main() {
     test_switch_exact();
     test_repaint_opaque();
     test_pc_link_icon();
+    test_rail_reading_order();
     // Entering and leaving the ring updates both rails and muted RowList pixel-accurately against render_for_capture.
     {
         Ui ring_ui;

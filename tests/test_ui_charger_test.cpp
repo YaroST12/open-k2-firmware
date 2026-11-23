@@ -769,7 +769,7 @@ static void check_header(Ui &ui, int step) {
     const kit::OppRailSpec spec = ui.current_opp_rail();
     CHECK_EQ(spec.dot_count, 3);
     CHECK_EQ(spec.dot_cur, step - 1);
-    CHECK_EQ(g_panel[0] == kBar || g_panel[0] == kFocus, true);
+    CHECK_EQ(g_panel[235 * 240 + 15], kAccent);   // the title cell's accent line at the start of the rail's reading (rotation 0: the bottom of the left rail)
 }
 static void test_three_step_header() {
     fixture(); g_stub.lib = {saved(1)};
@@ -1647,7 +1647,7 @@ static void test_a_pass_or_a_skip_reads_as_placeholders() {
         top(ui, t); calm();
         press(ui, Button::Ok); ui.tick(t += 100); calm();
         CHECK_EQ(ui.charger_test_stage(), 7);
-        CHECK_EQ(ui.current_opp_rail().title == "STEPS", true);   // the list is called Steps, as its strip and footer say
+        CHECK_EQ(ui.current_opp_rail().title == "STEP", true);   // the list is called Steps, as its strip and footer say
         top(ui, t); calm();
     };
     const int ty_measured = 44 + 1 * kit::kRowH + kit::row_text_y(kit::kRowH, kSmall.height);
@@ -1656,7 +1656,7 @@ static void test_a_pass_or_a_skip_reads_as_placeholders() {
     CHECK_EQ(volt_ink() > 50, true);   // a measured step keeps its reading
     press(ui, Button::Ok); ui.tick(t += 100); calm();
     CHECK_EQ(ui.charger_test_stage(), 8);
-    CHECK_EQ(ui.current_opp_rail().title == "DETAIL", true);
+    CHECK_EQ(ui.current_opp_rail().title == "DET", true);
     check_text_at(kSmall, ty_measured, "12.00V", kVolt, kBg, 76);
     check_text_at(kSmall, ty_reason(), "--", kDim, kBg, 76);
     press(ui, Button::Back); ui.tick(t += 100); calm();

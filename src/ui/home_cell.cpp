@@ -6,6 +6,7 @@
 #include "k2/ui/text.hpp"
 #include "k2/ui/ui_icons.hpp"
 #include "k2/ui/ui_viewport.hpp"
+#include <algorithm>
 
 namespace k2::home {
 namespace {
@@ -129,7 +130,7 @@ namespace {
 void compose_row_impl(const Cell &c, int y, int x0, int x1, uint16_t *out, bool with_text) {
     for (int x = x0; x <= x1; x++) out[x - x0] = bg_at(c, x, y);
     for (const Item &it : c.items) {
-        if (!with_text && it.kind == ItemKind::Text) continue;
+        if (!with_text && (it.kind == ItemKind::Text || it.kind == ItemKind::Link)) continue;
         put_item_row(it, y, x0, x1, out);
     }
 }
@@ -162,22 +163,28 @@ void paint_stretched(const Cell &c, int x0, int y0, int x1, int y1, uint16_t *ro
     TextBox boxes[kMaxTextBoxes];
     size_t nb = 0;
     for (const Item &it : c.items) {
-        if (it.kind != ItemKind::Text || !it.font || nb == kMaxTextBoxes) continue;
-        const Font &f = *it.font;
-        const int tw = text_width(f, it.text);
-        const bool badge = it.w > 0 && it.h > 0;
+        const bool link = it.kind == ItemKind::Link;   // the PC-link icon keeps its native 12 x 12, like a glyph
+        if (!link && (it.kind != ItemKind::Text || !it.font)) continue;
+        if (nb == kMaxTextBoxes) continue;
+        const Font *fp = link ? nullptr : it.font;
+        const int tw = link ? kLinkBox : text_width(*fp, it.text);
+        const int th = link ? kLinkBox : fp->height;
+        const bool badge = !link && it.w > 0 && it.h > 0;
         Rect full;
-        if (badge) {
+        if (link) {
+            full = ContentViewport::native_rect({it.x, it.y, kLinkBox, kLinkBox});
+        } else if (badge) {
+            const Font &f = *fp;
             const Rect box = ContentViewport::mapped_rect({it.x, it.y, it.w, it.h});
             const TextOrigin p = center_in_box(box, badge_text_bounds(f, it.text));
             full = {p.x, p.y, static_cast<int16_t>(tw), static_cast<int16_t>(f.height)};
         } else {
-            full = ContentViewport::native_rect({it.x, it.y, static_cast<int16_t>(tw), static_cast<int16_t>(f.height)});
+            full = ContentViewport::native_rect({it.x, it.y, static_cast<int16_t>(tw), static_cast<int16_t>(th)});
         }
         if (full.w <= 0 || full.h <= 0) continue;
         boxes[nb++] = {&it, full};
         // The part of this glyph box inside the logical rect lands at native size from the mapped box origin.
-        const int bw = badge ? it.w : tw, bh = badge ? it.h : f.height;
+        const int bw = badge ? it.w : tw, bh = badge ? it.h : th;
         const int ix0 = it.x > x0 ? it.x : x0, ix1 = it.x + bw - 1 < x1 ? it.x + bw - 1 : x1;
         const int iy0 = it.y > y0 ? it.y : y0, iy1 = it.y + bh - 1 < y1 ? it.y + bh - 1 : y1;
         if (ix0 > ix1 || iy0 > iy1) continue;
@@ -224,6 +231,11 @@ void paint_stretched(const Cell &c, int x0, int y0, int x1, int y1, uint16_t *ro
             for (size_t b = 0; b < nb; b++) {
                 const Rect &r = boxes[b].r;
                 if (py < r.y || py >= r.y + r.h || r.x > cx1 || r.x + r.w - 1 < cx0) continue;
+                if (boxes[b].it->kind == ItemKind::Link) {
+                    for (int x = std::max<int>(r.x, cx0), xe = std::min<int>(r.x + r.w - 1, cx1); x <= xe; x++)
+                        if (const int h = link_hit(boxes[b].it->aux, x - r.x, py - r.y)) row[x - cx0] = h == 2 ? boxes[b].it->ink : boxes[b].it->color;
+                    continue;
+                }
                 Item glyphs = *boxes[b].it;
                 glyphs.x = r.x;
                 glyphs.y = r.y;

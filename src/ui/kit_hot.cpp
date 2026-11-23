@@ -94,9 +94,9 @@ K2_HOT void fill_except(const Surface &s, Box r, const Box *holes, int n, uint16
     }
 }
 
-// The PC-link icon in its box, turned with the strip's text: one window write. Glass + Sand is the two-colour hourglass.
-K2_HOT static void paint_link_icon(const Surface &s, Box b, PanelEdge edge, TextDir dir, pclink::State st, uint16_t ground,
-                                   uint16_t ink, uint16_t sand) {
+// The PC-link icon in its box, upright on every edge (never turned with the text): one window write. Glass + Sand is the
+// two-colour hourglass.
+K2_HOT static void paint_link_icon(const Surface &s, Box b, pclink::State st, uint16_t ground, uint16_t ink, uint16_t sand) {
     constexpr int kN = kIconSize;
     if (!k2::detail::fits(s, b.x, b.y, kN, kN)) return;
     int r0 = 0, r1 = kN;
@@ -104,19 +104,13 @@ K2_HOT static void paint_link_icon(const Surface &s, Box b, PanelEdge edge, Text
     const uint16_t *shape = kIconBits[static_cast<int>(st == pclink::State::Power ? Icon::Socket
                                                        : st == pclink::State::Host ? Icon::Monitor : Icon::Glass)];
     const uint16_t *fill = kIconBits[static_cast<int>(Icon::Sand)];
-    const bool column = panel_is_column(edge), ccw = dir == TextDir::Ccw;
     uint16_t line[kN];
     lcd::stream_begin(static_cast<uint16_t>(s.x + b.x), static_cast<uint16_t>(s.y + b.y + r0),
                       static_cast<uint16_t>(s.x + b.x + kN - 1), static_cast<uint16_t>(s.y + b.y + r1 - 1));
     for (int r = r0; r < r1; r++) {
         for (int c = 0; c < kN; c++) {
-            int sx = c, sy = r;   // the upright mask pixel behind this box pixel
-            if (column) {
-                sx = ccw ? kN - 1 - r : r;
-                sy = ccw ? c : kN - 1 - c;
-            }
-            const int sh = kN - 1 - sx;
-            line[c] = (st == pclink::State::Shell && (fill[sy] >> sh & 1)) ? sand : (shape[sy] >> sh & 1) ? ink : ground;
+            const int sh = kN - 1 - c;
+            line[c] = (st == pclink::State::Shell && (fill[r] >> sh & 1)) ? sand : (shape[r] >> sh & 1) ? ink : ground;
         }
         lcd::stream_pixels({line, static_cast<std::size_t>(kN)});
     }
@@ -234,13 +228,18 @@ K2_HOT void draw_opp_slot(const Surface &s, PanelEdge opp_edge, TextDir dir, uns
         if (!lcd::clip_to_band(by, bh)) return;
     }
     const bool vertical = panel_is_column(opp_edge);
+    const bool rev = opp_reversed(opp_edge, dir);   // the text starts at the cell's high end (a column read bottom-to-top)
     const bool active_mast = cell.masthead && cell.active;
     const uint16_t bg = active_mast ? kAccent : kBg2;
     const uint16_t border_col = active_mast ? kAccent : kRule;
     const int16_t along = vertical ? s.h : s.w;
     const int16_t fh = static_cast<int16_t>(kLabelFont.height);
+    // Everything below is laid out in reading order: u counts pixels from where the text starts, and at() turns a run
+    // [u, u + len) into the cell coordinate. The cell looks the same, mirrored, in every rotation.
+    const auto at = [&](int u, int len) { return static_cast<int16_t>(rev ? along - u - len : u); };
 
-    // Inner divider (1 px along content-facing edge) + optional slot separator.
+    // Inner divider (1 px along content-facing edge) + the 1 px rule across the cell: at the end of the reading for the
+    // masthead, at its start for slots 2 and 3 (slot 1 starts after the masthead's rule).
     Box body{0, 0, s.w, s.h};
     if (vertical) {
         const int16_t div_x = opp_edge == PanelEdge::Left ? static_cast<int16_t>(s.w - 1) : 0;
@@ -248,14 +247,16 @@ K2_HOT void draw_opp_slot(const Surface &s, PanelEdge opp_edge, TextDir dir, uns
         body.x = opp_edge == PanelEdge::Left ? 0 : 1;
         body.w = static_cast<int16_t>(s.w - 1);
         if (cell.masthead) {
-            gfx_fill(s, body.x, static_cast<int16_t>(s.h - 1), body.w, 1, active_mast ? kBg : kRule);
+            gfx_fill(s, body.x, at(along - 1, 1), body.w, 1, active_mast ? kBg : kRule);
             body.h = static_cast<int16_t>(s.h - 1);
+            if (rev) body.y = 1;
         } else if (slot > 1) {
-            gfx_fill(s, body.x, 0, 2, 1, bg);
-            gfx_fill(s, static_cast<int16_t>(body.x + 2), 0, static_cast<int16_t>(body.w > 4 ? body.w - 4 : body.w), 1, kRule);
-            if (body.w > 4) gfx_fill(s, static_cast<int16_t>(body.x + body.w - 2), 0, 2, 1, bg);
-            body.y = 1;
+            const int16_t ry = at(0, 1);
+            gfx_fill(s, body.x, ry, 2, 1, bg);
+            gfx_fill(s, static_cast<int16_t>(body.x + 2), ry, static_cast<int16_t>(body.w > 4 ? body.w - 4 : body.w), 1, kRule);
+            if (body.w > 4) gfx_fill(s, static_cast<int16_t>(body.x + body.w - 2), ry, 2, 1, bg);
             body.h = static_cast<int16_t>(s.h - 1);
+            if (!rev) body.y = 1;
         }
     } else {
         const int16_t div_y = opp_edge == PanelEdge::Top ? static_cast<int16_t>(s.h - 1) : 0;
@@ -277,8 +278,8 @@ K2_HOT void draw_opp_slot(const Surface &s, PanelEdge opp_edge, TextDir dir, uns
     const uint8_t dots = cell.dot_count > 5 ? 5 : cell.dot_count;
     const int spot_w = cell.spot ? 5 : 0;
     const int dots_w = dots > 0 ? static_cast<int>(dots) * 5 : 0;
-    // A link cell keeps the icon at its far end (1 px gap before it, 1 px after); the text centres in the rest, with 2 px of
-    // padding instead of 4 (a "D+ 3.30V" cell in the narrowest slot still fits whole).
+    // A link cell keeps the icon at the end of the reading (1 px gap before it, 1 px after); the text centres in the rest,
+    // with 2 px of padding instead of 4 (a "D+ 3.30V" cell in the narrowest slot still fits whole).
     const bool linked = cell.link != pclink::State::None && !cell.masthead;
     const int zone = linked ? along - (kLinkIconPx + 2) : along;
     const int avail = std::max<int>(zone - (linked ? 2 : 4) - spot_w - dots_w, 0);
@@ -293,97 +294,46 @@ K2_HOT void draw_opp_slot(const Surface &s, PanelEdge opp_edge, TextDir dir, uns
     const std::string_view val_v = cell.value.empty() ? std::string_view{} : fit_text(kLabelFont, cell.value, std::max<int>(avail - tag_w, 6), vbuf);
     const int val_w = text_width(kLabelFont, val_v);
     const int total = spot_w + tag_w + val_w + dots_w;
-    const int16_t a0 = static_cast<int16_t>((zone - total) / 2);
 
     // Precompute element boxes for single-pass fill_except (zero overdraw).
     Box holes[6];
     int nh = 0;
     Box spot_box{}, tag_box{}, val_box{}, dot_box[5]{}, link_box{};
-    const int16_t tx = opp_edge == PanelEdge::Left ? 1 : 3;
-    const int16_t ty = opp_edge == PanelEdge::Top ? 1 : 3;
-
-    if (vertical) {
-        if (dir == TextDir::Ccw) {
-            int16_t cur = static_cast<int16_t>(a0 + total);
-            if (cell.spot) {
-                spot_box = {static_cast<int16_t>(tx + 2), static_cast<int16_t>(cur - 3), 8, 3};
-                holes[nh++] = spot_box;
-                cur = static_cast<int16_t>(cur - 5);
-            }
-            if (tag_w > 0) {
-                tag_box = {tx, static_cast<int16_t>(cur - tag_w), fh, static_cast<int16_t>(tag_w)};
-                holes[nh++] = tag_box;
-                cur = static_cast<int16_t>(cur - tag_w);
-            }
-            if (val_w > 0) {
-                val_box = {tx, static_cast<int16_t>(cur - val_w), fh, static_cast<int16_t>(val_w)};
-                holes[nh++] = val_box;
-                cur = static_cast<int16_t>(cur - val_w);
-            }
-            if (dots > 0) {
-                const int16_t d0 = static_cast<int16_t>(cur - dots_w);
-                const Box group{static_cast<int16_t>(tx + 4), d0, 3, static_cast<int16_t>(dots * 5 - 2)};
-                if (nh < 6) holes[nh++] = group;
-                for (uint8_t i = 0; i < dots; i++)
-                    dot_box[i] = {static_cast<int16_t>(tx + 4), static_cast<int16_t>(d0 + (dots - 1 - i) * 5), 3, 3};
-            }
-        } else {
-            int16_t cur = a0;
-            if (cell.spot) {
-                spot_box = {static_cast<int16_t>(tx + 2), cur, 8, 3};
-                holes[nh++] = spot_box;
-                cur = static_cast<int16_t>(cur + 5);
-            }
-            if (tag_w > 0) {
-                tag_box = {tx, cur, fh, static_cast<int16_t>(tag_w)};
-                holes[nh++] = tag_box;
-                cur = static_cast<int16_t>(cur + tag_w);
-            }
-            if (val_w > 0) {
-                val_box = {tx, cur, fh, static_cast<int16_t>(val_w)};
-                holes[nh++] = val_box;
-                cur = static_cast<int16_t>(cur + val_w);
-            }
-            if (dots > 0) {
-                const Box group{static_cast<int16_t>(tx + 4), static_cast<int16_t>(cur + 2), 3, static_cast<int16_t>(dots * 5 - 2)};
-                if (nh < 6) holes[nh++] = group;
-                for (uint8_t i = 0; i < dots; i++)
-                    dot_box[i] = {static_cast<int16_t>(tx + 4), static_cast<int16_t>(cur + 2 + i * 5), 3, 3};
-            }
-        }
-    } else {
-        int16_t cur = a0;
-        if (cell.spot) {
-            spot_box = {cur, static_cast<int16_t>(ty + 2), 3, 8};
-            holes[nh++] = spot_box;
-            cur = static_cast<int16_t>(cur + 5);
-        }
-        if (tag_w > 0) {
-            tag_box = {cur, ty, static_cast<int16_t>(tag_w), fh};
-            holes[nh++] = tag_box;
-            cur = static_cast<int16_t>(cur + tag_w);
-        }
-        if (val_w > 0) {
-            val_box = {cur, ty, static_cast<int16_t>(val_w), fh};
-            holes[nh++] = val_box;
-            cur = static_cast<int16_t>(cur + val_w);
-        }
-        if (dots > 0) {
-            const Box group{static_cast<int16_t>(cur + 2), static_cast<int16_t>(ty + 4), static_cast<int16_t>(dots * 5 - 2), 3};
-            if (nh < 6) holes[nh++] = group;
-            for (uint8_t i = 0; i < dots; i++)
-                dot_box[i] = {static_cast<int16_t>(cur + 2 + i * 5), static_cast<int16_t>(ty + 4), 3, 3};
-        }
+    const int16_t pp = vertical ? (opp_edge == PanelEdge::Left ? int16_t(1) : int16_t(3)) : (opp_edge == PanelEdge::Top ? int16_t(1) : int16_t(3));
+    // A run of `len` px at reading position u, `plen` px thick at offset `po` across the cell.
+    const auto run = [&](int u, int len, int po, int plen) {
+        return vertical ? Box{static_cast<int16_t>(pp + po), at(u, len), static_cast<int16_t>(plen), static_cast<int16_t>(len)}
+                        : Box{at(u, len), static_cast<int16_t>(pp + po), static_cast<int16_t>(len), static_cast<int16_t>(plen)};
+    };
+    int cur = (zone - total) / 2;
+    if (cell.spot) {
+        spot_box = run(cur, 3, 2, 8);
+        holes[nh++] = spot_box;
+        cur += 5;
+    }
+    if (tag_w > 0) {
+        tag_box = run(cur, tag_w, 0, fh);
+        holes[nh++] = tag_box;
+        cur += tag_w;
+    }
+    if (val_w > 0) {
+        val_box = run(cur, val_w, 0, fh);
+        holes[nh++] = val_box;
+        cur += val_w;
+    }
+    if (dots > 0) {
+        holes[nh++] = run(cur + 2, dots * 5 - 2, 4, 3);
+        for (uint8_t i = 0; i < dots; i++) dot_box[i] = run(cur + 2 + i * 5, 3, 4, 3);
     }
 
     if (linked) {
-        const int16_t oa = static_cast<int16_t>(along - 1 - kLinkIconPx);
-        const int16_t ac = static_cast<int16_t>((vertical ? body.x + (body.w - kLinkIconPx) / 2 : body.y + (body.h - kLinkIconPx) / 2));
+        const int16_t ac = static_cast<int16_t>(vertical ? body.x + (body.w - kLinkIconPx) / 2 : body.y + (body.h - kLinkIconPx) / 2);
+        const int16_t oa = at(along - 1 - kLinkIconPx, kLinkIconPx);
         link_box = vertical ? Box{ac, oa, kLinkIconPx, kLinkIconPx} : Box{oa, ac, kLinkIconPx, kLinkIconPx};
         holes[nh++] = link_box;
     }
     fill_except(s, body, holes, nh, bg);
-    if (linked) paint_link_icon(s, link_box, opp_edge, dir, cell.link, bg, cell.link == pclink::State::Power ? kInk3 : kInk, kFocus);
+    if (linked) paint_link_icon(s, link_box, cell.link, bg, cell.link == pclink::State::Power ? kInk3 : kInk, kFocus);
     if (cell.spot) gfx_fill(s, spot_box.x, spot_box.y, spot_box.w, spot_box.h, cell.spot);
     if (tag_w > 0) {
         if (vertical) gfx_text_rot(s, kLabelFont, tag_box.x, tag_box.y, tag_v, cell.tag_color, bg, dir);
@@ -401,7 +351,7 @@ K2_HOT void draw_opp_slot(const Surface &s, PanelEdge opp_edge, TextDir dir, uns
             gfx_fill(s, dot_box[i].x, dot_box[i].y, 3, 3, dot_col);
             if (i + 1 < dots) {
                 if (vertical) {
-                    const int16_t gy = dir == TextDir::Ccw ? static_cast<int16_t>(dot_box[i].y - 2) : static_cast<int16_t>(dot_box[i].y + 3);
+                    const int16_t gy = rev ? static_cast<int16_t>(dot_box[i].y - 2) : static_cast<int16_t>(dot_box[i].y + 3);
                     gfx_fill(s, dot_box[i].x, gy, 3, 2, bg);
                 } else {
                     gfx_fill(s, static_cast<int16_t>(dot_box[i].x + 3), dot_box[i].y, 2, 3, bg);

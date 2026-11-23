@@ -16,6 +16,7 @@
 #include "k2/ui/home_cell.hpp"
 #include "k2/ui/home_model.hpp"
 #include "k2/ui/kit.hpp"
+#include "k2/ui/rail_title.hpp"
 #include "k2/chargertest/report_card_delta.hpp"
 #include "k2/chargertest/result_layout.hpp"
 #include "k2/ui/list_view.hpp"
@@ -264,8 +265,8 @@ class PageBase : public PageIf {
 public:
     kit::OppRailSpec opp_rail() const override;
 protected:
-    PageBase(UiContext &c, Page id, const char *title) : ctx_(c), id_(id), title_(title) {}
-    PageBase(UiContext &c, Page id, const char *title, Icon icon) : ctx_(c), id_(id), title_(title), has_icon_(true), icon_(icon) {}
+    PageBase(UiContext &c, Page id, rail::Title title) : ctx_(c), id_(id), title_(title) {}
+    PageBase(UiContext &c, Page id, rail::Title title, Icon icon) : ctx_(c), id_(id), title_(title), has_icon_(true), icon_(icon) {}
     bool is_menu() const { return id_ == Page::Count; }
     void title_bar();
     // Right end of the top chrome bar: the compact V x A readout, the LAST pill when stale,
@@ -277,7 +278,7 @@ protected:
 
     UiContext &ctx_;
     Page id_;
-    const char *title_;
+    rail::Title title_;   // the rail name (at most 4 characters, include/k2/ui/rail_title.hpp)
     bool has_icon_ = false;
     Icon icon_ = Icon::Bolt;
     bool bar_icon_ = false;    // a rotation page that shows its icon and title_ in the bar (a Bench place)
@@ -809,7 +810,7 @@ ProtoInfo live_proto(const UiContext &ctx, const power::Metrics &pm);
 // cycler), Back long = the next hero.
 class HomePage final : public PageBase {
 public:
-    explicit HomePage(UiContext &c) : PageBase(c, Page::Home, "") {}
+    explicit HomePage(UiContext &c) : PageBase(c, Page::Home, rail::kNone) {}
     void draw_static() override;
     void update(uint32_t now_ms) override;
     bool on_event(Event e) override;
@@ -884,12 +885,12 @@ private:
 // energy, timer, flow). Pure rows are home_*/detail_* above; this class only paints them.
 class DetailPage final : public PageBase {
 public:
-    explicit DetailPage(UiContext &c) : PageBase(c, Page::Detail, "Numbers", Icon::Meter) {}
+    explicit DetailPage(UiContext &c) : PageBase(c, Page::Detail, rail::kNum, Icon::Meter) {}
     void draw_static() override;
     void update(uint32_t now_ms) override;
     bool on_event(Event) override { return false; }   // view-only in the ring
     Strip labels() const override { return base_labels(); }
-    kit::OppRailSpec opp_rail() const override { return {"NUMBERS", 0, 0, kit::OppTelemetry::PeakSagR}; }
+    kit::OppRailSpec opp_rail() const override { return {rail::kNum, 0, 0, kit::OppTelemetry::PeakSagR}; }
     void invalidate() override;
 private:
     struct CellState { uint16_t fg = kText; bool valid = false; char cur[10] = {}; };
@@ -930,7 +931,7 @@ void sense_passive(Facts &f, const UiContext &ctx, const pd::Link &link, const r
 // averages (raguard::classify) and never start an active CC operation.
 class ConnectionPage final : public PageBase {
 public:
-    explicit ConnectionPage(UiContext &c) : PageBase(c, Page::Count, "Who's attached", Icon::Plug) {}
+    explicit ConnectionPage(UiContext &c) : PageBase(c, Page::Count, rail::kCharger, Icon::Plug) {}
     void enter() override;
     void draw_static() override;
     void update(uint32_t now_ms) override;
@@ -964,8 +965,7 @@ public:
     int action_row() const { return act_sel_; }   // the focused action row on Actions page, -1 when not in Actions
     static constexpr int kPlaceRows = 9;   // 9 x 21 px fact rows under identity block (y 46..235, no footer)
     kit::OppRailSpec opp_rail() const override {
-        if (view_ == View::Overview) return {"LINK", 0, 0, kit::OppTelemetry::Vaw};
-        if (view_ == View::Actions) return {title_, 0, 0, kit::OppTelemetry::Vaw};
+        if (view_ == View::Overview) return {rail::kLink, 0, 0, kit::OppTelemetry::Vaw};
         return {title_, 0, 0, kit::OppTelemetry::Vaw};
     }
     int window_first() const { return first_; }   // the first list row on screen
@@ -1083,7 +1083,7 @@ public:
     // The saved-cables browser opened from Connection's Cable tab: it starts in the list view and BACK leaves it from there.
     // The list is the kit RowList (names read from flash on demand), one cable's table is a kit KvTable and the delete
     // question a kit AlertBand. The remote's e-marker state reads the driver, not this page.
-    explicit EmarkerPage(UiContext &c) : PageBase(c, Page::Count, "Cables", Icon::Emark) {}
+    explicit EmarkerPage(UiContext &c) : PageBase(c, Page::Count, rail::kEmarker, Icon::Emark) {}
     void enter() override;
     void draw_static() override;
     void update(uint32_t now_ms) override;
@@ -1120,7 +1120,7 @@ private:
 // sentence. A fixed layout: nothing scrolls.
 class DiagPage final : public PageBase {
 public:
-    explicit DiagPage(UiContext &c) : PageBase(c, Page::Count, "Diag", Icon::Chip) {}
+    explicit DiagPage(UiContext &c) : PageBase(c, Page::Count, rail::kSys, Icon::Chip) {}
     void draw_static() override;
     void update(uint32_t now_ms) override;
     bool on_event(Event e) override;
@@ -1152,7 +1152,7 @@ private:
 // The stack rows are plain numbers. Reads the cached snapshot only.
 class MemoryPage final : public PageBase {
 public:
-    explicit MemoryPage(UiContext &c) : PageBase(c, Page::Count, "Memory", Icon::Chip) {}
+    explicit MemoryPage(UiContext &c) : PageBase(c, Page::Count, rail::kMemory, Icon::Chip) {}
     void draw_static() override;
     void update(uint32_t now_ms) override;
     bool on_event(Event e) override;
@@ -1170,7 +1170,7 @@ private:
 // decoded result in pills, the Rp advertisement and the MCU temperature, and a footer sentence.
 class LinesPage final : public PageBase {
 public:
-    explicit LinesPage(UiContext &c) : PageBase(c, Page::Lines, "Lines", Icon::Meter) {}
+    explicit LinesPage(UiContext &c) : PageBase(c, Page::Lines, rail::kLine, Icon::Meter) {}
     void draw_static() override;
     void update(uint32_t now_ms) override;
     bool on_event(Event e) override;
@@ -1198,7 +1198,7 @@ const char *tool_name(int i);
 // cancellation hands measured cleanup to Ui so leaving the menu cannot drop the safety guard.
 class TriggerPage final : public PageBase {
 public:
-    explicit TriggerPage(UiContext &c) : PageBase(c, Page::Count, "FC trig", Icon::Brick) {}
+    explicit TriggerPage(UiContext &c) : PageBase(c, Page::Count, rail::kFcTrig, Icon::Brick) {}
     void draw_static() override;
     void update(uint32_t now_ms) override;
     bool on_event(Event e) override;
@@ -1251,7 +1251,7 @@ private:
 // BACK goes one step back; BACK on OFFER leaves and releases to 5 V (leave()).
 class PdTriggerPage final : public PageBase {
 public:
-    explicit PdTriggerPage(UiContext &c) : PageBase(c, Page::Count, "PD trig", Icon::Pd) {}
+    explicit PdTriggerPage(UiContext &c) : PageBase(c, Page::Count, rail::kPdTrig, Icon::Pd) {}
     void draw_static() override;
     void update(uint32_t now_ms) override;
     bool on_event(Event e) override;
@@ -1296,7 +1296,7 @@ private:
 // figure with a verdict cell and a grade scale, the footer states what is missing or what the figure includes.
 class CableRPage final : public PageBase {
 public:
-    explicit CableRPage(UiContext &c) : PageBase(c, Page::Count, "Cable R", Icon::Res) {}
+    explicit CableRPage(UiContext &c) : PageBase(c, Page::Count, rail::kCableR, Icon::Res) {}
     void draw_static() override;
     void update(uint32_t now_ms) override;
     bool on_event(Event e) override;
@@ -1316,7 +1316,7 @@ class SettingsPage final : public PageBase {
 public:
     // The K2 place (Bench > K2): the firmware's identity (version, then uptime and the USB link) over the settings, then
     // System state and Boot info.
-    explicit SettingsPage(UiContext &c) : PageBase(c, Page::Settings, "K2", Icon::Chip) { bar_icon_ = true; }
+    explicit SettingsPage(UiContext &c) : PageBase(c, Page::Settings, rail::kK2, Icon::Chip) { bar_icon_ = true; }
     void enter() override;
     void draw_static() override;
     void update(uint32_t now_ms) override;
@@ -1351,7 +1351,7 @@ private:
 // Brightness opens an adjust mode where [+] / [-] step 10 % live; the other two rows open a pick-one list.
 class DisplayPage final : public PageBase {
 public:
-    explicit DisplayPage(UiContext &c) : PageBase(c, Page::Count, "Display", Icon::Meter) {}
+    explicit DisplayPage(UiContext &c) : PageBase(c, Page::Count, rail::kDisplay, Icon::Meter) {}
     enum class View : uint8_t { List, Adjust, PickDim, PickOff };   // zero = List
     void enter() override;
     void draw_static() override;
@@ -1374,7 +1374,7 @@ private:
 
 class AutorotatePage final : public PageBase {
 public:
-    explicit AutorotatePage(UiContext &c) : PageBase(c, Page::Count, "Rotation", Icon::Rotate) {}
+    explicit AutorotatePage(UiContext &c) : PageBase(c, Page::Count, rail::kRotate, Icon::Rotate) {}
     void enter() override;
     void draw_static() override;
     void update(uint32_t now_ms) override;
@@ -1393,7 +1393,7 @@ private:
 // next boot (the descriptor is built once), so the footer says "Reboot to apply" until they match.
 class UsbLinkPage final : public PageBase {
 public:
-    explicit UsbLinkPage(UiContext &c) : PageBase(c, Page::Count, "USB Link", Icon::Usb) {}
+    explicit UsbLinkPage(UiContext &c) : PageBase(c, Page::Count, rail::kUsb, Icon::Usb) {}
     void draw_static() override;
     void update(uint32_t now_ms) override;
     bool on_event(Event e) override;
@@ -1411,7 +1411,7 @@ private:
 // Ring position 7 TOOLS: triggers (Request voltage, Fast charge) and active bench utilities.
 class ToolsPage final : public PageBase {
 public:
-    explicit ToolsPage(UiContext &c) : PageBase(c, Page::Count, "Tools", Icon::Bolt), sel_(c.keep.tools_sel) {}
+    explicit ToolsPage(UiContext &c) : PageBase(c, Page::Count, rail::kTools, Icon::Bolt), sel_(c.keep.tools_sel) {}
     void enter() override;
     void draw_static() override;
     void update(uint32_t now_ms) override;
@@ -1455,7 +1455,7 @@ private:
 // page (the Ui does it). The encode workspace is leased from the scratch arena during paint().
 class QrTestPage final : public PageBase {
 public:
-    explicit QrTestPage(UiContext &c) : PageBase(c, Page::Count, "QrTest") {}
+    explicit QrTestPage(UiContext &c) : PageBase(c, Page::Count, rail::kQr) {}
     void draw_static() override;
     void update(uint32_t now_ms) override;
     bool on_event(Event e) override;
