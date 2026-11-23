@@ -43,7 +43,7 @@ constexpr int16_t kPlaceListY = kit::kBelowBar + DiagnosisPage::kStampH + 2;
 
 void DiagnosisPage::as_place() {
     place_ = true;
-    title_ = bench::place_name(bench::Place::Log);
+    title_ = rail::kLog;
     icon_ = place_icon(bench::Place::Log);
     bar_icon_ = true;
 }

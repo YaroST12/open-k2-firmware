@@ -78,7 +78,7 @@ private:
 
 class SharePage final : public PageBase {
 public:
-    SharePage(UiContext &c, ShareRecord &r) : PageBase(c, Page::Count, "Share"), r_(r) {}
+    SharePage(UiContext &c, ShareRecord &r) : PageBase(c, Page::Count, rail::kShare), r_(r) {}
 
     static constexpr std::size_t kBuffer = ShareRecord::kBuffer;
     static constexpr std::size_t kTitleMax = ShareRecord::kTitleMax;

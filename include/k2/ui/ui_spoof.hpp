@@ -18,7 +18,7 @@ void spoof_counts_text(uint32_t requests, uint32_t replies, StrBuf<24> &out);
 
 class SpoofPage final : public PageBase {
 public:
-    explicit SpoofPage(UiContext &c) : PageBase(c, Page::Count, "Spoof", Icon::Ghost) {}
+    explicit SpoofPage(UiContext &c) : PageBase(c, Page::Count, rail::kSpoof, Icon::Ghost) {}
     void draw_static() override;
     void update(uint32_t now_ms) override;
     bool on_event(Event e) override;

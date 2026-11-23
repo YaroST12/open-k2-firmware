@@ -1423,7 +1423,6 @@ static void test_option_c_active_states() {
     // 2. draw_opp_slot active masthead (solid cyan + black ink + black separator) vs inactive (charcoal + grey ink + rule).
     const Surface mast{0, 0, 16, 64};
     kit::OppCell cell{};
-    cell.len = 64;
     cell.masthead = true;
     cell.active = true;
     cell.value = "CHARGER";
@@ -1452,6 +1451,16 @@ static void test_option_c_active_states() {
     lcd::fill(kBase);
     kit::draw_opp_slot(mast, PanelEdge::Left, TextDir::Cw, 0, cell);
     CHECK_EQ(count_col(0, 16, 0, 64, kAccent), 0);
+
+    // The same masthead read bottom-to-top is the mirror image: its end rule is on the top row, the text starts at the bottom.
+    cell.active = true;
+    cell.value_color = kSpotInk;
+    cell.dot_count = 3;
+    lcd::fill(kBase);
+    kit::draw_opp_slot(mast, PanelEdge::Right, TextDir::Ccw, 0, cell);
+    CHECK_EQ(px(8, 0), kBg);
+    CHECK_EQ(px(8, 63), kAccent);
+    CHECK_EQ(px(0, 8), kAccent);   // the content-facing divider is on the Right edge's left side
 
     // 3. RowList::set_muted (charcoal + kInk3 bar when muted vs teal + kFocusBar when active).
     struct Model { int n = 2; } m;
@@ -1490,7 +1499,6 @@ static void test_rail_link_cell_fits() {
                 const Surface tight = col ? Surface{0, 0, 16, len} : Surface{0, 0, len, 16};
                 const Surface roomy = col ? Surface{0, 0, 16, 160} : Surface{0, 0, 160, 16};
                 kit::OppCell c{};
-                c.len = len;
                 c.tag = "D+ ";
                 c.value = "3.30V";
                 lcd::fill(kBase);

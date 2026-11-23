@@ -74,6 +74,13 @@ enum class TextDir : uint8_t { Ccw, Cw };
 constexpr TextDir panel_text_dir(PanelEdge edge) { return edge == PanelEdge::Left ? TextDir::Cw : TextDir::Ccw; }
 constexpr bool panel_is_column(PanelEdge edge) { return edge == PanelEdge::Right || edge == PanelEdge::Left; }
 
+// The telemetry rail's four cells in reading order (page title, then the readouts); the lengths and the order are the same in
+// every rotation. A column rail whose text reads bottom-to-top (TextDir::Ccw) lays them out from the bottom up.
+constexpr int16_t kOppSlotLen[4] = {54, 62, 62, 62};
+static_assert(kOppSlotLen[0] + kOppSlotLen[1] + kOppSlotLen[2] + kOppSlotLen[3] == kScreenH);   // the rail spans the whole edge
+constexpr bool opp_reversed(PanelEdge opp_edge, TextDir dir) { return panel_is_column(opp_edge) && dir == TextDir::Ccw; }
+Rect opp_slot_rect(const Rect &rail, PanelEdge opp_edge, TextDir dir, unsigned slot);
+
 // Which physical button the i-th slot shows. Right edge, rotation 0: BACK, MINUS, OK, PLUS.
 Button slot_button(const Orientation &o, unsigned slot);
 

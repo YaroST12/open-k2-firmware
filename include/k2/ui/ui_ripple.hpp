@@ -17,7 +17,7 @@ public:
     static constexpr uint32_t kRefreshMs = 100;   // ~10 Hz capture cadence at boosted CPU/SPI
     static constexpr uint8_t kNoCol = 0xFF;
 
-    explicit RipplePage(UiContext &c) : PageBase(c, Page::Ripple, "Ripple", Icon::Meter) {}
+    explicit RipplePage(UiContext &c) : PageBase(c, Page::Ripple, rail::kRipple, Icon::Meter) {}
     ~RipplePage();
 
     void draw_static() override;

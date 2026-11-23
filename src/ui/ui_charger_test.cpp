@@ -1596,7 +1596,7 @@ void ChargerTestSession::freeze_facts() {
     facts_.frozen = true;
 }
 
-ChargerTestPage::ChargerTestPage(UiContext& c, ChargerTestSession& s) : PageBase(c, Page::ChargerTest, "Charger test"), s_(s) {
+ChargerTestPage::ChargerTestPage(UiContext& c, ChargerTestSession& s) : PageBase(c, Page::ChargerTest, rail::kTest), s_(s) {
     s_.bind_view(this);
 }
 void ChargerTestPage::on_stage(bool entering) {
@@ -2060,22 +2060,22 @@ void unit_progress(const ct::Runner &runner, size_t at, unsigned &i, unsigned &n
 kit::OppRailSpec ChargerTestPage::opp_rail() const {
     const Stage st = s_.stage_;
     if (st == Stage::Algorithms || st == Stage::Custom || st == Stage::Group)
-        return {"TEST", 3, 0, kit::OppTelemetry::Vaw};
+        return {rail::kTest, 3, 0, kit::OppTelemetry::Vaw};
     if (st == Stage::Cable)
-        return {"TEST", 3, 1, kit::OppTelemetry::Vaw};
+        return {rail::kTest, 3, 1, kit::OppTelemetry::Vaw};
     if (st == Stage::Review || st == Stage::Refuse)
-        return {"TEST", 3, 2, kit::OppTelemetry::Vaw};
+        return {rail::kTest, 3, 2, kit::OppTelemetry::Vaw};
     if (st == Stage::Running)
-        return {"TEST", 0, 0, kit::OppTelemetry::AmpCcDp};
+        return {rail::kTest, 0, 0, kit::OppTelemetry::AmpCcDp};
     if (st == Stage::Waiting)
-        return {"WAITING", 0, 0, kit::OppTelemetry::WattCcDp};
+        return {rail::kWait, 0, 0, kit::OppTelemetry::WattCcDp};
     if (st == Stage::Results)
-        return {"RESULTS", 0, 0, kit::OppTelemetry::Vaw};
+        return {rail::kResult, 0, 0, kit::OppTelemetry::Vaw};
     if (st == Stage::Steps)   // the strip's and the footer's name for the list
-        return {"STEPS", 0, 0, kit::OppTelemetry::Vaw};
+        return {rail::kSteps, 0, 0, kit::OppTelemetry::Vaw};
     if (st == Stage::Detail || st == Stage::SpecDetail)
-        return {"DETAIL", 0, 0, kit::OppTelemetry::Vaw};
-    return {"TEST", 0, 0, kit::OppTelemetry::Vaw};
+        return {rail::kDetail, 0, 0, kit::OppTelemetry::Vaw};
+    return {rail::kTest, 0, 0, kit::OppTelemetry::Vaw};
 }
 
 void ChargerTestPage::bar() {

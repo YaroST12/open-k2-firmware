@@ -14,7 +14,7 @@ namespace k2 {
 
 class BlackBoxPage final : public PageBase {
 public:
-    explicit BlackBoxPage(UiContext &c) : PageBase(c, Page::Count, "Black Box", Icon::Blackbox) {}
+    explicit BlackBoxPage(UiContext &c) : PageBase(c, Page::Count, rail::kBlackBox, Icon::Blackbox) {}
     void draw_static() override;
     void update(uint32_t now_ms) override;
     bool on_event(Event e) override;

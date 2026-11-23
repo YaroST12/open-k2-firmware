@@ -4,6 +4,15 @@
 
 namespace k2 {
 
+Rect opp_slot_rect(const Rect &rail, PanelEdge opp_edge, TextDir dir, unsigned slot) {
+    int16_t at = 0;
+    for (unsigned i = 0; i < slot && i < 4; ++i) at = static_cast<int16_t>(at + kOppSlotLen[i]);
+    const int16_t len = kOppSlotLen[slot & 3];
+    if (opp_reversed(opp_edge, dir)) at = static_cast<int16_t>(rail.h - at - len);
+    return panel_is_column(opp_edge) ? Rect{rail.x, static_cast<int16_t>(rail.y + at), rail.w, len}
+                                     : Rect{static_cast<int16_t>(rail.x + at), rail.y, len, rail.h};
+}
+
 Layout compute_layout(PanelEdge edge, const int16_t (&centers)[4], int16_t slot_len, int16_t thickness) {
     const int16_t lens[4] = {slot_len, slot_len, slot_len, slot_len};
     return compute_layout(edge, centers, lens, thickness);

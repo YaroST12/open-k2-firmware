@@ -226,7 +226,7 @@ void put_charger(StrBuf<N> &s, const pd::SourceCaps &caps) {
 
 }  // namespace
 
-PdStressPage::PdStressPage(UiContext &c) : PageBase(c, Page::Count, "PD Stress", Icon::Wave) {}
+PdStressPage::PdStressPage(UiContext &c) : PageBase(c, Page::Count, rail::kStress, Icon::Wave) {}
 
 void PdStressPage::put_kv(const kit::KvLayout &l, int row, int sig_idx, std::string_view text, uint16_t color, int box_px, int &spent,
                           int cap K2_TRUNC_DEF) {

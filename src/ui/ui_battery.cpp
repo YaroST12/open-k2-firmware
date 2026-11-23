@@ -68,7 +68,7 @@ const char *armed_text(Act a, const view::Shown &s) {
 }
 }  // namespace
 
-BatteryPage::BatteryPage(UiContext &c) : PageBase(c, Page::Count, "Battery", Icon::Battery) {
+BatteryPage::BatteryPage(UiContext &c) : PageBase(c, Page::Count, rail::kBattery, Icon::Battery) {
     bar_icon_ = true;
 }
 

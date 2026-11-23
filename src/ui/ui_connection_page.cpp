@@ -142,7 +142,7 @@ void ConnectionPage::set_overview(conn::Tab focus) {
     em_read_pending_ = false;
     first_ = 0;
     const bench::Place p = conn::place_of(focus);
-    title_ = bench::place_name(p);
+    title_ = rail::place(static_cast<unsigned>(p));
     icon_ = place_icon(p);
     bar_icon_ = true;
     sig_valid_ = false;
@@ -160,7 +160,7 @@ void ConnectionPage::lock(conn::Tab t) {
     em_read_pending_ = false;
     first_ = 0;
     const bench::Place p = conn::place_of(t);
-    title_ = bench::place_name(p);
+    title_ = rail::place(static_cast<unsigned>(p));
     icon_ = place_icon(p);
     bar_icon_ = true;
     sig_valid_ = false;
@@ -197,7 +197,7 @@ void ConnectionPage::enter_overview(conn::Tab t) {
     iq_armed_until_ = 0;
     em_read_pending_ = false;
     const bench::Place p = conn::place_of(t);
-    title_ = bench::place_name(p);
+    title_ = rail::place(static_cast<unsigned>(p));
     icon_ = place_icon(p);
     invalidate();
 }
@@ -208,7 +208,7 @@ void ConnectionPage::enter_actions() {
     iq_armed_until_ = 0;
     actions_gap_cleared_ = false;
     const bench::Place p = conn::place_of(tab_);
-    title_ = bench::place_name(p);
+    title_ = rail::place(static_cast<unsigned>(p));
     icon_ = place_icon(p);
     build_items();
     act_sel_ = std::clamp<int>(ctx_.keep.place_sel[static_cast<int>(p)], 0, std::max(0, act_count() - 1));
@@ -227,7 +227,7 @@ void ConnectionPage::enter_spec() {
     iq_armed_until_ = 0;
     em_read_pending_ = false;
     const bench::Place p = conn::place_of(tab_);
-    title_ = bench::place_name(p);
+    title_ = rail::place(static_cast<unsigned>(p));
     icon_ = place_icon(p);
     invalidate();
 }
@@ -336,7 +336,7 @@ bool ConnectionPage::on_event(Event e) {
             case Button::Plus:
                 if (tab_ == conn::Tab::Source) tab_ = conn::Tab::Cable;
                 else if (tab_ == conn::Tab::Cable) tab_ = conn::Tab::Sink;
-                title_ = bench::place_name(conn::place_of(tab_));
+                title_ = rail::place(static_cast<unsigned>(conn::place_of(tab_)));
                 icon_ = place_icon(conn::place_of(tab_));
                 sig_valid_ = false;
                 update(ctx_.now);
@@ -344,7 +344,7 @@ bool ConnectionPage::on_event(Event e) {
             case Button::Minus:
                 if (tab_ == conn::Tab::Sink) tab_ = conn::Tab::Cable;
                 else if (tab_ == conn::Tab::Cable) tab_ = conn::Tab::Source;
-                title_ = bench::place_name(conn::place_of(tab_));
+                title_ = rail::place(static_cast<unsigned>(conn::place_of(tab_)));
                 icon_ = place_icon(conn::place_of(tab_));
                 sig_valid_ = false;
                 update(ctx_.now);

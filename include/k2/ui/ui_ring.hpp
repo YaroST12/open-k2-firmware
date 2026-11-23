@@ -8,6 +8,7 @@
 // the ring on the same page. Lines and Numbers have nothing to act on, so they are view-only: OK does nothing there.
 #pragma once
 #include <cstdint>
+#include "k2/ui/rail_title.hpp"
 #include "k2/ui/ui_events.hpp"
 #include "k2/ui/ui_labels.hpp"
 #include "k2/ui/ui_types.hpp"
@@ -23,9 +24,9 @@ constexpr Pos prev(Pos p) { return static_cast<Pos>((static_cast<int>(p) + kCoun
 // Only the pages with something to do can be entered.
 constexpr bool can_enter(Pos p) { return p != Pos::Lines && p != Pos::Numbers; }
 
-// The masthead text in the ring view: 1-based position and the name, at most 9 characters (the rail's slot).
-constexpr const char *mast_name(Pos p) {
-    constexpr const char *kNames[kCount] = {"1 HOME", "2 LINES", "3 NUMBERS", "4 GRAPHS", "5 RIPPLE", "6 LINK", "7 TOOLS", "8 BATTERY", "9 LOG", "10 K2"};
+// The masthead text in the ring view: the page's own rail name (at most 4 characters), so an entered page keeps its place.
+constexpr const rail::Title &mast_name(Pos p) {
+    static constexpr rail::Title kNames[kCount] = {rail::kHome, rail::kLine, rail::kNum, rail::kGraph, rail::kRipple, rail::kLink, rail::kTools, rail::kBattery, rail::kLog, rail::kK2};
     return kNames[static_cast<int>(p) < kCount ? static_cast<int>(p) : 0];
 }
 

@@ -127,7 +127,32 @@ static void test_text_direction_follows_the_edge() {
     CHECK_EQ(panel_is_column(PanelEdge::Top) || panel_is_column(PanelEdge::Bottom), 0);
 }
 
+// The telemetry rail reads the same in every rotation: the page title first, then the readouts, at fixed lengths. A column
+// rail whose text reads bottom-to-top (rotation 0) lays its slots out from the bottom up, so the reading order never flips.
+static void test_opp_slots_keep_reading_order() {
+    static const int16_t kWant[4] = {0, 54, 116, 178};
+    for (uint8_t rot = 0; rot < 4; ++rot) {
+        const Orientation o = orientation_for(rot);
+        const Layout l = compute_layout(o.edge, kCenters, 60, kOppRailThickness);
+        const PanelEdge opp = opposite_edge(o.edge);
+        const TextDir dir = panel_text_dir(o.edge);
+        const bool column = panel_is_column(opp);
+        for (unsigned s = 0; s < 4; ++s) {
+            const Rect r = opp_slot_rect(l.opp_rail, opp, dir, s);
+            const int along = column ? l.opp_rail.h : l.opp_rail.w;
+            const int len = column ? r.h : r.w;
+            const int lo = column ? r.y - l.opp_rail.y : r.x - l.opp_rail.x;
+            const int u = (column && dir == TextDir::Ccw) ? along - lo - len : lo;   // distance from where reading starts
+            CHECK_EQ(len, kOppSlotLen[s]);
+            CHECK_EQ(u, kWant[s]);
+            CHECK_EQ(column ? r.w : r.h, kOppRailThickness);
+            CHECK_EQ(column ? r.x : r.y, column ? l.opp_rail.x : l.opp_rail.y);
+        }
+    }
+}
+
 int main() {
+    test_opp_slots_keep_reading_order();
     test_unequal_slots_tile_the_edge();
     test_shipped_style_tiles();
     test_thin_panel_gives_wider_content();

@@ -77,11 +77,9 @@ static void check_menu_mini(Ui &ui, std::string_view text, bool volts = false) {
     const Orientation o = orientation_for(ui.rotation());
     if (panel_is_column(opposite_edge(o.edge))) return;
     const Rect r = compute_layout(o.edge, kSlotCenters, kSlotLens, kPanelThickness).opp_rail;
-    const kit::OppRailSpec spec = ui.current_opp_rail();   // a title over 7 chars (or any dots) widens slot 0: (64, 59, 59, 58), else (54, 62, 62, 62)
-    const bool wide0 = spec.dot_count > 0 || spec.title.size() > 7;
-    const int16_t slot_len = wide0 ? 59 : 62;
-    const int16_t first = wide0 ? 64 : 54;
-    const int16_t slot_x = static_cast<int16_t>(r.x + (volts ? first : first + slot_len));
+    const Rect sr = opp_slot_rect(r, opposite_edge(o.edge), panel_text_dir(o.edge), volts ? 1 : 2);   // the same cells on every page
+    const int16_t slot_len = sr.w;
+    const int16_t slot_x = sr.x;
     // OppRail telemetry cells (slots 1..3) are centred in slot_len: spot_w (5) + text_width.
     const int tw = text_width(kLabelFont, text);
     const int a0 = (slot_len - (5 + tw)) / 2;

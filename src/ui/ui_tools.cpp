@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
 #include "k2/ui/ui_tools.hpp"
+#include "k2/ui/rail_title.hpp"
 #include "k2/pd/pd_emarker_plan.hpp"
 #include "k2/ui/text/tools.hpp"
 
@@ -173,6 +174,8 @@ Acts actions(Place p) {
 }
 
 Acts tools() { return acts(kTools); }
+
+static_assert(kPlaces == static_cast<int>(rail::kPlaceCount), "one rail name per place");
 
 const char *place_name(Place p) { return kPlaceNames[static_cast<int>(p) < kPlaces ? static_cast<int>(p) : 0]; }
 
