@@ -47,7 +47,8 @@
 //                                    indices, 0xFF = none) sub(1: bits 1:0 Connection tab, bit2 popup, bit3
 //                                    details) sel(1, 0xFF = none) count(1) home_window(1) flags(1: bit0 hold
 //                                    card, 1 rotation notice, 2 e-marker scanning, 3 listening, 4 quiet,
-//                                    5 identify: no device); enums: ui_types.hpp, home_model.hpp
+//                                    5 identify: no device, 6 ring view, 7 shell toast: the "Shell access" band is up);
+//                                    enums: ui_types.hpp, home_model.hpp
 //                                    part 2, 29 bytes: fusb_id(1) pd_rx(4) usb_resets(4) usb_isrs(4)
 //                                    log_sent(4) log_dropped(4) poll_gap_max_ms(4) usb_configured(1)
 //                                    loop(1: bits 1:0 HID-cable loop lock 0 none 1 certain 2 suspected,
@@ -1463,6 +1464,90 @@ constexpr bool wakes_screen(Cmd cmd, size_t payload_len) {
         return true;
     }
 }
+// Whether a request DRIVES the K2 rather than reads it: only those show the "Shell access" band (k2/core/shell_toast.hpp).
+// One row per command id (shell_rules_cover_all() is a static_assert, so a new id must pick a side). Ops rows: control when
+// the first payload byte is in `ops`, a request with no payload reads; ops of 32 and above count as control.
+enum class ShellKind : uint8_t { Read, Control, Ops, ChargerTest, Fc };
+struct ShellRule {
+    Cmd cmd;
+    ShellKind kind;
+    uint32_t ops = 0;
+};
+template <class... Op>
+constexpr uint32_t shell_ops(Op... op) { return ((uint32_t{1} << op) | ... | 0u); }
+inline constexpr uint32_t kShellAnyOp = ~uint32_t{0};
+inline constexpr ShellRule kShellRules[] = {
+    {Cmd::Ping, ShellKind::Read}, {Cmd::GetState, ShellKind::Read}, {Cmd::GetPdos, ShellKind::Read},
+    {Cmd::GetEmarker, ShellKind::Read}, {Cmd::GetIdentity, ShellKind::Read}, {Cmd::Log, ShellKind::Read},
+    {Cmd::Screenshot, ShellKind::Read}, {Cmd::FlashDump, ShellKind::Read}, {Cmd::BootInfo, ShellKind::Read},
+    {Cmd::Memory, ShellKind::Read}, {Cmd::UsbLink, ShellKind::Read}, {Cmd::PdMatch, ShellKind::Read},
+    {Cmd::PdTriggerStatus, ShellKind::Read}, {Cmd::AdcRaw, ShellKind::Read}, {Cmd::ChargerHunt, ShellKind::Read},
+    {Cmd::Diagnose, ShellKind::Read}, {Cmd::LoopProbe, ShellKind::Read}, {Cmd::TraceHid, ShellKind::Read},
+    {Cmd::DebugLcd, ShellKind::Read},
+    {Cmd::Button, ShellKind::Control}, {Cmd::Action, ShellKind::Control}, {Cmd::SetPage, ShellKind::Control},
+    {Cmd::Reboot, ShellKind::Control}, {Cmd::DfuEnter, ShellKind::Control}, {Cmd::FactoryWipe, ShellKind::Control},
+    {Cmd::DebugFault, ShellKind::Control}, {Cmd::DebugPdos, ShellKind::Control}, {Cmd::DebugLink, ShellKind::Control},
+    {Cmd::DebugPdMsg, ShellKind::Control}, {Cmd::DebugCcMatrix, ShellKind::Control}, {Cmd::DebugCcProbe, ShellKind::Control},
+    {Cmd::Ripple, ShellKind::Control}, {Cmd::EmarkerProbe, ShellKind::Control},
+    {Cmd::PdRequest, ShellKind::Control}, {Cmd::PdReset, ShellKind::Control}, {Cmd::PdRelease, ShellKind::Control},
+    {Cmd::PdAttach, ShellKind::Control}, {Cmd::PdHandback, ShellKind::Control}, {Cmd::Stop, ShellKind::Control},
+    {Cmd::Lab, ShellKind::Control}, {Cmd::ChargerUnits, ShellKind::Control},
+    {Cmd::Power, ShellKind::Ops, kShellAnyOp}, {Cmd::ChargerCable, ShellKind::Ops, kShellAnyOp},
+    {Cmd::ChargerSvoocCap, ShellKind::Ops, kShellAnyOp}, {Cmd::ChargerSweep, ShellKind::Ops, kShellAnyOp},
+    {Cmd::ChargerAvsSweep, ShellKind::Ops, kShellAnyOp}, {Cmd::ChargerLevel, ShellKind::Ops, kShellAnyOp},
+    {Cmd::ChargerTest, ShellKind::ChargerTest}, {Cmd::Fc, ShellKind::Fc},
+    {Cmd::CableR, ShellKind::Ops, shell_ops(kCableReset, kCablePassive, kCableKelvin)},
+    {Cmd::IdentifyDevice, ShellKind::Ops, ~uint32_t{1}}, {Cmd::PdReread, ShellKind::Ops, ~uint32_t{1}},
+    {Cmd::AppleRead, ShellKind::Ops, ~uint32_t{1}}, {Cmd::OppoProbe, ShellKind::Ops, ~uint32_t{1}},
+    {Cmd::PdLimit, ShellKind::Ops, ~uint32_t{1}}, {Cmd::Lease, ShellKind::Ops, ~uint32_t{1}},
+    {Cmd::MiCableAuth, ShellKind::Ops, ~uint32_t{1}}, {Cmd::DebugVconn, ShellKind::Ops, ~uint32_t{1}},
+    {Cmd::DebugEprInfo, ShellKind::Ops, ~uint32_t{1}}, {Cmd::DebugEeprom, ShellKind::Ops, shell_ops(2, 3)},
+    {Cmd::Store, ShellKind::Ops, shell_ops(kStoreSaveEmarker, kStoreSaveLog)},
+    {Cmd::Cards, ShellKind::Ops, shell_ops(kCardsRename, kCardsDelete)},
+    {Cmd::EmLib, ShellKind::Ops, shell_ops(kEmSave, kEmDelete, kEmRename, kEmSpoof, kEmLearn)},
+    {Cmd::Twin, ShellKind::Ops, shell_ops(kTwLearn, kTwRename, kTwDelete, kTwRun, kTwCancel, kTwInline)},
+    {Cmd::BlackBox, ShellKind::Ops, shell_ops(kBbClear, kBbFreeze, kBbCapClear)},
+    {Cmd::TransCap, ShellKind::Ops, shell_ops(kTcArm, kTcTrigger, kTcDisarm, kTcSave, kTcClear)},
+    {Cmd::Ufcs, ShellKind::Ops, shell_ops(kUfcsSet, kUfcsReset, kUfcsProbe, kUfcsStop)},
+    {Cmd::QRTest, ShellKind::Ops, shell_ops(kQrTestShow, kQrTestStop)},
+    {Cmd::PdStress, ShellKind::Ops, shell_ops(kPdStressStart, kPdStressStop)},
+    {Cmd::PdSpec, ShellKind::Ops, shell_ops(kPdSpecStart, kPdSpecStop)},
+    {Cmd::Battery, ShellKind::Ops, shell_ops(1, 2, 3, 4, 5)},   // wire ops: start, end phase, next, finish, config
+};
+constexpr bool shell_rules_cover_all() {
+    for (const Cmd c : kCmdIds) {
+        int n = 0;
+        for (const ShellRule &r : kShellRules) n += r.cmd == c;
+        if (n != 1) return false;
+    }
+    for (const ShellRule &r : kShellRules) {
+        bool known = false;
+        for (const Cmd c : kCmdIds) known = known || c == r.cmd;
+        if (!known) return false;
+    }
+    return true;
+}
+static_assert(shell_rules_cover_all(), "every remote command id needs exactly one shell-access rule (kShellRules)");
+// The charger test shares one id between its reads and START / CANCEL; these mirror handle_charger's own conditions, so the
+// legacy 9-byte rows read (which can begin with the same byte values) stays a read.
+constexpr bool shell_control(Cmd cmd, std::span<const uint8_t> p) {
+    for (const ShellRule &r : kShellRules) {
+        if (r.cmd != cmd) continue;
+        switch (r.kind) {
+        case ShellKind::Read: return false;
+        case ShellKind::Control: return true;
+        case ShellKind::Ops: return !p.empty() && (p[0] >= 32 || ((r.ops >> p[0]) & 1u));
+        case ShellKind::ChargerTest:
+            return (!p.empty() && p[0] == kChargerTestStartReq && p.size() <= 2) || (p.size() == 1 && p[0] == kChargerTestCancelReq);
+        case ShellKind::Fc:   // status, the VOOC monitor read and the SVOOC status / log read; the rest drive
+            if (p.empty()) return false;
+            if (p[0] == kFcVooc) return p.size() == 3;   // [4, page, on]: switches the monitor
+            if (p[0] == kFcSvooc) return p.size() > 1 && (p[1] == kSvoocStart || p[1] == kSvoocStop);
+            return p[0] != kFcStatus;
+        }
+    }
+    return true;   // an id outside the table cannot happen (static_assert above); a stray one counts as driving
+}
 struct MatchSnapshot {
     uint8_t caps_seen = 0, request_seen = 0, sink_ok = 0, flags = 0, verdict = 0, rows = 0, want_pos = 0;
     uint16_t want_mv = 0, want_ma = 0, need_ma = 0, have_ma = 0, src_max_mv = 0, src_max_w = 0;
@@ -2717,6 +2802,7 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
     const std::span<const uint8_t> p = r.payload;
     // The idle machine wants to know before the command runs (a wake repaints, the full clock is back for the lab timing).
     if constexpr (requires { backend.request_seen(true); }) backend.request_seen(wakes_screen(cmd, p.size()));
+    if constexpr (requires { backend.shell_control_seen(); }) { if (shell_control(cmd, p)) backend.shell_control_seen(); }
     switch (cmd) {
     case Cmd::Button: case Cmd::Action: case Cmd::SetPage: case Cmd::Reboot: case Cmd::DfuEnter: case Cmd::Log:
         return detail::handle_control(cmd, p, backend, f);

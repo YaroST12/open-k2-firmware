@@ -196,6 +196,25 @@ static void test_button() {
     check_header(r, 0x02, 7, Status::Busy, 0);
 }
 
+// The "Shell access" band hook: control commands raise it, reads and an unknown id do not.
+struct ShellFake : Fake {
+    int seen = 0;
+    void shell_control_seen() { seen++; }
+};
+
+static void test_shell_control_hook() {
+    ShellFake f; Frame r;
+    run(f, request(0x01, 1, {}), r);                  // ping
+    run(f, request(0x03, 2, {}), r);                  // state
+    CHECK_EQ(f.seen, 0);
+    run(f, request(0x02, 3, {2, 100, 0}), r);         // button press
+    CHECK_EQ(f.seen, 1);
+    run(f, request(0x03, 4, {}), r);
+    CHECK_EQ(f.seen, 1);
+    run(f, request(0x02, 5, {1, 100, 0}), r);
+    CHECK_EQ(f.seen, 2);
+}
+
 static void test_state() {
     Fake f; Frame r;
     CHECK_EQ(run(f, request(0x03, 8, {}), r), 1);
@@ -4038,6 +4057,7 @@ int main() {
     test_ping_long_git_string();
     test_ping_full_version_string();
     test_button();
+    test_shell_control_hook();
     test_state();
     test_state_session_part();
     test_state_diag_part();
