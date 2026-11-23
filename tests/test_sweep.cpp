@@ -89,8 +89,8 @@ static void test_plan_total_counts_the_points_of_the_depth() {
     CHECK_EQ(sw::plan_total(caps, 36000, sw::Kind::Pps, Depth::Step100), 239u);
     CHECK_EQ(sw::plan_total(caps, 36000, sw::Kind::Pps, Depth::Step200), 40u + 81u);      // 3.3-4.9 and 5-11 V; 5-21 V every 200 mV
     CHECK_EQ(sw::plan_total(caps, 36000, sw::Kind::Pps, Depth::Step20), 382u + 801u);
-    // phone: 8-11 V on the APDO with the most current (slot 2: +120 points), 14-19 V on the only one that covers it (+200)
-    CHECK_EQ(sw::plan_total(caps, 36000, sw::Kind::Pps, Depth::Phone), 239u + 120u + 200u);
+    // phone: 6.8-11 V on the APDO with the most current (slot 2: +168 points), 14-19 V on the only one that covers it (+200)
+    CHECK_EQ(sw::plan_total(caps, 36000, sw::Kind::Pps, Depth::Phone), 239u + 168u + 200u);
     CHECK_EQ(sw::plan_total_capped(caps, 36000, 20000, sw::Kind::Pps, Depth::Step200), 121u);   // a 20 V cable still permits 21 V of PPS
     CHECK_EQ(sw::plan_total_capped(caps, 36000, 9000, sw::Kind::Pps, Depth::Step200), 30u + 21u);   // a 9 V cable: 3.3-9 V, 5-9 V
 }
@@ -529,9 +529,9 @@ static void test_depth_20_steps_every_pps_quantum_but_avs_stays_100() {
 }
 static void test_phone_depth_is_20mv_inside_the_two_windows_only() {
     const auto s = seq(plan_of(sw::Depth::Phone, sw::Kind::Pps, 3300, 21000, 36000, 3));
-    CHECK_EQ(s.size(), 498u);                    // 178 cells, 30 + 50 of them replaced by 150 + 250 twenty-mV points
+    CHECK_EQ(s.size(), 546u);                    // 178 cells, 42 + 50 of them replaced by 210 + 250 twenty-mV points
     for (size_t i = 1; i < s.size(); ++i) {
-        const bool fine = (s[i - 1] >= 8000 && s[i - 1] < 11000) || (s[i - 1] >= 14000 && s[i - 1] < 19000);
+        const bool fine = (s[i - 1] >= 6800 && s[i - 1] < 11000) || (s[i - 1] >= 14000 && s[i - 1] < 19000);
         CHECK_EQ(s[i] - s[i - 1], fine ? 20u : 100u);
     }
     // a window the APDO does not own (wins bit clear) is swept at 100 mV; AVS never has windows
@@ -540,22 +540,24 @@ static void test_phone_depth_is_20mv_inside_the_two_windows_only() {
     CHECK_EQ(seq(plan_of(sw::Depth::Phone, sw::Kind::Avs, 9000, 20000, 36000, 3)).size(), 111u);
     // the cap clips the window: 11.0 V ceiling ends inside neither
     const auto c = seq(plan_of(sw::Depth::Phone, sw::Kind::Pps, 3300, 21000, 9000, 3));
-    CHECK_EQ(c.back(), 9000u); CHECK_EQ(c.size(), 47u + 51u);   // 3.3..7.9 V (47 cells), then 8.0..9.0 V at 20 mV (51)
+    CHECK_EQ(c.back(), 9000u); CHECK_EQ(c.size(), 35u + 111u);   // 3.3..6.7 V (35 cells), then 6.8..9.0 V at 20 mV (111)
+    CHECK_EQ(c[34], 6700u); CHECK_EQ(c[35], 6800u); CHECK_EQ(c[36], 6820u);   // the first fine point is 6.8 V, the grid joins once
+    for (size_t i = 1; i < c.size(); ++i) CHECK_EQ(c[i] > c[i - 1], true);   // strictly rising: no point twice
 }
 static void test_phone_windows_go_to_the_apdo_with_the_most_current() {
     const auto small = pps_apdo(3300, 11000, 3000), big = pps_apdo(3300, 21000, 5000), mid = pps_apdo(3300, 21000, 3000);
-    // 8-11 V: both cover it, the 5 A one wins; 14-19 V: only the big one reaches
+    // 6.8-11 V: both cover it, the 5 A one wins; 14-19 V: only the big one reaches
     const auto caps = caps_with({pd::decode_pdo(0x0001912c), small, big});
     CHECK_EQ(sw::phone_wins(caps, 36000, 1), 0u);   // the fixed 5 V PDO has no window
     CHECK_EQ(sw::phone_wins(caps, 36000, 2), 0u);
     CHECK_EQ(sw::phone_wins(caps, 36000, 3), 3u);
-    // equal current: the wider overlap wins (the 21 V one covers more of 14-19 V than the 11 V one covers of 8-11 V: both fully)
+    // equal current: the wider overlap wins (the 21 V one covers more of 14-19 V than the 11 V one covers of 6.8-11 V: both fully)
     const auto tie = caps_with({small, mid});
-    CHECK_EQ(sw::phone_wins(tie, 36000, 1), 1u);    // 8-11 V: tie on current and overlap -> the first APDO
+    CHECK_EQ(sw::phone_wins(tie, 36000, 1), 1u);    // 6.8-11 V: tie on current and overlap -> the first APDO
     CHECK_EQ(sw::phone_wins(tie, 36000, 2), 2u);    // 14-19 V: only the 21 V one reaches
     // the monitor / cable cap clips what an APDO can reach: a 12 V cap leaves no 14-19 V window at all
     CHECK_EQ(sw::phone_wins(caps, 12000, 3), 1u);
-    // a partial overlap still counts (an APDO that stops at 9 V covers 1 V of the 8-11 V window)
+    // a partial overlap still counts (an APDO that stops at 9 V covers 2.2 V of the 6.8-11 V window)
     const auto part = caps_with({pps_apdo(3300, 9000, 3000)});
     CHECK_EQ(sw::phone_wins(part, 36000, 1), 1u);
 }
