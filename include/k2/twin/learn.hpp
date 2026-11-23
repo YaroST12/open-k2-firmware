@@ -37,11 +37,11 @@ inline std::array<char, kNameMax + 1> auto_name(std::uint16_t vid, std::uint32_t
     };
     if (vid == 0) {
         put("Device", kAutoVendorMax);
-    } else if (const char* vendor = pd::vendor_name(vid); std::strcmp(vendor, "Unknown") == 0) {
+    } else if (const char* vendor = pd::vendor_find(vid)) {
+        put(vendor, kAutoVendorMax);
+    } else {
         put("VID ", kAutoVendorMax);
         for (int sh = 12; sh >= 0; sh -= 4) out[n++] = "0123456789ABCDEF"[(vid >> sh) & 0xF];
-    } else {
-        put(vendor, kAutoVendorMax);
     }
     while (n > 0 && out[n - 1] == ' ') out[--n] = 0;
     if (want_w != 0) {

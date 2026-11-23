@@ -697,8 +697,8 @@ Section section_of(A a) {
 // PD-derived OEM protocols are named from the source VID only (a VID may drive a label, never
 // behaviour). 0x05C6 Qualcomm is covered by the QC4+/QC5 label itself; 0x17EF Lenovo (the C140/C135
 // slim-tip 7 A mode is not PD-visible over C-to-C), 0x03F0 HP, 0x2717/0x2B01 Xiaomi-ecosystem.
-// A separate list from report_card::brand(): that one names only usb.ids vendors for the card name, this one also maps the
-// Xiaomi-ecosystem VID 0x2B01 (Zimi/CUKTECH), which usb.ids does not list.
+// A separate list from the vendor table (pd::vendor_find, which names the card): this one maps a VID to the OEM protocol family,
+// the Xiaomi-ecosystem VID 0x2B01 (Zimi/CUKTECH) included.
 const char* vendor_oem_name(uint16_t vid) {
     switch (vid) {
     case 0x17EF: return "Lenovo";

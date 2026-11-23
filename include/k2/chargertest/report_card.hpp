@@ -335,13 +335,9 @@ uint32_t fw_hash(std::string_view text);
 constexpr bool valid_name(std::string_view n) { return emlib::name_valid(n) && n.size() <= kNameMax; }
 void set_name(Card& c, std::string_view n);
 
-// Brand of a USB-IF vendor ID, nullptr when it is not in the (short) table. Every entry is checked against the
-// linux-usb.org usb.ids list except Anker, which is not in that list; unverified IDs are left out.
-// Honor 0x339B, vivo 0x2D95 and Zimi/CUKTECH 0x2B01 are not in that list (checked against usb.ids 2026.06.26), so they stay out.
-const char* brand(uint16_t vid);
-
 // "<Brand> <PDP>W" for the card name, written to out (kNameMax + 1 bytes) and returned as its length (0 = nothing known).
-// The brand is the VID's, else the manufacturer text (only the name alphabet, trimmed), else "VID xxxx"; the
+// The brand is the VID's (pd::vendor_find), else the manufacturer text (only the name alphabet, trimmed), else "VID xxxx". A chip
+// maker's, cable maker's or shared VID gives way to the manufacturer text, which gives way to it only when it is empty. The
 // wattage suffix is left out when pdp_w is 0. The base is cut so the whole name stays within kNameMax.
 size_t auto_name(char* out, uint16_t vid, std::string_view mfr, uint8_t pdp_w);
 

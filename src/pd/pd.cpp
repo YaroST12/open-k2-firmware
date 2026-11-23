@@ -4,8 +4,10 @@
 #include "k2/pd/pd.hpp"
 
 #include <algorithm>
+#include <cstring>
 
 #include "k2/core/hot.h"
+#include "k2/pd/vendor_table.hpp"
 
 namespace k2::pd {
 
@@ -38,25 +40,24 @@ constexpr std::uint32_t le32(const std::uint8_t* p) {
 
 }  // namespace
 
-namespace {
-struct Vendor { std::uint16_t vid; const char* name; };
-constexpr std::array<Vendor, 33> kVendors{{
-    {0x05AC, "Apple"},     {0x04B4, "Cypress"},  {0x2E6B, "ChargerLAB"}, {0x0BDA, "Realtek"},
-    {0x0424, "Microchip"}, {0x2970, "Analogix"}, {0x291A, "Hynetek"},    {0x2FCF, "Injoinic"},
-    {0x31CA, "Leadtrend"}, {0x324B, "CP Power"}, {0x301E, "Gowin"},      {0x0716, "WITRN"},
-    {0x1057, "Motorola"},  {0x04E8, "Samsung"},  {0x17EF, "Lenovo"},     {0x03F0, "HP"},
-    {0x413C, "Dell"},      {0x045E, "Microsoft"}, {0x18D1, "Google"},    {0x8087, "Intel"},
-    {0x0483, "STMicro"},   {0x203A, "Parade"},   {0x1A40, "Terminus"},   {0x05E3, "Genesys"},
-    {0x0403, "FTDI"},      {0x1A86, "WCH"},      {0x24C6, "Power-Z"},    {0x1037, "Anker"},
-    {0x1FC9, "NXP"},       {0x0451, "TI"},       {0x2E22, "BizLink"},
-    {0x2109, "VIA Labs"},  {0x2095, "CE Link"},
-}};
-
-}  // namespace
+const char* vendor_find(std::uint16_t vid, bool* weak) {
+    namespace vt = vendor_table;
+    unsigned lo = 0, hi = vt::kCount;
+    while (lo < hi) {
+        const unsigned mid = (lo + hi) / 2;
+        if (vt::kVid[mid] < vid) lo = mid + 1; else hi = mid;
+    }
+    const bool hit = lo < vt::kCount && vt::kVid[lo] == vid;
+    if (weak) *weak = hit && ((vt::kWeak[lo >> 3] >> (lo & 7)) & 1) != 0;
+    if (!hit) return nullptr;
+    const char* p = vt::kPool + vt::kSkip[lo / vt::kStride];
+    for (unsigned i = lo - lo % vt::kStride; i < lo; i++) p += std::strlen(p) + 1;
+    return p;
+}
 
 const char* vendor_name(std::uint16_t vid) {
-    auto it = std::ranges::find(kVendors, vid, &Vendor::vid);
-    return it == kVendors.end() ? "Unknown" : it->name;
+    const char* n = vendor_find(vid);
+    return n ? n : "Unknown";
 }
 
 namespace {

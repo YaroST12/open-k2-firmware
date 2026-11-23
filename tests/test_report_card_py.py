@@ -108,25 +108,6 @@ def test_v9_spread_decodes_per_level():
     assert "err_mv" not in c8["ranges"][0]
     assert report_card.PAYLOAD_V9 == 214
 
-def _brand_table(src, hdr):
-    consts = dict(re.findall(r'inline constexpr uint16_t (k\w+) = 0x([0-9A-Fa-f]{4});', hdr))
-    row = re.search(r"kBrands\[\]\s*=\s*\{(.*?)\};", src, re.S)
-    assert row is not None, "could not parse report_card.cpp kBrands[]"
-    entries = re.findall(r'\{(0x[0-9A-Fa-f]{4}|k\w+),\s*"([^"]+)"\}', row.group(1))
-    assert entries, "report_card.cpp kBrands[] parsed no entries"
-    fw = {int(consts.get(v, v[2:] if v.startswith("0x") else v), 16): n for v, n in entries}
-    assert len(fw) == len(entries), "report_card.cpp kBrands[] contains duplicate vendor ids"
-    return fw
-
-
-def test_brand_table_matches_the_firmware():
-    if not (ROOT / "priv").is_dir():
-        pytest.skip("priv/ is absent; the brand guard runs in the key-enabled checkout")
-    hdr = (ROOT / "include" / "k2" / "chargertest" / "report_card.hpp").read_text()
-    src = (ROOT / "src" / "chargertest" / "report_card.cpp").read_text()
-    assert _brand_table(src, hdr) == report_card.BRANDS
-
-
 def test_group_record_packs_voltages_and_detail():
     rec = bytearray(PAYLOAD)
     q = 56 + 4 * 1                                    # QC2
@@ -294,8 +275,6 @@ def test_every_fc_fail_table_names_every_enum_value(table):
 def test_source_table_parsers_fail_loudly_on_empty_matches():
     with pytest.raises(AssertionError, match="parsed neither"):
         _cpp_string_names('const char* name(X x) { return "?"; }', "const char* name(X x)")
-    with pytest.raises(AssertionError, match="could not parse"):
-        _brand_table('const char* brand() { return nullptr; }', "")
 
 
 def test_full_20_char_name_does_not_pick_up_the_pdp_byte():

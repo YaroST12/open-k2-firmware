@@ -237,9 +237,9 @@ static void test_emarker() {
     CHECK_STR(e.speed_str, "USB 3.2 Gen1 (5G)");
 
     /* Truncated answers keep the defaults: 3 A / 20 V / 60 W, USB 2.0 */
-    uint32_t d[4] = { 0, 0x2E6Bu, 0xCAFEu, (0xBEEFu << 16) | 0x0102u };
+    uint32_t d[4] = { 0, 0x2B89u, 0xCAFEu, (0xBEEFu << 16) | 0x0102u };
     emarker(d, 4, &e);
-    CHECK_STR(e.vendor_str, "ChargerLAB");
+    CHECK_STR(e.vendor_str, "UGREEN");
     CHECK_EQ(e.pid, 0xBEEF);
     CHECK_EQ(e.hw_rev, 1);
     CHECK_EQ(e.fw_rev, 2);

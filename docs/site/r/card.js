@@ -82,9 +82,8 @@ var K2Card = (function () {
     153: "EPR offered; entry: unable now", 154: "EPR offered; entry: 5V PDO lacks EPR bit",
     155: "not unlocked (no OEM chain)", 156: "not unlocked (chain unfinished)", 157: "not unlocked (3 A cable)",
     158: "not unlocked (vendor not accepted)", 159: "not unlocked (source reset)"};
-  var BRANDS = {0x05AC: "Apple", 0x04E8: "Samsung", 0x18D1: "Google", 0x2717: "Xiaomi", 0x12D1: "Huawei", 0x17EF: "Lenovo",
-    0x413C: "Dell", 0x03F0: "HP", 0x2A70: "OnePlus", 0x22D9: "OPPO", 0x0B05: "ASUS", 0x050D: "Belkin",
-    0x22B8: "Motorola", 0x19D2: "ZTE", 0x291A: "Anker"};
+  // VID -> vendor name: vendors.js, generated from tools/vendors.csv (the firmware's table too); a script tag in the page.
+  var BRANDS = typeof K2Vendors !== "undefined" ? K2Vendors : require("./vendors.js");
   var EPR_LEVELS = ["28V", "36V", "48V"];
   var QUALCOMM_VID = 0x05C6;
   var QC5_MIN_WATTS = 100;
