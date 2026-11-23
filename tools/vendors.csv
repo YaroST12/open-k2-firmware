@@ -1,0 +1,170 @@
+# vid,name,cat,usbif,why
+# vid: USB vendor ID in hex. name: display name, at most 10 chars of A-Za-z0-9 space - _ . (the cable-name alphabet).
+# cat: brand oem tool chip cable psu shared. chip, cable, psu and shared are weak: they lose to a charger's own manufacturer string.
+# usbif: the registrant in the USB-IF Valid Vendor IDs list (2026-03-10), checked by: python3 tools/gen_vendors.py --verify <pdftotext -layout of that list>.
+vid,name,cat,usbif,why
+0x03F0,HP,oem,HP Inc.,laptops/chargers
+0x0403,FTDI,chip,Future Technology Devices International Limited,USB bridges
+0x040B,Weltrend,chip,Weltrend Semiconductor,PD controllers/e-markers
+0x0416,Nuvoton,chip,Nuvoton Technology Corp.,PD controllers
+0x0421,Nokia,oem,Nokia Corporation,phones
+0x0424,Microchip,chip,Microchip-SMSC,hub controllers
+0x042F,Molex,cable,Molex LLC,cable assembler
+0x0438,AMD,oem,Advanced Micro Devices,handhelds/boards
+0x0451,TI,chip,Texas Instruments,PD controllers/e-markers
+0x0456,Analog Dev,chip,Analog Devices Inc.,power chips
+0x045B,Renesas,chip,Renesas Electronics Corp.,PD controllers
+0x045E,Microsoft,oem,Microsoft Corporation,Surface chargers/Xbox
+0x046D,Logitech,oem,Logitech Inc.,peripherals
+0x047A,Semtech,chip,Semtech Corporation,power chips
+0x047D,Kensington,brand,Kensington,docks/chargers
+0x0483,STMicro,chip,STMicroelectronics,PD controllers
+0x0486,ASUS,oem,ASUS Computers Inc.,ASUS Computers
+0x0489,Foxconn,cable,Foxconn / Hon Hai,cable assembler
+0x04B4,Cypress,chip,Cypress Semiconductor,PD controllers/e-markers
+0x04CA,Lite-On,psu,Lite-On Technology Corp.,laptop adapters
+0x04D8,Microchip,chip,Microchip Technology Inc.,PD controllers
+0x04E8,Samsung,oem,Samsung Electronics Co. Ltd.,chargers/phones
+0x0502,Acer,oem,Acer Inc.,laptops/chargers
+0x050D,Belkin,brand,Belkin International Inc.,chargers/cables/docks
+0x054C,Sony,oem,Sony Group Corporation,consoles/phones
+0x057E,Nintendo,oem,Nintendo Co. Ltd.,Switch/dock/chargers
+0x058B,Infineon,chip,Infineon Technologies,PD controllers/e-markers
+0x058F,Alcor,chip,Alcor Micro Corp.,hub and card readers
+0x05A7,Bose,oem,Bose Corporation,headphones
+0x05AC,Apple,oem,Apple,chargers/cables/phones/laptops
+0x05AF,Sunrex,cable,Sunrex Technology Corp.,cable assembler
+0x05BE,TE Conn,cable,Tyco Electronics Corp. a TE Connectivity Ltd. company,cable assembler
+0x05C6,Qualcomm,oem,Qualcomm Inc,Quick Charge sources/phones
+0x05C8,Foxlink,cable,Foxlink/Cheng Uei Precision Industry Co. Ltd,cable assembler
+0x05DC,Lexar,oem,Lexar Media Inc.,storage
+0x05DD,Delta,psu,Delta Electronics Inc.,laptop adapters/chargers
+0x05E3,Genesys,chip,Genesys Logic Inc.,hub controllers
+0x05FF,LeCroy,tool,LeCroy Corporation,PD protocol analyzers
+0x060F,Joinsoon,cable,Joinsoon Electronics Mfg. Co. Ltd.,cable assembler
+0x067B,Prolific,chip,Prolific Technology Inc.,USB bridges
+0x06C4,BizLink,cable,Bizlink Technology Inc.,cable assembler/docks
+0x0778,Volex,cable,Volex Inc.,cable assembler
+0x0779,Fairchild,chip,Fairchild Semiconductor,PD controllers
+0x0781,SanDisk,oem,Sandisk Technologies Inc.,storage
+0x090C,SiliconMot,chip,Silicon Motion Inc. - Taiwan,storage controllers
+0x091E,Garmin,oem,Garmin International,watches/chargers
+0x0930,Toshiba,oem,Toshiba Corporation,storage
+0x0951,Kingston,oem,Kingston Technology Company,storage
+0x0955,NVIDIA,oem,NVIDIA,Shield/Jetson
+0x0B05,ASUS,oem,ASUSTek Computer Inc.,laptops/chargers
+0x0BB4,HTC,oem,HTC Corporation,phones/headsets
+0x0BC2,Seagate,oem,Seagate Technology LLC,storage
+0x0BDA,Realtek,chip,Realtek Semiconductor Corp.,hub and PD controllers
+0x0CCA,Amphenol,cable,Amphenol Corporation,cable assembler
+0x0D51,Volex,cable,Volex (Asia) Pte Ltd,Volex Asia
+0x0DA7,IOGEAR,brand,IOGEAR Inc.,docks/adapters
+0x0DB0,MSI,oem,Micro-Star International Co. Ltd.,laptops/chargers
+0x0E8D,MediaTek,oem,MediaTek Inc.,phones/SoC
+0x0FCE,Sony,oem,Sony Mobile Communications,Sony Mobile
+0x1004,LG,oem,LG Electronics Inc.,phones/monitors
+0x1038,SteelSer,oem,SteelSeries ApS,peripherals
+0x1048,Targus,brand,Targus International LLC,docks/chargers
+0x1050,Yubico,oem,Yubico AB,security keys
+0x1057,ON Semi,chip,ON Semiconductor,PD controllers
+0x1058,WD,oem,Western Digital Branded,Western Digital storage
+0x108E,Lotes,cable,Lotes Co. Ltd.,connectors
+0x10C4,Silabs,chip,Silicon Laboratories Inc.,USB bridges
+0x125F,ADATA,oem,ADATA Technology Co. Ltd.,storage/banks
+0x12D1,Huawei,oem,Huawei Technologies Co. Ltd.,chargers/phones
+0x1375,TCL,oem,TCL MOBILE COMMUNICATION CO. LTD.,phones/chargers
+0x1377,Sennheiser,oem,Sennheiser electronic SE & Co. KG,headphones
+0x137D,Diodes,chip,Diodes Incorporated,PD and switch chips
+0x13FE,Phison,chip,Phison Electronics Corp.,storage controllers
+0x14B0,StarTech,brand,StarTech.com Ltd.,cables/docks
+0x1500,Ellisys,tool,Ellisys,protocol analyzers
+0x152D,JMicron,chip,JMicron Technology Corp.,storage bridges
+0x1532,Razer,oem,Razer (Asia-Pacific) Pte Ltd.,laptops/chargers
+0x154B,PNY,oem,PNY Technologies Inc.,storage
+0x15B6,Dialog,chip,Dialog Semiconductor GmbH,charger chips
+0x1679,TotalPhase,tool,Total Phase,Beagle PD analyzers
+0x174C,ASMedia,chip,ASMedia Technology Inc.,hub and host controllers
+0x17EF,Lenovo,oem,Lenovo,laptops/chargers/docks
+0x187C,Alienware,oem,Alienware Corporation,laptops/chargers
+0x18D1,Google,oem,Google Inc.,Pixel chargers/phones
+0x1915,Nordic,chip,Nordic Semiconductor ASA,wireless SoC
+0x19D2,ZTE,oem,ZTE Corporation,phones
+0x1A40,Terminus,chip,TERMINUS TECHNOLOGY INC.,hub controllers
+0x1A86,WCH,chip,Nanjing Qinheng Microelectronics Co. Ltd.,PD and USB bridges
+0x1B1C,Corsair,oem,CORSAIR MEMORY INC.,peripherals/banks
+0x1C7B,Luxshare,cable,Shenzhen Luxshare Precision Industry Co. Ltd.,cable assembler/e-markers
+0x1D5C,Fresco,chip,Fresco Logic Inc.,host controllers
+0x1DA0,Parade,chip,Parade Technologies Inc.,PD and retimer chips
+0x1E91,OWC,brand,Other World Computing,docks/SSD enclosures
+0x1F29,Analogix,chip,Analogix Semiconductor Inc.,PD and DP chips
+0x1FC9,NXP,chip,NXP Semiconductors,PD controllers
+0x2006,Lenovo,oem,Lenovo Mobile Communication Technology Ltd.,Lenovo Mobile
+0x208E,Luxshare,cable,Luxshare-ICT,Luxshare-ICT
+0x2095,CE Link,cable,CE LINK LIMITED,e-marker cables
+0x2109,VIA Labs,chip,VIA Labs Inc.,hub and PD controllers
+0x2174,Transcend,oem,Transcend Information Inc.,storage
+0x2188,CalDigit,brand,CalDigit Inc.,docks
+0x2230,Plugable,brand,Plugable Technologies,docks/hubs
+0x22B8,Motorola,oem,Motorola Mobility Inc.,TurboPower chargers/phones
+0x22D9,OPPO,oem,GuangDong OPPO Mobile Telecommunications Corp. Ltd.,SuperVOOC chargers/phones
+0x2317,Huawei,oem,Huawei Device Co. Ltd.,Huawei Device Co
+0x2357,TP-Link,brand,TP-LINK Technologies Co. Ltd.,chargers/hubs
+0x258A,SinoWealth,chip,Sino Wealth Electronic Ltd.,PD controllers
+0x2672,GoPro,oem,GoPro,cameras
+0x2687,Fitbit,oem,FITBIT,trackers
+0x2717,Xiaomi,oem,Xiaomi Communications Co. Ltd.,chargers/banks/phones; SVID 2717 on the bench
+0x2831,PowerInt,chip,Power Integrations,AC-DC chargers chips
+0x2833,Meta,oem,Meta Platforms Technologies LLC,Quest headsets/chargers
+0x28DE,Valve,oem,Valve Corporation,Steam Deck/chargers
+0x291A,Anker,brand,Anker Innovations Limited,chargers/banks/cables; bench Anker 100W
+0x29CF,Richtek,chip,Richtek Technology Corporation,PD controllers
+0x2A45,Meizu,oem,Meizu Technology Co. Ltd.,chargers/phones
+0x2A70,OnePlus,oem,Shenzhen Oneplus Science and Technology Co. Inc.,SuperVOOC chargers/phones
+0x2A7B,Bellwether,cable,Bellwether Electronic Corp.,cable assembler
+0x2A8D,Keysight,tool,Keysight Technologies Inc.,bench instruments
+0x2ACD,Silergy,chip,Silergy Corp.,power chips
+0x2AE5,Fairphone,oem,Fairphone B.V.,phones
+0x2B01,ZMI,shared,Zimi Corporation,bench banks and chargers; CUKTECH and ZMI use it
+0x2B89,UGREEN,brand,Ugreen Group Limited,chargers/cables/docks
+0x2BD0,mophie,brand,mophie LLC,banks/chargers
+0x2BD5,CblMatters,brand,Cable Matters Inc.,Cable Matters: cables/docks
+0x2C40,Leadtrend,chip,Leadtrend,AC-DC and PD controllers
+0x2C41,Adaptertek,psu,Adaptertek Technology Co. Ltd.,adapter maker
+0x2CA3,DJI,oem,DJI Technology Co. Ltd.,drones/chargers
+0x2CC9,MPS,chip,Monolithic Power Systems Inc.,power chips
+0x2CE3,Alcorlink,chip,Alcorlink Corp.,hub controllers
+0x2CE5,AKiTiO,brand,InX8 Inc dba AKiTiO,Thunderbolt docks
+0x2D1C,Club 3D,brand,Club 3D BV,cables/docks
+0x2D4D,Razer,oem,Razer Inc,Razer Inc
+0x2D95,vivo,oem,Vivo Mobile Communication Co. Ltd.,FlashCharge chargers/phones
+0x2D9F,Sabrent,brand,Resale Trading LLC (Sabrent),hubs/enclosures
+0x2DC0,Chipsea,chip,Chipsea Technologies (Shenzhen) Corp,PD controllers
+0x2DCF,Dialog,chip,Dialog Semiconductor (UK) Ltd,Dialog Semiconductor UK
+0x2DE5,j5create,brand,KaiJet Technology International Limited Inc. dba j5create,hubs/docks
+0x2E04,HMD,oem,HMD Global Oy,Nokia phones
+0x2E26,Monoprice,brand,Monoprice Inc.,cables
+0x2E87,Injoinic,chip,Shenzhen Injoinic Technology Co. Ltd.,PD controllers; SVID 2E87 on the bench
+0x2E98,Nekteck,brand,Nekteck Inc.,chargers
+0x2E99,Hynetek,chip,Hynetek Semiconductor Co. Ltd,PD controllers
+0x2F49,Aukey,brand,Aukey Technology Co. Ltd.,chargers/banks
+0x2FE6,iSmartWare,chip,Zhuhai iSmartWare Technology Co. Ltd.,bench 65 W charger source cap ext
+0x30D1,Sunvalley,brand,Sunvalley (HK) Limited,registrant of the RAVPower line
+0x3105,Spigen,brand,Spigen Korea Co. Ltd.,chargers/cables
+0x310E,Satechi,brand,Sariana LLC (dba SATECHI),chargers/hubs
+0x311C,Southchip,chip,Southchip Semiconductor Technology (Shanghai) Co. Ltd.,PD controllers
+0x315B,Times,cable,Shenzhen Times Innovation Technology Co. Ltd,bench EPR 5 A cable e-marker
+0x315C,Convpower,chip,Chengdu Convenientpower Semiconductor Co. LTD,PD controllers
+0x32AC,Framework,oem,Framework Computer Inc,laptops/expansion cards
+0x339A,Hyper,brand,Hyper Products Inc,HyperDrive hubs/chargers
+0x339B,Honor,oem,Honor Device Co. Ltd.,chargers/phones
+0x33B2,Honor,oem,Shenzhen Honor Electronic Co. Ltd.,Shenzhen Honor Electronic
+0x33D5,Dyson,oem,Dyson Technology Ltd,appliances
+0x344E,Chipown,chip,Wuxi Chipown Microelectronics Co. Ltd,AC-DC and PD controllers
+0x34BD,Orico,brand,Shenzhen Orico Technologies Co. Ltd,chargers/hubs
+0x3559,Remax,brand,Shenzhen REMAX Technology Co. Ltd.,chargers/cables
+0x35BC,TP-Link,brand,TP-LINK INTERNATIONAL SHENZHEN CO. LTD.,second TP-Link VID
+0x3746,EcoFlow,brand,EcoFlow Inc.,power stations
+0x38D8,Sonos,oem,Sonos Inc.,speakers
+0x413C,Dell,oem,Dell Inc.,laptops/chargers/docks
+0x8086,Intel,oem,Intel Corporation,laptops/hubs
+0x8087,Intel,oem,Intel,Thunderbolt cables/wireless
