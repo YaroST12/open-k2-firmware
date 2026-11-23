@@ -42,6 +42,7 @@ import re
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -378,8 +379,11 @@ def step_64bit():
         raise GateError("unallowlisted 64-bit integer types:\n  " + (r.stderr or r.stdout).strip().replace("\n", "\n  "))
 
 
+QUICK = "--quick" in sys.argv   # make gate-quick: no sanitizers, no K2_SPECROWS host pass, no perf (prototyping only)
+
+
 def step_tests():
-    for target in ("test", "test-specrows"):   # the shipping config, then the K2_SPECROWS=1 host pass (its own host-build-rows/)
+    for target in ("test",) if QUICK else ("test", "test-specrows"):   # the shipping config, then the K2_SPECROWS=1 host pass (its own host-build-rows/)
         r = run(["make", f"-j{os.environ.get('K2_J', '4')}", "-Otarget", target])
         if r.returncode:
             raise GateError(f"make {target} failed:\n" + "\n".join((r.stdout + r.stderr).splitlines()[-25:]))
@@ -519,15 +523,20 @@ def main():
             return 1
         return 0
     steps = [s for s in STEPS if s[1] is step_perf] if "--perf-only" in sys.argv else STEPS   # make perf-check
+    if QUICK:
+        steps = [s for s in steps if s[1] not in (step_sanitize, step_perf)]
     steps = steps + ([("static analysers (report only: tidy, -fanalyzer, cppcheck)", step_static)] if "--static" in sys.argv else [])
     for i, (name, fn) in enumerate(steps, 1):
         print(f"== gate {i}/{len(steps)}: {name}", flush=True)
+        t0 = time.monotonic()
         try:
             fn()
+            print(f"  ({time.monotonic() - t0:.0f} s)", flush=True)
         except GateError as e:
             print(f"\nGATE FAILED at step {i} ({name}):\n{e}", file=sys.stderr)
             return 1
-    print("\nGATE PASSED" if "--perf-only" not in sys.argv else "\nPERF CHECK DONE")
+    print("\nPERF CHECK DONE" if "--perf-only" in sys.argv else
+          "\nQUICK GATE PASSED (not a gate: run make gate before a merge)" if QUICK else "\nGATE PASSED")
     for name, reason in SKIPPED:
         print(f"*** SKIPPED: {name}: {reason}")
     return 0

@@ -393,7 +393,7 @@ endif
 
 DOCKER_IMG = open-k2-builder:latest
 
-.PHONY: all clean flash probe reboot nav-headers docker-build docker-flash test web web-sync webhid gate smoke stack-report check-64bit
+.PHONY: all clean flash probe reboot nav-headers docker-build docker-flash test web web-sync webhid gate gate-quick smoke stack-report check-64bit
 
 all: $(BUILD_DIR)/$(TARGET).k2
 	@$(COMPDB)
@@ -842,6 +842,10 @@ docker-flash:
 # Pre-commit gate: -Werror build, invariants, map check, command ids, tests, size report.
 gate:
 	@$(PYTHON) tools/gate.py
+
+# Prototyping only: the gate without the sanitizers, the K2_SPECROWS host pass and perf. Never a substitute for make gate.
+gate-quick:
+	@$(PYTHON) tools/gate.py --quick
 
 # Pre-release flow: make gate K2_SELFTEST=1 -> flash -> make perf-check. The selftest is not in the default (shipping) image, so
 # without K2_SELFTEST=1 the perf step reports SKIPPED. The perf step of the gate only looks at the build that is on the
