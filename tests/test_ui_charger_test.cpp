@@ -6636,6 +6636,26 @@ static void test_legacy_switch_flips_the_draft_without_losing_picks() {
     uiprefs::legacy_units_shown = true; ui.charger_test_legacy_changed();
     CHECK_EQ(algos(ui), kPdMask);
 }
+// The "All tests" counter follows the switch while the page stays up (the counters are cached by what they plan from).
+static void test_legacy_switch_refreshes_the_counters() {
+    using namespace hidden_legacy;
+    fixture(); Ui ui; open(ui);
+    ct::Input in; in.cap_mv = ui.context().cap_mv;
+    unsigned n[2];
+    for (int h = 0; h < 2; ++h) {
+        ct::Options p = ct::with_level({}, ct::Level::Medium); p.selected = h ? ct::kDefaultAlgorithms & ~kLegacy : ct::kDefaultAlgorithms;
+        n[h] = ct::planned_tests(g_stub.caps, p, in);
+    }
+    CHECK_EQ(n[0] > n[1], true);   // the fixture has legacy tests to lose
+    top(ui); ui.tick(1210); settle(ui, 1210);
+    char t[8]; std::snprintf(t, sizeof t, "%u", n[0]);
+    check_text_at(kSmall, wizard_text_y(kAllRow, kDepthRow), t, kDim, kBg, kit::kTailX - text_width(kSmall, t));
+    uiprefs::legacy_units_shown = false; ui.charger_test_legacy_changed();
+    top(ui); ui.tick(1500); settle(ui, 1500);
+    std::snprintf(t, sizeof t, "%u", n[1]);
+    check_text_at(kSmall, wizard_text_y(kAllRow, kDepthRow), t, kDim, kBg, kit::kTailX - text_width(kSmall, t));
+    uiprefs::legacy_units_shown = true; ui.charger_test_legacy_changed();
+}
 static void test_explicit_legacy_units_still_run_when_hidden_and_do_not_leak() {
     using namespace hidden_legacy;
     constexpr uint8_t units[] = {uint8_t(ct::Unit::Fcp), uint8_t(ct::Unit::Scp), uint8_t(ct::Unit::Afc)};
@@ -6673,6 +6693,7 @@ int main() {
     overlap_enable();
     test_hidden_legacy_units_leave_the_tests_step();
     test_legacy_switch_flips_the_draft_without_losing_picks();
+    test_legacy_switch_refreshes_the_counters();
     test_explicit_legacy_units_still_run_when_hidden_and_do_not_leak();
     test_hidden_legacy_default_run_has_no_legacy_rows();
     test_view_says_what_the_wizard_shows();

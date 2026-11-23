@@ -1838,7 +1838,7 @@ void ChargerTestSession::update_preset_counts(const ct::Input& in) {
     const auto mix = [&key](uint32_t v) { key = (key ^ v) * 16777619u; };
     mix(uint32_t(options_.level)); mix(options_.pps_sweep); mix(options_.avs_sweep); mix(options_.spec);
     mix(in.cap_mv); mix(in.cable_mv); mix(in.cable_ma); mix(in.cable_observed); mix(in.pd.xiaomi_svid);
-    mix(in.spoof_on); mix(in.spoof_mv); mix(in.spoof_ma);
+    mix(in.spoof_on); mix(in.spoof_mv); mix(in.spoof_ma); mix(legacy_hidden());
     mix(caps.valid); mix(caps.num_pdos);
     for (size_t n = 0; caps.valid && n < std::min<size_t>(caps.num_pdos, caps.pdos.size()); ++n) mix(caps.pdos[n].raw);
     key |= 1;   // 0 is "not computed"

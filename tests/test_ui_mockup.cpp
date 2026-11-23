@@ -209,6 +209,17 @@ int main() {
     render(ui, t, "settings_display");
     ui.on_button(Button::Minus, ButtonEvent::Short, t); t += 100;   // the row above Display: Long Back, with its note
     render(ui, t, "settings_longback");
+    ui.on_button(Button::Minus, ButtonEvent::Short, t); t += 100;   // the Huawei/Samsung switch (shown here, the host default), all four rotations
+    for (uint8_t rot = 0; rot < 4; ++rot) {
+        char nm[32];
+        ui.set_rotation(rot, t); t += 200;
+        std::snprintf(nm, sizeof nm, "settings_units_rot%u", unsigned(rot)); render(ui, t, nm);
+    }
+    ui.set_rotation(rot_ct(), t); t += 200;
+    uiprefs::legacy_units_shown = false; ui.charger_test_legacy_changed();   // the fresh K2's default
+    render(ui, t, "settings_units_off");
+    uiprefs::legacy_units_shown = true; ui.charger_test_legacy_changed();
+    ui.on_button(Button::Plus, ButtonEvent::Short, t); t += 100;
     ui.on_button(Button::Plus, ButtonEvent::Short, t); t += 100;
     ui.on_button(Button::Ok, ButtonEvent::Short, t); t += 100;
     render(ui, t, "display");
@@ -228,6 +239,17 @@ int main() {
     g_stub.pm.vbus_mv = 5000; g_stub.pm.current_ma = 0; g_stub.pm.power_mw = 0;
     for (uint32_t i = 0; i < k2::pd::kInlineQuietMs / 100 + 20; ++i) { t += 100; ui.tick(t); }   // the inline latch (quiet window) and the readout filters settle
     ui.goto_page(uint8_t(Page::ChargerTest), t + 100); render(ui, t, "ct_setup");
+    uiprefs::legacy_units_shown = false; ui.charger_test_legacy_changed();   // Huawei/Samsung hidden: preset counts and the Custom list lose them
+    ui.goto_page(uint8_t(Page::Lines), t + 100); render(ui, t, "lines_again");
+    ui.goto_page(uint8_t(Page::ChargerTest), t + 100); render(ui, t, "ct_setup_hidden");
+    for (int i = 0; i < ct::kMaxSteps; ++i) ui.on_button(Button::Minus, ButtonEvent::Short, t);
+    for (int i = 0; i < 5; ++i) ui.on_button(Button::Plus, ButtonEvent::Short, t);
+    ui.on_button(Button::Ok, ButtonEvent::Short, t); t += 100;   // Custom
+    render(ui, t, "ct_custom_hidden");
+    ui.on_button(Button::Back, ButtonEvent::Short, t); t += 100;
+    uiprefs::legacy_units_shown = true; ui.charger_test_legacy_changed();
+    ui.goto_page(uint8_t(Page::Lines), t + 100); render(ui, t, "lines_again2");
+    ui.goto_page(uint8_t(Page::ChargerTest), t + 100); render(ui, t, "ct_setup_shown");
     static const uint8_t kPdOnly[] = {uint8_t(ct::Unit::Pd), uint8_t(ct::Unit::PdLow)};
     CHECK_EQ(ui.charger_test_set_units(kPdOnly), true);
     for (int i = 0; i < ct::kMaxSteps; ++i) ui.on_button(Button::Minus, ButtonEvent::Short, t);   // to the top
