@@ -1719,8 +1719,8 @@ static void test_settings_test_level_row() {
     CHECK_EQ(g_stub.prefs.ct_level, 0);   // default Medium
     ui.context().keep.settings_sel = 0;
     ui.open_place(bench::Place::K2, kT0);
-    for (int i = 0; i < SettingsPage::kDisplayRow - 2; i++) press(ui, Button::Plus, ButtonEvent::Short, kT0 + 10 + i);   // Test level sits two above Display (Long Back between)
-    CHECK_EQ(ui.context().keep.settings_sel, SettingsPage::kDisplayRow - 2);
+    for (int i = 0; i < SettingsPage::kUnitsRow - 1; i++) press(ui, Button::Plus, ButtonEvent::Short, kT0 + 10 + i);   // Test level sits right above the units switch
+    CHECK_EQ(ui.context().keep.settings_sel, SettingsPage::kUnitsRow - 1);
     CHECK_STR(label(ui, Button::Ok), "Cycle");
     const int sets = g_stub.prefs_sets;
     static constexpr uint8_t kNext[3] = {2, 1, 0};   // Deep, Light, Medium
@@ -1732,6 +1732,35 @@ static void test_settings_test_level_row() {
     }
     CHECK_EQ(g_stub.prefs_sets, sets + 3);
     press(ui, Button::Back, ButtonEvent::Short, kT0 + 90);
+}
+
+// Settings > Huawei/Samsung: FCP, SCP and AFC in the charger test. Hidden out of the box (the stored flag is off), OK flips it,
+// stores it in uiprefs and moves the live flag and the idle draft with it.
+static void test_settings_units_row() {
+    Ui &ui = fresh_ui();
+    g_stub.prefs = {};
+    CHECK_EQ(g_stub.prefs.legacy_units, false);   // default hidden
+    uiprefs::legacy_units_shown = false;
+    ui.charger_test_legacy_changed();   // what main() does after reading the stored flag
+    ui.context().keep.settings_sel = 0;
+    ui.open_place(bench::Place::K2, kT0);
+    for (int i = 0; i < SettingsPage::kUnitsRow; i++) press(ui, Button::Plus, ButtonEvent::Short, kT0 + 10 + i);
+    CHECK_EQ(ui.context().keep.settings_sel, SettingsPage::kUnitsRow);
+    CHECK_STR(label(ui, Button::Ok), "Toggle");
+    const uint32_t hidden = ui.charger_test_selection();
+    const int sets = g_stub.prefs_sets;
+    press(ui, Button::Ok, ButtonEvent::Short, kT0 + 40);
+    CHECK_EQ(g_stub.prefs.legacy_units, true);
+    CHECK_EQ(uiprefs::legacy_units_shown, true);
+    CHECK_EQ(ui.charger_test_selection() != hidden, true);   // the draft gained the three units
+    CHECK_EQ(ui.page() == Page::Settings, true);
+    press(ui, Button::Ok, ButtonEvent::Short, kT0 + 50);
+    CHECK_EQ(g_stub.prefs.legacy_units, false);
+    CHECK_EQ(uiprefs::legacy_units_shown, false);
+    CHECK_EQ(ui.charger_test_selection(), hidden);
+    CHECK_EQ(g_stub.prefs_sets, sets + 2);
+    press(ui, Button::Back, ButtonEvent::Short, kT0 + 90);
+    uiprefs::legacy_units_shown = true;
 }
 
 // Settings > Long Back: the ring position long Back jumps to. Home out of the box, OK walks the ring's nine positions and
@@ -2597,6 +2626,7 @@ int main() {
     test_log_place();
     test_k2_place();
     test_settings_test_level_row();
+    test_settings_units_row();
     test_settings_long_back_row();
     test_every_bench_act_is_a_row();
     test_debug_fake_zero_clears();

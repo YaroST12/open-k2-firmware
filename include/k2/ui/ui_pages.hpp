@@ -1323,9 +1323,10 @@ public:
     // The row count follows the build: the Screenshot row exists only with K2_SCREENSHOT=1 (the default is 0). ui_pages.cpp
     // static_asserts these against its SettingRow enum, and test_settings_rows0 pins the K2_SCREENSHOT=0 values.
     static constexpr int kScreenshotRows = K2_SCREENSHOT ? 1 : 0;
-    static constexpr int kRows = 11 + kScreenshotRows;
-    static constexpr int kDisplayRow = 7 + kScreenshotRows;
-    static constexpr int kSystemRow = 8 + kScreenshotRows, kMemoryRow = 9 + kScreenshotRows, kBootRow = 10 + kScreenshotRows;
+    static constexpr int kRows = 12 + kScreenshotRows;
+    static constexpr int kUnitsRow = 6 + kScreenshotRows;   // Huawei/Samsung: FCP, SCP, AFC in the charger test
+    static constexpr int kDisplayRow = 8 + kScreenshotRows;
+    static constexpr int kSystemRow = 9 + kScreenshotRows, kMemoryRow = 10 + kScreenshotRows, kBootRow = 11 + kScreenshotRows;
     static constexpr int16_t kIdHeadY = 3, kIdLineY = 24, kIdDashY = 41, kListY = 44;   // identity y0..43, the list under it
 private:
     static void row_fn(void *ctx, int index, bool focused, kit::RowSpec &out);   // reads the live settings: no value cache
