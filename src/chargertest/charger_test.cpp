@@ -2231,13 +2231,16 @@ void Runner::begin_detach(const Input& in) {
         if (ending_) { ending_ = false; next(in); } else begin_attach(in);
         return;
     }
-    state_ = State::Detach; att_ms_ = in.now; dark_ = dipped_ = stable_ = false;
+    state_ = State::Detach; att_ms_ = in.now; dark_ = dipped_ = sagged_ = stable_ = false;
     attached_ = legacy_active_ = false;
     env_.detach();
 }
 void Runner::poll_detach(const Input& in) {
     if (in.vbus_mv < pd::kVSafe0Mv) { dipped_ = true; if (!dark_) { dark_ = true; dark_ms_ = in.now; } } else dark_ = false;
-    const uint32_t limit = never_dark_ ? kDetachQuickMs : kDetachDarkMs;
+    if (!safe5(in.vbus_mv)) sagged_ = true;
+    // No list ever heard and VBUS never left 5 V: an always-on port (A-to-C cable, Rp present), not a charger that is slow to drop.
+    const bool always_on = !sagged_ && !evidence_.num_pdos;
+    const uint32_t limit = never_dark_ || always_on ? kDetachQuickMs : kDetachDarkMs;
     if (!((dark_ && in.now - dark_ms_ >= kDetachDarkHoldMs) || in.now - att_ms_ >= limit)) return;
     if (!dipped_) never_dark_ = true;   // a source that kept its output up (a USB-A port has no CC): later detaches do not wait long
     detached_ = true; hot_ = false;
@@ -2264,12 +2267,16 @@ void Runner::begin_attach(const Input& in) {
 // A PDO 1 contract whose PS_RDY was seen during the wait (contract_wrong_, latched in poll_attach) with VBUS outside vSafe5V
 // fails WrongVoltage instead (pattern shared-bus-split), with the highest VBUS seen during the wait, not the reading at the timeout.
 void Runner::fail_unit(const Input& in, const pd::SourceCaps& caps, Reason reason, int measured_mv) {
+    // A source that never listed PD has nothing to re-attach to: the rows that are still pending (the Xiaomi chain row, which the
+    // re-plan keeps) skip like the planned ones instead of failing "no PD after re-attach" (A-port, 2026-11-23).
+    const bool no_pd = reason == Reason::NoReattach && !caps.valid && !evidence_.num_pdos;
     if (late_pd_ && !caps.valid && !evidence_.num_pdos) replan_pd(caps, in, true);   // no PD source at all: the plan says NoOffer
     const int measured = reason == Reason::WrongVoltage ? std::max(attach_max_mv_, 0)
                                                         : (measured_mv >= 0 ? measured_mv : in.vbus_mv);   // -1 default: the live reading
     for (auto& s : std::span<Step>(steps_.data(), count_)) {
         if (s.verdict != Verdict::Pending || unit_of(s) != unit_) continue;
-        s.verdict = Verdict::Fail; s.reason = reason;
+        s.verdict = no_pd ? Verdict::Skip : Verdict::Fail;
+        s.reason = !no_pd ? reason : in.self_powered && in.pd_seen_attach ? Reason::PdGaveUp : Reason::NoOffer;
         s.measured_mv = static_cast<uint16_t>(std::clamp(measured, 0, 65535)); env_.record(s);
     }
     ending_ = true; begin_detach(in);

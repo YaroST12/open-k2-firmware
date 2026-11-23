@@ -117,6 +117,15 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
   skip. `ct_start.py` then died reading the summary: `FrameError: charger-test row contradicts negotiated wire revision`
   (`k2_remote.py:1627`). The legacy units themselves were right: FCP 9/12 V, AFC 9/12 V, QC2 5/9/12 V, QC3 5-12-5 V,
   QC3B 5/12 V pass; SCP 10 V / 4.5 V "acked, no change"; VOOC, VIVO, UFCS, QC3+ no reply.
+  **Fixed on host, not verified on hardware** (k2/ct-legacy-only; seen again 2026-11-23, 1.2.0-116, USB-A port, A-to-C cable,
+  `runs/ct-usba-2026-11-23/rec1/`, row 22): the Xiaomi chain row stayed Pending through the no-caps re-plan and failed
+  NoReattach; it now skips "no offer" with the other PD rows. `decode_charger_test` reports a ran-row/wire contradiction as a
+  `warnings` entry instead of raising (the JS decoder, `tools/web/k2proto.js` and `k2.html`, still raises). Verify: a legacy-only
+  run on a USB-A port ends with no PD row red, and `ct_start.py` reads the summary.
+- **The first unit detach waits 10 s on a USB-A port** (2026-11-23, same run: later detaches took ~1.5 s). Fixed on host, not
+  verified on hardware: with no source list ever heard and VBUS at 5 V at every sample of the detach, the first detach uses
+  `kDetachQuickMs` too (host 2.1 s from START, was at least 10 s). Verify: A-port run, the first Rd off to attach about 1.5 s;
+  a C charger without PD that drops VBUS slowly still waits (a drop later than 1.5 s with no sample off 5 V would be missed).
 
 - **Back-to-back screenshots stall a charger-test run** (2026-11-21, 1.1.0-217-53dee143, Baseus 140 W). With
   `k2_remote.py screenshot` every ~0.65 s (each ~450 ms on the device) a Medium run sat after `Verify 5V` for ~7 min and
