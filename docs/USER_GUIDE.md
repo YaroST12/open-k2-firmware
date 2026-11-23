@@ -445,6 +445,7 @@ One screen for the three parties on the two ports: **Source** (charger), **Cable
 - **+ / -** (labels Tab+ and Tab-) switch tabs. OK opens the **Actions** pop-up. Long OK shares the Source caps or the Cable record as a QR code.
 - The tab it opens on: Sink if a live device is inline, else Source if a charger is seen, else Cable if a cable is held, else Source.
 - The **status bar** says "Charger / No charger", "Cable read / No cable", "Device inline / No device", with ", top plug" or ", via cable" when the CC lines show which. When a spoof is armed and a charger is already attached it says "Armed, replug to apply".
+- **On attach** the K2 asks the charger for its identity, vendor name, modes and extended capabilities by itself, once, when it holds the contract and nothing else uses the link. The status bar shows "Reading charger 3/5", then "Read: 4 got, 1 unsupported". Load current or another device's request stops it; the rows then say "Inline: blocked". Rows never asked read "Not asked", and the bar says "Not asked: Reset & re-read". Reset & re-read asks everything again.
 - Empty states: CHARGER WAITING (a charger is attached but waiting for a sink), NO CHARGER, NO DEVICE, NO CABLE, CABLE NOT READ, NO CABLE READ, each with a hint.
 - Vendor PD protocols are named from the partner's SVIDs: Xiaomi PD, OPPO PD, Huawei PD, Vivo PD, Cuktech PD, UFCS.
 

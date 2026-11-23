@@ -463,9 +463,10 @@ else advertised ones amber, `-` for none. Home keeps the combined `usblink::form
 
 ### 4.2 Other pages: key decisions
 - **Who's attached.** The offers-versus-request comparison, the e-marker reader and Identify are tabs and actions of
-  the Who's attached page (4.0.1, 5.1); there is no separate PD, Match or protocol-reader page. The page is passive:
-  it only reads what the PD engine has decoded and transmits only from an action (Refresh, Read cable, Identify),
-  never while it is merely open.
+  the Who's attached page (4.0.1, 5.1); there is no separate PD, Match or protocol-reader page. The page reads
+  what the PD engine has decoded and transmits only from an action (Refresh, Read cable, Identify), except the one
+  auto read of the charger once per attach (only when the K2 owns the contract, stopped at once by load current or a
+  foreign Request).
 - **Diag.** Grouped cards with accent colours and status dots. Compact counter pairs use their own
   wide value column, while the other values remain aligned.
 - **Lines.**

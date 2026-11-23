@@ -1163,7 +1163,8 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
   - Validate: the plan names every `kSysclkHz` user (a `git grep kSysclkHz` count matches the list) and the USB clock
     option chosen, with the draw at 48/72/96/120 MHz to be measured when implemented.
 
-- **Who's attached: one survey owner, run on Refresh** (decided 2026-11-09: active queries only on Refresh).
+- **Who's attached: one survey owner, run on Refresh** (decided 2026-11-09: active queries only on Refresh; since 2026-11-23 one
+  exception, the attach's auto read, see Status).
   - Today (mapped on be58a25): the page (`src/ui/ui_connection_page.cpp`) only shows what passes on the wire. Nothing
     it runs sends a source Discover Identity (only Identify, the lab `pd-reread` and the charger test's probe do);
     `ext()` (Manufacturer_Info, Source_Cap_Extended), `epr_info_list()`, Discover Modes and the cable's SVIDs/modes
@@ -1198,6 +1199,18 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
     proactive Discover SVIDs (`pd_sink.cpp`, default ON) stays, the one exception to "attach stays passive": it starts the
     Xiaomi 0x2717 chain that unlocks 6 A offers without a Refresh. Open: the Cable field is a check of the sniffed
     e-marker, not a VCONN read.
+  - **Auto read on attach** (2026-11-23, branch `k2/auto-read`, **built, not verified on hardware**): once per attach,
+    800 ms after Ready, only when the K2 owns the contract (it sent the Request; sink Ready, caps held this attach, no Xiaomi
+    chain pending) and `Ui::auto_read_block()` is clear (no inline latch, tool, spoof, Ra mode, legacy or identify run). It
+    runs the survey's Wire and EPR steps: Discover Identity, SVIDs, Modes, Source_Cap_Extended and Manufacturer_Info (PD 3),
+    EPR_Get_Source_Cap in SPR mode. No Get_Source_Cap, no cable read, no reset, no EPR entry, VBUS never moves. The Charger
+    tab shows `Reading charger n/m`, then `Read: ...`. Load current or a foreign Request (inline latch) or a tool starting
+    stops it at once; the rest reads `Inline: blocked` / `Charger test`. A skipped attach (passive link, tool, inline at the
+    first Ready) keeps `Not asked` and the hint `Not asked: Reset & re-read`. A read cut by a session change blocks the next
+    attach's auto read for 5 s (loop guard for a charger that resets on the questions; its behaviour is unverified).
+    Pure `pd::AutoRead` (`test_pd_survey`), glue `core/survey.cpp`. Validate on hardware: plug a PD charger (K2 owns the
+    contract): the Charger tab fills and shows the vendor, one pass per attach; plug a load behind it (inline) and confirm the
+    read stops; a charger test or Reset & re-read mid-read still starts; no VBUS dip in the black box.
 
 - **Ripple: calibrate PA1, then show it** (the capture works; its scale is unknown).
   - Seen on hardware (2026-11-09, HID power only, no charger, `runs/2026-11-09-ripple/`): `k2_remote ripple` returns
