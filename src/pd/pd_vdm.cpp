@@ -37,14 +37,10 @@ constexpr std::uint32_t le32(const std::uint8_t* p) {
 
 struct Named { std::uint16_t id; const char* name; };
 
-// SVIDs of phone/PC vendors and charging protocols, for labels; 0x5FC9 is the UFCS SVID.
-constexpr std::array<Named, 22> kSvids{{
-    {0x2717, "Xiaomi"},  {0x12D1, "Huawei"},  {0x22D9, "OPPO"},    {0x2D95, "Vivo"},
-    {0x17EF, "Lenovo"},  {0x22B8, "Motorola"}, {0x04E8, "Samsung"}, {0x18D1, "Google"},
-    {0x413C, "Dell"},    {0x03F0, "HP"},      {0x0B05, "ASUS"},    {0x0489, "Foxconn"},
-    {0x05AC, "Apple"},   {0x8086, "Intel"},   {0x8087, "Intel/TB"}, {0xFF00, "PD SID"},
-    {0xFF01, "DisplayPort"}, {0x2E87, "Cuktech"}, {0x291A, "Anker"}, {0x2B89, "Baseus"},
-    {0x2B16, "UGREEN"},  {0x5FC9, "UFCS"},
+// SVIDs that are protocol IDs, not a company's VID (0x5FC9 is the UFCS SVID); every vendor VID is named by
+// vendor_name() from the one USB-IF-verified table.
+constexpr std::array<Named, 4> kSvids{{
+    {0x8087, "Intel/TB"}, {0xFF00, "PD SID"}, {0xFF01, "DisplayPort"}, {0x5FC9, "UFCS"},
 }};
 
 constexpr std::array<Named, 44> kApple{{

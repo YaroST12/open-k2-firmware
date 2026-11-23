@@ -40,13 +40,16 @@ static void test_names() {
     CHECK_STR(svid_name(0x2717), "Xiaomi");
     CHECK_STR(svid_name(0x12D1), "Huawei");
     CHECK_STR(svid_name(0x22D9), "OPPO");
-    CHECK_STR(svid_name(0x2D95), "Vivo");
+    CHECK_STR(svid_name(0x2D95), "vivo");
     CHECK_STR(svid_name(0x05AC), "Apple");
     CHECK_STR(svid_name(0xFF00), "PD SID");
     CHECK_STR(svid_name(0xFF01), "DisplayPort");
-    CHECK_STR(svid_name(0x2E87), "Cuktech");
-    CHECK_STR(svid_name(0x2B16), "UGREEN");
+    CHECK_STR(svid_name(0x8087), "Intel/TB");   // a protocol SVID, not the vendor table's "Intel"
     CHECK_STR(svid_name(0x5FC9), "UFCS");
+    CHECK_STR(svid_name(0x2E87), "Injoinic");   // the USB-IF owner; no longer the old hand-written "Cuktech"
+    CHECK_STR(svid_name(0x2B89), "UGREEN");
+    CHECK_STR(svid_name(0x291A), "Anker");
+    CHECK_STR(svid_name(0x2B01), "CUKTECH");
     CHECK_STR(svid_name(0x0451), "TI");       // falls back to the cable-vendor table
     CHECK_STR(svid_name(0x1234), "Unknown");
     CHECK_STR(vendor_name(0x2109), "VIA Labs");
