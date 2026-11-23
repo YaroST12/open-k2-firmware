@@ -8990,8 +8990,8 @@ static void test_level_maps_to_the_run_switches() {
     CHECK_STR(ct::name(ct::Level::Light), "Light"); CHECK_STR(ct::name(ct::Level::Medium), "Medium"); CHECK_STR(ct::name(ct::Level::Deep), "Deep");
     CHECK_STR(ct::name(ct::Reason::Advertised), "advertised");
 }
-// The plan per level on one source: Light < Medium < Deep in rows that run and in time; Light runs the 5 V row and lists every
-// other PDO / APDO once as Advertised (no hunts, no step walk, no full-current rows, no PdLow unit).
+// The plan per level on one source: Light < Medium < Deep in rows that run and in time; Light lists every PDO / APDO once as
+// Advertised, the 5 V one too (no PD Request row, no hunts, no step walk, no full-current rows, no PdLow unit).
 static void test_level_plans_per_level() {
     Fake f; f.caps = level_caps();
     const auto pv = [&](ct::Level l) { return ct::Runner::preview(f.caps, ct::with_level({}, l), f.in); };
@@ -9010,16 +9010,56 @@ static void test_level_plans_per_level() {
     for (const auto& s : r.steps()) {
         CHECK_EQ(int(ct::unit_of(s)), int(ct::Unit::Pd));   // Light plans no PdLow rows
         if (ct::is_mi_chain(s)) continue;                    // the Xiaomi chain row: Light keeps it (it sends nothing)
-        if (s.verdict == ct::Verdict::Pending) { ++pending; CHECK_EQ(s.pos, 1); CHECK_EQ(s.mv, 5000); }
+        if (s.verdict == ct::Verdict::Pending) ++pending;
         if (s.reason == ct::Reason::Advertised && s.pos < 8) ++advertised[s.pos];
         CHECK_EQ(s.hunt, false);
         CHECK_EQ(ct::is_step_walk(s) || ct::is_sweep(s), false);
     }
-    CHECK_EQ(pending, 1u);
-    for (unsigned pos = 2; pos <= 7; ++pos) CHECK_EQ(advertised[pos], 1u);
+    CHECK_EQ(pending, 0u);   // no PD row is asked: not even the 5 V one
+    for (unsigned pos = 1; pos <= 7; ++pos) CHECK_EQ(advertised[pos], 1u);
     // the advertised row names its whole offer: the fixed level, or the APDO's top
-    for (const auto& s : r.steps()) if (s.reason == ct::Reason::Advertised && s.pos >= 2 && s.pos <= 7)
+    for (const auto& s : r.steps()) if (s.reason == ct::Reason::Advertised && s.pos >= 1 && s.pos <= 7)
         CHECK_EQ(s.mv, f.caps.pdos[s.pos - 1].max_mv);
+}
+// A Light run of the PD unit alone asks the source nothing: the list in hand is the answer. No Request, no EPR ask when PDO 1 has
+// no EPR bit (the unit's attach is the Xiaomi chain row's, which sends nothing); the AVS APDO is one listed row; the card's PD group still reads as a pass (it lists what is offered).
+static void test_light_pd_only_run_asks_nothing() {
+    Fake f; f.caps = level_caps(); f.in.pd.state = pd::SinkState::Ready; f.in.pd.mv = 5000;
+    ct::Runner r(f);
+    CHECK_EQ(r.start(f.caps, ct::with_level(with_units(ct::kDefaultAlgorithms, {ct::Unit::Pd}), ct::Level::Light), f.in, true), ct::Reason::None);
+    f.tick(r, 60000);
+    CHECK_EQ(int(r.state()), int(ct::State::Done));
+    CHECK_EQ(f.choices.size(), size_t(0)); CHECK_EQ(f.pd_requests, 0); CHECK_EQ(f.entry_times.size(), size_t(0));
+    CHECK_EQ(f.info_asks, 0);
+    unsigned listed = 0; bool avs = false;
+    for (const auto& s : r.steps()) {
+        if (s.group != ct::Group::Pd || ct::is_mi_chain(s)) continue;
+        CHECK_EQ(int(s.verdict), int(ct::Verdict::Skip));
+        if (s.reason == ct::Reason::Advertised) ++listed;
+        avs |= s.algorithm == A::SprAvs && s.reason == ct::Reason::Advertised;
+    }
+    CHECK_EQ(listed >= 7, true);
+    CHECK_EQ(avs, true);
+    // the Review's preview still counts the caps listing as the run: START is not "nothing to run"
+    const auto pv = ct::Runner::preview(f.caps, ct::with_level(with_units(ct::kDefaultAlgorithms, {ct::Unit::Pd}), ct::Level::Light), f.in);
+    CHECK_EQ(pv.runnable, 1); CHECK_EQ(pv.max_mv, 0);
+}
+// EPR caps are asked only of a source whose PDO 1 carries the EPR bit; one without it gets no ask and no EPR rows.
+static void test_light_asks_epr_caps_only_when_pdo1_is_epr_capable() {
+    for (const bool capable : {false, true}) {
+        Fake f = capable ? epr_capable_fake() : Fake();
+        f.info_mode = 1;
+        ct::Runner r(f);
+        CHECK_EQ(r.start(f.caps, ct::with_level({.selected = ct::bit(A::Epr) | ct::bit(A::EprAvs) | ct::bit(A::SprAvs)}, ct::Level::Light), f.in, true),
+                 ct::Reason::None);
+        f.tick(r, 90000);
+        CHECK_EQ(int(r.state()), int(ct::State::Done));
+        CHECK_EQ(f.info_asks, capable ? 1 : 0);
+        CHECK_EQ(f.choices.size(), size_t(0)); CHECK_EQ(f.entry_times.size(), size_t(0)); CHECK_EQ(f.pd_requests, 0);
+        unsigned epr_rows = 0;
+        for (const auto& s : r.steps()) epr_rows += (s.algorithm == A::Epr || s.algorithm == A::EprAvs) && s.reason == ct::Reason::Advertised;
+        CHECK_EQ(epr_rows >= 3, capable);
+    }
 }
 // The whole Light run, every unit, against a source that also lists a UFCS mode set and grows its list mid-run: the Fake's
 // recorded requests show nothing above or below 5 V, no EPR entry, no hunt. EPR-capable twice: with an EPR cable and without.
@@ -9037,10 +9077,8 @@ static void test_light_run_requests_nothing_but_5v() {
         CHECK_EQ(r.start(f.caps, ct::with_level({}, ct::Level::Light), f.in, true), ct::Reason::None);
         CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done || r.state() == ct::State::Stopped; }, 900000), true);
         CHECK_EQ(int(r.state()), int(ct::State::Done));
-        bool pd5 = false;
-        for (const auto& s : r.steps()) pd5 |= s.group == ct::Group::Pd && s.pos == 1 && s.verdict == ct::Verdict::Pass;
-        CHECK_EQ(pd5, true);   // the 5 V row ran
-        for (const auto& c : f.choices) { CHECK_EQ(c.pos, 1); CHECK_EQ(c.mv, 5000); CHECK_EQ(c.hunt, false); }
+        for (const auto& s : r.steps()) CHECK_EQ(s.group == ct::Group::Pd && s.verdict == ct::Verdict::Pass, false);   // no PD row ran
+        CHECK_EQ(f.choices.size(), size_t(0)); CHECK_EQ(f.pd_requests, 0);   // the 5 V PDO is not asked either
         for (const int mv : f.fc_mvs) CHECK_EQ(mv, 5000);
         CHECK_EQ(f.entry_times.size(), size_t(0));
         unsigned ufcs_adv = 0;
@@ -9823,6 +9861,7 @@ int main() {
     test_scp_ack_without_voltage_ends_early_and_skips_the_raises(); test_scp_no_change_without_restart_does_not_wait();
     test_level_maps_to_the_run_switches(); test_level_plans_per_level(); test_step_walk_is_planned_only_in_deep(); test_prog_check_flags_a_passing_programmable_row(); test_prog_check_clean_capture_changes_nothing();
     test_prog_check_without_a_capture_asks_nothing_more(); test_prog_check_follows_the_sweep_switches(); test_light_run_requests_nothing_but_5v(); test_light_lists_the_epr_levels_as_advertised();
+    test_light_pd_only_run_asks_nothing(); test_light_asks_epr_caps_only_when_pdo1_is_epr_capable();
     test_epr_spoof_identity_tests_epr_and_avs(); test_epr_capable_list_never_gives_epr_rows_not_offered(); test_epr_spoof_identity_at_light_makes_no_requests();
     test_a_resumed_light_run_stays_light();
     test_the_page_names_the_run_level();

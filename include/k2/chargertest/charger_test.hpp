@@ -319,9 +319,10 @@ struct Options {
     bool contains(Algorithm a) const { return selected & bit(a); }
 };
 // The one place a level maps to the run's switches (user decision 2026-11-15):
-//   Light  - VBUS stays at 5 V: the PD 5 V row, the 5 V handshake of each legacy protocol, the source's own list recorded as
-//            Advertised rows (Reason::Advertised); no Request above or below 5 V, no EPR entry (its levels are read in SPR mode),
-//            no sweeps, no SVOOC ceiling, no PdLow unit.
+//   Light  - VBUS stays at 5 V. The PD part only asks for what the source offers: no PD Request at all (not even the 5 V one),
+//            every PDO / APDO (5 V too) recorded as an Advertised row, the EPR levels read in SPR mode with one EPR_Get_Source_Cap
+//            (only when PDO 1 is EPR-capable; never an EPR entry). The legacy units keep their 5 V handshake row ("speaks it" /
+//            "no reply"); no sweeps, no SVOOC ceiling, no PdLow unit.
 //   Medium - the fixed levels, the PPS / AVS points, the legacy level steps; no deep sweeps, no SVOOC ceiling.
 //   Deep   - Medium plus the PPS and AVS deep sweeps over every APDO, the SVOOC ceiling stage and the PD spec stage (no-load
 //            conformance of the transitions and the PPS / AVS moves, one more section of the results).

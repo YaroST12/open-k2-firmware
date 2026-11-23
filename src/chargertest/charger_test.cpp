@@ -533,11 +533,12 @@ private:
 };
 // The rows of one unit, in plan order. Pd and PdLow share the PD plan: the low programmable rows (below 5 V) are the PdLow unit.
 void plan_unit(Unit unit, const pd::SourceCaps& caps, Options o, const Input& in, AddRef out) {
-    // Light (Options::level, with_level): VBUS stays at 5 V. The PD 5 V row and each legacy unit's first 5 V row (its handshake)
-    // run; every other offer the source lists is one Advertised row naming the whole offer (a PDO / APDO by its top, a UFCS mode by
-    // its top, an SCP level inside the limits the adapter reported); a legacy level nothing advertises, and a protocol only told
-    // apart above 5 V (AFC, QC3+, QC Class B), is a LightLevel skip. No hunts, walks, sweeps or full-current rows (one row per
-    // offer). Rows that already carry a reason (not offered, over the monitor, the cable) keep it.
+    // Light (Options::level, with_level): VBUS stays at 5 V. The PD plan asks nothing: every PDO / APDO the source lists (the 5 V
+    // one too) is one Advertised row naming the whole offer (by its top), read from the list in hand. Each legacy unit's first
+    // 5 V row (its handshake) runs; every other offer is one Advertised row (a UFCS mode by its top, an SCP level inside the limits
+    // the adapter reported); a legacy level nothing advertises, and a protocol only told apart above 5 V (AFC, QC3+, QC Class B),
+    // is a LightLevel skip. No hunts, walks, sweeps or full-current rows (one row per offer). Rows that already carry a reason
+    // (not offered, over the monitor, the cable) keep it.
     const bool light = o.level == Level::Light;
     bool light_open = false;                                  // the unit's 5 V handshake row is planned
     uint8_t light_pos = 0; Algorithm light_alg = Algorithm::Count; uint32_t light_pdo = 0;   // the offer the last row named
@@ -549,7 +550,7 @@ void plan_unit(Unit unit, const pd::SourceCaps& caps, Options o, const Input& in
             light_alg = s.algorithm; light_pos = s.pos;
             if (same) return;
             if (s.detail == kDetailEprOffered) { s.reason = Reason::Advertised; s.detail = 0; }   // listed in SPR mode, never entered
-            else if (s.verdict == Verdict::Pending && !(s.pos == 1 && s.mv == 5000 && !s.hunt)) {
+            else if (s.verdict == Verdict::Pending) {
                 const auto p = pd::decode_pdo(s.pdo);
                 s.verdict = Verdict::Skip; s.reason = Reason::Advertised; s.mv = p.max_mv; s.ma = p.max_ma;
                 s.continuous = s.hunt = false; s.detail = 0;
@@ -962,6 +963,12 @@ Summary Runner::preview(const pd::SourceCaps& caps, Options o, Input in) {
         }
     };
     plan_units(caps, o, in, units, count);
+    if (o.level == Level::Light && has_unit(units, Unit::Pd) && out.total < kMaxSteps) {
+        // Light asks the PD source nothing but its capabilities: the list in hand (and the EPR levels of an EPR-capable PDO 1, asked
+        // once in SPR mode) is one test, riding the Pd unit's attach (the Xiaomi chain row's, which sends nothing).
+        ++out.runnable; ++out.total;
+        out.estimate_ms += 5000;
+    }
     if (spec_planned(o, units)) {
         out.spec_checks = static_cast<uint8_t>(specsec::kCells);
         out.estimate_ms += specsec::estimate_ms(pdspec::scan(caps, in.cap_mv, false), o.pps_sweep, o.avs_sweep);
@@ -1445,8 +1452,8 @@ void Runner::request(const Input& in) {
     const auto limit = limit_reason(s.mv, in, s.algorithm);
     // A PD row above 5 A (a 6.25 A APDO's full-current row, a Xiaomi 6 A mode) needs a cable vouched for above 5 A.
     const bool over5 = s.group == Group::Pd && s.ma > 5000 && over5_cable_ma(in) <= 5000;
-    // Light: the backstop behind the planner. Whatever a replan left in the plan, nothing but 5 V (PDO 1, a legacy 5 V row) goes out.
-    const bool light = opts_.level == Level::Light && (s.mv != 5000 || (s.group == Group::Pd && (s.pos != 1 || s.hunt)));
+    // Light: the backstop behind the planner. Whatever a replan left in the plan, no PD Request goes out and a legacy row asks at 5 V only.
+    const bool light = opts_.level == Level::Light && (s.group == Group::Pd || s.mv != 5000);
     if (light || limit != Reason::None || over5 || ((s.algorithm == Algorithm::Epr || s.algorithm == Algorithm::EprAvs) && !epr_cable(in))) {
         s.verdict = Verdict::Skip;
         s.reason = light ? (s.group == Group::Pd ? Reason::Advertised : Reason::LightLevel) : limit == Reason::None ? Reason::CableLimit : limit;
