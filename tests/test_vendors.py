@@ -18,7 +18,7 @@ class Table(unittest.TestCase):
 
     def test_size(self):
         self.assertGreaterEqual(len(self.rows), 150)
-        self.assertLessEqual(len(self.rows), 200)
+        self.assertLessEqual(len(self.rows), 300)
 
     def test_rules(self):
         seen = set()
@@ -43,6 +43,14 @@ class Table(unittest.TestCase):
             with open(path, encoding="utf-8") as f:
                 self.assertEqual(f.read(), text, "stale %s: run python3 tools/gen_vendors.py" % os.path.basename(path))
         self.assertEqual(gen_vendors.main(["--check"]), 0)
+
+    def test_cable_makers(self):
+        by = {r.vid: r for r in self.rows}
+        self.assertEqual(by[0x2CA1].name, "Veetone")
+        self.assertTrue(by[0x2CA1].weak)
+        self.assertEqual({by[v].name for v in (0x0DBF, 0x0766, 0x062E)}, {"JPC"})   # one company, three VIDs, one name
+        self.assertEqual(by[0x3271].cat, "psu")
+        self.assertFalse(by[0x2943].weak)
 
     def test_card_tool_uses_the_table(self):
         import report_card

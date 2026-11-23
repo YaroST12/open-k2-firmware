@@ -87,7 +87,9 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
 
 - **Vendor database follow-ups** (2026-11-23): VID 0x0716 (this K2's own, Oxus Research on the USB-IF list) is left unlabeled;
   `rl::vendor_oem_name` is a separate table. Done: cable names are "<Brand> <W>W" (c23154ac), SVID names come from the one table
-  (5f5f3f8c), 0x2B01 reads CUKTECH (USB-IF: Zimi Corporation, c245aa82).
+  (5f5f3f8c), 0x2B01 reads CUKTECH (USB-IF: Zimi Corporation, c245aa82). 106 Asian cable makers, connector and wire
+  houses added (k2/cable-vids). Check on hardware: the cable with ID header VID 0x2CA1 must read "Veetone" and
+  auto-name "Veetone <W>W". SVID 0x8087 on a cable with VID 0000 is Thunderbolt mode support, not a maker (SVID table).
 
 - **USB 3.2 Gen 2x1 (10 Gbps) / USB4 pass-through cold-attach failure — hardware limit, not firmware** (2026-11-22,
   AMD USB4 `0000:c5:00.3` / `Bus 005` + `Bus 006`, 5 cm cable + Samsung PSSD T7 `04e8:4001`, plus ASMedia `246x` /
@@ -1438,7 +1440,7 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
 | Test levels: Light (what is advertised, VBUS stays at 5 V), Medium (default, no deep sweeps), Deep (+ PPS and AVS deep sweeps); Review Level row, Settings > Test level, `charger-level` (0x5B), `ct_start.py --level`, level on the card and in the QR record; the Noted verdict for what a Light run did not measure | done | not verified | `chargertest`, `ui_charger_test`, `kit` |
 | Idle power: backlight PWM (PB7), Active -> Dim -> Off with VBUS stopping at Dim, panel sleep, low AHB clock in Off, Settings > Display, remote 0x37 (`k2_remote.py power`) | done, host-tested (`test_idle`, `test_idle_cfg`, `test_ui_display`) | not verified. Validate: a brightness step changes the K2's own draw on the meter (PB7 timer mapping is inferred); Off with nothing attached falls well under the warm 0.52 W; USB and `k2_remote` still answer after the low clock; the wake press does nothing else | `idle`, `idle_cfg`, `idle_hw`, `lcd`, `crm`, `ui_display` |
 | A Legacy row waits through a source output restart (up to 10 s) instead of failing it | done | not verified | `chargertest` |
-| Vendor database: 165 USB-IF-verified VIDs (`tools/vendors.csv`, brand names only, no PIDs) feed one packed table (`pd::vendor_find`/`vendor_name`, `vendor_table.hpp`), the report-card auto name ("Anker 100W"), cable e-marker names, the PD page and twin auto names; mirrored in `docs/site/r/vendors.js` and `tools/report_card.py`; `tools/gen_vendors.py --check` keeps all three in step (`test_vendors.py`). Chip/cable/PSU makers are weak: a charger's own manufacturer text wins. +1.1 KB text (09d0020d, 0b770bd4, 91866fc4, 42233d9f) | done | not verified (host tests only) | `pd`, `chargertest`, `emname` |
+| Vendor database: 271 USB-IF-verified VIDs (`tools/vendors.csv`, brand names only, no PIDs) feed one packed table (`pd::vendor_find`/`vendor_name`, `vendor_table.hpp`), the report-card auto name ("Anker 100W"), cable e-marker names, the PD page and twin auto names; mirrored in `docs/site/r/vendors.js` and `tools/report_card.py`; `tools/gen_vendors.py --check` keeps all three in step (`test_vendors.py`). Chip/cable/PSU makers are weak: a charger's own manufacturer text wins. +1.1 KB text (09d0020d, 0b770bd4, 91866fc4, 42233d9f); +106 cable-maker rows, +1.1 KB text (+0.16 %) | done | not verified (host tests only) | `pd`, `chargertest`, `emname` |
 
 ## USB-PD
 

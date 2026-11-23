@@ -51,6 +51,22 @@ static void test_known_vendors() {
     CHECK_STR(vendor_name(0x0451), "TI");
 }
 
+// Cable e-marker ID headers carry the cable maker's VID: weak names, shared by one company's VIDs.
+static void test_cable_makers() {
+    bool weak = false;
+    CHECK_STR(vendor_find(0x2CA1, &weak), "Veetone");
+    CHECK_EQ(weak, true);
+    CHECK_STR(vendor_name(0x2B1D), "Lintes");
+    CHECK_STR(vendor_name(0x2BE2), "ECT");
+    CHECK_STR(vendor_name(0x0DBF), "JPC");
+    CHECK_STR(vendor_name(0x0766), "JPC");
+    CHECK_STR(vendor_name(0x062E), "JPC");
+    CHECK_STR(vendor_name(0x2E25), "GoldCable");
+    CHECK_STR(vendor_name(0x3875), "GoldCable");
+    vendor_find(0x3271, &weak); CHECK_EQ(weak, true);    // a charger ODM yields to the charger's own string
+    vendor_find(0x2943, &weak); CHECK_EQ(weak, false);   // a retail brand
+}
+
 static void test_weak_flag() {
     bool weak = false;
     vendor_find(0x291A, &weak); CHECK_EQ(weak, false);   // a brand
@@ -80,6 +96,7 @@ int main() {
     test_every_entry_round_trips();
     test_ends_gaps_and_unknown();
     test_known_vendors();
+    test_cable_makers();
     test_weak_flag();
     test_names_fit();
     return test_report("test_vendors");
