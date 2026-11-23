@@ -196,7 +196,21 @@ static void test_epr_capable_bit() {
     CHECK_EQ(offers::epr_capable(caps_of({fixed(5000, 3000)}, true)), 1);   // built from EPR chunks
 }
 
+// A hand-built fixture has raw = 0; the live caps carry real decoded words, and a zero raw slot is no offer.
+static void test_real_words_and_empty_raw_slots() {
+    const pd::SourceCaps c = caps_of({fixed(5000, 3000), fixed(9000, 3000), avs_spr15(3000)});
+    CHECK(c.pdos[2].type != pd::PdoType::Unknown);
+    const uint32_t epr[] = {0, 0, 0, 0, 0, 0, 0, 0, fixed(28000, 5000), 0, avs_epr(15000, 28000, 140)};
+    const Got g = rows_of(c, epr, true);
+    CHECK_EQ(g.row.size(), 5);
+    CHECK_STR(g.row[3].c_str(), "AVS 9-15V 45W");
+    CHECK(g.watts[3]);
+    CHECK_STR(g.row[4].c_str(), "AVS 15-28V 140W");
+    CHECK_EQ(offers::count(c, c.num_pdos, epr), 5);   // the two empty raw slots (7, 9) add nothing
+}
+
 int main() {
+    test_real_words_and_empty_raw_slots();
     test_hero_is_pdp_else_best_offer();
     test_bank_100w();
     test_epr_140w_from_the_epr_list();

@@ -3338,7 +3338,47 @@ static void test_source_tab_offer_groups_epr() {
     g_stub.vdm = {}; g_stub.caps = {};
 }
 
+// The headline watts follow the extended caps (PDP): the cheap page signature must see them arrive and change, or the hero
+// would stay on the best offer until something else repaints the page.
+static uint64_t hero_hash() {
+    uint64_t h = 1469598103934665603ull;
+    for (int y = 0; y < 46; y++)
+        for (int x = 16; x < 224; x++) h = (h ^ g_panel[y * LCD_WIDTH + x]) * 1099511628211ull;
+    return h;
+}
+
+static void test_source_tab_hero_follows_the_pdp() {
+    Ui &ui = fresh_ui();
+    make_inline(ui, 20000);
+    g_stub.pm_online = true;
+    g_stub.caps.valid = true; g_stub.caps.spec_rev = 2; g_stub.caps.active_cc = 1; g_stub.caps.num_pdos = 2;
+    g_stub.caps.pdos[0] = {pd::PdoType::Fixed, 0, 5000, 5000, 3000, 15000};
+    g_stub.caps.pdos[1] = {pd::PdoType::Fixed, 0, 20000, 20000, 3000, 60000};
+    g_stub.caps.raw_header = 0x1181; g_stub.caps.rx_count++;
+    g_stub.pd_seen_attach = true;
+    uint32_t t = 21000;
+    ui.tick(t);
+    show(ui, 0, t);
+    const uint64_t best = hero_hash();
+    auto settle = [&] {
+        for (int i = 0; i < 12; i++) ui.tick(t += 100);
+        while (ui.painting()) ui.tick(t += 2);
+    };
+    g_stub.ext.caps_ext.valid = true; g_stub.ext.caps_ext.pdp_w = 65;
+    settle();
+    const uint64_t pdp65 = hero_hash();
+    CHECK(pdp65 != best);
+    g_stub.ext.caps_ext.pdp_w = 100;
+    settle();
+    CHECK(hero_hash() != pdp65);
+    g_stub.ext.caps_ext = {};
+    settle();
+    CHECK(hero_hash() == best);
+    g_stub.vdm = {}; g_stub.caps = {};
+}
+
 int main() {
+    test_source_tab_hero_follows_the_pdp();
     test_source_tab_offer_groups_bank();
     test_source_tab_offer_groups_epr();
     test_auto_wake_once_on_the_charger_overview();
