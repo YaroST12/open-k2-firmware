@@ -866,7 +866,31 @@ static void test_auto_wake_page_reopen_and_manual_refresh() {
     CHECK_EQ(m.step(true, true, false, 100000), false);
 }
 
+// Wake anything connected: the bank that idles dark (VBUS 0, CC1 8 mV, CC2 1.55 V) has no standby signature, and an empty port
+// reads the same bias levels, so the verdict is the absence of every other fact. It leaves PortSense and the words alone.
+static void test_wake_candidate() {
+    Facts bank = facts(false, false, false);
+    bank.vbus_mv = 0;
+    CHECK_EQ(wake_candidate(bank), true);
+    CHECK_EQ(source_asleep(bank), false);
+    CHECK_EQ(int(classify_port_sense(bank)), int(PortSense::NoCharger));          // the page still says "No charger"
+    Facts f = bank;
+    f.inline_sink = true;           CHECK_EQ(wake_candidate(f), false);           // a live sink is inline
+    f = bank; f.sink_seen = true;   CHECK_EQ(wake_candidate(f), false);           // a sink's frames were decoded
+    f = bank; f.charger = true;     CHECK_EQ(wake_candidate(f), false);           // already attached
+    f = bank; f.vbus_mv = -1;       CHECK_EQ(wake_candidate(f), false);           // no VBUS monitor: nothing known
+    f = bank; f.vbus_mv = 5000;     CHECK_EQ(wake_candidate(f), false);           // the rail is up
+    f = bank; f.vbus_mv = raguard::kVbusAttachedMv - 1; CHECK_EQ(wake_candidate(f), true);
+    f = bank; f.wake_port_off = false; CHECK_EQ(wake_candidate(f), false);        // an idle Rd hold is already waking it
+    f = bank; f.cross = raguard::CrossKind::Crossed; CHECK_EQ(wake_candidate(f), false);   // two parties on the lines
+    f = bank; f.cross = raguard::CrossKind::Hint;    CHECK_EQ(wake_candidate(f), false);
+    f = bank; f.wait = raguard::WaitKind::ChargerWaiting; CHECK_EQ(wake_candidate(f), false);   // an Rp is already waiting for us
+    f = bank; f.wait = raguard::WaitKind::DualRolePort;   CHECK_EQ(wake_candidate(f), false);   // a dual-role port is looking itself
+    f = bank; f.open_cc_mv = 2950;  CHECK_EQ(wake_candidate(f), true);            // the standby signature is one more case, not required
+}
+
 int main() {
+    test_wake_candidate();
     test_auto_wake_once_per_sleeping_episode();
     test_auto_wake_needs_asleep_page_and_no_block();
     test_auto_wake_own_failed_cycle_is_swallowed();

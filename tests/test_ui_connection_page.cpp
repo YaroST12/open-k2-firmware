@@ -1004,6 +1004,15 @@ static void asleep_port(Ui &ui) {
     (void)ui;
 }
 
+// A power bank on the top port that idles dark (2026-11-23, Baseus 100 W): VBUS 0, CC1 8 mV, CC2 1.55 V steady. No standby
+// signature (the empty port's own CC2 bias net reads 1.64-1.71 V, so no level tells the two apart): the wake still goes.
+static void bank_port(Ui &ui) {
+    g_stub.pm.vbus_mv = 0;
+    set_cc(8, 1550);
+    g_stub.rescan_result = rescan::Result::Cycled;
+    (void)ui;
+}
+
 // The Who's attached overview on its Charger tab, the way the ring opens it (the page aliases open the Spec sheet).
 static uint32_t open_overview(Ui &ui, uint32_t t) {
     ui.open_place(bench::Place::Charger, t);
@@ -1024,15 +1033,15 @@ static void test_auto_wake_once_on_the_charger_overview() {
     CHECK_EQ(int(cp(ui).view()), int(ConnectionPage::View::Overview));
     CHECK_EQ(g_stub.rescan_requests, 1);                        // the Refresh path, by itself
     CHECK_EQ(g_stub.survey_refreshes, 1);
-    g_stub.open_cc_mv[0] = -1;                                  // our own cycle moved the line ...
+    g_stub.pm.vbus_mv = 5000;                                   // our own cycle lit the rail for a blip ...
     t = run_ticks(ui, t, 10);
-    g_stub.open_cc_mv[0] = 2950;                                // ... and it fell asleep again: still the same episode
+    g_stub.pm.vbus_mv = 0;                                      // ... and it fell asleep again: still the same episode
     t = run_ticks(ui, t, 100);                                  // 10 s of a charger that stays silent: no second try
     CHECK_EQ(g_stub.rescan_requests, 1);
     t = run_ticks(ui, t, 60);
-    g_stub.open_cc_mv[0] = -1;                                  // a replug after the retry gap is a new episode
+    g_stub.pm.vbus_mv = 5000;                                   // a replug after the retry gap is a new episode
     t = run_ticks(ui, t, 10);
-    g_stub.open_cc_mv[0] = 2950;
+    g_stub.pm.vbus_mv = 0;
     t = run_ticks(ui, t, 300);
     CHECK_EQ(g_stub.rescan_requests, 2);
 }
@@ -1110,6 +1119,93 @@ static void test_auto_wake_needs_the_live_facts_too() {
     g_stub.pm.vbus_mv = 5000;                                   // the debounced sense still says asleep for 600 ms
     ui.tick(t += 100);
     CHECK_EQ(g_stub.rescan_requests, 0);
+}
+
+// Wake anything connected: a dark port with no inline / sink evidence gets one wake per episode, whatever its CC lines read.
+static void test_wake_any_bank_idle_port_wakes_once() {
+    Ui &ui = fresh_ui();
+    bank_port(ui);
+    uint32_t t = open_overview(ui, 20000);
+    CHECK_EQ(g_stub.rescan_requests, 1);
+    CHECK_EQ(g_stub.survey_refreshes, 1);
+    CHECK_STR(ui.context().toast.view().data(), "Waking charger");
+    t = run_ticks(ui, t, 300);                                  // 30 s of a bank that stays silent: no second try, no loop
+    CHECK_EQ(g_stub.rescan_requests, 1);
+    CHECK_EQ(int(conn::classify_port_sense(cp(ui).facts())), int(conn::PortSense::NoCharger));   // the fallback view is unchanged
+    CHECK_EQ(int(cp(ui).view()), int(ConnectionPage::View::Overview));
+}
+
+// An empty port is the same fixture: one attempt, then the plain "No charger" view.
+static void test_wake_any_empty_port_one_attempt() {
+    Ui &ui = fresh_ui();
+    g_stub.rescan_result = rescan::Result::Cycled;
+    set_cc(8, 1690);
+    uint32_t t = open_overview(ui, 20000);
+    t = run_ticks(ui, t, 200);
+    CHECK_EQ(g_stub.rescan_requests, 1);
+}
+
+static void test_wake_any_never_inline_or_blocked() {
+    {
+        Ui &ui = fresh_ui();
+        make_inline(ui, 20000);                                 // a load behind the K2
+        g_stub.rescan_result = rescan::Result::Cycled;
+        uint32_t t = open_overview(ui, 20500);
+        run_ticks(ui, t, 50);
+        CHECK_EQ(g_stub.rescan_requests, 0);
+    }
+    {
+        Ui &ui = fresh_ui();
+        bank_port(ui);
+        g_stub.ra_on = true;                                    // a tool owns the port
+        uint32_t t = open_overview(ui, 20000);
+        run_ticks(ui, t, 50);
+        CHECK_EQ(g_stub.rescan_requests, 0);
+    }
+    {
+        Ui &ui = fresh_ui();
+        bank_port(ui);
+        g_stub.sink_seen.valid = true;                          // a sink's Sink_Capabilities was decoded on CC
+        uint32_t t = open_overview(ui, 20000);
+        run_ticks(ui, t, 50);
+        CHECK_EQ(g_stub.rescan_requests, 0);
+    }
+    {
+        Ui &ui = fresh_ui();
+        bank_port(ui);
+        g_stub.idle_wake = true;                                // Wake sleeping port is already holding an Rd
+        uint32_t t = open_overview(ui, 20000);
+        run_ticks(ui, t, 50);
+        CHECK_EQ(g_stub.rescan_requests, 0);
+    }
+}
+
+// Scrolling the ring past the Charger page is not opening it: no cycle, no toast holding the ring.
+static void test_wake_any_not_while_the_ring_passes() {
+    Ui &ui = fresh_ui();
+    bank_port(ui);
+    uint32_t t = 20000;
+    ui.open_place(bench::Place::Meter, t);
+    ui.on_button(Button::Back, ButtonEvent::Short, t += 20);
+    for (int i = 0; i < 5; i++) ui.on_button(Button::Plus, ButtonEvent::Short, t += 20);
+    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Link));
+    run_ticks(ui, t, 50);
+    CHECK_EQ(g_stub.rescan_requests, 0);
+}
+
+// A dark attach blip on the empty port's bias net (the link flips attached with VBUS still 0) is not a charger: the three-try
+// cap does not reset on it, so a silent port is cycled at most three times and never forever.
+static void test_wake_any_dark_attach_blips_do_not_loop() {
+    Ui &ui = fresh_ui();
+    bank_port(ui);
+    uint32_t t = open_overview(ui, 20000);
+    for (int i = 0; i < 12; i++) {
+        g_stub.cc = 2;                                          // the scan latches CC2 on the bias net ...
+        t = run_ticks(ui, t, 10);
+        g_stub.cc = 0;                                          // ... and drops it again
+        t = run_ticks(ui, t, 160);                              // past the 15 s retry gap each round
+    }
+    CHECK(g_stub.rescan_requests <= int(conn::AutoWake::kMaxTries));
 }
 
 // The comeback of a bridged Refresh lands on Connection -> Source, whatever page the boot opened.
@@ -3270,6 +3366,11 @@ int main() {
     test_auto_wake_not_on_other_tabs_or_views();
     test_auto_wake_honours_the_auto_read_block();
     test_auto_wake_needs_the_live_facts_too();
+    test_wake_any_bank_idle_port_wakes_once();
+    test_wake_any_empty_port_one_attempt();
+    test_wake_any_never_inline_or_blocked();
+    test_wake_any_not_while_the_ring_passes();
+    test_wake_any_dark_attach_blips_do_not_loop();
     test_sink_tab_pd_body_shows_the_raw_vooc_note();
     test_sink_tab_no_pd_shows_the_raw_vooc_note();
     test_sink_tab_offers_identify_when_a_device_is_alone();

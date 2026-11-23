@@ -661,13 +661,14 @@ conn::Facts Ui::passive_facts() const {
     return f;
 }
 
-// The Charger overview wakes a source that holds VBUS off (standby signature) once per sleeping episode, through the Refresh path:
+// The Charger overview wakes a dark port (conn::wake_candidate: a sleeping source, a bank, or nothing at all) once per episode, through the Refresh path:
 // the woken attach is a new session, so the survey's auto read runs on it once. Never while anything blocks the auto read.
 void ConnectionPage::auto_wake(uint32_t now_ms) {
     if (fusb302::line_trial().live) return;   // the direct-plug fallback is moving our Rd on this attach: its own wake, not ours
-    const bool open = view_ == View::Overview && tab_ == conn::Tab::Source;
+    // Scrolling the ring past the page is not opening it (a cycle there would hold the ring for the toast): OK enters.
+    const bool open = view_ == View::Overview && tab_ == conn::Tab::Source && !ctx_.ui->ring_view();
     if (!wake_.step(wake_asleep_, open, ctx_.ui->auto_read_block() != pd::SvWhy::None, now_ms)) return;
-    K2LOG("[UI] source asleep: waking it from the Charger overview\n");
+    K2LOG("[UI] dark port: waking it from the Charger overview\n");
     if (ctx_.ui->rescan_source()) set_op(conn::tx::kWakingCharger, now_ms, 2500);   // a refusal stays silent: the episode is spent
 }
 
@@ -685,14 +686,16 @@ void ConnectionPage::sense(uint32_t now_ms) {
     // The charger went quiet but its offers are held: the Overview and Source views keep showing them.
     if ((view_ == View::Overview || tab_ == conn::Tab::Source) && !raw_f.charger && held::showing_held()) raw_f.charger = true;
     if (held::cable_em().valid) raw_f.cable = true;   // a read cable stays after it is unplugged
-    const bool asleep_now = conn::source_asleep(raw_f);   // the debounce lags 600 ms: the wake needs the facts of this tick too
+    // The wake rule is the facts of this tick held 600 ms (a page opened on a dark port waits too); the sense below stays the words.
+    const bool wakeable = conn::wake_candidate(raw_f);
     const conn::PortSense stable_ps = port_sense_.commit(conn::classify_port_sense(raw_f), now_ms);
-    if (stable_ps == conn::PortSense::SourceAsleep && asleep_now) {
+    if (wakeable) {
         if (!asleep_run_) { asleep_run_ = true; asleep_since_ = now_ms; }
-        wake_asleep_ = uint32_t(now_ms - asleep_since_) >= conn::DebouncedSense::kHoldMs;   // a page opened on a sleeping port waits too
+        wake_asleep_ = uint32_t(now_ms - asleep_since_) >= conn::DebouncedSense::kHoldMs;
     } else {
         asleep_run_ = wake_asleep_ = false;
-        if (stable_ps == conn::PortSense::Attached) wake_.attached();
+        // Only a lit rail proves a wake worked: a dark attach blip on the bias net must not re-arm the try cap.
+        if (stable_ps == conn::PortSense::Attached && raw_f.vbus_mv >= raguard::kVbusAttachedMv) wake_.attached();
     }
     conn::apply_port_sense(raw_f, stable_ps);
     facts_ = raw_f;

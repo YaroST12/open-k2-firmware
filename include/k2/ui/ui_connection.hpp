@@ -121,8 +121,19 @@ struct DebouncedSense {
     }
 };
 
-// Wakes a sleeping source once per sleeping episode while the Charger overview is open (the same CC cycle + survey as Refresh).
-// `asleep` = the debounced PortSense::SourceAsleep confirmed by the live facts. A wake that got no VBUS leaves the port asleep:
+// "Try to wake anything connected" (the Charger overview's auto wake): a dark port (VBUS < kVbusAttachedMv, a monitor present)
+// with no source seen, no inline or decoded sink, no crossed / flipped lines, no Rp-waiting or dual-role verdict and no idle Rd
+// hold running. It carries no CC-level test on purpose: a bank that idles dark (CC1 ~0, CC2 1.55 V) reads like the empty
+// port's own bias net (CC2 1.64-1.71 V), so only the wake itself tells them apart. The standby signature is one case of it.
+constexpr bool wake_candidate(const Facts &f) {
+    if (f.sink_seen || !f.wake_port_off) return false;
+    if (f.vbus_mv < 0 || f.vbus_mv >= raguard::kVbusAttachedMv) return false;
+    const PortSense ps = classify_port_sense(f);
+    return ps == PortSense::NoCharger || ps == PortSense::SourceAsleep;
+}
+
+// Wakes a dark port once per episode while the Charger overview is open (the same CC cycle + survey as Refresh).
+// `asleep` = the debounced wake_candidate (the page keeps the member name from the standby-signature days). A wake that got no VBUS leaves the port asleep:
 // a retry needs the state to leave and come back after kRetryGapMs (a sooner return is the cycle's own blip), or the page to
 // be opened again. A manual Refresh / Reset & re-read spends the episode too (spend()).
 class AutoWake {
