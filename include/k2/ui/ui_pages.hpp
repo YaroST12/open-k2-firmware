@@ -362,6 +362,11 @@ public:
     void set_avs_sweep(bool on) { options_.avs_sweep = on; }
     charger_test::Level level() const { return options_.level; }
     void set_level(charger_test::Level l);   // with_level: the level and both deep sweeps; a START armed on the old plan is disarmed
+    // Settings > Huawei/Samsung tests changed (or first read): the draft drops FCP, SCP and AFC, or takes them back when it was the default.
+    void sync_legacy();
+    // The options a plan is made from: the draft, plus the hidden units an explicit unit list names (remote runs still reach them).
+    charger_test::Options plan_options() const;
+    charger_test::Options journal_options() const { auto o = options_; o.selected |= run_extra_; return o; }   // the header names what the run was planned with
     // The SVOOC ceiling stage (opt-in, Cmd::ChargerSvoocCap): Off, On (the far-sink check stays) or UsbA (waived: a legacy A port).
     svooc_ceiling::Mode svooc_cap() const { return options_.svooc_cap; }
     void set_svooc_cap(svooc_ceiling::Mode m) { options_.svooc_cap = m; }
@@ -531,6 +536,8 @@ private:
     // Review's Level row and the remote (Cmd 0x5B) change it, and Deep turns both deep sweeps on (with_level). The Tests list
     // lines and the remote knob (charger-sweep, Cmd 0x0F) still toggle each sweep on its own after that.
     charger_test::Options options_{};
+    uint32_t run_extra_ K2_BSS_INIT(0);          // hidden-unit algorithm bits the run in flight was planned with (not in the draft; the journal header keeps them)
+    bool legacy_hidden_seen_ K2_BSS_INIT(false);   // what sync_legacy() last applied to the draft (the draft starts as shown)
     charger_test::Summary summary_;
     // The Tests list's preset counts (planned_tests at the chosen depth), kept until the depth, the source list or the cable changes.
     std::array<uint8_t, 4> preset_n_{};

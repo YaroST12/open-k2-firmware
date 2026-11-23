@@ -10,6 +10,7 @@
 #include "fake_lcd.h"
 #include "ui_stubs.h"
 #include "k2/ui/ui.hpp"
+#include "k2/ui/uiprefs.hpp"
 #include "k2/ui/capture.hpp"
 #include "fake_remote_backend.hpp"
 #include "k2/pd/pd_source.hpp"
@@ -6565,8 +6566,115 @@ static void test_transient_current_spike_does_not_abort_run() {
     }
     CHECK_EQ(ui.link().inline_mode(), false);
 }
+// ---- Settings > Huawei/Samsung tests off (the default of a fresh K2): FCP, SCP and AFC leave the presets, the Custom list and the plan ----
+namespace hidden_legacy {
+constexpr uint32_t kLegacy = ct::bit(A::Fcp) | ct::bit(A::Scp) | ct::bit(A::Afc);
+struct Hide {
+    Hide() { uiprefs::legacy_units_shown = false; }
+    ~Hide() { uiprefs::legacy_units_shown = true; }
+};
+static unsigned plan_hits(const Ui& ui, uint32_t mask) {
+    unsigned n = 0;
+    for (const auto& s : ui.charger_test_results().steps()) n += (ct::bit(s.algorithm) & mask) != 0;
+    return n;
+}
+static void run_until_busy(Ui& ui, uint32_t& t) { for (; t <= 3000 && !ui.charger_test_busy(); t += 20) ui.tick(t); CHECK_EQ(ui.charger_test_busy(), true); }
+static void stop_run(Ui& ui, uint32_t& t) {
+    CHECK_EQ(ui.charger_test_stop(t) == Stopped::Run, true);
+    for (const uint32_t end = t + 20000; t <= end && ui.charger_test_busy(); t += 100) ui.tick(t);
+    CHECK_EQ(ui.charger_test_busy(), false);
+}
+}  // namespace hidden_legacy
+static void test_hidden_legacy_units_leave_the_tests_step() {
+    using namespace hidden_legacy;
+    constexpr uint32_t masks[4] = {ct::kDefaultAlgorithms & ~kLegacy, kPdMask, ct::kDefaultAlgorithms & ~kPdMask & ~kLegacy,
+                                   ct::bit(A::Vooc) | ct::bit(A::SuperVooc) | ct::bit(A::SuperVooc65) | ct::bit(A::Vivo)};
+    Hide hide;
+    fixture(); Ui ui; open(ui);
+    CHECK_EQ(algos(ui), masks[0]);   // the draft starts without them
+    ct::Input in; in.cap_mv = ui.context().cap_mv;
+    top(ui); ui.tick(1210); settle(ui, 1210);
+    for (int r = 0; r < 4; ++r) {   // the counters are the plans of the stripped presets
+        ct::Options p = ct::with_level({}, ct::Level::Medium); p.selected = masks[r];
+        char t[8]; std::snprintf(t, sizeof t, "%u", ct::planned_tests(g_stub.caps, p, in));
+        check_text_at(kSmall, wizard_text_y(kAllRow + r, kDepthRow), t, kDim, kBg, kit::kTailX - text_width(kSmall, t));
+    }
+    for (int r = 0; r < 4; ++r) {   // a pick selects the stripped set
+        top(ui); move(ui, kAllRow + r); press(ui, Button::Ok); settle(ui);
+        CHECK_EQ(ui.charger_test_stage(), 2); CHECK_EQ(algos(ui), masks[r]);
+        press(ui, Button::Back); settle(ui);
+        CHECK_EQ(ui.charger_test_stage(), 0); CHECK_EQ(ui.charger_test_cursor(), kAllRow + r);   // the pick still reads as its preset row
+    }
+    // Custom: OPPO/vivo, Xiaomi, PD, QC, Done
+    top(ui); move(ui, kAllRow); press(ui, Button::Ok); settle(ui);   // All tests again
+    press(ui, Button::Back); settle(ui);
+    custom(ui);
+    top(ui); move(ui, 9); CHECK_EQ(ui.charger_test_cursor(), 4);   // Done is the fifth row
+    top(ui); press(ui, Button::Ok); settle(ui);   // the first row is OPPO / vivo
+    CHECK_EQ(algos(ui) & (ct::bit(A::Vooc) | ct::bit(A::Vivo)), 0u);
+    CHECK_EQ(algos(ui) & kLegacy, 0u);
+    press(ui, Button::Ok); settle(ui);
+    CHECK_EQ(algos(ui), masks[0]);
+    open_group(ui, 0);   // long OK on the first row: the OPPO entries
+    press(ui, Button::Back); settle(ui);
+    CHECK_EQ(ui.charger_test_stage(), kCustomStage); CHECK_EQ(ui.charger_test_cursor(), 0);
+    top(ui); move(ui, 4); press(ui, Button::Ok); settle(ui);   // Done
+    CHECK_EQ(ui.charger_test_stage(), 2);
+}
+static void test_legacy_switch_flips_the_draft_without_losing_picks() {
+    using namespace hidden_legacy;
+    fixture(); Ui ui; open(ui);
+    CHECK_EQ(algos(ui), ct::kDefaultAlgorithms);   // shown: today's default
+    uiprefs::legacy_units_shown = false; ui.charger_test_legacy_changed();
+    CHECK_EQ(algos(ui), ct::kDefaultAlgorithms & ~kLegacy);
+    uiprefs::legacy_units_shown = true; ui.charger_test_legacy_changed();
+    CHECK_EQ(algos(ui), ct::kDefaultAlgorithms);   // the untouched default comes back whole
+    top(ui); move(ui, kPdRow); press(ui, Button::Ok); settle(ui);   // a pick other than the default stays as it is
+    CHECK_EQ(algos(ui), kPdMask);
+    uiprefs::legacy_units_shown = false; ui.charger_test_legacy_changed();
+    CHECK_EQ(algos(ui), kPdMask);
+    uiprefs::legacy_units_shown = true; ui.charger_test_legacy_changed();
+    CHECK_EQ(algos(ui), kPdMask);
+}
+static void test_explicit_legacy_units_still_run_when_hidden_and_do_not_leak() {
+    using namespace hidden_legacy;
+    constexpr uint8_t units[] = {uint8_t(ct::Unit::Fcp), uint8_t(ct::Unit::Scp), uint8_t(ct::Unit::Afc)};
+    Hide hide;
+    fixture(); Ui ui; boot_home(ui);
+    CHECK_EQ(ui.charger_test_set_units(units), true);
+    CHECK_EQ(ui.charger_test_start(true, 1200).result == RemoteStart::Result::Accepted, true);
+    uint32_t t = 1200;
+    run_until_busy(ui, t);
+    CHECK_EQ(plan_hits(ui, ct::bit(A::Fcp)) > 0, true);   // each named unit is planned, and nothing else
+    CHECK_EQ(plan_hits(ui, ct::bit(A::Scp)) > 0, true);
+    CHECK_EQ(plan_hits(ui, ct::bit(A::Afc)) > 0, true);
+    CHECK_EQ(plan_hits(ui, kLegacy), ui.charger_test_results().steps().size());
+    CHECK_EQ(algos(ui), ct::kDefaultAlgorithms & ~kLegacy);   // the draft stays stripped
+    stop_run(ui, t);
+    // the next START is an ordinary one: the draft, with no legacy rows
+    CHECK_EQ(ui.charger_test_start(true, t).result == RemoteStart::Result::Accepted, true);
+    run_until_busy(ui, t);
+    CHECK_EQ(ui.charger_test_results().steps().size() > 0, true);
+    CHECK_EQ(plan_hits(ui, kLegacy), 0u);
+    CHECK_EQ(algos(ui), ct::kDefaultAlgorithms & ~kLegacy);
+}
+static void test_hidden_legacy_default_run_has_no_legacy_rows() {
+    using namespace hidden_legacy;
+    Hide hide;
+    fixture(); Ui ui; boot_home(ui);
+    CHECK_EQ(ui.charger_test_start(true, 1200).result == RemoteStart::Result::Accepted, true);
+    uint32_t t = 1200;
+    run_until_busy(ui, t);
+    CHECK_EQ(ui.charger_test_results().steps().size() > 0, true);
+    CHECK_EQ(plan_hits(ui, kLegacy), 0u);
+    stop_run(ui, t);
+}
 int main() {
     overlap_enable();
+    test_hidden_legacy_units_leave_the_tests_step();
+    test_legacy_switch_flips_the_draft_without_losing_picks();
+    test_explicit_legacy_units_still_run_when_hidden_and_do_not_leak();
+    test_hidden_legacy_default_run_has_no_legacy_rows();
     test_view_says_what_the_wizard_shows();
     test_view_carries_the_wait_and_the_run();
     test_waiting_plus_minus_do_nothing();

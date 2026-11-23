@@ -138,10 +138,21 @@ constexpr uint32_t kPresetMasks[kPresets] = {
     ct::kDefaultAlgorithms, ct::kDefaultAlgorithms & kFamilies[kFamPd],
     ct::kDefaultAlgorithms & ~kFamilies[kFamPd],
     kFamilies[kFamHuawei] | kFamilies[kFamSamsung] | kFamilies[kFamOppo]};
+// Settings > Huawei/Samsung tests off: the first two families (FCP + SCP, AFC) are in no preset, no Custom row and no draft.
+static_assert(kFamHuawei == 0 && kFamSamsung == 1, "the hidden families are the first Custom rows");
+constexpr uint32_t kLegacyBits = kFamilies[kFamHuawei] | kFamilies[kFamSamsung];
+bool legacy_hidden() { return !uiprefs::legacy_units_shown; }
+int fam_skip() { return legacy_hidden() ? 2 : 0; }   // Custom row 0 is family fam_skip()
+int family_rows() { return kFamilyCount - fam_skip(); }
+uint32_t preset_mask(int p) { return legacy_hidden() ? kPresetMasks[p] & ~kLegacyBits : kPresetMasks[p]; }
 // The preset row the selection equals (1-based row), 0 = none: "Custom..." carries the pill then.
 int preset_row_of(uint32_t selected) {
-    for (int n = 0; n < kPresets; ++n) if (kPresetMasks[n] == selected) return n + 1;
+    for (int n = 0; n < kPresets; ++n) if (preset_mask(n) == selected) return n + 1;
     return 0;
+}
+// An explicit unit list names the units the switch hides: their algorithm bit rides along for that run.
+uint32_t hidden_unit_bit(ct::Unit u) {
+    return u == ct::Unit::Fcp ? ct::bit(A::Fcp) : u == ct::Unit::Scp ? ct::bit(A::Scp) : u == ct::Unit::Afc ? ct::bit(A::Afc) : 0;
 }
 constexpr int kBestChars = 25;   // the Results best line: 16 px (8 px cells) in the 200 px beside the page margins
 using result_layout::kGridMetrics;
@@ -562,9 +573,9 @@ void ChargerTestSession::pump_journal() {
     SpecRowsCtx c{e, runner_.run_id()};
     // No transitions, no file: a header alone would only cost a flash write and a stale-file drop.
     const cj::SpecRowsSource src{e && specsec::rows_total(*e) ? specsec::rows_file_size(*e) : 0, &spec_rows_fill, &c};
-    cj::hw::pump(runner_.run_id(), options_, runner_.evidence(), runner_.steps(), &src);
+    cj::hw::pump(runner_.run_id(), journal_options(), runner_.evidence(), runner_.steps(), &src);
 #else
-    cj::hw::pump(runner_.run_id(), options_, runner_.evidence(), runner_.steps());
+    cj::hw::pump(runner_.run_id(), journal_options(), runner_.evidence(), runner_.steps());
 #endif
 }
 // The run's journal: rows and header in pieces (hw::pump), one per tick on a quiet link, the Runner held in its Baseline so that
@@ -734,6 +745,9 @@ bool ChargerTestSession::boot_load(bool cancel) {
             return false;
         }
         options_ = r.options;
+        legacy_hidden_seen_ = legacy_hidden();
+        run_extra_ = legacy_hidden_seen_ ? options_.selected & kLegacyBits : 0;   // an interrupted run keeps its rows; the draft does not
+        options_.selected &= ~run_extra_;
         journal_active_ = true; journal_closed_ = false;   // the interrupted-step marks are journaled too
         // A comeback boot whose marker said Reattach (the planned re-attach) resumes without counting a resume.
         const bool planned = rdcomeback::planned_reattach();
@@ -1176,7 +1190,7 @@ void ChargerTestSession::invalidate_confirmation() {
 ChargerTestSession::RemoteStart ChargerTestSession::remote_start(bool all_tests) {
     RemoteStart r;
     if (start_held()) { r.result = RemoteStart::Result::Busy; return r; }
-    if (all_tests) options_.selected = kPresetMasks[0];
+    if (all_tests) options_.selected = preset_mask(0);
     if (stage_ != Stage::Review) set_stage(Stage::Review, kStartRow);
     else { invalidate_confirmation(); selection_ = kStartRow; }
     open_confirmation();
@@ -1392,7 +1406,7 @@ __attribute__((noinline)) static bool selected_facts(ctcable::Choice c, ctcable:
 // when the wait ends. Every other refusal shows on the footer at once, with no window.
 void ChargerTestSession::open_confirmation() {
     const auto in = input(ctx_.now);
-    const auto preview = ct::Runner::preview(fusb302::caps(), options_, in);
+    const auto preview = ct::Runner::preview(fusb302::caps(), plan_options(), in);
     const bool later = (preview.refusal == ct::Reason::NoSource || preview.refusal == ct::Reason::Release) &&
                        pd::start_needs_rd(ctx_.inline_mode, ctx_.vbus_fast_mv);
     // One reading inside the fall of a USB-A port's auto-off cut (1 V up to vSafe5V) is not a refusal: START's own check waits for it.
@@ -1460,7 +1474,7 @@ void ChargerTestSession::start_failed(ct::Reason r, const char* busy, int vbus_m
 // The preflight on the final reading (the wait changed it), then the run itself.
 void ChargerTestSession::launch() {
     const auto in = input(ctx_.now);
-    const auto preview = ct::Runner::preview(fusb302::caps(), options_, in);
+    const auto preview = ct::Runner::preview(fusb302::caps(), plan_options(), in);
     // A reading inside a port cut's fall is waited for by the runner's own 5 V check (Runner::start), not refused here.
     const bool in_cut = preview.refusal == ct::Reason::Release && ct::dip_reading(in.vbus_mv);
     if (preview.refusal != ct::Reason::None && !in_cut) {
@@ -1479,8 +1493,10 @@ void ChargerTestSession::begin_run() {
     in.no_cc = in.vbus_mv >= pd::kVSafe0Mv && !in.self_powered && !fusb302::rp_on_line();
     journal_active_ = false; capture_kept_ = false; reattach_plan_ = false; reattach_ask_ = false; reattach_ = 0;
     capture_identity();
-    const auto r = runner_.start(fusb302::caps(), options_, in, true);
-    K2LOG("[TEST] start selected=%u units=%u level=%s -> %s\n", unsigned(options_.selected), unsigned(options_.units.n),
+    const auto run_options = plan_options();
+    run_extra_ = run_options.selected & ~options_.selected;
+    const auto r = runner_.start(fusb302::caps(), run_options, in, true);
+    K2LOG("[TEST] start selected=%u units=%u level=%s -> %s\n", unsigned(run_options.selected), unsigned(options_.units.n),
           ct::name(options_.level), ct::name(r));
     charger_journal::RunMeta meta;
     meta.units = options_.units;
@@ -1530,11 +1546,24 @@ bool ChargerTestSession::set_units(std::span<const uint8_t> units) {
     invalidate_confirmation();   // the preview's runnable count follows the list
     return true;
 }
+void ChargerTestSession::sync_legacy() {
+    if (legacy_hidden() == legacy_hidden_seen_) return;
+    legacy_hidden_seen_ = legacy_hidden();
+    if (legacy_hidden_seen_) options_.selected &= ~kLegacyBits;
+    else if (options_.selected == (ct::kDefaultAlgorithms & ~kLegacyBits)) options_.selected = ct::kDefaultAlgorithms;   // a picked set stays as picked
+    invalidate_confirmation();
+}
+ct::Options ChargerTestSession::plan_options() const {
+    ct::Options o = options_;
+    if (legacy_hidden()) for (size_t n = 0; n < o.units.n; ++n) o.selected |= hidden_unit_bit(o.units.u[n]);
+    return o;
+}
 void ChargerTestSession::set_level(ct::Level l) {
     options_ = ct::with_level(options_, l);
     invalidate_confirmation();   // the preview's step count follows the level
 }
 void ChargerTestSession::enter() {
+    sync_legacy();
     ctx_.cables.sync();
     entering_ = true;   // the screen still shows the previous page, which the redraw erases: no body wipe here
     if (resume_pending_) set_stage(Stage::Resume);
@@ -1796,7 +1825,7 @@ uint32_t ChargerTestSession::wait_total_ms() {
 }
 
 void ChargerTestSession::update_summary(const ct::Input& in) {
-    if (stage_ <= Stage::Review || stage_ == Stage::Custom) summary_ = ct::Runner::preview(fusb302::caps(), options_, in);
+    if (stage_ <= Stage::Review || stage_ == Stage::Custom) summary_ = ct::Runner::preview(fusb302::caps(), plan_options(), in);
     if (stage_ == Stage::Algorithms) update_preset_counts(in);
 }
 
@@ -1816,7 +1845,7 @@ void ChargerTestSession::update_preset_counts(const ct::Input& in) {
     if (key == preset_key_) return;
     preset_key_ = key;
     for (int p = 0; p < kPresets; ++p) {
-        ct::Options o = options_; o.selected = kPresetMasks[p];
+        ct::Options o = options_; o.selected = preset_mask(p);
         preset_n_[p] = ev8(ct::planned_tests(caps, o, in));
     }
 }
@@ -1881,7 +1910,7 @@ void ChargerTestPage::describe(ChargerTestSession::View& v) {
 int ChargerTestPage::row_count() const {
     switch (s_.stage_) {
     case Stage::Algorithms: return kViewRow + (s_.runner_.run_id() ? 1 : 0);
-    case Stage::Custom: return kFamilyCount + 1;   // the families, then "Done"
+    case Stage::Custom: return family_rows() + 1;   // the families, then "Done"
     case Stage::Group: {
         if (s_.family_ != kFamPd) return static_cast<int>(selected(kFamilies[s_.family_]));
         const unsigned pps_pts = s_.sweep_points(), avs_pts = s_.avs_sweep_points();
@@ -2188,8 +2217,8 @@ static FooterTone range_footer(StrBuf<32> &f, const ct::Runner &runner, A algo, 
     }
     case Stage::Custom: {
         unsigned on = 0;
-        for (int n = 0; n < kFamilyCount; ++n) on += family_state(s_.options_.selected, n) != 0;
-        put_of(f, on, kFamilyCount, " families on");
+        for (int n = fam_skip(); n < kFamilyCount; ++n) on += family_state(s_.options_.selected, n) != 0;
+        put_of(f, on, family_rows(), " families on");
         return FooterTone::Info;
     }
     case Stage::Group: {
@@ -2388,24 +2417,26 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
             if (focused) out.note = kNoteLast;
         }
         break;
-    case Stage::Custom:
-        if (index >= kFamilyCount) {
+    case Stage::Custom: {
+        if (index >= family_rows()) {
             out.text = "Done";
             out.text_color = kFocus;
             break;
         }
+        const int fam = index + fam_skip();
         out.marker = kit::Marker::Box3;
-        out.state = family_state(s_.options_.selected, index);
-        out.text = kFamilyNames[index];
-        if (index == kFamXiaomi) {
+        out.state = family_state(s_.options_.selected, fam);
+        out.text = kFamilyNames[fam];
+        if (fam == kFamXiaomi) {
             out.text_color = kDim;
             out.tail = "PD";
             if (focused) out.note = kNoteXiaomi;
         } else {
-            row_tail_.put_u32(entries(s_.options_.selected & kFamilies[index])).put_char('/').put_u32(entries(kFamilies[index]));
+            row_tail_.put_u32(entries(s_.options_.selected & kFamilies[fam])).put_char('/').put_u32(entries(kFamilies[fam]));
             if (focused) out.note = kNoteFamily;
         }
         break;
+    }
     case Stage::Group: {
         const A a = algorithm_at(index);
         const uint32_t m = group_mask(s_.family_, index, a);
@@ -3631,7 +3662,7 @@ bool ChargerTestPage::on_event(Event e) {
         return true;
     }
     // Long OK on a Custom family opens its entries; on an entries page it toggles the whole group.
-    const bool open_group = long_ok && s_.stage_ == Stage::Custom && s_.selection_ < kFamilyCount && s_.selection_ != kFamXiaomi;
+    const bool open_group = long_ok && s_.stage_ == Stage::Custom && s_.selection_ < family_rows() && s_.selection_ + fam_skip() != kFamXiaomi;
     const bool toggle_group = long_ok && s_.stage_ == Stage::Group;
     if (e.press != Press::Short && !open_group && !toggle_group && !(e.press == Press::Long && e.button == Button::Back)) return false;
     // A long BACK stops first (a run, a resume offer, an armed START, the wait); with nothing to stop it goes to the Meter (the Ui).
@@ -3639,7 +3670,7 @@ bool ChargerTestPage::on_event(Event e) {
         !s_.confirming_)
         return false;
     if (open_group) {
-        s_.family_ = s_.selection_;
+        s_.family_ = s_.selection_ + fam_skip();
         set_stage(Stage::Group, 0);
         update(ctx_.now);
         return true;
@@ -3657,7 +3688,7 @@ bool ChargerTestPage::on_event(Event e) {
         if (s_.stop() != ChargerTestSession::Stopped::Nothing) { update(ctx_.now); return true; }
         switch (s_.stage_) {
         case Stage::Algorithms: return false;   // the Ui leaves to the ring
-        case Stage::Group: set_stage(Stage::Custom, s_.family_); break;
+        case Stage::Group: set_stage(Stage::Custom, s_.family_ - fam_skip()); break;
         case Stage::Custom: set_stage(Stage::Algorithms, kCustomRow); break;
         case Stage::Cable: {
             const int pr = preset_row_of(s_.options_.selected);
@@ -3727,7 +3758,7 @@ __attribute__((noinline)) void ChargerTestPage::ok_event() {
         if (s_.selection_ == kDepthRow) {
             s_.set_level(ct::next_level(s_.options_.level));
         } else if (s_.selection_ < kCustomRow) {
-            s_.options_.selected = kPresetMasks[s_.selection_ - kPresetFirst];
+            s_.options_.selected = preset_mask(s_.selection_ - kPresetFirst);
             invalidate_confirmation();
             set_stage(Stage::Cable, ctx_.cables.index_of(ctx_.cables.selected()));
         } else if (s_.selection_ == kCustomRow) {
@@ -3737,10 +3768,10 @@ __attribute__((noinline)) void ChargerTestPage::ok_event() {
         }
         break;
     case Stage::Custom:
-        if (s_.selection_ >= kFamilyCount) {   // Done
+        if (s_.selection_ >= family_rows()) {   // Done
             set_stage(Stage::Cable, ctx_.cables.index_of(ctx_.cables.selected()));
-        } else if (s_.selection_ != kFamXiaomi) {   // Xiaomi rides the PD unit: nothing to toggle
-            const uint32_t mask = kFamilies[s_.selection_];
+        } else if (s_.selection_ + fam_skip() != kFamXiaomi) {   // Xiaomi rides the PD unit: nothing to toggle
+            const uint32_t mask = kFamilies[s_.selection_ + fam_skip()];
             s_.options_.selected = (s_.options_.selected & mask) == mask ? s_.options_.selected & ~mask : s_.options_.selected | mask;
             invalidate_confirmation();
         }
@@ -3838,7 +3869,7 @@ Strip ChargerTestPage::labels() const {
         switch (s_.stage_) {
         case Stage::Algorithms: ok = s_.selection_ == kDepthRow ? sl::Change : s_.selection_ < kCustomRow ? sl::Pick : sl::Open; break;
         case Stage::Custom:
-            ok = s_.selection_ >= kFamilyCount ? sl::Next : s_.selection_ == kFamXiaomi ? sl::None : sl::ToggleOpen;
+            ok = s_.selection_ >= family_rows() ? sl::Next : s_.selection_ + fam_skip() == kFamXiaomi ? sl::None : sl::ToggleOpen;
             break;
         case Stage::Group: ok = sl::SetGrp; break;
         case Stage::Cable: ok = sl::Pick; break;
