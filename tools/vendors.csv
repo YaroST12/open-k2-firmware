@@ -35,7 +35,7 @@ vid,name,cat,usbif,why
 0x05AC,Apple,oem,Apple,chargers/cables/phones/laptops
 0x05AF,Sunrex,cable,Sunrex Technology Corp.,cable assembler
 0x05BE,TE Conn,cable,Tyco Electronics Corp. a TE Connectivity Ltd. company,cable assembler
-0x05C6,Qualcomm,oem,Qualcomm Inc,Quick Charge sources/phones
+0x05C6,Qualcomm,chip,Qualcomm Inc,Quick Charge sources/phones
 0x05C8,Foxlink,cable,Foxlink/Cheng Uei Precision Industry Co. Ltd,cable assembler
 0x05DC,Lexar,oem,Lexar Media Inc.,storage
 0x05DD,Delta,psu,Delta Electronics Inc.,laptop adapters/chargers
