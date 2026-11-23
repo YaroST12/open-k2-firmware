@@ -2492,6 +2492,40 @@ static void test_overview_provenance_throttled_and_bottleneck() {
     g_stub.em = {};
 }
 
+// The PD limit shows as an amber LIM chip on the Charger slice while armed, and goes with it.
+static void test_charger_slice_lim_chip_while_armed() {
+    Ui &ui = fresh_ui();
+    make_inline(ui, 50000);
+    g_stub.pm_online = true;
+    g_stub.pd_seen_attach = true;
+    g_stub.caps = {};
+    g_stub.caps.valid = true; g_stub.caps.spec_rev = 2; g_stub.caps.num_pdos = 2;
+    g_stub.caps.pdos[0] = {pd::PdoType::Fixed, 0, 5000, 5000, 3000, 15000};
+    g_stub.caps.pdos[1] = {pd::PdoType::Fixed, 0, 20000, 20000, 5000, 100000};
+    g_stub.caps.raw_header = 0x1181; g_stub.caps.rx_count++;
+    g_stub.contract.valid = true; g_stub.contract.ready = true; g_stub.contract.pos = 2;
+    g_stub.contract.mv = 20000; g_stub.contract.op_ma = g_stub.contract.max_ma = 3000;
+    g_stub.lim = {};
+    uint32_t t = 51000;
+    for (int i = 0; i < 12; i++) ui.tick(t += 100);
+    ui.open_place(bench::Place::Charger, t += 100);
+    settle(ui, t);
+    CHECK_EQ(cp(ui).overview_mode(), true);
+    const int x0 = kOppRailThickness, x1 = x0 + 208;
+    CHECK_EQ(count_px(2 + 24, 2 + 38, x0, x1, kCautionT), 0);
+    g_stub.lim.state = pd::LimState::Armed; g_stub.lim.limit_mw = 100000;   // the widest text: LIM 100W
+    for (int i = 0; i < 12; i++) ui.tick(t += 100);
+    settle(ui, t);
+    CHECK(count_px(2 + 24, 2 + 38, x0, x1, kCautionT) > 0);
+    g_stub.lim.state = pd::LimState::Off;
+    for (int i = 0; i < 12; i++) ui.tick(t += 100);
+    settle(ui, t);
+    CHECK_EQ(count_px(2 + 24, 2 + 38, x0, x1, kCautionT), 0);
+#ifdef K2_TRUNC_LOG
+    CHECK_EQ(k2::trunc::failures(), 0);
+#endif
+}
+
 // Bring up the sniffed Request scene of the provenance test (20V 3A PD contract, caps, cable e-marker) on 6 LINK.
 static void inline_pd_scene(Ui &ui, uint32_t &t) {
     make_inline(ui, t);
@@ -2961,5 +2995,6 @@ int main() {
     test_standalone_cable_read_is_not_stale();
     test_sink_slice_goes_stale_when_the_sink_leaves();
     test_charger_slice_revision_chip_names_the_wire_revision();
+    test_charger_slice_lim_chip_while_armed();
     return test_report("test_ui_connection_page");
 }
