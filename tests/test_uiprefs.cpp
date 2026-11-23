@@ -250,6 +250,29 @@ void test_long_back_byte() {
     CHECK_EQ(v.f.write_file(uiprefs::kPath, std::span<const std::uint8_t>(old)) == fs::Err::Ok, 1);
     CHECK_EQ(uiprefs::load(v.f).qc_after_pd, 1);
 }
+// Settings > Huawei/Samsung tests: orientation bit 7, stored 1 = shown so every older file and the default read hidden.
+void test_legacy_units_bit() {
+    using uiprefs::Prefs;
+    CHECK_EQ(Prefs{}.legacy_units, 0);
+    CHECK_EQ(uiprefs::encode(Prefs{}) == uiprefs::encode(Prefs{.legacy_units = false}), 1);   // hidden adds nothing to the file
+    const std::array<std::uint8_t, 8> old{'K', '2', 'U', 'P', 0, 0xFF, 0, 0};
+    CHECK_EQ(uiprefs::decode(old).legacy_units, 0);
+    const std::array<std::uint8_t, 8> shown{'K', '2', 'U', 'P', 0, 0xFF, 0, 0x80};
+    CHECK_EQ(uiprefs::encode(Prefs{.legacy_units = true}) == shown, 1);
+    CHECK_EQ(uiprefs::decode(shown).legacy_units, 1);
+    for (int rot = 0; rot < 4; rot++) {
+        const Prefs in{.screenshot = false, .rotation_manual = true, .rotation = std::uint8_t(rot), .idle_wake = true, .home_hero = 2, .ct_level = 1,
+                       .long_back = 3, .legacy_units = true};
+        CHECK_EQ(uiprefs::decode(uiprefs::encode_ext(in)) == in, 1);
+    }
+    CHECK_EQ(uiprefs::decode(uiprefs::encode(Prefs{.home_hero = 2, .legacy_units = true})).home_hero, 2);   // the hero bits stay put
+    Vol v;
+    CHECK_EQ(uiprefs::save(v.f, Prefs{.legacy_units = true}) == true, 1);
+    CHECK_EQ(uiprefs::load(v.f).legacy_units, 1);
+    CHECK_EQ(uiprefs::save(v.f, Prefs{}) == true, 1);
+    CHECK_EQ(uiprefs::load(v.f).legacy_units, 0);
+    CHECK_EQ(uiprefs::legacy_units_shown, 1);   // the runtime flag defaults to shown; main() sets it from the prefs (hidden by default)
+}
 void test_legacy_page_is_outside_the_volume() {
     CHECK_EQ(flash::store_sector_allowed(uiprefs::kLegacyAddr), 0);   // no static grant: erasable only with our signature on it
     CHECK_EQ(flash::legacy_candidate(uiprefs::kLegacyAddr), 1);
@@ -270,6 +293,7 @@ int main() {
     test_retired_theme_bits();
     test_ct_level_bits();
     test_long_back_byte();
+    test_legacy_units_bit();
     test_legacy_page_is_outside_the_volume();
     return test_report("test_uiprefs");
 }

@@ -861,6 +861,8 @@ class ChargerTestViewTest(unittest.TestCase):
         self.assertEqual(v["wait"], {"elapsed_ms": 0, "total_ms": 0, "retry": False, "paused": False})
         self.assertTrue(v["armed_is_pick"])
         self.assertFalse(v["cable_armed"])
+        self.assertFalse(v["legacy_units"])   # the Huawei/Samsung switch: off (hidden) is the fresh K2's default
+        self.assertTrue(kr.decode_charger_test_view(VIEW[:4] + b"\x80" + VIEW[5:])["legacy_units"])   # flags bit 15: shown
         self.assertEqual(v["rmdo"], "3.2")
         self.assertEqual(v["resume"], {"pending": False, "auto": False, "gate_ready": False, "held": False,
                                        "behind_cable": False, "rd": False})

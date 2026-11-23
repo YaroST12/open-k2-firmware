@@ -362,6 +362,11 @@ public:
     void set_avs_sweep(bool on) { options_.avs_sweep = on; }
     charger_test::Level level() const { return options_.level; }
     void set_level(charger_test::Level l);   // with_level: the level and both deep sweeps; a START armed on the old plan is disarmed
+    // Settings > Huawei/Samsung tests changed (or first read): the draft drops FCP, SCP and AFC, or takes them back when it was the default.
+    void sync_legacy();
+    // The options a plan is made from: the draft, plus the hidden units an explicit unit list names (remote runs still reach them).
+    charger_test::Options plan_options() const;
+    charger_test::Options journal_options() const { auto o = options_; o.selected |= run_extra_; return o; }   // the header names what the run was planned with
     // The SVOOC ceiling stage (opt-in, Cmd::ChargerSvoocCap): Off, On (the far-sink check stays) or UsbA (waived: a legacy A port).
     svooc_ceiling::Mode svooc_cap() const { return options_.svooc_cap; }
     void set_svooc_cap(svooc_ceiling::Mode m) { options_.svooc_cap = m; }
@@ -388,7 +393,8 @@ public:
         uint8_t stage = 0, cursor = 0, rows = 0;
         bool on_screen = false, confirming = false, confirm_reattach = false, self_supplied = false, resume_pending = false,
              auto_resume = false, gate_ready = false, resume_held = false, behind_cable = false, resume_rd = false,
-             wait_paused = false, wait_retry = false, armed_is_pick = false, rmdo_valid = false, cable_armed = false;
+             wait_paused = false, wait_retry = false, armed_is_pick = false, rmdo_valid = false, cable_armed = false,
+             legacy_shown = false;
         uint32_t confirm_left_ms = 0, wait_elapsed_ms = 0, wait_total_ms = 0, run_elapsed_s = 0;
         uint16_t card_no = 0, delta_runs = 0;
         uint8_t delta_n = 0;
@@ -531,6 +537,8 @@ private:
     // Review's Level row and the remote (Cmd 0x5B) change it, and Deep turns both deep sweeps on (with_level). The Tests list
     // lines and the remote knob (charger-sweep, Cmd 0x0F) still toggle each sweep on its own after that.
     charger_test::Options options_{};
+    uint32_t run_extra_ K2_BSS_INIT(0);          // hidden-unit algorithm bits the run in flight was planned with (not in the draft; the journal header keeps them)
+    bool legacy_hidden_seen_ K2_BSS_INIT(false);   // what sync_legacy() last applied to the draft (the draft starts as shown)
     charger_test::Summary summary_;
     // The Tests list's preset counts (planned_tests at the chosen depth), kept until the depth, the source list or the cable changes.
     std::array<uint8_t, 4> preset_n_{};
@@ -1316,9 +1324,10 @@ public:
     // The row count follows the build: the Screenshot row exists only with K2_SCREENSHOT=1 (the default is 0). ui_pages.cpp
     // static_asserts these against its SettingRow enum, and test_settings_rows0 pins the K2_SCREENSHOT=0 values.
     static constexpr int kScreenshotRows = K2_SCREENSHOT ? 1 : 0;
-    static constexpr int kRows = 11 + kScreenshotRows;
-    static constexpr int kDisplayRow = 7 + kScreenshotRows;
-    static constexpr int kSystemRow = 8 + kScreenshotRows, kMemoryRow = 9 + kScreenshotRows, kBootRow = 10 + kScreenshotRows;
+    static constexpr int kRows = 12 + kScreenshotRows;
+    static constexpr int kUnitsRow = 6 + kScreenshotRows;   // Huawei/Samsung: FCP, SCP, AFC in the charger test
+    static constexpr int kDisplayRow = 8 + kScreenshotRows;
+    static constexpr int kSystemRow = 9 + kScreenshotRows, kMemoryRow = 10 + kScreenshotRows, kBootRow = 11 + kScreenshotRows;
     static constexpr int16_t kIdHeadY = 3, kIdLineY = 24, kIdDashY = 41, kListY = 44;   // identity y0..43, the list under it
 private:
     static void row_fn(void *ctx, int index, bool focused, kit::RowSpec &out);   // reads the live settings: no value cache

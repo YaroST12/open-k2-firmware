@@ -211,6 +211,7 @@ remote::ChargerTestView Remote::charger_test_view() {
     flag(v.armed_is_pick, remote::kCtViewArmedIsPick);
     flag(v.rmdo_valid, remote::kCtViewRmdoValid);
     flag(v.cable_armed, remote::kCtViewCableArmed);
+    flag(v.legacy_shown, remote::kCtViewLegacyShown);
     o.confirm_left_ms = sat16(v.confirm_left_ms);
     o.wait_elapsed_ms = sat16(v.wait_elapsed_ms);
     o.wait_total_ms = sat16(v.wait_total_ms);

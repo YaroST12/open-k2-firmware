@@ -3173,7 +3173,7 @@ static void test_charger_test_wire() {
 static void test_charger_test_view_wire() {
     Fake f; Frame r;
     f.view.stage = 4; f.view.cursor = 2; f.view.rows = 1;
-    f.view.flags = kCtViewOnScreen | kCtViewConfirming | kCtViewWaitRetry | kCtViewArmedIsPick | kCtViewRmdoValid;
+    f.view.flags = kCtViewOnScreen | kCtViewConfirming | kCtViewWaitRetry | kCtViewArmedIsPick | kCtViewRmdoValid | kCtViewLegacyShown;
     f.view.confirm_left_ms = 0x0FA0; f.view.wait_elapsed_ms = 0x1234; f.view.wait_total_ms = 10000; f.view.run_elapsed_s = 0x0102;
     f.view.card_no = 0x0304; f.view.delta_n = 5; f.view.delta_runs = 0x0607;
     f.view.runnable = 9; f.view.skipped = 3; f.view.refusal = 7; f.view.refusal_mv = 0x2710;
@@ -3184,7 +3184,7 @@ static void test_charger_test_view_wire() {
     CHECK_EQ(run(f, request(0x0B, 31, {3}), r), 1);
     check_header(r, 0x0B, 31, Status::Ok, uint8_t(30 + text.size()));
     check_bytes(r, 6, {4, 2, 1,                     // stage cursor rows
-                       0x03, 0x38,                  // flags: on_screen confirming wait_retry armed_is_pick rmdo_valid
+                       0x03, 0xB8,                  // flags: on_screen confirming wait_retry armed_is_pick rmdo_valid legacy_shown
                        0xA0, 0x0F, 0x34, 0x12, 0x10, 0x27, 0x02, 0x01,   // confirm_left wait_elapsed wait_total run_elapsed
                        0x04, 0x03, 5, 0x07, 0x06,   // card_no delta_n delta_runs
                        9, 3, 7, 0x10, 0x27,         // runnable skipped refusal refusal_mv

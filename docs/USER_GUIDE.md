@@ -83,6 +83,7 @@ Faces (MINUS / PLUS flips, wraps)            OK opens the Bench     BACK returns
   K2 ............ the Settings page
                     USB Link (HID, Drive), Autorotate (Auto, Manual 0/90/180/270),
                     Rotate buttons, Screenshot, Smoothing, Wake sleeping port, Test level,
+                    Huawei/Samsung (FCP, SCP, AFC in the charger test),
                     System state (Diag), Memory, Boot info (QR)
 ```
 
@@ -288,13 +289,15 @@ Steps of the wizard:
    | All tests | Everything, including QC Class B 20 V |
    | PD only | PD fixed, PPS and AVS levels, plus the Xiaomi 6 A step |
    | Legacy only | D+/D- protocols: vendor modes, QC, UFCS |
-   | Vendor modes | Huawei, Samsung, OPPO, vivo |
+   | Vendor modes | OPPO, vivo; with Settings > Huawei/Samsung ON also Huawei, Samsung |
    | Custom... | Pick families and individual tests |
    | Last results | Appears once a run exists; opens the last Results |
 
    The number at the right of a preset is how many tests that run would make at the **Depth** in force (Light, Medium or Deep; OK on the Depth row cycles it), so PD only grows with the depth (for a typical charger 1 at Light, 17 at Medium, 48 at Deep). It follows the charger's real offers when the K2 has read them, and a typical SPR charger's list when it has not. It counts tests and spec checks, the same way on every row.
 
-   **Custom**: six families (Huawei/Honor, Samsung, OPPO/OnePlus/vivo, Xiaomi/Redmi, USB PD, QC/UFCS) with counts as ON, OFF or PART. Short OK toggles a family, long OK opens its group (inside, short OK sets one test, long OK toggles the whole group). The Xiaomi family cannot be toggled on its own because it rides on PD. The last row is Next.
+   **FCP, SCP and AFC are hidden by default** (Settings > Huawei/Samsung, OFF on a fresh K2): they are not in any preset, in Custom or in the plan, the step counts leave them out and Results has no rows for them. They take a long time to run. Turning the switch ON brings them back everywhere. Detection elsewhere (Fast charge, passive readouts) is unaffected, and `ct_start.py --units fcp,scp,afc` (or `k2_remote charger-units`) runs them whatever the switch says.
+
+   **Custom**: six families (Huawei/Honor, Samsung, OPPO/OnePlus/vivo, Xiaomi/Redmi, USB PD, QC/UFCS; four with the switch OFF, without Huawei/Honor and Samsung) with counts as ON, OFF or PART. Short OK toggles a family, long OK opens its group (inside, short OK sets one test, long OK toggles the whole group). The Xiaomi family cannot be toggled on its own because it rides on PD. The last row is Next.
 
 2. **Spoof cable (2 of 3)**: the cable identity the K2 presents to the charger (it answers the charger's cable query). The list is the shared one: **Off (real cable)** (no identity), built-ins (for example EPR 50 V 5 A, Xiaomi 6A, OnePlus 100W) and your saved cables. **Xiaomi 6A** is a Xiaomi-branded 20 V 5 A cable without EPR (the K2 still tries EPR entry with it; an EPR charger that checks the cable is expected to refuse, so its EPR levels usually end skipped); it also answers the charger's Xiaomi cable check, which some Xiaomi-family chargers ask before they offer their 6 A mode. The dialog opens on **EPR 50 V 5 A**: with nothing picked yet, the K2 presents that cable, so a charger that advertises EPR gets its EPR levels and EPR AVS tested instead of being skipped for an unread cable. OK picks the row under the cursor and goes to Review; the choice is remembered, **Off (real cable)** included (an explicit Off stays Off). The default itself is never written to flash, and a boot that has nothing remembered arms nothing. It applies to the PD units only.
 
@@ -350,6 +353,7 @@ Reached as the **K2** place, the last row of the Bench. The top shows the firmwa
 | Smoothing | Off / Low / Medium / High | across boots |
 | Wake sleeping port | ON / OFF (default OFF) | across boots |
 | Test level | Light / Medium / Deep (default Medium) | across boots |
+| Huawei/Samsung | ON / OFF (default OFF): FCP, SCP, AFC in the charger test | across boots |
 | System state | opens [Diag](#diag) | |
 | Memory | opens the memory page | |
 | Boot info | opens the boot record as a QR code to share | |
@@ -608,6 +612,7 @@ Radio rows: **Auto** (follows gravity), then **Manual** 0, 90, 180, 270 degrees.
 - **Smoothing**: Off ("Raw readings"), Low ("Light calming"), Medium ("Balanced"), High ("Steady, slower"). OK cycles. Applied at once, remembered. It filters the display readings only, not the recorded data.
 - **Wake sleeping port**: OFF by default, and then the idle K2 presents no Rd and stays passive. ON lets an idle K2 hold its own Rd on one line at a time (2 s each) when that line reads like a sleeping source (about 3.0 to 3.3 V open, for example a splitter port with nothing plugged in), so the source can wake and the PD list appears without any pin. With it ON every waiting charger also sees the K2 as a sink for a moment, so turn it off again when you do not need it. It never acts during a charger test or a cable/source tool, and turning it off lets go of the line at once. Remembered.
 - **Test level**: the level each new charger test starts at: Light ("Charger test: offers at 5V"), Medium ("Charger test: levels, no sweeps", the default) or Deep ("Charger test: + PPS, AVS sweeps"). OK cycles Light, Medium, Deep. Remembered. The Depth row on the Tests step changes it too; that choice holds for every run until the next change or a reboot, which starts again from this setting. See [Test levels](#test-levels).
+- **Huawei/Samsung**: ON puts the Huawei FCP, Huawei SCP and Samsung AFC units into the charger test (presets, Custom, plan, Results). OFF, the default, leaves them out: they take a long time. OK toggles. Remembered. `k2_remote charger-test view` reports the state as `FCP/SCP/AFC shown|hidden`.
 
 ---
 
@@ -691,7 +696,7 @@ The bootloader area (0x08000000 to 0x080037FF) is never written by this firmware
 | Item | Where | Notes |
 | :--- | :--- | :--- |
 | USB link choice | flash, `/usb.cfg` | off by default, applies after replug |
-| Screenshot on/off, Smoothing, Rotate buttons, Autorotate, Wake sleeping port, Test level | flash, `/prefs.cfg` | remembered |
+| Screenshot on/off, Smoothing, Rotate buttons, Autorotate, Wake sleeping port, Test level, Huawei/Samsung | flash, `/prefs.cfg` | remembered |
 | Cable identity for the charger test | flash, `/cable.cfg` | remembered once picked (Off included); never written while the EPR 50 V 5 A default is in force |
 | Saved cables (up to 140) | flash | also shown on the drive as JSON |
 | Report cards (up to 64) | flash | also on the drive as `CARDS.JSON` |

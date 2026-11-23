@@ -82,7 +82,7 @@
                card_no: 0, delta_n: 0, delta_runs: 0, preview: { runnable: 0, skipped: 0, refusal: "none", refusal_mv: 0 },
                sweep_points: { pps: 0, avs: 0 }, guard: { topology: "direct", run_guard: 0 },
                resume: { pending: false, auto: false, gate_ready: false, held: false, behind_cable: false, rd: false },
-               self_supplied: false, armed_is_pick: false, cable_armed: false, rmdo: null, message: "" };
+               self_supplied: false, armed_is_pick: false, cable_armed: false, legacy_units: false, rmdo: null, message: "" };
     }
     if (kind === "results") { F.reads++; var all = F.run ? shown(F.run) : []; return meta(all); }
     return meta(null);

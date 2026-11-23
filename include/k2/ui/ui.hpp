@@ -334,6 +334,8 @@ public:
         charger_test_.set_level(charger_test::Level(level));
         return true;
     }
+    // Settings > Huawei/Samsung tests (uiprefs::legacy_units_shown) changed: FCP, SCP and AFC leave or rejoin the draft.
+    void charger_test_legacy_changed() { charger_test_.sync_legacy(); }
     void charger_test_set_sweep(bool on) { charger_test_.set_sweep(on); }
     void charger_test_set_avs_sweep(bool on) { charger_test_.set_avs_sweep(on); }
     // The SVOOC ceiling stage of the next run (Off / On / UsbA, svooc_ceiling::Mode as a byte; false for an unknown mode).

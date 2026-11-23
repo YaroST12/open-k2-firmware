@@ -2132,6 +2132,7 @@ enum class SettingRow : uint8_t {
     Smoothing,
     IdleWake,
     TestLevel,
+    LegacyUnits,
     LongBack,
     Display,
     SystemState,
@@ -2142,6 +2143,7 @@ enum class SettingRow : uint8_t {
 constexpr int kSettingsRows = static_cast<int>(SettingRow::Count);
 // Checked in both builds (K2_SCREENSHOT 0 and 1): the page's public constants must follow the enum.
 static_assert(kSettingsRows == SettingsPage::kRows);
+static_assert(static_cast<int>(SettingRow::LegacyUnits) == SettingsPage::kUnitsRow);
 static_assert(static_cast<int>(SettingRow::Display) == SettingsPage::kDisplayRow);
 static_assert(static_cast<int>(SettingRow::SystemState) == SettingsPage::kSystemRow);
 static_assert(static_cast<int>(SettingRow::Memory) == SettingsPage::kMemoryRow);
@@ -2226,13 +2228,13 @@ void SettingsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
 #if K2_SCREENSHOT
         "Screenshot",
 #endif
-        "Smoothing", "Wake port", "Test level", "Long Back", "Display", "System state", "Memory", "Boot info"};
+        "Smoothing", "Wake port", "Test level", "Huawei/Samsung", "Long Back", "Display", "System state", "Memory", "Boot info"};
     static constexpr Icon kIcons[kSettingsRows] = {
         Icon::Usb, Icon::Rotate, Icon::Keys,
 #if K2_SCREENSHOT
         Icon::Camera,
 #endif
-        Icon::Wave, Icon::Plug, Icon::Bolt, Icon::Clock, Icon::Meter, Icon::Chip, Icon::Chip, Icon::Report};
+        Icon::Wave, Icon::Plug, Icon::Bolt, Icon::Brick, Icon::Clock, Icon::Meter, Icon::Chip, Icon::Chip, Icon::Report};
     static constexpr const char *kPresets[smoothing::kPresetCount] = {"Off", "Low", "Medium", "High"};
     static constexpr const char *kPresetNotes[smoothing::kPresetCount] = {"Raw readings", "Light calming", "Balanced", "Steady, slower"};
     // charger_test::Level order (Medium 0, Light 1, Deep 2): the charger test's default level and what it runs.
@@ -2288,6 +2290,9 @@ void SettingsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
         out.note = kLevelNotes[l];
         break;
     }
+    case SettingRow::LegacyUnits:   // FCP, SCP and AFC: slow to run and rarely answered, so off until asked for
+        set_toggle(uiprefs::legacy_units_shown, "FCP, SCP, AFC in the test", "FCP, SCP, AFC hidden");
+        break;
     case SettingRow::LongBack:   // the ring view's long Back target (ring::view_key)
         out.tail = ring::name(ring::sanitize_target(self->ctx_.keep.long_back));
         out.note = "Where Long Back jumps";
@@ -2352,6 +2357,15 @@ bool SettingsPage::on_event(Event e) {
             uiprefs::set(p);
             ct_level_ = p.ct_level;
             if (!ctx_.ui->charger_test_busy()) ctx_.ui->charger_test_set_level(p.ct_level);   // a running test keeps its level
+            update(ctx_.now);
+            break;
+        }
+        case SettingRow::LegacyUnits: {   // remembered; the idle draft gains or loses the units at once (a running test keeps its rows)
+            uiprefs::Prefs p = uiprefs::stored();
+            p.legacy_units = !uiprefs::legacy_units_shown;
+            uiprefs::set(p);
+            uiprefs::legacy_units_shown = p.legacy_units;
+            ctx_.ui->charger_test_legacy_changed();
             update(ctx_.now);
             break;
         }
