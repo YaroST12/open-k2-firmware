@@ -169,6 +169,7 @@ struct Session {
     std::uint8_t n_src = 0;
     bool sink_answered = false;
     bool contract = false, contract_seen = false, epr = false, mismatch = false, pps = false;
+    bool req_dev = false;                  // the last Request came from the device on the wire, not from the K2
     std::uint8_t req_fixed = 0;
     std::uint8_t n_snk = 0;
     bool snk_higher = false;               // sink PDO1 "higher capability": it wants more than 5 V
@@ -298,6 +299,7 @@ private:
     void message(bool rx, std::uint8_t token, std::uint16_t hdr, std::span<const std::uint8_t> objs, std::uint32_t crc);
     void contract_from_rdo();
     void close_burst();
+    void hand_over();   // the K2 latched an inline sink: its own sink session ends, the device's begins
     bool first_vbus_opens(std::uint16_t mv) const;   // VBUS up on a trace that started mid-session
     void sustain(std::uint32_t dt, std::uint32_t ma);   // the kSustainMs blocks against the contract
 

@@ -1104,6 +1104,104 @@ void test_k2_release_is_not_a_cut_out() {
     EXPECT_CODE(run, Code::ActiveSink, Sev::Info);
 }
 
+// The inline hand-over (hardware 2026-11-23): the K2 re-read a sleeping charger as the sink (5 V), then a phone plugged in
+// behind it, sagging VBUS under kLostMv on the K2's own contract; the K2 latched inline, released its Rd, and the phone
+// negotiated PPS. The phone's session is the one shown: none of the K2's sink session (its sag, its role) carries over.
+const std::vector<std::uint32_t> kPpsCaps{fixed(5000, 3000), fixed(9000, 3000), 3u << 30 | 110u << 17 | 50u << 8 | 100u};
+constexpr std::uint32_t pps_rdo(unsigned pos, unsigned mv, unsigned ma) { return pos << 28 | (mv / 20) << 9 | ma / 50; }
+
+void k2_reread_contract(Trace& t) {
+    t.cc(true);
+    t.rx(true, false, Source_Cap, kPpsCaps);
+    t.tx(false, false, Request, {rdo(1, 3000, 3000)});
+    t.rx(true, false, Accept, {});
+    t.wait(40);
+    t.rx(true, false, PS_RDY, {});
+    t.hold(5000, 0, 3000);
+}
+
+void test_inline_takeover_starts_the_device_session() {
+    Trace t;
+    k2_reread_contract(t);
+    t.vbus(3380, 0);   // the phone's plug-in sag on the K2's contract
+    t.wait(150);
+    t.hold(5000, 0, 2500);
+    t.put(pdtrace::Type::Link, {1});
+    t.put(pdtrace::Type::Sink, {std::uint8_t(SinkState::Idle), 0, 0, 0});
+    t.hold(5000, 1500, 3000);   // the dead phone draws at 5 V
+    t.hold(0, 0, 300);          // the source restarts for the phone
+    t.hold(5000, 1500, 200);
+    t.rx(true, false, Source_Cap, kPpsCaps);
+    t.rx(false, false, Request, {pps_rdo(3, 8200, 3000)});
+    t.wait(5);
+    t.rx(true, false, Accept, {});
+    t.wait(60);
+    t.rx(true, false, PS_RDY, {});
+    t.hold(8200, 3000, 5000);
+    Run run;
+    run.go(t);
+    EXPECT_NO(run, Code::VbusLost);
+    EXPECT_NO(run, Code::ActiveSink);
+    CHECK_COND(!run.r.active);
+    CHECK_COND(run.r.power != kPowerActive);
+    CHECK_EQ(run.r.link, 0);
+    char v[40];
+    screen::verdict(run.r, v);
+    CHECK_COND(std::strstr(v, "K2 is") == nullptr);
+    CHECK_COND(std::strstr(v, "unstable") == nullptr);
+    char w[24];
+    Sev sev = Sev::Ok;
+    screen::word(run.r, w, sev);
+    CHECK_COND(std::strcmp(w, "VBUS lost") != 0);
+    CHECK_COND(std::strcmp(w, "K2 is the sink") != 0);
+    // the K2's own session is finished and keeps what happened in it
+    CHECK_EQ(run.a.finished(), 1);
+    const Report k2 = evaluate(run.a.last(), nullptr, run.a.now_ms());
+    CHECK_COND(k2.active);
+    CHECK_COND(k2.power == kPowerActive);
+}
+
+// The other order: the device's Request reaches the wire before the K2 latches inline. The device's negotiation goes
+// with it into its own session, so its contract is seen there.
+void test_inline_takeover_after_the_device_request() {
+    Trace t;
+    k2_reread_contract(t);
+    t.reset(0);
+    t.hold(0, 0, 300);
+    t.hold(5000, 200, 200);
+    t.rx(true, false, Source_Cap, kPpsCaps);
+    t.rx(false, false, Request, {pps_rdo(3, 8200, 3000)});
+    t.wait(5);
+    t.rx(true, false, Accept, {});
+    t.put(pdtrace::Type::Link, {1});
+    t.put(pdtrace::Type::Sink, {std::uint8_t(SinkState::Idle), 0, 0, 0});
+    t.wait(60);
+    t.rx(true, false, PS_RDY, {});
+    t.hold(8200, 3000, 5000);
+    Run run;
+    run.go(t);
+    EXPECT_NO(run, Code::ActiveSink);
+    CHECK_COND(!run.r.active);
+    CHECK_COND(run.r.power != kPowerActive && run.r.power != kPowerUnseen && run.r.power != kPowerNone);
+    CHECK_EQ(run.r.offer_mw, 55000u);   // the source's offer came along
+    CHECK_EQ(run.a.finished(), 1);
+}
+
+// A passive session keeps its real findings across the inline latch: the latch splits only the K2's own sink session.
+void test_inline_latch_keeps_a_passive_cut_out() {
+    Trace t;
+    t.cc(true);
+    t.contract(kPpsCaps, rdo(2, 3000, 3000), false);
+    t.hold(9000, 1000, 2000);
+    t.put(pdtrace::Type::Link, {1});
+    t.hold(9000, 2000, 2000);
+    t.hold(300, 0, 3000);
+    Run run;
+    run.go(t);
+    EXPECT_CODE(run, Code::VbusLost, Sev::Fail);
+    CHECK_EQ(run.a.finished(), 0);
+}
+
 // The K2's own Requests (an active script) are not the device asking again and again.
 void test_k2_requests_are_not_many_requests() {
     Trace t;
@@ -1629,6 +1727,9 @@ int main() {
     test_dip_with_cc_kept_is_reported();
     test_transition_is_not_a_breach();
     test_k2_release_is_not_a_cut_out();
+    test_inline_takeover_starts_the_device_session();
+    test_inline_takeover_after_the_device_request();
+    test_inline_latch_keeps_a_passive_cut_out();
     test_k2_requests_are_not_many_requests();
     test_active_sink_pdo_not_captured();
     test_contract_unseen_without_vbus();
