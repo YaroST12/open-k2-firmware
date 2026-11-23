@@ -154,6 +154,7 @@ void poll(bool charger_test, pd::SvWhy block) {
     in.contract = owns_contract();
     in.block = block;
     in.survey_running = g_s.running();
+    in.reread_running = fusb302::reread_status().state == pd::RereadState::Running;
     const pd::AutoAct auto_act = g_auto.step(in, now);   // before the view follows a changed session: a read cut by the link is noticed
     if (fusb302::session() != g_session) {   // a detach or a new source: what was read belongs to the old one
         if (g_s.planned() || g_s.blocked()) K2LOG("[SURVEY] attach changed: view cleared\n");

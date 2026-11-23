@@ -177,7 +177,7 @@ AutoAct AutoRead::step(const AutoIn& in, std::uint32_t now) {
         return AutoAct::None;
     }
     if (spent_) return AutoAct::None;
-    if (!in.contract) { ready_ = false; return AutoAct::None; }   // not ours (yet): a later Ready may still be
+    if (!in.contract || in.reread_running) { ready_ = false; return AutoAct::None; }   // not ours (yet): a later Ready may still be
     if (!ready_) { ready_ = true; ready_at_ = now; }
     if (in.block != SvWhy::None || in.survey_running) { spent_ = true; return AutoAct::None; }
     if (std::int32_t(now - ready_at_) < std::int32_t(kAutoSettleMs)) return AutoAct::None;

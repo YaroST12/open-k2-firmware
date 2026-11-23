@@ -114,6 +114,7 @@ struct AutoIn {
     bool contract = false;         // the K2's own Ready contract of this attach, its caps held
     SvWhy block = SvWhy::None;     // Inline: a downstream sink or load; ChargerTest: a tool owns the link; None: free
     bool survey_running = false;   // a survey (the auto read's own, or a manual one) is reading
+    bool reread_running = false;   // the driver's own re-read (a woken attach, pd-reread) holds the wire: not a block, the read waits
 };
 enum class AutoAct : std::uint8_t { None, Start, Abort };
 
