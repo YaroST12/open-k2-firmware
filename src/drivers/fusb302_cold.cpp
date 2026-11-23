@@ -1109,7 +1109,7 @@ static pd::LimState g_lim_logged = pd::LimState::Off;
 static std::uint8_t g_lim_logged_inj = 0;
 static std::uint32_t g_lim_logged_rdo = 0;
 
-pd::LimRefusal limit_arm(std::uint32_t limit_mw, const pd::LimFacts& outside) {
+pd::LimRefusal limit_arm(std::uint32_t limit_mw, const pd::LimFacts& outside, bool seed) {
     pd::LimFacts f = outside;
     f.busy = f.busy || engines_busy() || iq_running();
     const pd::LimRefusal r = pd::lim_gate(f, limit_mw);
@@ -1118,7 +1118,7 @@ pd::LimRefusal limit_arm(std::uint32_t limit_mw, const pd::LimFacts& outside) {
         return r;
     }
     // A far sink's Request on this attach means the always-fed sniffer holds its contract: limit it now, no replug.
-    lim().arm(limit_mw, systick::millis(), far_sink_seen() ? &iq().watch() : nullptr);
+    lim().arm(limit_mw, systick::millis(), seed && far_sink_seen() ? &iq().watch() : nullptr);
     g_lim_on = true;
     g_lim_logged = pd::LimState::Armed;
     g_lim_logged_inj = 0;
@@ -1144,7 +1144,8 @@ void lim_report() {
               unsigned(s.limit_mw));
         for (unsigned i = 0; i < s.forged_n; i++) K2LOG("[LIM] forged pos %u PDO 0x%08X\n", i + 1, unsigned(s.forged[i]));
     }
-    if (s.req_rdo != g_lim_logged_rdo) {
+    if (s.req_rdo == 0) g_lim_logged_rdo = 0;   // a detach cleared it: the next attach's first Request logs again
+    else if (s.req_rdo != g_lim_logged_rdo) {
         g_lim_logged_rdo = s.req_rdo;
         K2LOG("[LIM] t=%u sink Request pos %u RDO 0x%08X: %u mW (limit %u mW)\n", t, unsigned(s.req_pos), unsigned(s.req_rdo),
               unsigned(s.req_mw), unsigned(s.limit_mw));

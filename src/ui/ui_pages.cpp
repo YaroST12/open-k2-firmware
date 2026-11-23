@@ -6,6 +6,7 @@
 #include "k2/ui/trend.hpp"
 #include "k2/ui/uiprefs.hpp"
 #include "k2/ui/ui_display.hpp"
+#include "k2/core/held.hpp"
 #include "k2/core/idle_hw.hpp"
 #include "k2/ui/ui_lines.hpp"
 #include "k2/ui/ui_tools.hpp"
@@ -2615,10 +2616,12 @@ void ToolsPage::show(View v) {
         for (int i = 0; s.state != pd::LimState::Off && i < npicks_; i++)
             if (picks_[i].mw == s.limit_mw) pick_ = i + 1;
         title_ = text::tools::kLimName;
+        confirm_until_ = 0;
         if (npicks_ == 0)
-            ctx_.toast.show(FooterTone::Info, pd::active_caps().valid ? text::tools::kLimToastNoLower : text::tools::kLimToastNoOffers, ctx_.now);
+            ctx_.toast.show(FooterTone::Info, held::shown_caps().valid ? text::tools::kLimToastNoLower : text::tools::kLimToastNoOffers, ctx_.now);
     } else {
         title_ = "Tools";
+        confirm_until_ = 0;
     }
     if (!ctx_.blank) pg::clear_body(ctx_.content, kit::kBelowBar);
     title_bar();
@@ -2628,11 +2631,13 @@ void ToolsPage::show(View v) {
     update(ctx_.now);
 }
 
-// The charger's own list, read live: a new one reshapes the picker (its rows repaint by signature).
+// The charger's own list: the live one, else the last one the K2 held (inline it only sniffs). A new list reshapes the picker
+// (its rows repaint by signature). With none known at all, row 1 is Reset link: the charger lists again into the K2.
 void ToolsPage::build_picks() {
-    const pd::SourceCaps &c = pd::active_caps();
+    const pd::SourceCaps &c = held::shown_caps();
     const std::size_t n = std::min<std::size_t>(c.num_pdos, c.pdos.size());
     npicks_ = c.valid ? static_cast<uint8_t>(pd::lim_picks({c.pdos.data(), n}, picks_)) : 0;
+    reset_row_ = !c.valid;
 }
 
 void ToolsPage::draw_static() {
@@ -2668,6 +2673,13 @@ void ToolsPage::limit_row(int index, bool focused, kit::RowSpec &out) const {
                 out.note = tx::kLimNoteOff;
             }
         }
+        return;
+    }
+    if (reset_row_ && index == 1) {
+        out.marker = kit::Marker::Icon;
+        out.icon = Icon::Plug;
+        out.text = tx::kLimRowReset;
+        if (focused) out.note = tx::kLimNoteReset;
         return;
     }
     out.marker = kit::Marker::Radio;
@@ -2745,11 +2757,11 @@ void ToolsPage::limit_edge() {
 }
 
 void ToolsPage::update(uint32_t) {
-    title_badge(false);
+    title_badge(view_ == View::PickLimit && held::showing_held());   // offers of a charger that is gone: LAST
     limit_edge();
     if (view_ == View::PickLimit) {
         build_picks();
-        pick_ = std::min(pick_, int(npicks_));
+        pick_ = std::min(pick_, count() - 1);
     } else {
         sel_ = std::min(sel_, rows() - 1);
     }
@@ -2758,36 +2770,61 @@ void ToolsPage::update(uint32_t) {
     ctx_.rows.draw(ctx_.now, ctx_.budget);
 }
 
-// OK on a level arms it at once through the remote's path; a refusal is the result, the row keeps what was in force.
-void ToolsPage::pick_limit() {
+void ToolsPage::ask_confirm(uint32_t key) {
+    confirm_key_ = key;
+    confirm_until_ = ctx_.now + Ui::kConfirmWindowMs;
+    if (confirm_until_ == 0) confirm_until_ = 1;
+    ctx_.toast.show(FooterTone::Caution, text::tools::kLimToastConfirm, ctx_.now, Ui::kConfirmWindowMs);
+}
+
+// OK on a level (or Off) goes through Ui::pd_limit_set: a live contract is reset first, on a second OK within the window, so the
+// charger lists again into the clamp; the row keeps what was in force until then. The Reset link row only reads the offers.
+bool ToolsPage::pick_limit() {
     namespace tx = text::tools;
+    constexpr uint32_t kResetKey = 0xFFFFFFFFu;
+    if (reset_row_ && pick_ == 1) {
+        const bool confirmed = confirmed_for(kResetKey);
+        confirm_until_ = 0;
+        switch (ctx_.ui->link_reset(confirmed, ctx_.now)) {
+        case Ui::LinkResetResult::Cycled: ctx_.toast.show(FooterTone::Info, tx::kLimToastRescan, ctx_.now, 2500); break;
+        case Ui::LinkResetResult::HardReset: ctx_.toast.show(FooterTone::Info, tx::kLimToastResetting, ctx_.now, 2500); break;
+        case Ui::LinkResetResult::NeedConfirm: ask_confirm(kResetKey); break;
+        case Ui::LinkResetResult::SelfPowered: ctx_.toast.show(FooterTone::Caution, tx::kLimToastSelfPowered, ctx_.now); break;
+        case Ui::LinkResetResult::Busy: ctx_.toast.show(FooterTone::Caution, tx::kLimToastRetry, ctx_.now, 1500); break;
+        case Ui::LinkResetResult::NoLink: ctx_.toast.show(FooterTone::Info, tx::kLimToastNoLink, ctx_.now, 1500); break;
+        }
+        return true;   // stays: the offers show up here once the charger lists again
+    }
     const pd::LimStatus &s = fusb302::limit_status();
     const bool armed = s.state != pd::LimState::Off;
-    if (pick_ <= 0 || pick_ > npicks_) {
-        if (armed) fusb302::limit_disarm();
-        return;
+    const uint32_t mw = pick_ > 0 && pick_ <= npicks_ ? picks_[pick_ - 1].mw : 0;
+    if (armed && s.limit_mw == mw) return false;   // already on it: arming again would restart the negotiation
+    const bool confirmed = confirmed_for(mw);
+    confirm_until_ = 0;
+    switch (ctx_.ui->pd_limit_set(mw, confirmed, ctx_.now)) {
+    case Ui::LimitSet::Done: break;
+    case Ui::LimitSet::DoneReset: ctx_.toast.show(FooterTone::Info, tx::kLimToastResetting, ctx_.now, 2500); break;
+    case Ui::LimitSet::NeedConfirm: ask_confirm(mw); return true;
+    case Ui::LimitSet::NoReset: ctx_.toast.show(FooterTone::Caution, tx::kLimToastNoReset, ctx_.now); break;
+    case Ui::LimitSet::BadLimit: ctx_.toast.show(FooterTone::Error, tx::kLimToastBadLimit, ctx_.now); break;
+    case Ui::LimitSet::Busy: ctx_.toast.show(FooterTone::Caution, tx::kLimToastBusy, ctx_.now); break;
     }
-    const uint32_t mw = picks_[pick_ - 1].mw;
-    if (armed && s.limit_mw == mw) return;   // already on it: arming again would restart the negotiation
-    switch (ctx_.ui->pd_limit_arm(mw)) {
-    case pd::LimRefusal::None: break;
-    case pd::LimRefusal::BadLimit: ctx_.toast.show(FooterTone::Error, tx::kLimToastBadLimit, ctx_.now); break;
-    case pd::LimRefusal::Busy: ctx_.toast.show(FooterTone::Caution, tx::kLimToastBusy, ctx_.now); break;
-    }
+    return false;
 }
 
 bool ToolsPage::on_event(Event e) {
     if (e.press != Press::Short) return false;
     if (e.button == Button::Plus || e.button == Button::Minus) {
         cur() = std::clamp(cur() + (e.button == Button::Plus ? 1 : -1), 0, count() - 1);
+        confirm_until_ = 0;   // a moved selection is another question
         update(ctx_.now);
         return true;
     }
     if (e.button == Button::Ok) {
         const bench::Acts b = bench::tools();
         if (view_ == View::PickLimit) {
-            pick_limit();
-            show(View::List);
+            if (pick_limit()) update(ctx_.now);
+            else show(View::List);
         } else if (sel_ >= b.n) {
             show(View::PickLimit);
         } else {
@@ -2805,7 +2842,7 @@ bool ToolsPage::on_event(Event e) {
 Strip ToolsPage::labels() const {
     Strip l = list_strip(base_labels());
     const int at = view_ == View::PickLimit ? pick_ : sel_;
-    const int n = view_ == View::PickLimit ? 1 + int(npicks_) : rows();
+    const int n = count();
     if (at == 0) l[Button::Minus] = sl::UpDim;
     if (at >= n - 1) l[Button::Plus] = sl::DnDim;
     l[Button::Ok] = view_ == View::PickLimit ? sl::Select : sel_ >= bench::tools().n ? sl::Pick : sl::Open;

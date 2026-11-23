@@ -2239,7 +2239,7 @@ static void test_pd_limit_no_offers() {
     g_stub.caps = {};
     uint32_t t = open_limit_row(ui, 20000);
     press(ui, Button::Ok, ButtonEvent::Short, t += 10);
-    CHECK_EQ(ui.list_state().count, 1);                      // Off alone
+    CHECK_EQ(ui.list_state().count, 2);                      // Off, and Reset link to read them
     CHECK_STR(ui.context().toast.view().data(), "No charger offers yet");
     press(ui, Button::Back, ButtonEvent::Short, t += 10);
     ui.context().toast.clear();
@@ -2280,7 +2280,218 @@ static void test_pd_limit_give_up_toast_once() {
     }
 }
 
+// --- PD limit with a live contract: the link is reset first, on a second OK, and the arm after it is unseeded ---
+// Inline with a far sink's Request: the phone is in a contract through the K2.
+static void live_contract() { g_stub.inl = true; g_stub.far_sink = true; g_stub.hard_resets = 0; g_stub.lab_hard_resets = 0; }
+static void idle_link() { g_stub.inl = false; g_stub.far_sink = false; g_stub.contract = {}; g_stub.self_powered = false; g_stub.listen_on = false; }
+
+static void test_pd_limit_live_contract_resets_then_arms() {
+    Ui &ui = fresh_ui();
+    set_caps_65w();
+    uint32_t t = open_limit_row(ui, 20000);
+    live_contract();
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);
+    press(ui, Button::Plus, ButtonEvent::Short, t += 10);
+    press(ui, Button::Plus, ButtonEvent::Short, t += 10);   // 27 W
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);
+    CHECK_STR(ui.context().toast.view().data(), "OK again: resets link");
+    CHECK_EQ(g_stub.lim_arms, 0);                           // nothing yet: no limit, no reset
+    CHECK_EQ(g_stub.hard_resets, 0);
+    CHECK_EQ(ui.list_state().count, 4);                     // the picker stays open
+    press(ui, Button::Ok, ButtonEvent::Short, t += 100);
+    CHECK_EQ(g_stub.hard_resets, 1);
+    CHECK_EQ(g_stub.lim_arms, 1);
+    CHECK_EQ(int(g_stub.lim_arm_mw), 27000);
+    CHECK_EQ(int(g_stub.lim_arm_resets), 1);                // armed after the reset went out
+    CHECK_EQ(g_stub.lim_arm_seeded, false);                 // not from the contract that is ending
+    CHECK_STR(ui.context().toast.view().data(), "Resetting link...");
+    CHECK_EQ(ui.list_state().count, bench::tools().n + 1);  // back on the list
+    // Another level while Limited: the same two presses.
+    g_stub.lim.state = pd::LimState::Limited;
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);
+    press(ui, Button::Minus, ButtonEvent::Short, t += 10);  // 15 W
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);
+    CHECK_EQ(g_stub.lim_arms, 1);
+    CHECK_EQ(g_stub.hard_resets, 1);
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);
+    CHECK_EQ(g_stub.hard_resets, 2);
+    CHECK_EQ(g_stub.lim_arms, 2);
+    CHECK_EQ(int(g_stub.lim_arm_mw), 15000);
+    CHECK_EQ(g_stub.lim_arm_seeded, false);
+    // Off while Limited resets too, so the sink sees the real list again.
+    g_stub.lim.state = pd::LimState::Limited;
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);
+    press(ui, Button::Minus, ButtonEvent::Short, t += 10);
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);
+    CHECK_EQ(g_stub.lim_offs, 0);
+    CHECK_STR(ui.context().toast.view().data(), "OK again: resets link");
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);
+    CHECK_EQ(g_stub.hard_resets, 3);
+    CHECK_EQ(g_stub.lim_offs, 1);
+    idle_link();
+}
+
+static void test_pd_limit_confirm_window() {
+    Ui &ui = fresh_ui();
+    set_caps_65w();
+    uint32_t t = open_limit_row(ui, 20000);
+    live_contract();
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);
+    press(ui, Button::Plus, ButtonEvent::Short, t += 10);
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);     // 15 W asked
+    press(ui, Button::Plus, ButtonEvent::Short, t += 10);   // moved: another question
+    press(ui, Button::Minus, ButtonEvent::Short, t += 10);
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);
+    CHECK_EQ(g_stub.hard_resets, 0);
+    CHECK_STR(ui.context().toast.view().data(), "OK again: resets link");
+    press(ui, Button::Ok, ButtonEvent::Short, t += int(Ui::kConfirmWindowMs) + 50);   // too late
+    CHECK_EQ(g_stub.hard_resets, 0);
+    CHECK_EQ(g_stub.lim_arms, 0);
+    press(ui, Button::Back, ButtonEvent::Short, t += 10);   // Back drops the window
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);
+    press(ui, Button::Plus, ButtonEvent::Short, t += 10);
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);
+    CHECK_EQ(g_stub.hard_resets, 0);
+    idle_link();
+}
+
+static void test_pd_limit_no_live_contract_no_reset() {
+    for (int scene = 0; scene < 3; scene++) {
+        Ui &ui = fresh_ui();
+        set_caps_65w();
+        uint32_t t = open_limit_row(ui, 20000);
+        idle_link();
+        g_stub.hard_resets = 0;
+        if (scene == 1) g_stub.inl = true;       // a charger only, the K2 inline with nobody asking: no Request, no contract
+        if (scene == 2) g_stub.far_sink = true;  // not inline: a stale latch is no live link
+        press(ui, Button::Ok, ButtonEvent::Short, t += 10);
+        press(ui, Button::Plus, ButtonEvent::Short, t += 10);
+        press(ui, Button::Ok, ButtonEvent::Short, t += 10);
+        CHECK_EQ(g_stub.lim_arms, 1);
+        CHECK_EQ(g_stub.hard_resets, 0);
+        CHECK_EQ(g_stub.lim_arm_seeded, true);
+        idle_link();
+    }
+}
+
+static void test_pd_limit_reset_refusals() {
+    Ui &ui = fresh_ui();
+    set_caps_65w();
+    uint32_t t = open_limit_row(ui, 20000);
+    live_contract();
+    g_stub.self_powered = true;   // the K2 lives on this link: a reset would end it
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);
+    press(ui, Button::Plus, ButtonEvent::Short, t += 10);
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);
+    CHECK_EQ(g_stub.hard_resets, 0);
+    CHECK_EQ(g_stub.lim_arms, 1);                           // armed from the sniffer's contract, the sink must re-ask
+    CHECK_EQ(g_stub.lim_arm_seeded, true);
+    CHECK_STR(ui.context().toast.view().data(), "No reset: replug to apply");
+    // Off is never blocked.
+    g_stub.lim.state = pd::LimState::Limited;
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);
+    press(ui, Button::Minus, ButtonEvent::Short, t += 10);
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);
+    CHECK_EQ(g_stub.lim_offs, 1);
+    CHECK_EQ(g_stub.hard_resets, 0);
+    // A port owner busy: no reset, no arm, the Busy result.
+    g_stub.self_powered = false;
+    g_stub.listen_on = true;
+    g_stub.lim.state = pd::LimState::Off;
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);
+    press(ui, Button::Plus, ButtonEvent::Short, t += 10);
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);
+    CHECK_STR(ui.context().toast.view().data(), "Port in use: stop it first");
+    CHECK_EQ(g_stub.hard_resets, 0);
+    CHECK_EQ(g_stub.lim_arms, 1);
+    idle_link();
+}
+
+// The offers the K2 held count when none are live; with none at all the picker offers Reset link.
+static void test_pd_limit_picker_offers_held_and_reset_row() {
+    Ui &ui = fresh_ui();
+    set_caps_65w();
+    g_stub.caps.raw_header = 0x1181; g_stub.caps.rx_count++;
+    for (uint32_t i = 0; i < 40; i++) held::poll(30000 + i * 100, true);   // the K2 keeps the list it saw (settled)
+    g_stub.caps = {};                                        // ... and the live one is gone
+    uint32_t t = open_limit_row(ui, 34100);
+    CHECK_EQ(held::showing_held(), true);
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);
+    CHECK_EQ(ui.list_state().count, 4);                      // Off, 15, 27, 45 W from the held list
+    press(ui, Button::Back, ButtonEvent::Short, t += 10);
+    held::reset();
+    Ui &u2 = fresh_ui();
+    g_stub.caps = {};
+    t = open_limit_row(u2, 31000);
+    live_contract();
+    press(u2, Button::Ok, ButtonEvent::Short, t += 10);
+    CHECK_EQ(u2.list_state().count, 2);                      // Off, Reset link
+    CHECK_STR(u2.context().toast.view().data(), "No charger offers yet");
+    press(u2, Button::Plus, ButtonEvent::Short, t += 10);
+    press(u2, Button::Ok, ButtonEvent::Short, t += 10);
+    CHECK_STR(u2.context().toast.view().data(), "OK again: resets link");
+    CHECK_EQ(g_stub.hard_resets, 0);
+    press(u2, Button::Ok, ButtonEvent::Short, t += 10);
+    CHECK_EQ(g_stub.hard_resets, 1);
+    CHECK_STR(u2.context().toast.view().data(), "Resetting link...");
+    CHECK_EQ(u2.list_state().count, 2);                      // the picker stays: the offers show up here
+    CHECK_EQ(g_stub.lim_arms, 0);
+    idle_link();
+}
+
+// K2_DUMP=dir: the limiter's Tools row and picker states at every rotation (tools/panel2png.py).
+static void dump_panel(const char *name, int rot) {
+    const char *dir = std::getenv("K2_DUMP");
+    if (!dir) return;
+    char p[256];
+    std::snprintf(p, sizeof p, "%s/k2_limit_%s_r%d.panel", dir, name, rot);
+    if (FILE *f = std::fopen(p, "wb")) {
+        std::fwrite(g_panel, 2, 240 * 240, f);
+        std::fclose(f);
+    }
+}
+
+static void test_pd_limit_renders() {
+    if (!std::getenv("K2_DUMP")) return;
+    for (int rot = 0; rot < 4; rot++) {
+        Ui &ui = fresh_ui();
+        ui.set_rotation(uint8_t(rot), 19000);
+        set_caps_65w();
+        uint32_t t = open_limit_row(ui, 20000);
+        t = settle(ui, t);
+        dump_panel("row_off", rot);
+        press(ui, Button::Ok, ButtonEvent::Short, t += 10);
+        t = settle(ui, t);
+        dump_panel("picker", rot);
+        live_contract();
+        press(ui, Button::Plus, ButtonEvent::Short, t += 10);
+        press(ui, Button::Ok, ButtonEvent::Short, t += 10);
+        t = settle(ui, t);
+        dump_panel("picker_confirm", rot);
+        live_contract();                                     // the stub's tick drops the inline flag
+        press(ui, Button::Ok, ButtonEvent::Short, t += 100);
+        t = settle(ui, t);
+        dump_panel("row_armed", rot);
+        idle_link();
+        g_stub.caps = {};
+        Ui &u2 = fresh_ui();
+        u2.set_rotation(uint8_t(rot), 19000);
+        t = open_limit_row(u2, 31000);
+        live_contract();
+        press(u2, Button::Ok, ButtonEvent::Short, t += 10);
+        t = settle(u2, t);
+        dump_panel("picker_reset_row", rot);
+        idle_link();
+    }
+}
+
 int main() {
+    test_pd_limit_renders();
+    test_pd_limit_live_contract_resets_then_arms();
+    test_pd_limit_confirm_window();
+    test_pd_limit_no_live_contract_no_reset();
+    test_pd_limit_reset_refusals();
+    test_pd_limit_picker_offers_held_and_reset_row();
     test_over_load_above_5v_needs_confirm();
     test_usb_link_footer_icon_tone();
     test_usb_link_toggles();

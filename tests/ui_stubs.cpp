@@ -223,9 +223,11 @@ void interrogate_abort() {
 }
 bool interrogate_running() { return g_stub.iq_running; }
 const pd::IqStatus& interrogate_status() { return g_stub.iq_status; }
-pd::LimRefusal limit_arm(std::uint32_t mw, const pd::LimFacts& f) {
+pd::LimRefusal limit_arm(std::uint32_t mw, const pd::LimFacts& f, bool seed) {
     g_stub.lim_arms++;
     g_stub.lim_arm_mw = mw;
+    g_stub.lim_arm_seeded = seed;
+    g_stub.lim_arm_resets = g_stub.hard_resets;   // the link resets the arm came after
     if (g_stub.lim_refusal != pd::LimRefusal::None) return g_stub.lim_refusal;
     const pd::LimRefusal why = pd::lim_gate(f, mw);
     if (why != pd::LimRefusal::None) return why;
@@ -240,6 +242,7 @@ void limit_disarm() {
     g_stub.lim.why = pd::LimWhy::User;
 }
 bool limit_armed() { return g_stub.lim.state != pd::LimState::Off; }
+bool far_sink_seen() { return g_stub.far_sink; }
 const pd::LimStatus& limit_status() { return g_stub.lim; }
 bool listen_active() { return g_stub.listen_on; }
 void feed(uint8_t, uint16_t, std::span<const uint8_t>) {}

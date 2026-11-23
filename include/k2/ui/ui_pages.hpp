@@ -1412,15 +1412,19 @@ private:
     void show(View v);
     void build_picks();
     int rows() const;
-    int count() const { return view_ == View::PickLimit ? 1 + int(npicks_) : rows(); }
+    int count() const { return view_ == View::PickLimit ? 1 + int(npicks_) + int(reset_row_) : rows(); }
     int &cur() { return view_ == View::PickLimit ? pick_ : sel_; }
     void limit_row(int index, bool focused, kit::RowSpec &out) const;
-    void pick_limit();
+    bool pick_limit();   // true: the picker stays open (a confirm is pending, or the Reset link row ran)
     void limit_edge();
+    bool confirmed_for(uint32_t key) const { return confirm_until_ != 0 && confirm_key_ == key && int32_t(confirm_until_ - ctx_.now) > 0; }
+    void ask_confirm(uint32_t key);
     int &sel_;
     View view_ = View::List;
     int pick_ = 0;
     uint8_t npicks_ = 0;
+    bool reset_row_ = false;          // no offers known at all: row 1 reads them (Reset link)
+    uint32_t confirm_until_ = 0, confirm_key_ = 0;   // the 2-press window of a link reset, keyed by the level asked (0 = Off)
     pd::LimState seen_ = pd::LimState::Off;   // for the one-shot give-up result
     pd::LimPick picks_[pd::kLimMaxPicks];
     mutable StrBuf<8> text_, tail_;   // a row's strings live for one row_fn call

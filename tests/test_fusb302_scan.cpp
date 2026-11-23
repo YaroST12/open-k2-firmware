@@ -4530,6 +4530,7 @@ void test_inline_interrogation_never_answers_a_device_vconn_swap();
 void test_inline_interrogation_spoof_answers_the_devices_cable_query();
 void test_inline_pd_limiter_injects_the_clamped_list_and_sees_the_sink_obey();
 void test_pd_limiter_waits_through_a_replug_and_acts_on_a_far_request();
+void test_pd_limiter_arm_without_a_heard_list_and_unseeded();
 void test_stress_soft_reset_goes_out_and_keeps_rd_when_the_source_answers();
 void test_stress_soft_reset_to_a_silent_source_asks_for_the_caps_with_rd_kept();
 void test_a_request_is_answered_in_the_service_pass_that_reads_it();
@@ -5677,6 +5678,7 @@ int main() {
     test_inline_interrogation_spoof_answers_the_devices_cable_query();
     test_inline_pd_limiter_injects_the_clamped_list_and_sees_the_sink_obey();
     test_pd_limiter_waits_through_a_replug_and_acts_on_a_far_request();
+    test_pd_limiter_arm_without_a_heard_list_and_unseeded();
     test_stress_soft_reset_goes_out_and_keeps_rd_when_the_source_answers();   // each ends with a detach
     test_stress_soft_reset_to_a_silent_source_asks_for_the_caps_with_rd_kept();
     test_a_request_is_answered_in_the_service_pass_that_reads_it();   // ends with a detach
@@ -6098,6 +6100,37 @@ void test_pd_limiter_waits_through_a_replug_and_acts_on_a_far_request() {
     CHECK_EQ(h.size(), 1u);
     CHECK_EQ(h.empty() ? 0u : (h[0] >> 9) & 7, 4u);                          // the charger's next id is 3: ours is the one after
     CHECK_EQ(int(fusb302::limit_status().state), int(pd::LimState::Injected));
+    fusb302::limit_disarm();
+    service_ms(3);
+    end_inline_case();
+}
+
+// Hardware test 2 (2026-11-23): the phone was already in a contract when the K2 joined and no traffic has crossed since, so the
+// sniffer holds no Request and the seed is empty; arming waits for traffic that does not come until a replug.
+// After a link reset the picker arms unseeded: the old contract is gone from the wire, so a seeded arm would act on stale state.
+void test_pd_limiter_arm_without_a_heard_list_and_unseeded() {
+    pd::LimFacts f;
+    attach_inline();
+    g_log.clear(); g_usb.clear();
+    service_ms(5);                                                           // joined mid-contract: no frame heard
+    CHECK_EQ(int(fusb302::limit_arm(10000, f)), int(pd::LimRefusal::None));
+    service_ms(300);
+    CHECK_EQ(tx_headers().size(), 0u);                                       // nothing to clamp: the K2 stays quiet
+    CHECK_EQ(int(fusb302::limit_status().state), int(pd::LimState::Armed));
+    fusb302::limit_disarm();
+    service_ms(3);
+    // the unseeded arm never starts from the sniffer's old contract
+    end_inline_case();
+    attach_inline();
+    g_log.clear(); g_usb.clear();
+    push_frame(0xE0, hdr(1, 2, true, 0), {0x0A01912Cu, 0x0004B12Cu});
+    push_frame(0xE0, hdr(2, 1, false, 0), {0x2204B12Cu});
+    push_frame(0xE0, hdr(3, 0, true, 1), {});
+    push_frame(0xE0, hdr(6, 0, true, 2), {});
+    service_ms(30);
+    CHECK_EQ(int(fusb302::limit_arm(10000, f, false)), int(pd::LimRefusal::None));
+    CHECK_EQ(int(fusb302::limit_status().state), int(pd::LimState::Armed));   // seeded it would be Pending
+    CHECK_EQ(fusb302::limit_status().req_pos, 0);
     fusb302::limit_disarm();
     service_ms(3);
     end_inline_case();
