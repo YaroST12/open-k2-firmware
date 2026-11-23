@@ -44,7 +44,7 @@ Home > Lines > Numbers > Graph > Ripple > Link > Tools > Battery > Log > K2 > (H
 
 | state | PLUS / MINUS | OK | short Back | long Back |
 |---|---|---|---|---|
-| Ring view (the page is shown, the masthead carries its numbered name) | previous / next page, wrapping | enter the page (Lines and Numbers only look: no entry) | Home | the page chosen in Settings > Long Back |
+| Ring view (the page is shown, the masthead carries its 4-char name) | previous / next page, wrapping | enter the page (Lines and Numbers only look: no entry) | Home | the page chosen in Settings > Long Back |
 | Entered (the page's own rows and actions) | scroll the rows (or step Charger / Cable / Sink slice on Link) | the focused slice / row's action | up one level; at the top level back to the ring view | the ring view on the same page |
 
 - Boot lands on Home in the ring view. `Ui::goto_page`, the remote `page N`, `open_connection`, `open_place` and a started
