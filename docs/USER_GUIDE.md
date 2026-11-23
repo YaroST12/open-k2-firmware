@@ -443,6 +443,7 @@ The default build shows one tab at a time as the **Charger** (Source), **Cable**
 One screen for the three parties on the two ports: **Source** (charger), **Cable** and **Sink** (device). Background: [`SOURCE_SINK_DETECTION.md`](SOURCE_SINK_DETECTION.md).
 
 - **+ / -** (labels Tab+ and Tab-) switch tabs. OK opens the **Actions** pop-up. Long OK shares the Source caps or the Cable record as a QR code.
+- **The offers** (Charger / Source). The headline is the charger's rated watts (its extended capabilities' PDP, the EPR rating when it has one), else its best offer; the line under it counts the offers and says what the identity read found. Then one group per kind, always in this order: **SPR** (the fixed voltages up to 20 V, grouped by current: `5/9/15V 3A`, `20V 5A`), **EPR** (28 V and up), **PPS** (one row per range: `3.3-21V 5A`) and **AVS** (`15-28V 140W`, rated in watts). A kind the charger does not offer reads a dim `none`; EPR on a charger that can do it but was not read yet says why (the survey's word) instead. Then the contract in use and the identity rows.
 - The tab it opens on: Sink if a live device is inline, else Source if a charger is seen, else Cable if a cable is held, else Source.
 - The **status bar** says "Charger / No charger", "Cable read / No cable", "Device inline / No device", with ", top plug" or ", via cable" when the CC lines show which. When a spoof is armed and a charger is already attached it says "Armed, replug to apply".
 - **On attach** the K2 asks the charger for its identity, vendor name, modes and extended capabilities by itself, once, when it holds the contract and nothing else uses the link. A toast shows "Reading charger 3/5", then "Read: 4 got, 1 unsupported", while the rows fill in. Load current or another device's request stops it; the rows then say "Inline: blocked". Rows never asked read "Not asked", (the Actions list's first row, Reset & re-read, asks). Reset & re-read asks everything again.
@@ -728,7 +729,7 @@ The bootloader area (0x08000000 to 0x080037FF) is never written by this firmware
 | :--- | :--- |
 | **PD** | USB Power Delivery: a message protocol on the CC line that agrees voltage and current. |
 | **PDO** | Power Data Object: one offer from a charger (for example "9 V 3 A"). |
-| **Fixed** | A PDO at one voltage. |
+| **Fixed** | A PDO at one voltage. The Charger record lists them as the **SPR** rows (up to 20 V) and the **EPR** rows (28 V and up). |
 | **PPS** | Programmable Power Supply: a range of voltage and a current limit, adjustable in 20 mV steps. |
 | **AVS** | Adjustable Voltage Supply: another adjustable range, used for higher power. |
 | **SPR / EPR** | Standard Power Range (up to 20 V) and Extended Power Range (up to 48 V, up to 240 W). |
