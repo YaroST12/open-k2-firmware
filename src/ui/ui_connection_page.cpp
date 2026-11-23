@@ -25,6 +25,7 @@
 #include "k2/ui/qrshare_records.hpp"
 #include "k2/core/storage.hpp"
 #include "k2/pd/usb_link.hpp"
+#include "k2/ui/offer_rows.hpp"
 #include "k2/ui/text.hpp"
 #include "k2/ui/ui.hpp"
 #include "k2/ui/ui_pages.hpp"
@@ -734,13 +735,13 @@ constexpr bool cable_full_rows_fit() {
 }
 static_assert(cable_full_rows_fit(), "the Cable tab's full-read rows fit their columns");
 
-// A value row. `cut` > 0 splits the value there: the head in `c`, the tail (the current) in kAmp; so a "20/28V 5A" line
+// A value row. `cut` > 0 splits the value there: the head in `c`, the tail (a current, or watts) in `ct`; so a "20/28V 5A" line
 // reads in unit colours. 0 = one colour.
 // The rows are built in order and only the window is kept: `skip` rows are counted and dropped, the next kCap stored, the rest
 // counted. A place page builds twice - once to count (skip = kCountOnly), once for the window it then shows.
 struct Rows {
     struct R {
-        const char *key = ""; StrBuf<28> v; uint16_t c = kText; uint8_t cut = 0;
+        const char *key = ""; StrBuf<28> v; uint16_t c = kText, ct = kAmp; uint8_t cut = 0;
     };
     static constexpr int kCap = kMaxList;
     static constexpr int kCountOnly = 1 << 14;
@@ -764,7 +765,7 @@ struct Rows {
         open = &x;
         return x;
     }
-    void cut_here() { open->cut = static_cast<uint8_t>(open->v.view().size()); }   // the tail of the open row is a current
+    void cut_at(uint8_t n, uint16_t tail) { open->cut = n; open->ct = tail; }   // the open row's tail (a current, or watts) from cell n
     void colour(uint16_t c) { open->c = c; }                                       // recolours the open row
 };
 
@@ -878,52 +879,11 @@ void proto_row(Rows &R, const pd::VdmInfo &vdm) {
     if (conn::protocol_text(std::span<const uint16_t>(vdm.svids.data(), vdm.num_svids), t)) R.add("Proto", kEnergy).put(t.view());
 }
 
-void flush_fixed(Rows &R, StrBuf<28> &head, uint16_t cur_ma) {
-    if (head.view().empty()) return;
-    StrBuf<28> &v = R.add("Fixed", kVolt);
-    v.put(head.view()).put_char('V');
-    R.cut_here();
-    v.put_char(' ');
-    put_a(v, cur_ma);
-    head.clear();
+// One Line of the offer model as a row: volts in kVolt, the tail (a current, or the watts of an AVS) in its own colour.
+void put_line(Rows &R, const offers::Line &l) {
+    R.add(l.key, l.dim ? kFaint : kVolt).put(l.text);
+    if (l.cut) R.cut_at(l.cut, l.tail_watts ? kWatt : kAmp);
 }
-
-void step_fixed(Rows &R, StrBuf<28> &head, uint16_t &cur_ma, const pd::Pdo &p) {
-    if (p.type != pd::PdoType::Fixed) return;
-    StrBuf<12> vs;
-    put_v(vs, p.max_mv);
-    StrBuf<12> as;
-    put_a(as, p.max_ma);
-    const std::size_t joined = head.view().size() + (head.view().empty() ? 0 : 1) + vs.view().size();
-    if (!head.view().empty() && (p.max_ma != cur_ma || joined + 2 + as.view().size() > kValCells)) {
-        flush_fixed(R, head, cur_ma);
-    }
-    if (!head.view().empty()) head.put_char('/');
-    head.put(vs.view());
-    cur_ma = p.max_ma;
-}
-
-// The fixed PDOs, one row per current group and per line of 19 cells ("5/9/15V 3A", "20/28/36/48V 5A"). Every line
-// ends with its own current, so no line needs the cut and none reads as another group's.
-void fixed_rows(Rows &R, const pd::SourceCaps &caps, int rows) {
-    StrBuf<28> head;   // the voltages of the open line, "5/9/15"
-    uint16_t cur_ma = 0;
-    for (int i = 0; i < rows; i++) step_fixed(R, head, cur_ma, caps.pdos[i]);
-    flush_fixed(R, head, cur_ma);
-}
-
-// "3.3-11V 5A": the range in kVolt, the current in kAmp.
-void range_row(Rows &R, const char *key, const pd::Pdo &p) {
-    StrBuf<28> &v = R.add(key, kVolt);
-    if (p.min_mv != p.max_mv) { put_v(v, p.min_mv); v.put_char('-'); }
-    put_v(v, p.max_mv);
-    v.put_char('V');
-    R.cut_here();
-    v.put_char(' ');
-    put_a(v, p.max_ma);
-}
-
-void put_sink_pdos(Rows &R, const char *key, std::span<const uint32_t> sink);
 
 // Only one tab builder runs per paint, but inlined all three their locals add up in paint_body()'s frame,
 // which already holds the Rows (stack budget, tools/stack_depth.py).
@@ -934,33 +894,30 @@ void put_sink_pdos(Rows &R, const char *key, std::span<const uint32_t> sink);
         R.add("PD", kFaint).put("Waiting for caps...");
         return;
     }
+    const pd::SourceCaps &caps = *d.caps;
+    const bool traffic = fusb302::pd_traffic();
+    if (r.caps_seen) {
+        // The headline and chips carry the revision and the watts; the rows are the four offer groups, then who made them.
+        auto emit = [&R](const offers::Line &l) { put_line(R, l); };
+        offers::rows(caps, static_cast<std::size_t>(r.rows), held::epr_raw(), offers::epr_capable(caps),
+                     conn::sv_word(survey::state().entry(pd::SvField::EprList)), kValCells, emit);
+        if (r.request_seen) put_request(R.add("Used", kOk), r, caps);
+    }
     if (id.valid) put_id(R.add("ID"), id.vid, id.pid, id.vendor.c_str());
     else {   // the row says why it is empty: not asked yet (Refresh reads it), asking, no answer, not supported...
         const char *w = conn::sv_word(survey::state().entry(pd::SvField::Identity));
         R.add("ID", kFaint).put(w[0] ? w : "Unknown");
     }
-    const pd::SourceCaps &caps = *d.caps;
-    StrBuf<28> &pdv = R.add("PD", r.caps_seen ? kEnergy : kFaint);
-    const bool traffic = fusb302::pd_traffic();
     if (r.caps_seen) {
-        pdv.put(caps.spec_rev == 1 || caps.spec_rev == 2 ? pd::wire_revision_name(caps.spec_rev) : "No PD yet");
-        if (caps.epr) pdv.put(" EPR");
-        pdv.put_char(' ').put_u32(r.src_max_mw / 1000).put_char('W');
-        fixed_rows(R, caps, r.rows);
-        for (int i = 0; i < r.rows; i++) {
-            const pd::Pdo &p = caps.pdos[i];
-            if (p.type != pd::PdoType::Pps && p.type != pd::PdoType::Avs) continue;
-            range_row(R, p.type == pd::PdoType::Pps ? "PPS" : "AVS", p);
-        }
-        if (r.request_seen) put_request(R.add("Used", kOk), r, caps);
+        if (caps.spec_rev != 1 && caps.spec_rev != 2) R.add("PD", kFaint).put("No PD yet");
     } else if (!traffic && (r.typec_ma || r.typec_rp)) {
+        R.add("PD", kFaint).put(d.in_use ? "None, in use" : "None");
         // A Type-C Rp advertisement exists (the source is attached): show it with the measured VBUS
         // and the advertised current, a default-USB Rp included.
-        pdv.put(d.in_use ? "None, in use" : "None");
         StrBuf<28> &v = R.add("Type-C", kText);
         typec_row_text(d.vbus_mv, r.typec_ma, v);
     } else {
-        pdv.put(traffic ? "Active, no caps" : d.in_use ? "None, in use" : "No caps yet");
+        R.add("PD", kFaint).put(traffic ? "Active, no caps" : d.in_use ? "None, in use" : "No caps yet");
     }
     if (!r.caps_seen && legacy_row_protocol(d.fc)) {   // legacy fast-charge protocols the K2 detected
         StrBuf<6> fcn;
@@ -1106,15 +1063,17 @@ void cable_full_rows(Rows &R, const pd::Emarker &em) {
 }
 
 void sink_pdo_rows(Rows &R, std::span<const uint32_t> sink) {
-    StrBuf<28> head;
-    uint16_t cur_ma = 0;
-    for (uint32_t raw : sink) step_fixed(R, head, cur_ma, pd::decode_pdo(raw));
-    flush_fixed(R, head, cur_ma);
+    auto emit = [&R](const offers::Line &l) { put_line(R, l); };
+    offers::FixedRun run("Fixed");
+    for (uint32_t raw : sink) {
+        const pd::Pdo p = pd::decode_pdo(raw);
+        if (p.type == pd::PdoType::Fixed) run.add(p, kValCells, emit);
+    }
+    run.flush(emit);
 
     for (uint32_t raw : sink) {
         const pd::Pdo p = pd::decode_pdo(raw);
-        if (p.type != pd::PdoType::Pps && p.type != pd::PdoType::Avs) continue;
-        range_row(R, p.type == pd::PdoType::Pps ? "PPS" : "AVS", p);
+        if (p.type == pd::PdoType::Pps || p.type == pd::PdoType::Avs) offers::range_line(p.type == pd::PdoType::Pps ? "PPS" : "AVS", p, false, emit);
     }
 
     for (uint32_t raw : sink) {
@@ -1126,25 +1085,6 @@ void sink_pdo_rows(Rows &R, std::span<const uint32_t> sink) {
         v.put("V ");
         v.put_u32(p.max_mw / 1000).put_char('W');
     }
-}
-
-// One row: "5V 3A 9V 3A" whole entries that fit the 19 cells, then a "+" when more follow (never a cut entry).
-void put_sink_pdos(Rows &R, const char *key, std::span<const uint32_t> sink) {
-    StrBuf<28> &cur = R.add(key, kText);
-    std::size_t shown = 0;
-    for (uint32_t raw : sink) {
-        const pd::Pdo p = pd::decode_pdo(raw);
-        StrBuf<24> t;
-        if (p.type == pd::PdoType::Battery) { put_v(t, p.max_mv); t.put("V "); t.put_u32(p.max_mw / 1000).put_char('W'); }
-        else if (p.type == pd::PdoType::Pps || p.type == pd::PdoType::Avs) { put_v(t, p.min_mv); t.put_char('-'); put_v(t, p.max_mv); t.put("V "); put_a(t, p.max_ma); }
-        else { put_v(t, p.max_mv); t.put("V "); put_a(t, p.max_ma); }
-        const std::size_t after = cur.view().size() + (cur.view().empty() ? 0 : 1) + t.view().size();
-        if (after + (shown + 1 == sink.size() ? 0 : 2) > kValCells) break;   // a non-last entry keeps room for " +"
-        if (!cur.view().empty()) cur.put_char(' ');
-        cur.put(t.view());
-        shown++;
-    }
-    if (shown < sink.size()) cur.put(shown ? " +" : "+");
 }
 
 // The match summary as two list rows, worded by who holds the number down (pdtabs::power_line / data_line):
@@ -1468,15 +1408,10 @@ void word_row(Rows &R, const char *key, pd::SvField f) {
         put_id(R.add("Mfr", kText), mi.vid, mi.pid, nullptr);
     } else word_row(R, "Mfr", pd::SvField::MfrInfo);
 
+    // The headline shows the rating; a row only when the source has a separate EPR one.
     const pd::SourceCapsExt &ce = fusb302::ext().caps_ext;
     if (ce.valid) {
-        StrBuf<28> &v = R.add("Ext", kText);
-        v.put("PDP ").put_u32(ce.pdp_w).put_char('W');
-        if (ce.epr_pdp_w) {
-            StrBuf<12> e;
-            e.put(" EPR ").put_u32(ce.epr_pdp_w).put_char('W');
-            put_if_fits(v, e.view());
-        }
+        if (ce.epr_pdp_w) R.add("Ext", kText).put("PDP ").put_u32(ce.pdp_w).put("W EPR ").put_u32(ce.epr_pdp_w).put_char('W');
     } else word_row(R, "Ext", pd::SvField::CapsExt);
 
     const pd::VdmInfo &vdm = fusb302::vdm();
@@ -1487,10 +1422,6 @@ void word_row(Rows &R, const char *key, pd::SvField f) {
         StrBuf<28> &v = R.add("Modes", kText);
         v.put_hex(vdm.modes_svid, 4).put(": ").put_u32(vdm.num_modes).put(vdm.num_modes == 1 ? " mode" : " modes");
     } else word_row(R, "Modes", pd::SvField::Modes);
-
-    const std::span<const uint32_t> epr = held::epr_raw();   // the live list, else the one kept
-    if (!epr.empty()) put_sink_pdos(R, "EPR", epr.size() > 7 ? epr.subspan(7) : epr);   // the EPR positions (8 on) when the list has them
-    else word_row(R, "EPR", pd::SvField::EprList);
 }
 
 // What the Details page and the status line read from the survey and the extended answers, hashed for the paint signatures.
@@ -1550,7 +1481,7 @@ bool paint_list(const Surface &c, const Rows &R, bool dim,
     std::array<uint32_t, kVisRows> sigs{};
     for (int i = 0; i < n; i++) {
         const Rows::R &row = R.r[i];
-        uint32_t h = mix_u32(2166136261u, uint32_t(row.c) | uint32_t(row.cut) << 16 | uint32_t(dim) << 24);
+        uint32_t h = mix_u32(2166136261u, uint32_t(row.c) | uint32_t(row.cut) << 16 | uint32_t(dim) << 24 | uint32_t(row.ct == kWatt) << 25);
         h = pg::mix_cstr(h, row.key);
         h = mix_u32(h, 0x100u);   // key / value separator
         h = pg::mix_str(h, row.v.view());
@@ -1603,7 +1534,7 @@ bool paint_list(const Surface &c, const Rows &R, bool dim,
         const int16_t vy = static_cast<int16_t>(y + kValDy);
         if (row.cut > 0 && all.size() <= static_cast<std::size_t>(kValCells)) {   // built to fit: head in its colour, current in kAmp
             runs[nr++] = {kValX, vy, &kSmall, all.substr(0, row.cut), dim ? kStale : row.c};
-            runs[nr++] = {static_cast<int16_t>(kValX + row.cut * kSmall.adv), vy, &kSmall, all.substr(row.cut), dim ? kStale : kAmp};
+            runs[nr++] = {kValX, vy, &kSmall, all.substr(row.cut), dim ? kStale : row.ct, static_cast<int16_t>(row.cut * kSmall.adv)};
         } else {
             // Every row is built to fit the value column (vendor names, tags and flags are added whole or not at all),
             // so a cut here is a copy bug: fit_text fails the host gate on it.
@@ -1689,21 +1620,19 @@ void add_soc_chip(Ident &id, const pd::BatteryCaps &bat, const pd::BatteryStatus
             return;
         }
         const pd::SourceCaps &caps = *d.caps;
-        id.head.put_u32(r.src_max_mw / 1000).put_char('W');
+        const pd::SourceCapsExt &ce = fusb302::ext().caps_ext;
+        id.head.put_u32(offers::hero_w(ce.valid, ce.pdp_w, ce.epr_pdp_w, r.src_max_mw)).put_char('W');
         if (caps.spec_rev == 1 || caps.spec_rev == 2) id.add(pd::wire_revision_name(caps.spec_rev), Ident::Solid);
-        bool pps = false, avs = false;
-        for (int i = 0; i < r.rows; i++) {
-            pps = pps || caps.pdos[i].type == pd::PdoType::Pps;
-            avs = avs || caps.pdos[i].type == pd::PdoType::Avs;
-        }
-        if (caps.epr) id.add("EPR", Ident::Outline);
-        add_pps_avs(id, pps, avs);
+        const offers::Summary sm = offers::summarize(caps, static_cast<std::size_t>(r.rows), held::epr_raw());
+        if (sm.epr) id.add("EPR", Ident::Outline);
+        add_pps_avs(id, sm.pps, sm.avs);
         if (r.request_seen) {
             StrBuf<12> t;
             put_va(t, r.want_mv, r.want_ma);
             id.add(t.view(), Ident::Volt);
         }
-        id.line.put_u32(uint32_t(r.rows)).put(r.rows == 1 ? " offer, ID " : " offers, ID ");
+        const std::size_t n_offers = offers::count(caps, static_cast<std::size_t>(r.rows), held::epr_raw());
+        id.line.put_u32(uint32_t(n_offers)).put(n_offers == 1 ? " offer, ID " : " offers, ID ");
         const pd::Identity &vid = fusb302::vdm().identity;
         if (vid.valid) put_line_id(id.line, vid.vid, vid.pid, vid.vendor.c_str());
         else {
