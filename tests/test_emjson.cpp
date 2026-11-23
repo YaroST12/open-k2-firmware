@@ -34,7 +34,7 @@ static void test_exact() {
         "  \"id\": 3,\n"
         "  \"revision\": 2,\n"
         "  \"name\": \"Desk USB4\",\n"
-        "  \"auto_name\": \"Apple 240W\",\n"
+        "  \"auto_name\": \"APPLE 240W\",\n"
         "  \"record\": \"" + [] {
             const emlib::Entry e = entry("x");
             static const char* hex = "0123456789ABCDEF";
@@ -44,7 +44,7 @@ static void test_exact() {
         }() + "\",\n"
         "  \"cable\": {\n"
         "    \"vid\": \"0x05AC\",\n"
-        "    \"vendor\": \"Apple\",\n"
+        "    \"vendor\": \"APPLE\",\n"
         "    \"pid\": \"0x1234\",\n"
         "    \"xid\": \"0x00001234\",\n"
         "    \"type\": \"passive\",\n"

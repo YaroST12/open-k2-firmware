@@ -234,7 +234,7 @@ int main() {
         const int n = identify_rows(st, v, rows);
         CHECK_EQ(n, 11);
         CHECK_STR(rows[1].text.c_str(), "VID 05AC Apple");
-        CHECK_STR(rows[4].text.c_str(), "SVID FF01 DisplayPort");
+        CHECK_STR(rows[4].text.c_str(), "SVID FF01 DISPLAYPORT");
         CHECK_STR(rows[6].text.c_str(), "1 FIX 5V 3.0A");
         CHECK_STR(rows[7].text.c_str(), "PD 3.1 ver 2.0");
         CHECK_STR(rows[8].text.c_str(), "-- No reply --");   // names, not step numbers
@@ -261,6 +261,28 @@ int main() {
         st.why = pd::IdWhy::Stopped;
         identify_status_text(st, s = {});
         CHECK_STR(s.c_str(), "Aborted: stopped");
+    }
+    {   // a vendor name too wide for beside "VID xxxx " goes on its own row; nothing is cut
+        for (const char* name : {"ANALOG DEVICES", "SIXTEEN CHARS OK"}) {
+            pd::IdStatus st;
+            pd::VdmInfo v;
+            IdRow rows[kMaxIdRows];
+            v.identity.valid = true; v.identity.vid = 0x0456; v.identity.pid = 0x0001; v.identity.vendor = name;
+            v.num_svids = 1; v.svids[0] = 0x0456;
+            st.state = pd::IdState::Done;
+            const int n = identify_rows(st, v, rows);
+            int seen = 0;
+            for (int i = 0; i < n; i++) {
+                CHECK_EQ(int(rows[i].text.view().size()) <= 22, 1);
+                if (rows[i].text.view().find(name) != std::string_view::npos) seen++;
+            }
+            CHECK_EQ(seen >= 1, 1);   // the VID row, and the SVID row if the same name repeats
+            IdCard card;
+            st.revision = 0x31200000;
+            CHECK_EQ(int(identify_card(st, v, card)), 1);
+            CHECK_STR(card.vendor.c_str(), name);
+            CHECK_STR(card.name.c_str(), name);
+        }
     }
     {   // identify result card
         pd::IdStatus st;

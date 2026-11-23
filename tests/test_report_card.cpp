@@ -745,35 +745,46 @@ static std::string auto_name(uint16_t vid, const char* mfr, uint8_t pdp) {
 
 // The card name's brand is pd::vendor_find (tools/vendors.csv): one table for cards, cables and the PD page.
 static void test_brand_from_the_vendor_table() {
-    CHECK_STR(auto_name(0x05AC, "", 0).c_str(), "Apple");
-    CHECK_STR(auto_name(0x04E8, "", 0).c_str(), "Samsung");
-    CHECK_STR(auto_name(0x291A, "", 0).c_str(), "Anker");   // not Hynetek: 0x2E99 is
+    CHECK_STR(auto_name(0x05AC, "", 0).c_str(), "APPLE");
+    CHECK_STR(auto_name(0x04E8, "", 0).c_str(), "SAMSUNG");
+    CHECK_STR(auto_name(0x291A, "", 0).c_str(), "ANKER");   // not Hynetek: 0x2E99 is
     CHECK_STR(auto_name(0x2B89, "", 240).c_str(), "UGREEN 240W");
-    CHECK_STR(auto_name(0x339B, "", 100).c_str(), "Honor 100W");
-    // A name that fits a card with " 240W" after it, for every listed vendor.
-    for (unsigned v = 0; v < 0x10000; ++v)
-        if (const char* b = k2::pd::vendor_find(uint16_t(v))) CHECK_EQ(rc::valid_name(b) && std::strlen(b) <= rc::kNameMax - 5, 1);
+    CHECK_STR(auto_name(0x339B, "", 100).c_str(), "HONOR 100W");
+    // Names are up to 16 characters: for every listed vendor the brand is cut, never the watts, and the card name stays valid.
+    for (unsigned v = 0; v < 0x10000; ++v) {
+        const k2::pd::VendorName b = k2::pd::vendor_find(uint16_t(v));
+        if (b.empty()) continue;
+        CHECK_EQ(rc::valid_name(b.c_str()), 1);
+        for (uint8_t w : {uint8_t(0), uint8_t(65), uint8_t(240)}) {
+            const std::string n = auto_name(uint16_t(v), "", w);
+            CHECK_EQ(n.size() <= rc::kNameMax && rc::valid_name(n.c_str()), 1);
+            if (w) CHECK_EQ(n.size() >= 4 && n.substr(n.size() - (w == 240 ? 5 : 4)) == (w == 240 ? " 240W" : " 65W"), 1);
+        }
+    }
+    // The longest brand (a manufacturer text on a chip maker's VID) is cut for the watts, never the other way round.
+    CHECK_STR(auto_name(0x2E87, "Sixteen Chars Ok!", 240).c_str(), "Sixteen Chars O 240W");
+    CHECK_STR(auto_name(0x2E87, "Sixteen Chars Ok!", 65).c_str(), "Sixteen Chars Ok 65W");
 }
 
 // Chip, cable and shared-VID names say who made a part: a charger that also gives its own manufacturer is named by that.
 static void test_weak_vendor_yields_to_the_manufacturer() {
     CHECK_STR(auto_name(0x2E87, "UGREEN Group", 65).c_str(), "UGREEN Group 65W");   // a controller VID with the brand's text
-    CHECK_STR(auto_name(0x2E87, "", 65).c_str(), "Injoinic 65W");                   // no text: the chip maker's name
+    CHECK_STR(auto_name(0x2E87, "", 65).c_str(), "INJOINIC 65W");                   // no text: the chip maker's name
     CHECK_STR(auto_name(0x2B01, "CUKTECH", 100).c_str(), "CUKTECH 100W");
     CHECK_STR(auto_name(0x2B01, "", 100).c_str(), "CUKTECH 100W");
-    CHECK_STR(auto_name(0x291A, "Someone Else", 100).c_str(), "Anker 100W");        // a brand's VID is not overruled
-    CHECK_STR(auto_name(0x291A, "", 100).c_str(), "Anker 100W");
-    CHECK_STR(auto_name(0x2E87, "///", 65).c_str(), "Injoinic 65W");                // a manufacturer with no usable character
+    CHECK_STR(auto_name(0x291A, "Someone Else", 100).c_str(), "ANKER 100W");        // a brand's VID is not overruled
+    CHECK_STR(auto_name(0x291A, "", 100).c_str(), "ANKER 100W");
+    CHECK_STR(auto_name(0x2E87, "///", 65).c_str(), "INJOINIC 65W");                // a manufacturer with no usable character
 }
 
 static void test_auto_name_rules() {
     CHECK_STR(auto_name(0xFFFF, "", 100).c_str(), "");   // all-ones VID is unknown: no name
-    CHECK_STR(auto_name(0x291A, "Anker Innova", 65).c_str(), "Anker 65W");         // brand from the VID wins over the mfr text
-    CHECK_STR(auto_name(0x2717, "", 67).c_str(), "Xiaomi 67W");
+    CHECK_STR(auto_name(0x291A, "Anker Innova", 65).c_str(), "ANKER 65W");         // brand from the VID wins over the mfr text
+    CHECK_STR(auto_name(0x2717, "", 67).c_str(), "XIAOMI 67W");
     CHECK_STR(auto_name(0x9999, "Acme Power", 30).c_str(), "Acme Power 30W");      // unknown VID: the mfr string
     CHECK_STR(auto_name(0x9999, "", 30).c_str(), "VID 9999 30W");                  // then the VID
     CHECK_STR(auto_name(0x0ABC, "", 0).c_str(), "VID 0ABC");                       // no wattage: no suffix
-    CHECK_STR(auto_name(0x05AC, "", 0).c_str(), "Apple");
+    CHECK_STR(auto_name(0x05AC, "", 0).c_str(), "APPLE");
     CHECK_STR(auto_name(0, "", 65).c_str(), "");                                   // nothing known: stays unnamed
     CHECK_STR(auto_name(0, "", 0).c_str(), "");
     CHECK_STR(auto_name(0, "Acme/Power*", 18).c_str(), "AcmePower 18W");           // characters outside the name alphabet drop
@@ -787,7 +798,7 @@ static void test_codec_identity_fields_and_old_formats() {
     rc::Card c = rc::build(run_a(), evidence(), {ct::HandoverOutcome::StayedPd, 0}, {.fp = 7, .vid = 0x291A, .pid = 0x0102, .pdp_w = 65}, {},
                            ct::State::Done, ct::Reason::None);
     rc::set_auto_name(c, "");
-    CHECK_STR(c.name, "Anker 65W"); CHECK_EQ(c.name_auto, 1);
+    CHECK_STR(c.name, "ANKER 65W"); CHECK_EQ(c.name_auto, 1);
     std::array<uint8_t, rc::kMaxRecord> buf{};
     rc::encode_card(buf, c);
     CHECK_EQ(buf[4 + 33], rc::kFormat);                // format 7 (repeat counter)
@@ -871,10 +882,10 @@ static void test_inherit_rules() {
     rc::Card a; a.id = {.fp = 5, .vid = 0x2717, .pdp_w = 67}; rc::set_auto_name(a, "");
     rc::Card b; b.id = {.fp = 5, .vid = 0x2717, .pdp_w = 100}; rc::set_auto_name(b, "");
     rc::inherit(b, a);
-    CHECK_STR(b.name, "Xiaomi 100W");
+    CHECK_STR(b.name, "XIAOMI 100W");
     rc::Card blank; blank.id.fp = 5;
     rc::inherit(blank, b);
-    CHECK_STR(blank.name, "Xiaomi 100W"); CHECK_EQ(blank.name_auto, 1);
+    CHECK_STR(blank.name, "XIAOMI 100W"); CHECK_EQ(blank.name_auto, 1);
     // First run: no previous card, nothing to do.
     rc::Card lone; lone.id.fp = 9;
     rc::Card none;

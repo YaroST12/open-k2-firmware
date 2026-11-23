@@ -23,38 +23,39 @@ static void vdm(Engine& e, std::uint32_t* v, unsigned n, Sop sop = Sop::Sop, boo
     e.on_message(sop, std::uint16_t((n << 12) | (src ? 1u << 8 : 0u) | (2u << 6) | 0x0F), {g_buf, n * 4}, 1);
 }
 
-// PD page rows are 22 characters wide: "SVID xxxx <name>", "VID xxxx <vendor>" and the Apple model.
+// PD page rows are 22 characters wide: a name (up to 16, in capitals) on its own row always fits; the pages put it beside
+// "SVID xxxx " / "VID xxxx " only when it is short enough (ui_pdtrig identify_rows).
 static void test_names_fit_a_row() {
     constexpr unsigned kRow = 22;
     for (unsigned id = 0; id <= 0xFFFF; id++) {
-        const char* n = svid_name(std::uint16_t(id));
-        if (n) CHECK_EQ(5 + 4 + 1 + std::strlen(n) <= kRow, 1);
-        const char* v = vendor_name(std::uint16_t(id));
-        if (v) CHECK_EQ(4 + 4 + 1 + std::strlen(v) <= kRow, 1);
+        const VendorName n = svid_name(std::uint16_t(id));
+        CHECK_EQ(n.view().size() <= kVendorMax && n.view().size() <= kRow, 1);
+        const VendorName v = vendor_name(std::uint16_t(id));
+        CHECK_EQ(v.view().size() <= kVendorMax && v.view().size() <= kRow, 1);
         const char* m = apple_model(std::uint16_t(id));
         if (m) CHECK_EQ(std::strlen(m) <= kRow, 1);
     }
 }
 
 static void test_names() {
-    CHECK_STR(svid_name(0x2717), "Xiaomi");
-    CHECK_STR(svid_name(0x12D1), "Huawei");
-    CHECK_STR(svid_name(0x22D9), "OPPO");
-    CHECK_STR(svid_name(0x2D95), "vivo");
-    CHECK_STR(svid_name(0x05AC), "Apple");
-    CHECK_STR(svid_name(0xFF00), "PD SID");
-    CHECK_STR(svid_name(0xFF01), "DisplayPort");
-    CHECK_STR(svid_name(0x8087), "Intel/TB");   // a protocol SVID, not the vendor table's "Intel"
-    CHECK_STR(svid_name(0x5FC9), "UFCS");
-    CHECK_STR(svid_name(0x2E87), "Injoinic");   // the USB-IF owner; no longer the old hand-written "Cuktech"
-    CHECK_STR(svid_name(0x2B89), "UGREEN");
-    CHECK_STR(svid_name(0x291A), "Anker");
-    CHECK_STR(svid_name(0x2B01), "CUKTECH");
-    CHECK_STR(svid_name(0x0451), "TI");       // falls back to the cable-vendor table
-    CHECK_STR(svid_name(0x1234), "Unknown");
-    CHECK_STR(vendor_name(0x2109), "VIA Labs");
-    CHECK_STR(vendor_name(0x2095), "CE Link");
-    CHECK_STR(vendor_name(0x1234), "Unknown");
+    CHECK_STR(svid_name(0x2717).c_str(), "XIAOMI");
+    CHECK_STR(svid_name(0x12D1).c_str(), "HUAWEI");
+    CHECK_STR(svid_name(0x22D9).c_str(), "OPPO");
+    CHECK_STR(svid_name(0x2D95).c_str(), "VIVO");
+    CHECK_STR(svid_name(0x05AC).c_str(), "APPLE");
+    CHECK_STR(svid_name(0xFF00).c_str(), "PD SID");
+    CHECK_STR(svid_name(0xFF01).c_str(), "DISPLAYPORT");
+    CHECK_STR(svid_name(0x8087).c_str(), "INTEL/TB");   // a protocol SVID, not the vendor table's "INTEL"
+    CHECK_STR(svid_name(0x5FC9).c_str(), "UFCS");
+    CHECK_STR(svid_name(0x2E87).c_str(), "INJOINIC");   // the USB-IF owner; no longer the old hand-written "Cuktech"
+    CHECK_STR(svid_name(0x2B89).c_str(), "UGREEN");
+    CHECK_STR(svid_name(0x291A).c_str(), "ANKER");
+    CHECK_STR(svid_name(0x2B01).c_str(), "CUKTECH");
+    CHECK_STR(svid_name(0x0451).c_str(), "TI");       // falls back to the cable-vendor table
+    CHECK_STR(svid_name(0x1234).c_str(), "Unknown");
+    CHECK_STR(vendor_name(0x2109).c_str(), "VIA LABS");
+    CHECK_STR(vendor_name(0x2095).c_str(), "CE LINK");
+    CHECK_STR(vendor_name(0x1234).c_str(), "Unknown");
 }
 
 static void test_apple_model() {
@@ -85,7 +86,7 @@ static void test_identity_apple() {
     CHECK_EQ(id.vid, 0x05AC);
     CHECK_EQ(id.pid, 0x710D);
     CHECK_EQ(id.bcd, 0x0100);
-    CHECK_STR(id.vendor, "Apple");
+    CHECK_STR(id.vendor.c_str(), "APPLE");
     CHECK_STR(id.model, "iPad Air 5");
     CHECK_EQ(id.id_header, 0x400005ACu);
     CHECK_EQ(id.num_vdos, 4);
@@ -109,7 +110,7 @@ static void test_identity_other_vendor_and_nonack() {
     vdm(e, v, 4);
     CHECK_EQ(e.vdm.identity.valid, true);
     CHECK_EQ(e.vdm.identity.model == nullptr, true);
-    CHECK_STR(e.vdm.identity.vendor, "Xiaomi");   // the SVID table is tried before the cable-vendor VID table
+    CHECK_STR(e.vdm.identity.vendor.c_str(), "XIAOMI");   // the SVID table is tried before the cable-vendor VID table
 }
 
 static void test_svids() {
@@ -200,7 +201,7 @@ static void test_sink_answers_stay_on_the_sink_side() {
     CHECK_EQ(e.sink_vdm.identity.valid, true);
     CHECK_EQ(e.sink_vdm.identity.vid, 0x18D1);
     CHECK_EQ(e.sink_vdm.identity.pid, 0x4EE1);
-    CHECK_STR(e.sink_vdm.identity.vendor, "Google");
+    CHECK_STR(e.sink_vdm.identity.vendor.c_str(), "GOOGLE");
     CHECK_EQ(e.sink_vdm.num_svids, 1);
     CHECK_EQ(e.sink_vdm.svids[0], 0xFF01);
     // A vendor flag set by the sink is the sink's, not the charger's.

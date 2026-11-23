@@ -21,7 +21,7 @@ int layout(const pd::Emarker &e, bool tbt, uint8_t *kinds) {
 }
 
 // "<10 ns (~1 m)" -> "<10 ns": the text before the bracket.
-void latency_short(const char *s, StrBuf<16> &out) {
+void latency_short(const char *s, StrBuf<20> &out) {
     if (!s) { out.put("n/a"); return; }
     for (; *s && *s != '('; s++)
         if (!(*s == ' ' && s[1] == '(')) out.put_char(*s);
@@ -47,12 +47,12 @@ int emarker_kv_count(const pd::Emarker &e, bool tbt) {
     return layout(e, tbt, k);
 }
 
-void emarker_kv(const pd::Emarker &e, bool tbt, int i, StrBuf<12> &key, StrBuf<16> &val) {
+void emarker_kv(const pd::Emarker &e, bool tbt, int i, StrBuf<12> &key, StrBuf<20> &val) {
     uint8_t k[kEmKvMax];
     const int n = layout(e, tbt, k);
     if (i < 0 || i >= n) return;
     switch (k[i]) {
-    case Vendor: key.put("Vendor"); val.put(e.vendor_str ? e.vendor_str : "Unknown"); break;
+    case Vendor: key.put("Vendor"); val.put(e.vendor_str.empty() ? "Unknown" : e.vendor_str.c_str()); break;
     case Vid: key.put("VID"); val.put_hex(e.vid, 4); break;
     case Pid: key.put("PID"); val.put_hex(e.pid, 4); break;
     case HwFw: key.put("HW/FW"); val.put_u32(e.hw_rev).put(" / ").put_u32(e.fw_rev); break;

@@ -320,7 +320,8 @@ struct Ident {
         chip[n++].k = k;
     }
 };
-static_assert(8 + 32 * 6 <= 208 - 4, "the identity line's 32 cells of font 12 fit beside a place list's scroll lane");
+constexpr std::size_t kIdLineCells = 32;   // font 12 cells of the identity line; text past it is dropped whole by the caller
+static_assert(8 + kIdLineCells * 6 <= 208 - 4, "the identity line's 32 cells of font 12 fit beside a place list's scroll lane");
 // Paints the band when its content hash moved from `sig` (or `full`); sig is updated.
 bool paint_identity(const Surface &c, const Ident &id, bool full, uint32_t &sig, PaintBudget *bg = nullptr);
 // Initialises n value cells (white on kBg) at the layout's value box of each row.

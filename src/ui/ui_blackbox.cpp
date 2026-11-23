@@ -52,7 +52,7 @@ Icon trigger_icon(pdtrace::Trigger t) { return trig_meta(t).icon; }
 struct KeyText {
     char key[28];
     std::size_t n = 0;
-    const char *vendor = "";
+    char vendor[pd::kVendorMax + 1] = "";   // a copy: the name is decoded per lookup
     bool identity = false;
 };
 
@@ -63,8 +63,8 @@ KeyText key_text(const view::Identity &id) {
     const uint16_t vid = view::key_vid(id);
     if (vid) {
         k.identity = true;
-        const char *v = pd::svid_name(vid);
-        if (v && v[0] != 'U') k.vendor = v;      // "Unknown" stays out of the header
+        const pd::VendorName v = pd::svid_name(vid);
+        if (v.view() != "Unknown") std::memcpy(k.vendor, v.c_str(), sizeof k.vendor);   // "Unknown" stays out of the header
     }
     return k;
 }

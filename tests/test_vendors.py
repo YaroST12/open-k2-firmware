@@ -26,7 +26,7 @@ class Table(unittest.TestCase):
             self.assertNotIn(r.vid, seen, "duplicate VID %04X" % r.vid)
             seen.add(r.vid)
             self.assertTrue(0 < r.vid < 0xFFFF)
-            self.assertLessEqual(len(r.name), 10, r.name)
+            self.assertLessEqual(len(r.name), gen_vendors.NAME_MAX, r.name)
             self.assertRegex(r.name, r"^[A-Za-z0-9][A-Za-z0-9 _.-]*[A-Za-z0-9_.-]$|^[A-Za-z0-9]$")
             self.assertIn(r.cat, gen_vendors.CATS)
             self.assertTrue(r.usbif, "%04X has no USB-IF registrant" % r.vid)
@@ -54,14 +54,48 @@ class Table(unittest.TestCase):
 
     def test_card_tool_uses_the_table(self):
         import report_card
-        self.assertEqual(report_card.BRANDS[0x291A], "Anker")
+        self.assertEqual(report_card.BRANDS[0x291A], "ANKER")   # table names are shown in capitals
         self.assertEqual(len(report_card.BRANDS), len(self.rows))
+
+    def test_results_page_names_are_capitals(self):
+        text = gen_vendors.render_js(self.rows)
+        self.assertIn('0x291A: "ANKER"', text)
+        self.assertNotIn('"Anker"', text)
 
     def test_every_vid_is_on_the_usbif_list(self):
         if not os.path.exists(LIST):
             self.skipTest("runs/vendor-ids/vendor_ids.txt not fetched")
         with open(LIST, encoding="utf-8") as f:
             self.assertEqual(gen_vendors.verify(self.rows, f.read()), [])
+
+
+class Pack(unittest.TestCase):
+    """The 6-bit name pool: every csv name survives pack -> unpack as its capitals, whatever the neighbours."""
+
+    def test_every_name_round_trips(self):
+        rows = sorted(gen_vendors.load(gen_vendors.CSV), key=lambda r: r.vid)
+        pool, offs = gen_vendors.pack_names([r.name for r in rows])
+        self.assertEqual(len(offs), len(rows))
+        for r, off in zip(rows, offs):
+            name, end = gen_vendors.unpack_name(pool, off)
+            self.assertEqual(name, r.name.upper())
+        self.assertEqual(end, 6 * sum(len(r.name) + 1 for r in rows))   # nothing but names and terminators
+
+    def test_alphabet_edges_and_sixteen_characters(self):
+        for n in ("a", "z", "0", "9", "a b", "x-y_z.1", "abcdefghijklmnop", "a" * 16):
+            pool, offs = gen_vendors.pack_names([n, "q"])
+            self.assertEqual(gen_vendors.unpack_name(pool, offs[0])[0], n.upper())
+            self.assertEqual(gen_vendors.unpack_name(pool, offs[1])[0], "Q")
+
+    def test_rejects_what_the_alphabet_cannot_hold(self):
+        R = gen_vendors.Row
+        for bad in ("a" * 17, "", " lead", "trail ", "two  spaces", "a&b", "a+b", "caf\xe9"):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                gen_vendors.check_rows([R(0x1111, bad, "brand", "x", "")])
+        gen_vendors.check_rows([R(0x1111, "Sixteen Chars Ok", "brand", "x", "")])   # exactly 16, mixed case
+
+    def test_the_pool_fits_the_skip_index(self):
+        self.assertLess(gen_vendors.pool_bits(gen_vendors.load(gen_vendors.CSV)), 1 << 16)   # kSkip is uint16
 
 
 class Verify(unittest.TestCase):

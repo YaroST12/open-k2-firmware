@@ -37,7 +37,7 @@ std::size_t render(const emlib::Entry& e, std::span<char> out) {
         t.put_raw({two, 2});
     }
     t.put("\",\n  \"cable\": {\n");
-    t.put("    \"vid\": \"0x%04X\",\n    \"vendor\": \"%s\",\n", static_cast<unsigned>(em.vid), em.vendor_str);
+    t.put("    \"vid\": \"0x%04X\",\n    \"vendor\": \"%s\",\n", static_cast<unsigned>(em.vid), em.vendor_str.c_str());
     t.put("    \"pid\": \"0x%04X\",\n    \"xid\": \"0x%08X\",\n", static_cast<unsigned>(em.pid), static_cast<unsigned>(em.xid));
     t.put("    \"type\": \"%s\",\n", em.is_active ? "active" : "passive");
     t.put("    \"speed\": \"%s\",\n", em.speed_str);

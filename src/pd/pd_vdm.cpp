@@ -40,7 +40,7 @@ struct Named { std::uint16_t id; const char* name; };
 // SVIDs that are protocol IDs, not a company's VID (0x5FC9 is the UFCS SVID); every vendor VID is named by
 // vendor_name() from the one USB-IF-verified table.
 constexpr std::array<Named, 4> kSvids{{
-    {0x8087, "Intel/TB"}, {0xFF00, "PD SID"}, {0xFF01, "DisplayPort"}, {0x5FC9, "UFCS"},
+    {0x8087, "INTEL/TB"}, {0xFF00, "PD SID"}, {0xFF01, "DISPLAYPORT"}, {0x5FC9, "UFCS"},
 }};
 
 constexpr std::array<Named, 44> kApple{{
@@ -96,7 +96,7 @@ K2_HOT void on_svids(VdmInfo& info, std::span<const std::uint32_t> v) {
 
 }  // namespace
 
-const char* svid_name(std::uint16_t svid) {
+VendorName svid_name(std::uint16_t svid) {
     if (const char* n = find(kSvids, svid)) return n;
     return vendor_name(svid);
 }

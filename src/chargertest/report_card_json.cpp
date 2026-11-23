@@ -21,7 +21,7 @@ std::size_t render_json(const Card& c, std::span<char> out) {
     t.put("{\"no\":%u,\"name\":\"%s\",\"fp\":\"%08x\",\"vid\":%u,\"pid\":%u,",
           unsigned(c.card_no), c.name, unsigned(c.id.fp), unsigned(c.id.vid), unsigned(c.id.pid));
     // Identity extras only when known, so a card without them renders as before (tools/report_card.py does the same).
-    if (const char* b = pd::vendor_find(c.id.vid)) t.put("\"brand\":\"%s\",", b);
+    if (const pd::VendorName b = pd::vendor_find(c.id.vid); !b.empty()) t.put("\"brand\":\"%s\",", b.c_str());
     if (c.id.pdp_w) t.put("\"pdp_w\":%u,", unsigned(c.id.pdp_w));
     if (c.name_auto) t.put("\"name_auto\":true,");
     // The passive OEM label's bare name (tools/report_card.py and the results page write the same); the fact line behind it is UI text.
@@ -170,7 +170,7 @@ std::size_t render_summary(const Card& c, std::span<char> out) {
     const Counts n = c.counts();
     t.put("Card %u \xC2\xB7 %s \xC2\xB7 %u PDOs \xC2\xB7 %u runs", unsigned(c.card_no), c.name[0] ? c.name : "(unnamed)",
           unsigned(c.num_pdos), unsigned(c.runs));
-    if (const char* b = pd::vendor_find(c.id.vid)) t.put(" \xC2\xB7 %s", b);
+    if (const pd::VendorName b = pd::vendor_find(c.id.vid); !b.empty()) t.put(" \xC2\xB7 %s", b.c_str());
     t.put(" %04X:%04X", unsigned(c.id.vid), unsigned(c.id.pid));
     if (c.id.pdp_w) t.put(" \xC2\xB7 %u W", unsigned(c.id.pdp_w));
     t.put(" \xC2\xB7 fw %08x\n", unsigned(c.fw));

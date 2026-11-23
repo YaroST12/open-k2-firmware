@@ -8,13 +8,15 @@
 #include <cstdint>
 #include <span>
 
+#include "k2/pd/vendor_name.hpp"
+
 namespace k2::pd {
 
 inline constexpr std::uint8_t kMsgVendorDefined = 0x0F;
 inline constexpr std::uint16_t kSvidPd = 0xFF00;  // the PD SID: Discover Identity/SVIDs
 
-// SVID or vendor name: the SVID table first, then the cable-vendor VID table, else "Unknown".
-const char* svid_name(std::uint16_t svid);
+// SVID or vendor name in capitals: the SVID table first, then the vendor table, else "Unknown". A value: see VendorName.
+VendorName svid_name(std::uint16_t svid);
 
 // Apple device name from the Product VDO PID (VID 0x05AC); nullptr for an unknown PID and for
 // the placeholder values 0x0000, 0xFFFF, 0x00FF and 0xFF00.
@@ -30,7 +32,7 @@ struct Identity {  // Discover Identity ACK: VDM header, ID header, cert stat, p
     bool valid = false;
     std::uint16_t vid = 0, pid = 0, bcd = 0;
     std::uint32_t id_header = 0, cert_stat = 0;
-    const char* vendor = nullptr;  // set whenever valid; null keeps the engine out of .data
+    VendorName vendor;             // set whenever valid, capitals
     const char* model = nullptr;  // Apple only
     std::array<std::uint32_t, 6> vdos{};
     std::uint8_t num_vdos = 0;

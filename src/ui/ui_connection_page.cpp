@@ -912,7 +912,7 @@ void put_sink_pdos(Rows &R, const char *key, std::span<const uint32_t> sink);
         R.add("PD", kFaint).put("Waiting for caps...");
         return;
     }
-    if (id.valid) put_id(R.add("ID"), id.vid, id.pid, id.vendor);
+    if (id.valid) put_id(R.add("ID"), id.vid, id.pid, id.vendor.c_str());
     else {   // the row says why it is empty: not asked yet (Refresh reads it), asking, no answer, not supported...
         const char *w = conn::sv_word(survey::state().entry(pd::SvField::Identity));
         R.add("ID", kFaint).put(w[0] ? w : "Unknown");
@@ -962,7 +962,7 @@ void cable_full_rows(Rows &R, const pd::Emarker &em);
 
 [[gnu::noinline]] void cable_rows(Rows &R, const TabData &d) {
     const pd::Emarker &em = held::cable_em();
-    put_id(R.add("ID"), em.vid, em.pid, em.vendor_str);
+    put_id(R.add("ID"), em.vid, em.pid, em.vendor_str.c_str());
     StrBuf<28> &sp = R.add("Speed", kText);
     char sb[24];
     pdtabs::speed_short(sb, em.speed_str ? em.speed_str : "?");
@@ -1394,7 +1394,7 @@ void put_dwh(StrBuf<28> &v, uint16_t dwh) {
     // The ID row: sniffed when neither Identify nor inline interrogation collected it.
     if (id.valid) {
         StrBuf<28> &v = R.add("ID");
-        conn::id_value(v, kValCells, id_cur || (iq_ok && iq.id.valid), id.vid, id.pid, id.vendor);
+        conn::id_value(v, kValCells, id_cur || (iq_ok && iq.id.valid), id.vid, id.pid, id.vendor.c_str());
     } else R.add("ID").put("Unknown");   // until the sink answers a Discover Identity (the charger's own, sniffed)
     if (id_cur && (d.k2_sink || !r.request_seen)) {
         if (!d.sink.empty()) sink_pdo_rows(R, d.sink);
@@ -1624,7 +1624,7 @@ using kit::paint_identity;
 // "2B01:0001 Anker": the ids, the vendor only when it fits the line whole.
 void put_line_id(StrBuf<36> &l, uint16_t vid, uint16_t pid, const char *vendor) {
     l.put_hex(vid, 4).put_char(':').put_hex(pid, 4);
-    if (vendor && vendor[0] && l.view().size() + 1 + std::string_view(vendor).size() <= 35) l.put_char(' ').put(vendor);
+    if (vendor && vendor[0] && l.view().size() + 1 + std::string_view(vendor).size() <= kit::kIdLineCells) l.put_char(' ').put(vendor);
 }
 
 // The identity of a place with something on it (the empty and no-PD states are the page's own): Charger = the source's
@@ -1683,7 +1683,7 @@ void add_soc_chip(Ident &id, const pd::BatteryCaps &bat, const pd::BatteryStatus
         }
         id.line.put_u32(uint32_t(r.rows)).put(r.rows == 1 ? " offer, ID " : " offers, ID ");
         const pd::Identity &vid = fusb302::vdm().identity;
-        if (vid.valid) put_line_id(id.line, vid.vid, vid.pid, vid.vendor);
+        if (vid.valid) put_line_id(id.line, vid.vid, vid.pid, vid.vendor.c_str());
         else {
             const char *w = conn::sv_word(survey::state().entry(pd::SvField::Identity));
             id.line.put(w[0] ? w : "Unknown");
@@ -1704,16 +1704,18 @@ void add_soc_chip(Ident &id, const pd::BatteryCaps &bat, const pd::BatteryStatus
             pdtabs::speed_short(sb, em.speed_str);
             if (sb[0] && sb[0] != '?') id.add(sb, Ident::Outline);
         }
-        put_line_id(id.line, em.vid, em.pid, em.vendor_str);
+        put_line_id(id.line, em.vid, em.pid, em.vendor_str.c_str());
         const std::string_view kind = em.is_active ? ", active" : ", passive";
-        if (id.line.view().size() + kind.size() <= 35) id.line.put(kind);
+        if (id.line.view().size() + kind.size() <= kit::kIdLineCells) id.line.put(kind);
         return;
     }
     case conn::Tab::Sink: {
         if ((!r.request_seen || d.k2_sink) && fusb302::identify_current()) {
             const pd::Identity &pid = fusb302::identify_identity();
-            const bool has_vendor = pid.valid && pid.vendor && pid.vendor[0];
-            if (has_vendor) id.head.put(pid.vendor);
+            // The name is the headline when it fits the head (15 cells, and the band's width); else the ID line carries it.
+            const bool has_vendor = pid.valid && !pid.vendor.empty() && pid.vendor.view().size() < 16 &&
+                                    text_width(kMid, pid.vendor.c_str()) <= 224;
+            if (has_vendor) id.head.put(pid.vendor.c_str());
             else id.head.put("Device read");
             id.dim = false;
 
@@ -1740,9 +1742,10 @@ void add_soc_chip(Ident &id, const pd::BatteryCaps &bat, const pd::BatteryStatus
             const char *fallback = d.k2_sink ? "Self-powered PD read" : "Standalone PD read";
             const std::string_view tag = d.k2_sink ? " \xC2\xB7 self-powered" : " \xC2\xB7 standalone";
             if (pid.valid) {
-                put_line_id(id.line, pid.vid, pid.pid, has_vendor ? nullptr : pid.vendor);
-                if (id.line.view().size() + tag.size() <= 35) id.line.put(tag);
-                else { id.line.clear(); id.line.put(fallback); }
+                put_line_id(id.line, pid.vid, pid.pid, has_vendor ? nullptr : pid.vendor.c_str());
+                // A name that did not fit the head sits on the line; it wins over the tag (whole or not at all).
+                if (id.line.view().size() + tag.size() <= kit::kIdLineCells) id.line.put(tag);
+                else if (has_vendor || pid.vendor.empty()) { id.line.clear(); id.line.put(fallback); }
             } else {
                 id.line.put(fallback);
             }
@@ -1986,7 +1989,7 @@ void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
         if (vid.valid) {
             StrBuf<36> seg;
             if (!sl.l1.view().empty()) seg.put(" \xC2\xB7 ");
-            if (vid.vendor && vid.vendor[0]) seg.put(vid.vendor).put_char(' ');
+            if (!vid.vendor.empty()) seg.put(vid.vendor.c_str()).put_char(' ');
             seg.put_hex(vid.vid, 4).put_char(':').put_hex(vid.pid, 4);
             if (!put_slice_if_fits(sl.l1, seg.view())) {
                 seg.clear();
@@ -2130,7 +2133,7 @@ void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
         } else if (em.epr_capable) {
             sl.add_chip("EPR", SliceSpec::Solid);
         }
-        if (em.vendor_str && em.vendor_str[0]) sl.l1.put(em.vendor_str);
+        if (!em.vendor_str.empty()) sl.l1.put(em.vendor_str.c_str());
         else sl.l1.put_hex(em.vid, 4).put_char(':').put_hex(em.pid, 4);
         if (em.speed_str && em.speed_str[0]) {
             char sb[24];
@@ -2233,16 +2236,16 @@ void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
         const pd::Identity &iqid = d.iq_ok ? fusb302::interrogate_status().id : pd::Identity{};
         if (sid.valid) {
             sl.l2.put_hex(sid.vid, 4).put_char(':').put_hex(sid.pid, 4);
-            if (sid.vendor && sid.vendor[0]) {
+            if (!sid.vendor.empty()) {
                 StrBuf<24> seg;
-                seg.put_char(' ').put(sid.vendor);
+                seg.put_char(' ').put(sid.vendor.c_str());
                 put_slice_if_fits(sl.l2, seg.view());
             }
         } else if (iqid.valid) {
             sl.l2.put_hex(iqid.vid, 4).put_char(':').put_hex(iqid.pid, 4);
-            if (iqid.vendor && iqid.vendor[0]) {
+            if (!iqid.vendor.empty()) {
                 StrBuf<24> seg;
-                seg.put_char(' ').put(iqid.vendor);
+                seg.put_char(' ').put(iqid.vendor.c_str());
                 put_slice_if_fits(sl.l2, seg.view());
             }
         } else {
@@ -2263,7 +2266,7 @@ void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
             if (mw > smw) { smw = mw; smv = p.max_mv; sma = p.max_ma; }
         }
         if (smw > 0) put_w_hero(sl.head, smw);
-        else if (pid.valid && pid.vendor && pid.vendor[0] && text_width(kMid, pid.vendor) <= 132) sl.head.put(pid.vendor);
+        else if (pid.valid && !pid.vendor.empty() && text_width(kMid, pid.vendor.c_str()) <= 132) sl.head.put(pid.vendor.c_str());
         else sl.head.put("Device read");
         const uint32_t irev = fusb302::identify_status().revision;
         if (irev != 0) {
@@ -2276,7 +2279,7 @@ void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
             StrBuf<36> seg;
             if (!sl.l1.view().empty()) seg.put(" \xC2\xB7 ");
             seg.put_hex(pid.vid, 4).put_char(':').put_hex(pid.pid, 4);
-            if (pid.vendor && pid.vendor[0]) seg.put_char(' ').put(pid.vendor);
+            if (!pid.vendor.empty()) seg.put_char(' ').put(pid.vendor.c_str());
             if (!put_slice_if_fits(sl.l1, seg.view())) {
                 seg.clear();
                 if (!sl.l1.view().empty()) seg.put(" \xC2\xB7 ");
@@ -2928,7 +2931,7 @@ void ConnectionPage::update(uint32_t now_ms) {
             const pd::ExtInfo &iext = fusb302::identify_ext();
             dev_sig = mix_u32(dev_sig, idst.revision);
             dev_sig = mix_u32(dev_sig, uint32_t(iid.valid) | uint32_t(iid.vid) << 8 | uint32_t(iid.pid) << 16);
-            if (iid.valid && iid.vendor && iid.vendor[0]) dev_sig = pg::mix_cstr(dev_sig, iid.vendor);
+            if (iid.valid && !iid.vendor.empty()) dev_sig = pg::mix_cstr(dev_sig, iid.vendor.c_str());
             dev_sig = mix_bat_mfr(dev_sig, iext.battery, iext.battery_status, iext.mfr);
             dev_sig = mix_dev_extra(dev_sig, iext.batt_mfr, iext.status);
         }

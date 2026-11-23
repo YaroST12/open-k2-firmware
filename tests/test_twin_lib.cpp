@@ -333,9 +333,9 @@ static pd::IdStatus done_with_caps(std::initializer_list<std::uint32_t> pdos) {
 }
 
 static void test_auto_name() {
-    CHECK_STR(auto_name(0x18D1, 33u).data(), "Google 33W");
-    CHECK_STR(auto_name(0x17EF, 65u).data(), "Lenovo 65W");
-    CHECK_STR(auto_name(0x17EF, 0u).data(), "Lenovo");                   // no sink level read
+    CHECK_STR(auto_name(0x18D1, 33u).data(), "GOOGLE 33W");
+    CHECK_STR(auto_name(0x17EF, 65u).data(), "LENOVO 65W");
+    CHECK_STR(auto_name(0x17EF, 0u).data(), "LENOVO");                   // no sink level read
     CHECK_STR(auto_name(0x1234, 33u).data(), "VID 1234 33W");           // an unlisted VID names itself
     CHECK_STR(auto_name(0x0ABC, 0u).data(), "VID 0ABC");
     CHECK_STR(auto_name(0, 27u).data(), "Device 27W");
@@ -347,7 +347,7 @@ static void test_auto_name() {
     t.num_pdos = 3;
     t.pdos = {0x3601912Cu, 0x0002D12Cu, 0xC0DC323Cu};
     CHECK_EQ(want_w(t), 33u);
-    CHECK_STR(auto_name(t).data(), "Google 33W");
+    CHECK_STR(auto_name(t).data(), "GOOGLE 33W");
 }
 
 static void test_from_identify() {
@@ -394,10 +394,22 @@ static Twin lenovo(const char* name = "") {
     return t;
 }
 
+// A brand of up to 16 characters, the widest watts and the library's " 12" suffix always fit kNameMax; the brand gives way.
+static void test_auto_name_fits_every_brand() {
+    for (unsigned v = 1; v < 0x10000; v++)
+        for (std::uint32_t w : {0u, 5u, 65u, 999u}) {
+            const auto n = auto_name(std::uint16_t(v), w);
+            const std::size_t len = std::strlen(n.data());
+            CHECK_EQ(len + 3 <= kNameMax, 1);
+            CHECK_EQ(len > 0 && n[len - 1] != ' ', 1);
+            if (w != 0) CHECK_EQ(std::string(n.data()).find(" " + std::to_string(w) + "W") != std::string::npos, 1);
+        }
+}
+
 static void test_auto_name_counts_variable_pdos() {
     CHECK_EQ(want_w(lenovo()), 65u);
     CHECK_EQ(legacy_want_w(lenovo()), 15u);
-    CHECK_STR(auto_name(lenovo()).data(), "Lenovo 65W");
+    CHECK_STR(auto_name(lenovo()).data(), "LENOVO 65W");
     CHECK_EQ(name_is_legacy_auto(lenovo("Lenovo 15W")) ? 1 : 0, 1);
     CHECK_EQ(name_is_legacy_auto(lenovo("Lenovo 15W 2")) ? 1 : 0, 1);
     CHECK_EQ(name_is_legacy_auto(lenovo("Lenovo 65W")) ? 1 : 0, 0);
@@ -408,7 +420,7 @@ static void test_auto_name_counts_variable_pdos() {
     Library l(v.f);
     Result r = l.save(lenovo());
     CHECK_EQ(int(r.err), int(Err::Ok));
-    CHECK_STR(name_of(l, r.seq).c_str(), "Lenovo 65W");
+    CHECK_STR(name_of(l, r.seq).c_str(), "LENOVO 65W");
     // a stored twin with the old auto name: saved again (any learn of that device), it gets the right watts
     Vol v2;
     Library l2(v2.f);
@@ -417,7 +429,7 @@ static void test_auto_name_counts_variable_pdos() {
     r = l2.save(lenovo());
     CHECK_EQ(r.existed ? 1 : 0, 1);
     CHECK_EQ(r.unchanged ? 1 : 0, 0);
-    CHECK_STR(name_of(l2, 1).c_str(), "Lenovo 65W");
+    CHECK_STR(name_of(l2, 1).c_str(), "LENOVO 65W");
     r = l2.save(lenovo());                                             // now nothing left to change
     CHECK_EQ(r.unchanged ? 1 : 0, 1);
     // a name the user typed stays
@@ -444,7 +456,7 @@ static void test_learn_names_and_rename_wins() {
     CHECK_EQ(from_identify(id, st, 2, t) ? 1 : 0, 1);
     Result r = l.save(t);
     CHECK_EQ(int(r.err), int(Err::Ok));
-    CHECK_STR(name_of(l, r.seq).c_str(), "Google 33W");
+    CHECK_STR(name_of(l, r.seq).c_str(), "GOOGLE 33W");
     // the same device learned again: no new twin, nothing written when nothing changed
     r = l.save(t);
     CHECK_EQ(r.seq, 1);
@@ -468,11 +480,11 @@ static void test_learn_names_and_rename_wins() {
     from_identify(id2, st, 2, t3);
     r = l.save(t3);
     CHECK_EQ(r.seq, 2);
-    CHECK_STR(name_of(l, 2).c_str(), "Google 33W");
+    CHECK_STR(name_of(l, 2).c_str(), "GOOGLE 33W");
     Twin t4;
     from_identify(identity_of(0x18D1, 0x4EE3, 2u << 27), st, 2, t4);
     r = l.save(t4);
-    CHECK_STR(name_of(l, r.seq).c_str(), "Google 33W 2");
+    CHECK_STR(name_of(l, r.seq).c_str(), "GOOGLE 33W 2");
     // a device with no VID is never matched to an identified one, even with their PDO list; learned again it is matched by its
     // sink PDO list (same_device), not added a second time
     Twin anon;
@@ -594,7 +606,7 @@ static void test_learn_sniffed_attaches() {
     from_sniffed(contract_at(2, rdo), caps, other, pd::SinkCapsSeen{}, s2);
     r = l.save(s2);
     CHECK_EQ(r.seq, 2);
-    CHECK_STR(name_of(l, 2).c_str(), "Apple");
+    CHECK_STR(name_of(l, 2).c_str(), "APPLE");
     l.get(2, t);
     CHECK_EQ(t.num_pdos, 0);
     CHECK_EQ(t.has_request() ? 1 : 0, 1);
@@ -965,6 +977,7 @@ int main() {
     test_library_damaged_and_foreign();
     test_library_power_loss();
     test_auto_name();
+    test_auto_name_fits_every_brand();
     test_auto_name_counts_variable_pdos();
     test_from_identify();
     test_learn_names_and_rename_wins();

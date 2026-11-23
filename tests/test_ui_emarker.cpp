@@ -8,7 +8,7 @@
 using namespace k2;
 
 static std::string kv(const pd::Emarker &e, bool tbt, int i) {
-    StrBuf<12> k; StrBuf<16> v;
+    StrBuf<12> k; StrBuf<20> v;
     emarker_kv(e, tbt, i, k, v);
     return std::string(k.view()) + "=" + std::string(v.view());
 }
@@ -80,7 +80,7 @@ static void test_widths_and_latency_codes() {
         e.vdo2_valid = true; e.num_vdos = 6; e.termination = static_cast<uint8_t>(code & 3);
         e.vendor_str = "Unknown";
         for (int i = 0; i < emarker_kv_count(e, true); i++) {
-            StrBuf<12> k; StrBuf<16> v;
+            StrBuf<12> k; StrBuf<20> v;
             emarker_kv(e, true, i, k, v);
             CHECK_EQ(k.view().size() <= static_cast<size_t>(kEmKeyChars), 1);
             CHECK_EQ(v.view().size() <= static_cast<size_t>(kEmValChars), 1);
