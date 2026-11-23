@@ -43,15 +43,16 @@ std::array<char, kMaxLen + 1> make(const emrec::Record& rec, unsigned ordinal) {
         for (unsigned b = 0; b < 4; b++) raw[4 * i + b] = static_cast<std::uint8_t>(emrec::vdo(rec, i) >> (8 * b));
     const pd::Emarker em = pd::parse_emarker(raw, 5);
 
-    const char* brand = pd::vendor_find(vid);
+    const pd::VendorName brand = pd::vendor_find(vid);
+    const bool known = !brand.empty();
     char mfg[16];
-    if (!brand) {   // unlisted: hex VID, and the speed in the name so two unknown makers still differ
+    if (!known) {   // unlisted: hex VID, and the speed in the name so two unknown makers still differ
         const char hex[] = "0123456789ABCDEF";
         mfg[0] = '0'; mfg[1] = 'x';
         for (int k = 0; k < 4; k++) mfg[2 + k] = hex[(vid >> (12 - 4 * k)) & 0xF];
         mfg[6] = 0;
     }
-    const std::string_view vendor = brand ? brand : mfg;
+    const std::string_view vendor = known ? brand.view() : std::string_view(mfg);
     char watts[8], suffix[8];
     {
         unsigned w = em.max_power_w, k = 0;
@@ -72,12 +73,14 @@ std::array<char, kMaxLen + 1> make(const emrec::Record& rec, unsigned ordinal) {
             suffix[s] = 0;
         }
     }
-    const std::string_view ver = brand ? std::string_view() : version(cab);
-    const std::size_t tail = 1 + (brand ? 0 : ver.size() + 1) + std::strlen(watts) + std::strlen(suffix);
+    const std::string_view ver = known ? std::string_view() : version(cab);
+    const std::size_t tail = 1 + (known ? 0 : ver.size() + 1) + std::strlen(watts) + std::strlen(suffix);
     const std::size_t room = kMaxLen > tail ? kMaxLen - tail : 0;
     Out out;
-    out.put(vendor.substr(0, room));
-    if (brand) {
+    std::string_view head = vendor.substr(0, room);
+    while (!head.empty() && head.back() == ' ') head.remove_suffix(1);   // a cut can land after a space
+    out.put(head);
+    if (known) {
         out.put(" ");
     } else {
         out.put("-");

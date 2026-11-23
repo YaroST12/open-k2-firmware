@@ -37,8 +37,8 @@ inline std::array<char, kNameMax + 1> auto_name(std::uint16_t vid, std::uint32_t
     };
     if (vid == 0) {
         put("Device", kAutoVendorMax);
-    } else if (const char* vendor = pd::vendor_find(vid)) {
-        put(vendor, kAutoVendorMax);
+    } else if (const pd::VendorName vendor = pd::vendor_find(vid); !vendor.empty()) {
+        put(vendor.c_str(), kAutoVendorMax);
     } else {
         put("VID ", kAutoVendorMax);
         for (int sh = 12; sh >= 0; sh -= 4) out[n++] = "0123456789ABCDEF"[(vid >> sh) & 0xF];
@@ -74,7 +74,11 @@ inline std::uint32_t legacy_want_w(const Twin& t) {
 inline bool name_is_legacy_auto(const Twin& t) {
     const auto old = auto_name(t.vid, legacy_want_w(t));
     const std::size_t n = std::strlen(old.data());
-    if (n == 0 || std::strncmp(t.name.data(), old.data(), n) != 0) return false;
+    // Names saved before the table went to capitals ("Lenovo 15W") are still the auto name: compare without case.
+    auto up = [](char c) { return (c >= 'a' && c <= 'z') ? char(c - 32) : c; };
+    if (n == 0) return false;
+    for (std::size_t i = 0; i < n; ++i)
+        if (up(t.name[i]) != up(old[i])) return false;
     const char* rest = t.name.data() + n;
     if (*rest == 0) return true;
     if (*rest != ' ' || rest[1] == 0) return false;

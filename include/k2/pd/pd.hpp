@@ -9,6 +9,8 @@
 #include <cstdint>
 #include <span>
 
+#include "k2/pd/vendor_name.hpp"
+
 namespace k2::pd {
 
 enum class PdoType : std::uint8_t { Unknown, Fixed, Battery, Variable, Pps, Avs };
@@ -49,7 +51,7 @@ struct Emarker {
     std::uint8_t max_current_a = 0, max_voltage_v = 0;  // parse_emarker defaults: 3 A / 20 V / 60 W
     std::uint16_t max_power_w = 0;
     const char* speed_str = nullptr;  // set by parse_emarker; null keeps the engine out of .data
-    const char* vendor_str = nullptr;
+    VendorName vendor_str;           // capitals, set by parse_emarker (a table name or "Unknown"); a value, the table is packed
     std::array<std::uint32_t, 6> raw_vdos{};
     std::uint8_t num_vdos = 0;
 
@@ -111,12 +113,13 @@ void decode_source_caps(SourceCaps& caps, std::uint16_t header, std::span<const 
 // Parse `num_do` VDOs (little endian) from `body`.
 Emarker parse_emarker(std::span<const std::uint8_t> body, unsigned num_do);
 
-// Name of a vendor by USB VID (tools/vendors.csv): nullptr when not listed. `weak` is set for chip makers, cable makers and
-// VIDs shared by two brands, whose name says who made a part, not whose product it is.
-const char* vendor_find(std::uint16_t vid, bool* weak = nullptr);
+// Name of a vendor by USB VID (tools/vendors.csv) in capitals, decoded from the packed table into the returned value:
+// empty when not listed. `weak` is set for chip makers, cable makers and VIDs shared by two brands, whose name says who
+// made a part, not whose product it is.
+VendorName vendor_find(std::uint16_t vid, bool* weak = nullptr);
 
 // vendor_find() or "Unknown".
-const char* vendor_name(std::uint16_t vid);
+VendorName vendor_name(std::uint16_t vid);
 
 // Name of a control message type (header bits 4:0); "OTHER" when not listed.
 const char* control_name(std::uint8_t msg_type);

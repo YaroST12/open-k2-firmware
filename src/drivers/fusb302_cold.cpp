@@ -110,7 +110,7 @@ std::size_t scan_orientation(std::uint8_t sw0, std::uint8_t sw1, bool pc13, bool
 
 void log_found_cable() {
     const pd::Emarker& e = g_engine.cable;
-    K2LOG("[EMARK] E-Marker detected: VID=0x%04X (%s), PID=0x%04X\n", e.vid, e.vendor_str, e.pid);
+    K2LOG("[EMARK] E-Marker detected: VID=0x%04X (%s), PID=0x%04X\n", e.vid, e.vendor_str.c_str(), e.pid);
     K2LOG("[EMARK] Rating: %d.0A / %dV (%dW), Speed: %s\n", e.max_current_a, e.max_voltage_v,
                 e.max_power_w, e.speed_str);
     K2LOG("[EMARK] Cable Type: %s, HW: v%d, FW: v%d, XID: 0x%08X\n", e.is_active ? "Active" : "Passive",
@@ -1249,11 +1249,11 @@ void log_vdm(std::uint16_t header, std::span<const std::uint8_t> payload) {
     const unsigned cmd_type = (hdr >> 6) & 3, cmd = hdr & 0x1F;
     const pd::VdmInfo& v = (header >> 8) & 1 ? g_engine.vdm : g_engine.sink_vdm;
     K2LOG("[VDM] hdr=0x%08X SVID=0x%04X (%s) type=%u cmd=%u\n", unsigned(hdr), unsigned(hdr >> 16),
-                pd::svid_name(hdr >> 16), cmd_type, cmd);
+                pd::svid_name(hdr >> 16).c_str(), cmd_type, cmd);
     if (cmd_type != 1 || (hdr >> 16) != pd::kSvidPd) return;
     if (cmd == 1 && v.identity.valid) {
         K2LOG("[VDM] Identity: VID=0x%04X (%s) PID=0x%04X bcd=0x%04X%s%s\n", v.identity.vid,
-                    v.identity.vendor, v.identity.pid, v.identity.bcd, v.identity.model ? " model=" : "",
+                    v.identity.vendor.c_str(), v.identity.pid, v.identity.bcd, v.identity.model ? " model=" : "",
                     v.identity.model ? v.identity.model : "");
         for (std::size_t i = 4; i + 3 < payload.size(); i += 4) {
             const std::uint32_t w = payload[i] | (payload[i + 1] << 8) | (payload[i + 2] << 16) |
@@ -1262,7 +1262,7 @@ void log_vdm(std::uint16_t header, std::span<const std::uint8_t> payload) {
         }
     } else if (cmd == 2) {
         for (int i = 0; i < v.num_svids; i++)
-            K2LOG("[VDM] SVID %d: 0x%04X (%s)\n", i + 1, v.svids[i], pd::svid_name(v.svids[i]));
+            K2LOG("[VDM] SVID %d: 0x%04X (%s)\n", i + 1, v.svids[i], pd::svid_name(v.svids[i]).c_str());
     }
 }
 

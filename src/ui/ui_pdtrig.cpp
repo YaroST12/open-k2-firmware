@@ -75,15 +75,23 @@ int identify_rows(const pd::IdStatus &st, const pd::VdmInfo &vdm, IdRow *rows) {
     const pd::Identity &id = vdm.identity;
     if (id.valid) {
         add(rows, n, RowTone::Head, [](auto &s) { s.put("-- Identity --"); });
-        add(rows, n, RowTone::Value, [&](auto &s) { s.put("VID ").put_hex(id.vid, 4).put_char(' ').put(id.vendor ? id.vendor : "?"); });
+        // "VID xxxx " leaves 13 of the row's 22 cells: a longer name takes a row of its own, never a cut.
+        const std::string_view vendor = id.vendor.empty() ? std::string_view("?") : id.vendor.view();
+        const bool beside = vendor.size() <= 13;
+        add(rows, n, RowTone::Value, [&](auto &s) { s.put("VID ").put_hex(id.vid, 4); if (beside) s.put_char(' ').put(vendor); });
+        if (!beside) add(rows, n, RowTone::Value, [&](auto &s) { s.put(vendor); });
         add(rows, n, RowTone::Text, [&](auto &s) { s.put("PID ").put_hex(id.pid, 4).put(" bcd ").put_hex(id.bcd, 4); });
         if (id.model) add(rows, n, RowTone::Value, [&](auto &s) { s.put(id.model); });
     } else if (st.state == pd::IdState::Done) {
         add(rows, n, RowTone::Dim, [](auto &s) { s.put("No identity answer"); });
     }
     const int svids = std::min<int>(vdm.num_svids, 4);
-    for (int i = 0; i < svids; i++)
-        add(rows, n, RowTone::Text, [&](auto &s) { s.put("SVID ").put_hex(vdm.svids[i], 4).put_char(' ').put(pd::svid_name(vdm.svids[i])); });
+    for (int i = 0; i < svids; i++) {
+        const pd::VendorName nm = pd::svid_name(vdm.svids[i]);
+        const bool beside = nm.view().size() <= 12;   // "SVID xxxx " leaves 12 of 22; a longer name takes its own row
+        add(rows, n, RowTone::Text, [&](auto &s) { s.put("SVID ").put_hex(vdm.svids[i], 4); if (beside) s.put_char(' ').put(nm.view()); });
+        if (!beside) add(rows, n, RowTone::Text, [&](auto &s) { s.put(nm.view()); });
+    }
     if (st.num_sink_pdos) {
         add(rows, n, RowTone::Head, [](auto &s) { s.put("-- Sink wants --"); });
         for (int i = 0; i < st.num_sink_pdos; i++) {
@@ -130,8 +138,8 @@ bool identify_card(const pd::IdStatus &st, const pd::VdmInfo &vdm, IdCard &out) 
     out = IdCard{};
     const pd::Identity &id = vdm.identity;
     if (st.state != pd::IdState::Done || !id.valid) return false;
-    put_cut(out.name, id.model ? id.model : id.vendor ? id.vendor : "Device", 13);
-    put_cut(out.vendor, id.vendor, 10);
+    put_cut(out.name, id.model ? id.model : !id.vendor.empty() ? id.vendor.c_str() : "Device", pd::kVendorMax);
+    put_cut(out.vendor, id.vendor.c_str(), pd::kVendorMax);
     if (st.revision) out.pd.put("PD ").put_u32(st.revision >> 28).put_char('.').put_u32((st.revision >> 24) & 0xF);
     uint32_t best = 0;
     int bi = -1;
@@ -167,10 +175,10 @@ void identify_kv(const pd::IdStatus &, const pd::VdmInfo &vdm, int i, StrBuf<12>
         const uint16_t sv = vdm.svids[i];
         key.put("SVID");
         val.put_hex(sv, 4).put_char(' ');
-        const char *nm = pd::svid_name(sv);
+        const pd::VendorName nm = pd::svid_name(sv);
         size_t len = 0;
-        while (nm && nm[len] && nm[len] != '/' && len < 6) len++;   // "Intel/TBT" reads as "Intel"
-        put_cut(val, nm, len);
+        while (nm.s[len] && nm.s[len] != '/' && len < 6) len++;   // "INTEL/TB" reads as "INTEL"
+        put_cut(val, nm.c_str(), len);
     }
 }
 

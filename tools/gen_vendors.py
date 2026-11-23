@@ -3,12 +3,15 @@
 # Copyright (C) 2026 Yaraslau Furman
 """tools/vendors.csv -> include/k2/pd/vendor_table.hpp, the one USB vendor table (pd::vendor_find / vendor_name).
 
-  gen_vendors.py                 rewrite the header and the results page's copy of the names (docs/site/r/vendors.js)
+  gen_vendors.py                 rewrite the header, the results page's copy of the names (docs/site/r/vendors.js) and
+                                 the host test's expected names (tests/vendor_expect.inc)
   gen_vendors.py --check         exit 1 when a committed output is not what the csv makes (tests/test_vendors.py)
   gen_vendors.py --verify FILE   check every row against the USB-IF Valid Vendor IDs list (pdftotext -layout of
                                  https://www.usb.org/sites/default/files/vendor_ids*.pdf)
 
-Packed layout: sorted uint16 VIDs, a NUL-separated name pool, a pool offset per STRIDE entries, a weak-flag bitmap.
+Packed layout: sorted uint16 VIDs, a name pool of 6-bit symbols (0 ends a name; 1-26 a-z, 27-36 0-9, 37-40 space - _ .), the
+bit offset of every STRIDE-th name, a weak-flag bitmap. Names are at most 16 characters and are stored folded to lower
+case; the K2 and the results page show them in capitals (the csv keeps its readable case).
 Weak entries (chips, cable makers, shared VIDs) name a part, not the product, so a charger's own manufacturer string
 wins over them (report_card::auto_name)."""
 import os
@@ -20,12 +23,16 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 CSV = os.path.join(HERE, "vendors.csv")
 HDR = os.path.join(HERE, "..", "include", "k2", "pd", "vendor_table.hpp")
 JS = os.path.join(HERE, "..", "docs", "site", "r", "vendors.js")
+EXPECT = os.path.join(HERE, "..", "tests", "vendor_expect.inc")
 STRIDE = 8
+NAME_MAX = 16
+SYMBOLS = "\0abcdefghijklmnopqrstuvwxyz0123456789 -_."   # the 6-bit code of a character is its index; 0 ends a name
 CATS = {"brand": False, "oem": False, "tool": False, "chip": True, "cable": True, "psu": True, "shared": True}
 NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+(?: [A-Za-z0-9_.-]+)*$")   # emlib::name_valid, no edge spaces
 
 Row = namedtuple("Row", "vid name cat usbif why")
 Row.weak = property(lambda r: CATS[r.cat])
+Row.display = property(lambda r: r.name.upper())   # what the K2, the card tool and the results page show
 
 
 def load(path):
@@ -46,22 +53,47 @@ def check_rows(rows):
         if r.vid in seen or not 0 < r.vid < 0xFFFF:
             raise ValueError("bad or duplicate VID %04X" % r.vid)
         seen.add(r.vid)
-        if len(r.name) > 10 or not NAME_RE.match(r.name):
-            raise ValueError("%04X: name %r is over 10 characters or outside the name alphabet" % (r.vid, r.name))
+        if len(r.name) > NAME_MAX or not NAME_RE.match(r.name):
+            raise ValueError("%04X: name %r is over %d characters or outside the name alphabet" % (r.vid, r.name, NAME_MAX))
         if r.cat not in CATS:
             raise ValueError("%04X: unknown category %r" % (r.vid, r.cat))
+
+
+def pack_names(names):
+    """Names -> (pool bytes, bit offset of each name): 6-bit symbols, LSB first, a 0 symbol after each name, one pad byte
+    so the device's two-byte symbol read never leaves the array."""
+    offs, acc, nbits = [], 0, 0
+    for name in names:
+        offs.append(nbits)
+        for ch in name.lower() + "\0":
+            acc |= SYMBOLS.index(ch) << nbits
+            nbits += 6
+    return acc.to_bytes((nbits + 7) // 8 + 1, "little"), offs
+
+
+def unpack_name(pool, bit):
+    """The name at bit offset `bit` in capitals, and the bit offset just after its terminator."""
+    acc = int.from_bytes(pool, "little")
+    out = ""
+    while True:
+        sym = (acc >> bit) & 63
+        bit += 6
+        if sym == 0:
+            return out, bit
+        out += SYMBOLS[sym].upper()
+
+
+def pool_bits(rows):
+    return sum(6 * (len(r.name) + 1) for r in rows)
 
 
 def render(rows):
     check_rows(rows)
     rows = sorted(rows, key=lambda r: r.vid)
     n = len(rows)
-    offs, pool = [], []
-    pos = 0
-    for r in rows:
-        offs.append(pos)
-        pool.append(r.name)
-        pos += len(r.name) + 1
+    pool, offs = pack_names([r.name for r in rows])
+    if pool_bits(rows) >= 1 << 16:
+        raise ValueError("name pool over 65535 bits: kSkip needs a wider type")
     skip = [offs[i] for i in range(0, n, STRIDE)]
     weak = [0] * ((n + 7) // 8)
     for i, r in enumerate(rows):
@@ -78,7 +110,7 @@ def render(rows):
            "namespace k2::pd::vendor_table {",
            "",
            "inline constexpr unsigned kCount = %d;" % n,
-           "inline constexpr unsigned kStride = %d;   // kSkip holds the pool offset of every kStride-th name" % STRIDE,
+           "inline constexpr unsigned kStride = %d;   // kSkip holds the pool bit offset of every kStride-th name" % STRIDE,
            "",
            "inline constexpr std::uint16_t kVid[kCount] = {",
            wrap([r.vid for r in rows], "0x%04X", 8),
@@ -89,9 +121,10 @@ def render(rows):
            "inline constexpr std::uint8_t kWeak[%d] = {" % len(weak),
            wrap(weak, "0x%02X", 16),
            "};",
-           "// One NUL after each name, in VID order.",
-           "inline constexpr char kPool[] =",
-           "\n".join('    "%s\\0"' % r.name for r in rows) + ";",
+           "// The names in VID order, 6-bit symbols (k2/pd/vendor_pack.hpp), a pad byte at the end.",
+           "inline constexpr std::uint8_t kPool[%d] = {" % len(pool),
+           wrap(list(pool), "0x%02X", 16),
+           "};",
            "",
            "}  // namespace k2::pd::vendor_table",
            ""]
@@ -100,11 +133,18 @@ def render(rows):
 
 def render_js(rows):
     check_rows(rows)
-    body = ",\n".join('  0x%04X: "%s"' % (r.vid, r.name) for r in sorted(rows, key=lambda r: r.vid))
+    body = ",\n".join('  0x%04X: "%s"' % (r.vid, r.display) for r in sorted(rows, key=lambda r: r.vid))
     return ("// Generated by tools/gen_vendors.py from tools/vendors.csv: do not edit.\n"
             '"use strict";\n'
             "var K2Vendors = {\n" + body + "\n};\n"
             'if (typeof module !== "undefined" && module.exports) module.exports = K2Vendors;\n')
+
+
+def render_expect(rows):
+    """The host test's expected table, straight from the csv: VID and capitals, independent of the packer."""
+    check_rows(rows)
+    body = "\n".join('    {0x%04X, "%s"},' % (r.vid, r.display) for r in sorted(rows, key=lambda r: r.vid))
+    return "// Generated by tools/gen_vendors.py from tools/vendors.csv: do not edit.\n" + body + "\n"
 
 
 def parse_usbif(text):
@@ -135,7 +175,7 @@ def main(argv):
             errs = verify(rows, f.read())
         print("\n".join(errs) or "all %d rows match the USB-IF list" % len(rows))
         return 1 if errs else 0
-    outs = [(HDR, render(rows)), (JS, render_js(rows))]
+    outs = [(HDR, render(rows)), (JS, render_js(rows)), (EXPECT, render_expect(rows))]
     if argv[:1] == ["--check"]:
         stale = [os.path.relpath(p) for p, text in outs if not os.path.exists(p) or open(p, encoding="utf-8").read() != text]
         if stale:
@@ -144,7 +184,7 @@ def main(argv):
     for p, text in outs:
         with open(p, "w", encoding="utf-8") as f:
             f.write(text)
-    print("%d vendors, %d bytes of names" % (len(rows), sum(len(r.name) + 1 for r in rows)))
+    print("%d vendors, %d bytes of packed names" % (len(rows), (pool_bits(rows) + 7) // 8 + 1))
     return 0
 
 

@@ -30,7 +30,7 @@ int identify_rows(const pd::IdStatus &st, const pd::VdmInfo &vdm, IdRow *rows);
 // Result card of a finished identify (state Done with a valid identity): the device name (Apple
 // model, else vendor, else "Device"), vendor and PD revision pills and what the sink asks for
 // ("wants 20V 1.5A", the highest-power sink PDO). false while there is nothing to show.
-struct IdCard { StrBuf<16> name; StrBuf<12> vendor; StrBuf<8> pd; StrBuf<16> wants; };
+struct IdCard { StrBuf<20> name; StrBuf<20> vendor; StrBuf<8> pd; StrBuf<16> wants; };
 bool identify_card(const pd::IdStatus &st, const pd::VdmInfo &vdm, IdCard &out);
 // Key / value rows under the card: VID, PID, product type and USB role when known, up to 4 SVIDs. Keys <= 9, values <= 11 chars.
 int identify_kv_count(const pd::IdStatus &st, const pd::VdmInfo &vdm);

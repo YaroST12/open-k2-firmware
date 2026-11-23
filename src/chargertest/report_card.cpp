@@ -288,8 +288,9 @@ size_t auto_name(char* out, uint16_t vid, std::string_view mfr, uint8_t pdp_w) {
     char base[kNameMax + 1] = {};
     size_t n = 0;
     bool weak = false;
-    const char* b = pd::vendor_find(vid, &weak);
-    if (!b || weak) {   // a chip or cable maker's name yields to the charger's own manufacturer text
+    const pd::VendorName vn = pd::vendor_find(vid, &weak);
+    const bool has_b = !vn.empty();
+    if (!has_b || weak) {   // a chip or cable maker's name yields to the charger's own manufacturer text
         for (char c : mfr) {
             if (n >= kNameMax) break;
             const bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.';
@@ -298,9 +299,9 @@ size_t auto_name(char* out, uint16_t vid, std::string_view mfr, uint8_t pdp_w) {
         while (n && base[n - 1] == ' ') base[--n] = 0;
     }
     if (n == 0) {
-        if (b) {
-            n = std::strlen(b);
-            std::memcpy(base, b, n);
+        if (has_b) {
+            n = vn.view().size();
+            std::memcpy(base, vn.c_str(), n);
         } else if (vid) {
             static constexpr char hx[] = "0123456789ABCDEF";
             std::memcpy(base, "VID ", 4);

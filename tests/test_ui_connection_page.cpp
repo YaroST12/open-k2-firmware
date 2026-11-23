@@ -676,16 +676,17 @@ static void test_worst_case_rows_fit() {
     for (int i = 0; i < 10; i++) g_stub.caps.pdos[i] = {pd::PdoType::Fixed, 0, uint16_t(5000 + 1000 * i), uint16_t(5000 + 1000 * i), 3000, uint32_t(15000 + 3000 * i)};
     g_stub.caps.pdos[10] = {pd::PdoType::Pps, 0, 3300, 21120, 3250, 68640};
     g_stub.caps.raw_header = 0x1181; g_stub.caps.rx_count++;
+    g_stub.pd_seen_attach = true; g_stub.ol_facts.far_pd_message = true;   // without these the Source and Sink tabs read "NO PD"
     g_stub.contract.valid = true; g_stub.contract.ready = true; g_stub.contract.accepted = true;
     g_stub.contract.pos = 11; g_stub.contract.mv = 21120; g_stub.contract.op_ma = 3250; g_stub.contract.max_ma = 3250;
     g_stub.contract.flags = pd::kRdoFGiveBack | pd::kRdoFMismatch | pd::kRdoFUsbComm | pd::kRdoFNoSuspend | pd::kRdoFEpr;
-    // The ten-character vendor "ChargerLAB" on every side, an active TB cable that needs VCONN, a 5 G device with DP.
-    set_id(g_stub.vdm, 0x2B01, 0x0000, "ChargerLAB");
-    set_id(g_stub.sink_vdm, 0x2B01, 0x0000, "ChargerLAB");
+    // The widest real vendor name (14 characters, in capitals) on every side, an active TB cable that needs VCONN, a 5 G device with DP.
+    set_id(g_stub.vdm, 0x0456, 0x0000, "ANALOG DEVICES");
+    set_id(g_stub.sink_vdm, 0x0456, 0x0000, "ANALOG DEVICES");
     g_stub.vdm.num_svids = 3; g_stub.vdm.svids[0] = 0x2717; g_stub.vdm.svids[1] = 0x22D9; g_stub.vdm.svids[2] = 0x1D45;
     g_stub.sink_vdm = g_stub.vdm;
     pd::Emarker &em = g_stub.em;
-    em.valid = true; em.is_active = true; em.vid = 0x2B01; em.pid = 0x0000; em.vendor_str = "ChargerLAB";
+    em.valid = true; em.is_active = true; em.vid = 0x2B01; em.pid = 0x0000; em.vendor_str = "ANALOG DEVICES";
     em.speed_str = "USB 3.2 Gen2 (10G)"; em.latency_str = "50-60 ns (~6 m)";
     em.max_current_a = 5; em.max_voltage_v = 50; em.max_power_w = 250; em.epr_capable = true;
     em.vdo2_valid = true; em.usb_lanes = 2; em.usb4_supported = true; em.vconn_required = true; em.type_c_plug = true;
@@ -695,6 +696,11 @@ static void test_worst_case_rows_fit() {
     g_stub.ul.conf = usblink::Confidence::Negotiated;
     uint32_t t = 31000;
     ui.tick(t);
+    show(ui, 0, t); show(ui, 1, t); show(ui, 2, t);
+    // The longest name a table row can take (16 characters) must still draw inside every band.
+    set_id(g_stub.vdm, 0x2B01, 0x0000, "SIXTEEN CHARS OK");
+    set_id(g_stub.sink_vdm, 0x2B01, 0x0000, "SIXTEEN CHARS OK");
+    em.vendor_str = "SIXTEEN CHARS OK";
     show(ui, 0, t); show(ui, 1, t); show(ui, 2, t);
     // The thin-cable case: a 3 A cable under a 100 W offer, sink unknown, draws nothing yet.
     em.max_current_a = 3; em.max_power_w = 60; em.vconn_required = false;
@@ -1279,6 +1285,78 @@ static void test_source_tab_no_pd_never_offered_all_rotations() {
         }
     }
     ui.set_rotation(0, t += 100);
+}
+
+// The widest table name (ANALOG DEVICES, 14) on the charger and the sink, and a 16-capital cable maker string, every tab in all
+// four rotations: panels go to K2_DUMP (k2_vendor16_t<tab>_rot<N>.panel) and the trunc log fails on any cut.
+static void test_widest_vendor_all_rotations() {
+    Ui &ui = fresh_ui();
+    make_inline(ui, 30000);
+    g_stub.pm_online = true;
+    g_stub.caps.valid = true; g_stub.caps.spec_rev = 2; g_stub.caps.active_cc = 1; g_stub.caps.num_pdos = 11;
+    for (int i = 0; i < 10; i++) g_stub.caps.pdos[i] = {pd::PdoType::Fixed, 0, uint16_t(5000 + 1000 * i), uint16_t(5000 + 1000 * i), 3000, uint32_t(15000 + 3000 * i)};
+    g_stub.caps.pdos[10] = {pd::PdoType::Pps, 0, 3300, 21120, 3250, 68640};
+    g_stub.caps.raw_header = 0x1181; g_stub.caps.rx_count++;
+    g_stub.contract.valid = true; g_stub.contract.ready = true; g_stub.contract.accepted = true;
+    g_stub.contract.pos = 11; g_stub.contract.mv = 21120; g_stub.contract.op_ma = 3250; g_stub.contract.max_ma = 3250;
+    g_stub.pd_seen_attach = true; g_stub.ol_facts.far_pd_message = true;   // a PD charger and a PD sink, so all three tabs have rows
+    set_id(g_stub.vdm, 0x0456, 0x0000, "ANALOG DEVICES");   // the widest name in the table (14); the 16 limit goes through the cable head
+    g_stub.vdm.num_svids = 3; g_stub.vdm.svids[0] = 0x2717; g_stub.vdm.svids[1] = 0x22D9; g_stub.vdm.svids[2] = 0x1D45;
+    g_stub.sink_vdm = g_stub.vdm;
+    pd::Emarker &em = g_stub.em;
+    em.valid = true; em.is_active = true; em.vid = 0x2B01; em.pid = 0x0000; em.vendor_str = "SIXTEEN CHARS OK";
+    em.speed_str = "USB 3.2 Gen2 (10G)"; em.latency_str = "50-60 ns (~6 m)";
+    em.max_current_a = 5; em.max_voltage_v = 50; em.max_power_w = 250; em.epr_capable = true;
+    em.vdo2_valid = true; em.usb_lanes = 2; em.usb4_supported = true; em.vconn_required = true; em.type_c_plug = true;
+    g_stub.cable_tb = true;
+    uint32_t t = 40000;
+    ui.tick(t);
+    for (int r = 0; r < 4; r++) {
+        ui.set_rotation(r, t += 100);
+        for (uint8_t tab = 0; tab < 3; tab++) {
+            show(ui, tab, t);
+            char name[64];
+            std::snprintf(name, sizeof name, "k2_vendor16_t%u_rot%d", unsigned(tab), r);
+            dump_panel(name);
+        }
+    }
+    ui.set_rotation(0, t += 100);
+#ifdef K2_TRUNC_LOG
+    CHECK_EQ(k2::trunc::failures(), 0);
+#endif
+    g_stub.em = {}; g_stub.vdm = {}; g_stub.sink_vdm = {}; g_stub.caps = {}; g_stub.contract = {}; g_stub.cable_tb = false;
+    g_stub.pd_seen_attach = false; g_stub.ol_facts.far_pd_message = false;
+}
+
+// A standalone device read (the Sink tab's headline is the vendor when it fits the head) with the widest table name and a 16
+// character name from the device itself: all four rotations, nothing cut. Panels: k2_vendorid_<14|16>_rot<N>.panel.
+static void test_widest_vendor_identify_all_rotations() {
+    for (const char *name : {"ANALOG DEVICES", "SIXTEEN CHARS OK"}) {
+        Ui &ui = fresh_ui();
+        g_stub.cc = 1; g_stub.pm_online = true; g_stub.pm.vbus_mv = 0;
+        g_stub.caps.valid = false; g_stub.caps_this_attach = false;
+        uint32_t t = 12000;
+        for (; t <= 13400; t += 100) { set_cc(0, (t / 100) % 2 == 0 ? 3300 : 0); ui.tick(t); }
+        g_stub.ident_current = true;
+        g_stub.ident.state = pd::IdState::Done;
+        g_stub.ident.ok_mask = uint16_t((1u << int(pd::IdStep::Identity)) | (1u << int(pd::IdStep::SinkCap)) | (1u << int(pd::IdStep::Revision)));
+        g_stub.ident_identity.valid = true; g_stub.ident_identity.vid = 0x0456; g_stub.ident_identity.pid = 0x0001;
+        g_stub.ident_identity.vendor = name;
+        g_stub.ident.revision = 0x31200000u;
+        for (int r = 0; r < 4; r++) {
+            ui.set_rotation(r, t += 100);
+            ui.goto_page(kConnTabAlias + 2, t += 100);
+            settle(ui, t);
+            char dump[64];
+            std::snprintf(dump, sizeof dump, "k2_vendorid_%zu_rot%d", std::strlen(name), r);
+            dump_panel(dump);
+        }
+        ui.set_rotation(0, t += 100);
+#ifdef K2_TRUNC_LOG
+        CHECK_EQ(k2::trunc::failures(), 0);
+#endif
+        g_stub.ident_current = false; g_stub.ident_identity = {}; g_stub.ident = {};
+    }
 }
 
 // The same inline setup but the sink answered (a GoodCRC / Request this attach): the verdict is Present, the
@@ -3053,6 +3131,8 @@ int main() {
     test_sink_id_row_marks_a_sniffed_identity();
     test_sink_tab_no_pd_offered_unanswered();
     test_source_tab_no_pd_never_offered_all_rotations();
+    test_widest_vendor_all_rotations();
+    test_widest_vendor_identify_all_rotations();
     test_pd_present_keeps_identify_offered();
     test_single_tools_lock_one_tab();
     test_tools_rows_open_single_tools();

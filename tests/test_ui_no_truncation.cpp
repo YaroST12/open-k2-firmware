@@ -84,6 +84,11 @@ void apply(const Scenario &sc) {
         g_stub.em.vid = 0x2B1D; g_stub.em.pid = 0x1234;
         g_stub.em.max_current_a = 5; g_stub.em.max_voltage_v = 50; g_stub.em.max_power_w = 250;
         g_stub.em.epr_capable = true;
+        // The longest vendor name a table row can carry (16 capitals) on the cable and on both sides' identity.
+        g_stub.em.vendor_str = "SIXTEEN CHARS OK";
+        for (pd::Identity *id : {&g_stub.vdm.identity, &g_stub.sink_vdm.identity, &g_stub.ident_identity, &g_stub.iq_status.id}) {
+            id->valid = true; id->vid = 0x0456; id->pid = 0x1234; id->vendor = "SIXTEEN CHARS OK";
+        }
         g_stub.cable_ans = k2::emk_variant::answered_from(2, 1);  // orientation B, PD3 + SVDM 1.0
         // The full read at its widest: an active optical cable (3-digit temperatures, hub hops, asymmetric), four SVIDs with
         // the Thunderbolt and DisplayPort modes decoded, a SOP'' plug with raw words.

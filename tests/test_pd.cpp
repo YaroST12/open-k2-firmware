@@ -195,7 +195,7 @@ static void test_emarker() {
     CHECK_EQ(e.num_vdos, 5);
     CHECK_EQ(e.is_active, false);
     CHECK_EQ(e.vid, 0x05AC);
-    CHECK_STR(e.vendor_str, "Apple");
+    CHECK_STR(e.vendor_str.c_str(), "APPLE");
     CHECK_EQ(e.xid, 0x12345678u);
     CHECK_EQ(e.pid, 0x1234);
     CHECK_EQ(e.hw_rev, 5);
@@ -211,7 +211,7 @@ static void test_emarker() {
                       (2u << 9) | (1u << 5) | 3u, 1u << 20 };
     emarker(b, 6, &e);
     CHECK_EQ(e.is_active, true);
-    CHECK_STR(e.vendor_str, "Intel");
+    CHECK_STR(e.vendor_str.c_str(), "INTEL");
     CHECK_EQ(e.max_voltage_v, 20);
     CHECK_EQ(e.max_current_a, 3);
     CHECK_EQ(e.max_power_w, 60);
@@ -221,7 +221,7 @@ static void test_emarker() {
     /* 5 A passive cables: the deprecated 40 V and 30 V codes and 20 V are all 20 V -> 100 W */
     uint32_t c[5] = { 0xFF00A041u, (3u << 27) | 0x1234u, 0, 0, (2u << 9) | (2u << 5) | 4u };
     emarker(c, 5, &e);
-    CHECK_STR(e.vendor_str, "Unknown");
+    CHECK_STR(e.vendor_str.c_str(), "Unknown");
     CHECK_EQ(e.max_voltage_v, 20);
     CHECK_EQ(e.max_power_w, 100);
     CHECK_STR(e.speed_str, "USB4 Gen4 (80G)");
@@ -239,7 +239,7 @@ static void test_emarker() {
     /* Truncated answers keep the defaults: 3 A / 20 V / 60 W, USB 2.0 */
     uint32_t d[4] = { 0, 0x2B89u, 0xCAFEu, (0xBEEFu << 16) | 0x0102u };
     emarker(d, 4, &e);
-    CHECK_STR(e.vendor_str, "UGREEN");
+    CHECK_STR(e.vendor_str.c_str(), "UGREEN");
     CHECK_EQ(e.pid, 0xBEEF);
     CHECK_EQ(e.hw_rev, 1);
     CHECK_EQ(e.fw_rev, 2);
@@ -251,14 +251,14 @@ static void test_emarker() {
     uint32_t f[4] = { 0, 0x2109u, 0, (0x0103u << 16) };
     emarker(f, 4, &e);
     CHECK_EQ(e.vid, 0x2109);
-    CHECK_STR(e.vendor_str, "VIA Labs");
+    CHECK_STR(e.vendor_str.c_str(), "VIA LABS");
     uint32_t g[4] = { 0, 0x2095u, 0, (0x3100u << 16) };
     emarker(g, 4, &e);
     CHECK_EQ(e.vid, 0x2095);
-    CHECK_STR(e.vendor_str, "CE Link");
+    CHECK_STR(e.vendor_str.c_str(), "CE LINK");
     emarker(d, 1, &e);
     CHECK_EQ(e.num_vdos, 1);
-    CHECK_STR(e.vendor_str, "Unknown");
+    CHECK_STR(e.vendor_str.c_str(), "Unknown");
     CHECK_EQ(e.vid, 0);
 }
 

@@ -461,7 +461,7 @@ remote::EmarkerSnapshot Remote::emarker() {
     e.max_v = m->max_voltage_v;
     e.max_w = m->max_power_w;
     e.num_vdos = m->num_vdos > remote::kMaxVdos ? remote::kMaxVdos : m->num_vdos;
-    e.vendor = sv(m->vendor_str);
+    e.vendor = m->vendor_str.view();
     e.speed = sv(m->speed_str);
     for (unsigned i = 0; i < e.num_vdos; i++) e.vdo[i] = m->raw_vdos[i];
     e.sop = m->sop;
@@ -506,7 +506,7 @@ remote::IdentitySnapshot Remote::identity() {
     s.bcd = id.bcd;
     s.num_svids = v.num_svids > remote::kMaxIdSvids ? remote::kMaxIdSvids : v.num_svids;
     for (unsigned i = 0; i < s.num_svids; i++) s.svids[i] = v.svids[i];
-    s.vendor = sv(id.vendor);
+    s.vendor = id.vendor.view();
     s.model = sv(id.model);
     return s;
 }

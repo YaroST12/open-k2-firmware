@@ -23,7 +23,7 @@ void emarker_speed_pill(const pd::Emarker &e, StrBuf<12> &out);
 
 // Number of key / value rows below the card, `tbt` = the Thunderbolt SVID was seen.
 int emarker_kv_count(const pd::Emarker &e, bool tbt);
-// Row `i` (0 .. count-1): key at most 9 characters, value at most 11.
-void emarker_kv(const pd::Emarker &e, bool tbt, int i, StrBuf<12> &key, StrBuf<16> &val);
+// Row `i` (0 .. count-1): key at most 9 characters, value at most 11 (the Vendor row's name is up to 16: no page draws these rows now).
+void emarker_kv(const pd::Emarker &e, bool tbt, int i, StrBuf<12> &key, StrBuf<20> &val);
 
 }  // namespace k2

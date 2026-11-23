@@ -7,6 +7,7 @@
 #include <cstring>
 
 #include "k2/core/hot.h"
+#include "k2/pd/vendor_pack.hpp"
 #include "k2/pd/vendor_table.hpp"
 
 namespace k2::pd {
@@ -40,7 +41,7 @@ constexpr std::uint32_t le32(const std::uint8_t* p) {
 
 }  // namespace
 
-const char* vendor_find(std::uint16_t vid, bool* weak) {
+VendorName vendor_find(std::uint16_t vid, bool* weak) {
     namespace vt = vendor_table;
     unsigned lo = 0, hi = vt::kCount;
     while (lo < hi) {
@@ -49,15 +50,17 @@ const char* vendor_find(std::uint16_t vid, bool* weak) {
     }
     const bool hit = lo < vt::kCount && vt::kVid[lo] == vid;
     if (weak) *weak = hit && ((vt::kWeak[lo >> 3] >> (lo & 7)) & 1) != 0;
-    if (!hit) return nullptr;
-    const char* p = vt::kPool + vt::kSkip[lo / vt::kStride];
-    for (unsigned i = lo - lo % vt::kStride; i < lo; i++) p += std::strlen(p) + 1;
-    return p;
+    VendorName name;
+    if (!hit) return name;
+    unsigned bit = vt::kSkip[lo / vt::kStride];
+    for (unsigned i = lo - lo % vt::kStride; i < lo; i++) bit = vendor_pack::unpack(vt::kPool, bit, nullptr);
+    vendor_pack::unpack(vt::kPool, bit, name.s);
+    return name;
 }
 
-const char* vendor_name(std::uint16_t vid) {
-    const char* n = vendor_find(vid);
-    return n ? n : "Unknown";
+VendorName vendor_name(std::uint16_t vid) {
+    const VendorName n = vendor_find(vid);
+    return n ? n : VendorName("Unknown");
 }
 
 namespace {

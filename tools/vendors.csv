@@ -1,5 +1,6 @@
 # vid,name,cat,usbif,why
-# vid: USB vendor ID in hex. name: display name, at most 10 chars of A-Za-z0-9 space - _ . (the cable-name alphabet).
+# vid: USB vendor ID in hex. name: at most 16 chars of A-Za-z0-9 space - _ . (the cable-name alphabet); the table stores it
+# lower-case in 6-bit symbols and the K2, the card tool and the results page show it in capitals, so only spelling matters here.
 # cat: brand oem tool chip cable psu shared. chip, cable, psu and shared are weak: they lose to a charger's own manufacturer string.
 # usbif: the registrant in the USB-IF Valid Vendor IDs list (2026-03-10), checked by: python3 tools/gen_vendors.py --verify <pdftotext -layout of that list>.
 vid,name,cat,usbif,why
@@ -12,7 +13,7 @@ vid,name,cat,usbif,why
 0x042F,Molex,cable,Molex LLC,cable assembler
 0x0438,AMD,oem,Advanced Micro Devices,handhelds/boards
 0x0451,TI,chip,Texas Instruments,PD controllers/e-markers
-0x0456,Analog Dev,chip,Analog Devices Inc.,power chips
+0x0456,Analog Devices,chip,Analog Devices Inc.,power chips
 0x045B,Renesas,chip,Renesas Electronics Corp.,PD controllers
 0x045E,Microsoft,oem,Microsoft Corporation,Surface chargers/Xbox
 0x0468,Wieson,cable,Wieson Technologies Co. Ltd.,cable assembler
@@ -58,7 +59,7 @@ vid,name,cat,usbif,why
 0x07B7,TIME,cable,TIME Interconnect Ltd.,cable assembler
 0x07EC,Taiyo,cable,Taiyo Electric Wire & Cable Co. Ltd.,wire & cable
 0x08E7,Pan-Intl,cable,PAN-INTERNATIONAL WIRE & CABLE (M) SDN BHD,wire & cable
-0x090C,SiliconMot,chip,Silicon Motion Inc. - Taiwan,storage controllers
+0x090C,Silicon Motion,chip,Silicon Motion Inc. - Taiwan,storage controllers
 0x091E,Garmin,oem,Garmin International,watches/chargers
 0x0930,Toshiba,oem,Toshiba Corporation,storage
 0x0951,Kingston,oem,Kingston Technology Company,storage
@@ -109,7 +110,7 @@ vid,name,cat,usbif,why
 0x10C4,Silabs,chip,Silicon Laboratories Inc.,USB bridges
 0x10CC,GBM,cable,GBM Connector Co. Ltd.,connectors
 0x10E1,Cableplus,cable,CABLEPLUS LTD.,cable assembler
-0x112E,MasterHill,cable,Master Hill Electric Wire and Cable Co. Ltd.,wire & cable
+0x112E,Master Hill,cable,Master Hill Electric Wire and Cable Co. Ltd.,wire & cable
 0x113E,KDK,cable,KDK Electric Wire (H.K.) Co. Ltd.,wire & cable
 0x1147,Ever Great,cable,Ever Great Electric Wire and Cable Co. Ltd.,wire & cable
 0x11EF,Cableplus,cable,Cableplus Industrial Co. Ltd.,cable assembler
@@ -135,9 +136,9 @@ vid,name,cat,usbif,why
 0x154B,PNY,oem,PNY Technologies Inc.,storage
 0x15B6,Dialog,chip,Dialog Semiconductor GmbH,charger chips
 0x15FC,Xintai,cable,Humen Xintai Electrical Wires Factory,wire & cable
-0x1679,TotalPhase,tool,Total Phase,Beagle PD analyzers
+0x1679,Total Phase,tool,Total Phase,Beagle PD analyzers
 0x16AC,ChingLung,cable,Dongguan ChingLung Wire & Cable Co. Ltd.,wire & cable
-0x16F8,EverBright,cable,Ever Bright Wire Factory,wire & cable
+0x16F8,Ever Bright,cable,Ever Bright Wire Factory,wire & cable
 0x174C,ASMedia,chip,ASMedia Technology Inc.,hub and host controllers
 0x1771,Alex Conn,cable,Shenzhen Alex Connector Co. Ltd.,connectors
 0x17CF,Hip Hing,cable,Hip Hing Cable & Plug Mfy. Ltd.,cable & plug
@@ -181,7 +182,7 @@ vid,name,cat,usbif,why
 0x246B,P Fortune,cable,Perfect Fortune Electric Wire & Cable (ShenZhen) Co. Ltd.,wire & cable
 0x24CE,Deren,cable,Shenzhen Deren Electronic Co. Ltd.,cable assembler
 0x2529,Xinya,cable,SUZHOU XINYA ELECTRIC COMMUNICATION CO. LTD.,cable assembler
-0x258A,SinoWealth,chip,Sino Wealth Electronic Ltd.,PD controllers
+0x258A,Sino Wealth,chip,Sino Wealth Electronic Ltd.,PD controllers
 0x2672,GoPro,oem,GoPro,cameras
 0x2687,Fitbit,oem,FITBIT,trackers
 0x26F5,MornStar,cable,Morning Star Digital Connector Co. Ltd.,connectors
@@ -209,7 +210,7 @@ vid,name,cat,usbif,why
 0x2BA1,I-Sheng,cable,I-Sheng Electric Wire & Cable Co. Ltd.,wire & cable
 0x2BB8,OCC,cable,OCC (Zhuhai) Electronic Co. Ltd.,cable assembler
 0x2BD0,mophie,brand,mophie LLC,banks/chargers
-0x2BD5,CblMatters,brand,Cable Matters Inc.,Cable Matters: cables/docks
+0x2BD5,Cable Matters,brand,Cable Matters Inc.,Cable Matters: cables/docks
 0x2BE2,ECT,cable,Electric Connector Technology Co. Ltd.,connectors
 0x2C40,Leadtrend,chip,Leadtrend,AC-DC and PD controllers
 0x2C41,Adaptertek,psu,Adaptertek Technology Co. Ltd.,adapter maker
