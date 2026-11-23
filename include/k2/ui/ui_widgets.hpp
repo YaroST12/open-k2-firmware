@@ -77,10 +77,10 @@ int marked_width(const Font &f, std::string_view text);
 void draw_label_box(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, std::string_view text,
                     uint16_t fg, uint16_t bg);
 // A pill: the font 12 word centred in a w x h box of `fill`, ringed by a 1 px `frame` unless it equals the fill. Native size in
-// every rotation (ContentViewport::native_box): under a stretch `ground` takes the rest of the mapped box. `hug_top`: a squeezed
-// pill grows down from its mapped top row, not round its centre (the toast: its band is cleared from its top row down).
+// every rotation (ContentViewport::native_box): under a stretch `ground` takes the rest of the mapped box. It hangs
+// from its mapped origin like text; `centred`: across its mapped box instead (the toast).
 void draw_pill_box(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, std::string_view text, uint16_t ink,
-                   uint16_t fill, uint16_t frame, uint16_t ground, bool hug_top = false);
+                   uint16_t fill, uint16_t frame, uint16_t ground, bool centred = false);
 
 // w x h sparkline of `w` samples (oldest first, each 0..h-1): bg box, three rule lines, a fill
 // under the trace in `tint`, and a one-pixel trace in `color`.
@@ -200,7 +200,7 @@ bool status_toast(Toast &t, uint32_t now_ms, uint32_t &shown, FooterTone tone, s
 // Single-pass fill + 1 px tone border + S12 text; sets footer_error_shown() when tone == FooterTone::Error.
 void draw_toast(const Surface &s, FooterTone tone, std::string_view text K2_TRUNC_DECL);
 // Wipes the toast band of `s` to kBg; returns its top row. Under a squeeze it takes the margin under the band too, where the
-// native pill hangs (draw_pill_box hug_top).
+// native pill hangs from the band's top row.
 int16_t erase_toast(const Surface &s);
 
 // ---- top chrome bar (micro-GUI phase 1): 20 px band + 1 px hairline at y kBarH-1 -----------------

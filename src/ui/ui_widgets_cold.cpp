@@ -80,10 +80,10 @@ void draw_label_box(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h
 }
 
 void draw_pill_box(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, std::string_view text, uint16_t ink,
-                   uint16_t fill, uint16_t frame, uint16_t ground, bool hug_top) {
+                   uint16_t fill, uint16_t frame, uint16_t ground, bool centred) {
     if (ContentViewport::scaled()) {
         const Rect src{static_cast<int16_t>(s.x + x), static_cast<int16_t>(s.y + y), w, h};
-        const Rect m = ContentViewport::mapped_rect(src), n = ContentViewport::native_box(src, hug_top);
+        const Rect m = ContentViewport::mapped_rect(src), n = ContentViewport::native_box(src, centred);
         ContentViewport::Pause unscaled;
         const Surface panel{0, 0, kScreenW, kScreenH};
         // the mapped box's columns either side of the native pill (a stretch widens it), over the rows of both boxes

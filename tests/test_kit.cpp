@@ -1615,6 +1615,15 @@ static void test_chip_native_in_every_rotation() {
             std::fill(std::begin(g_panel), std::end(g_panel), kBase);
             const int ws = kit::draw_chip(s, 20, y, "PD3.x", kFill, kInkC);
             const bool solid_ok = whole_box(kFill, ws, kit::kChipH);
+            {   // it hangs from its mapped origin like text, so a chip column keeps the key column's left edge
+                const Rect o = ContentViewport::native_rect({20, y, 1, 1});
+                int l = 240, t = 240;
+                for (int i = 0; i < 240 * 240; i++)
+                    if (g_panel[i] == kFill) { l = std::min(l, i % 240); t = std::min(t, i / 240); }
+                if (l != o.x || t != o.y) std::printf("  rotation %d y %d: chip at %d,%d, origin %d,%d\n", r, y, l, t, o.x, o.y);
+                CHECK_EQ(l, o.x);
+                CHECK_EQ(t, o.y);
+            }
             if (!frame_ok || !solid_ok) std::printf("  rotation %d y %d: outline %d solid %d\n", r, y, frame_ok, solid_ok);
             CHECK_EQ(frame_ok, true);
             CHECK_EQ(solid_ok, true);
