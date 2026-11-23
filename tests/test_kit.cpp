@@ -1281,6 +1281,43 @@ static void test_range_gauge() {
     CHECK_EQ(changed_in(still, snap(), 0, 240), 0);
 }
 
+// A field lays out cells, not bytes: the two-byte degree sign takes one cell, so a right-aligned reading ends on the field's
+// last cell (the Lines VREF row ended a cell short), a changed digit repaints one cell, and a shorter left-aligned text
+// leaves nothing behind.
+static void test_field_counts_glyphs() {
+    const std::string_view deg = "0.00V 33\xC2\xB0" "C", deg2 = "0.00V 34\xC2\xB0" "C";
+    const int x0 = 10, y0 = 100, adv = kSmall.adv, end = x0 + 12 * adv;
+    lcd::fill(kBase);
+    Field f;
+    f.init(kSurf, kSmall, x0, y0, 12, Align::Right, kText, kBase);
+    f.draw(deg);
+    CHECK_EQ(ink_in(end - adv, end, y0, y0 + kSmall.height, kBase) > 0, true);   // "C" in the last cell
+    CHECK_EQ(ink_in(x0, x0 + 2 * adv, y0, y0 + kSmall.height, kBase), 0);       // two blank cells ahead of 10 glyphs
+    const auto before = snap();
+    f.draw(deg2);
+    int cols = 0;
+    for (int x = 0; x < 240; x++) {
+        bool any = false;
+        for (int y = y0; y < y0 + kSmall.height; y++) any = any || g_panel[y * 240 + x] != before[y * 240 + x];
+        cols += any;
+    }
+    CHECK_EQ(cols > 0 && cols <= adv, true);   // only the "3" -> "4" cell
+    const auto diffed = snap();
+    lcd::fill(kBase);
+    Field fresh;
+    fresh.init(kSurf, kSmall, x0, y0, 12, Align::Right, kText, kBase);
+    fresh.draw(deg2);
+    CHECK_EQ(changed_in(diffed, snap(), 0, 240), 0);
+    // left-aligned: "33°C" then "5V" blanks the old cells 2..3
+    lcd::fill(kBase);
+    Field l;
+    l.init(kSurf, kSmall, x0, y0, 6, Align::Left, kText, kBase);
+    l.draw("33\xC2\xB0" "C");
+    CHECK_EQ(ink_in(x0 + 3 * adv, x0 + 4 * adv, y0, y0 + kSmall.height, kBase) > 0, true);
+    l.draw("5V");
+    CHECK_EQ(ink_in(x0 + 2 * adv, x0 + 6 * adv, y0, y0 + kSmall.height, kBase), 0);
+}
+
 static void test_hero() {
     Field f;
     kit::HeroSpec h;
@@ -1631,6 +1668,7 @@ static void test_stamp_cross_is_the_icon() {
 }
 
 int main() {
+    test_field_counts_glyphs();
     test_stamp_cross_is_the_icon();
     test_chip_native_in_every_rotation();
     test_rail_link_icon_upright();

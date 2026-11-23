@@ -118,17 +118,35 @@ K2_HOT void gfx_text_rot(const Surface &s, const Font &f, int16_t x, int16_t y, 
     K2_TEXT_DRAWN(f, text, s.x + x, s.y + y, s.x + x, s.y + y, f.height, tw, static_cast<int>(dir));
 }
 
+namespace {
+// One diff key per cell: ASCII as is, a wider glyph folded into 0x80..0xFF (the fonts' few, the arrows and the degree sign,
+// fold apart).
+K2_HOT char cell_key(uint32_t cp) { return static_cast<char>(cp < 0x80 ? cp : 0x80 | ((cp ^ (cp >> 7)) & 0x7F)); }
+constexpr char kBlanks[FieldBase::kMaxChars + 1] = "                                ";
+static_assert(sizeof kBlanks == FieldBase::kMaxChars + 1);
+}  // namespace
+
+// Cells, not bytes: a two-byte glyph (the degree sign) takes one cell, so right-aligned text still ends on the last one.
 K2_HOT void field_draw_buf(const Surface &s, const Font &f, int16_t x, int16_t y, uint8_t chars, Align a,
                            uint16_t fg, uint16_t bg, bool &valid, char *cur,
                            std::string_view text K2_TRUNC_DEF) {
     if (chars > FieldBase::kMaxChars) chars = FieldBase::kMaxChars;
     char next[FieldBase::kMaxChars];
-    if (text.size() > chars)
+    int len = 0;
+    size_t bytes = 0;
+    bool ascii = true;
+    while (bytes < text.size() && len < chars) {
+        const uint32_t cp = next_codepoint(text, bytes);
+        ascii = ascii && cp < 0x80;
+        next[len++] = cell_key(cp);
+    }
+    if (bytes < text.size())
         K2_TRUNC_NOTE(trunc::Kind::Cut, text, static_cast<int>(chars) * f.adv);   // a field never wraps or grows
-    size_t len = text.size() < chars ? text.size() : chars;
-    size_t pad = a == Align::Right ? chars - len : 0;
-    for (size_t i = 0; i < chars; i++) next[i] = ' ';
-    for (size_t i = 0; i < len; i++) next[pad + i] = text[i];
+    text = text.substr(0, bytes);
+    const int pad = a == Align::Right ? chars - len : 0;
+    for (int i = len - 1; i >= 0 && pad; i--) next[pad + i] = next[i];
+    for (int i = 0; i < pad; i++) next[i] = ' ';
+    for (int i = pad + len; i < chars; i++) next[i] = ' ';
 
     int first = 0, last = chars - 1;
     if (valid) {
@@ -139,9 +157,30 @@ K2_HOT void field_draw_buf(const Surface &s, const Font &f, int16_t x, int16_t y
     for (int i = 0; i < chars; i++) cur[i] = next[i];
     valid = true;
     K2_FIELD_SCOPE(static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(&f)) * 31u + static_cast<unsigned>((s.x + x) * 257 + s.y + y));
-    gfx_text(s, f, x, y,
-             std::string_view(next + first, static_cast<size_t>(last - first + 1)), fg, bg,
-             static_cast<int16_t>(first * f.adv) K2_TRUNC_ARG);
+    if (ascii) {
+        gfx_text(s, f, x, y,
+                 std::string_view(next + first, static_cast<size_t>(last - first + 1)), fg, bg,
+                 static_cast<int16_t>(first * f.adv) K2_TRUNC_ARG);
+        return;
+    }
+    // a wider glyph: the keys are not the bytes, so the blanks and the text's own bytes each go to their cells
+    auto blanks = [&](int c0, int c1) {
+        if (c0 <= c1)
+            gfx_text(s, f, x, y, std::string_view(kBlanks, static_cast<size_t>(c1 - c0 + 1)), fg, bg,
+                     static_cast<int16_t>(c0 * f.adv) K2_TRUNC_ARG);
+    };
+    const int t0 = first > pad ? first : pad, t1 = last < pad + len - 1 ? last : pad + len - 1;
+    if (t0 > t1) {
+        blanks(first, last);
+        return;
+    }
+    blanks(first, t0 - 1);
+    size_t b0 = 0;
+    for (int g = pad; g < t0; g++) next_codepoint(text, b0);
+    size_t b1 = b0;
+    for (int g = t0; g <= t1; g++) next_codepoint(text, b1);
+    gfx_text(s, f, x, y, text.substr(b0, b1 - b0), fg, bg, static_cast<int16_t>(t0 * f.adv) K2_TRUNC_ARG);
+    blanks(t1 + 1, last);
 }
 
 void FieldBase::init_base(const Surface &s, const Font &f, int16_t x, int16_t y, uint8_t chars, uint8_t max_chars,
