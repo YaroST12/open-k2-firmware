@@ -520,7 +520,7 @@ constexpr const char *protocol_name(std::uint16_t svid) {
     case 0x22D9: return "OPPO PD";
     case 0x12D1: return "Huawei PD";
     case 0x2D95: return "Vivo PD";
-    case 0x2E87: return "Cuktech PD";
+    case 0x2E87: return "Injoinic PD";
     case 0x5FC9: return "UFCS";
     default:     return nullptr;
     }

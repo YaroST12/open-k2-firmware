@@ -136,8 +136,8 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
   `rl::vendor_oem_name` is a separate table. Done: cable names are "<Brand> <W>W" (c23154ac), SVID names come from the one table
   (5f5f3f8c). Names are shortenings of the USB-IF registrant, never a brand (user 2026-11-23), enforced by
   `gen_vendors.derives` on every generation (bc288c9e): 0x2B01 CUKTECH->ZIMI, 0x1A86 WCH->QINHENG, 0x0DBF JPC->JESS,
-  0x05BE TE CONN->TYCO; 0 B text. Open: `protocol_name` (ui_connection.hpp) still labels SVID 0x2E87 (Injoinic)
-  "Cuktech PD", the same kind of swap. Not verified on the K2. 106 Asian cable makers, connector and wire
+  0x05BE TE CONN->TYCO; 0 B text. SVID 0x2E87 (Injoinic) now reads "Injoinic PD" in
+  `protocol_name` (was the "Cuktech PD" swap). Not verified on the K2. 106 Asian cable makers, connector and wire
   houses added (k2/cable-vids). Verified 2026-11-23 (user, K2 1.2.0-100): the cable with ID header VID 0x2CA1 reads
   "Veetone". SVID 0x8087 on a cable with VID 0000 is Thunderbolt mode support, not a maker (SVID table).
 
