@@ -25,6 +25,8 @@ import k2_lock
 import k2_remote as kr
 
 DEFAULT_MASK = 0x38FFFF     # charger_test::kDefaultAlgorithms: every algorithm selected except the three revision rows (Class B included)
+HUAWEI_BITS = 0x700         # afc, fcp, scp: out of every preset while Settings > Huawei/Samsung is off (the default)
+DEFAULT_MASKS = (DEFAULT_MASK, DEFAULT_MASK & ~HUAWEI_BITS)
 # Setup lists, 0-based. The Tests step ("algorithms"): rows 0 Depth, 1 All tests, 2 PD only, 3 Legacy, 4 Vendor, 5 Custom...,
 # 6 Last results; a preset pick advances to Cable (and enters on All tests). The Custom list: rows 0..5 are the families, 6 Done.
 # A list's top row (Custom, a family group): NEXT_ROW is kept as its name. Review has one row, 0 START (kStartRow in src/ui/ui_charger_test.cpp).
@@ -106,7 +108,7 @@ class Walk:
         """On the Tests step: pick "All tests" (OK advances to Cable) and verify the default mask is in force."""
         if not self.move_to(ALG_ALL_ROW):
             return False
-        return self.press("ok", ("cable", None)) and self.where()[2] == DEFAULT_MASK
+        return self.press("ok", ("cable", None)) and self.where()[2] in DEFAULT_MASKS
 
     def round(self):
         ok = self.to_algorithms() and self.pick_all()
