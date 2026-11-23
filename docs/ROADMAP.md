@@ -1327,7 +1327,7 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
   boot with a charger shows both empty states and K2 sends nothing on tab open (no Rd/VCONN edge on the lines); Light + PD
   fills the Charger tab; sleep and unplug keep both tabs' data; a different charger replaces the offers; inline, Read again
   says "Inline: listens only" and sends nothing. .bss +136 B, text -1936 B vs 82792207 (like-for-like worktree builds); the preset counts alone: .bss +8 B, text +552 B.
-- **Light asks, never requests (PD)** (k2/light-caps, 24bff690, built and host-tested only). Light sends no PD Request, not
+- **Light asks, never requests (PD)** (k2/light-caps, 24bff690; verified 2026-11-23 on v1.2.0-192, EPR 140 W charger + EPR cable: only the attach's PDO 1 5 V Request, one EPR_Get_Source_Cap, no EPR entry, offers listed, QC/UFCS 5 V handshakes answered; trace runs/auto-read-hw/trace-light.txt). Light sends no PD Request, not
   even the 5 V one: every PDO / APDO is a listed row, the EPR list is asked once with EPR_Get_Source_Cap in normal mode when PDO 1 is
   EPR-capable (never an EPR entry); the legacy units keep their 5 V handshake rows. Check on an EPR charger and on a PPS charger:
   `pd_trace.py dump` of a Light run shows no Request, the grid lists every offer as LISTED, the card's PD group reads Pass
