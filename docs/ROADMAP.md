@@ -87,6 +87,18 @@ Everything is C++23; there are no C files left in `src/` (TinyUSB and lwIP under
 
 Open defects, newest first. A row leaves this list when its fix is merged and seen on hardware.
 
+- **Inline phone after a K2 re-read: Graphs "VBUS lost", LOG "Link unstable, K2 is the sink"** (2026-11-23, v1.2.0-222,
+  charger asleep -> `pd-reread` -> Pixel on PPS behind the K2). Cause: CC never detaches, so the diagnosis kept the K2's own
+  5 V sink session under the phone: its sink role stuck (`s.active`) and the phone's plug-in sag to 3.4 V on the K2's
+  contract counted as VBUS lost (not the Rd release). Fixed in k2/inline-readouts (c9f1d5e7): the inline latch's Link record
+  ends the K2's sink session and opens the device's, keeping the offer and a negotiation already started
+  (`test_pd_diag` inline cases). Not verified on hardware. Verify: the same sequence; LOG shows the phone (no "K2 is the
+  sink", no "unstable"), Graphs no "VBUS lost".
+- **Lines D+/D- row showed the PD summary** ("PD 3.x 105W", same setup): the row printed the verdict's detail pill. Fixed in
+  k2/inline-readouts (5f6c7436): the row shows `fastcharge::lines()`, the pair classified with PD left out (QC, DCP, Apple,
+  USB data, none); the chips keep the PD summary. Not verified on hardware. Verify: Lines with the phone on PPS reads
+  "USB data" or "none" there.
+
 - **Black band left over the page after a toast** (2026-11-23, v1.2.0-196, user): on Who's attached > Charger (button strip at
   the top) the survey toasts ("Reading charger n/m", the summary) left a black band across the body. Cause: a toast that was
   cleared or replaced by a shorter one erased its band and nothing repainted the rows under it; screenshots hide it (capture

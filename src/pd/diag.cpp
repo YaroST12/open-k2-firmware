@@ -190,6 +190,43 @@ void Analyzer::finish() {
     cur_ = Session();
 }
 
+// The K2's sink session ends where the device's begins: CC stays attached, so no detach splits them. The source's
+// offer carries over, and so does a negotiation the device already started (its Request came before the latch).
+void Analyzer::hand_over() {
+    const std::array<std::uint32_t, 7> pdos = src_pdos_;
+    const bool dev_req = cur_.req_dev, dev_contract = dev_req && cur_.contract && cur_.contract_ms >= cur_.rdo_ms;
+    const std::uint8_t pend = dev_req ? pend_ : std::uint8_t(kPendNone), pend_src = pend_from_src_;
+    const std::uint32_t pend_ms = pend_ms_, accept_ms = accept_ms_;
+    const bool wait = dev_req && wait_psrdy_;
+    finish();
+    begin(true);
+    const Session& o = last_;
+    Session& s = cur_;
+    src_pdos_ = pdos;
+    s.n_src = o.n_src;
+    s.offer_mw = o.offer_mw;
+    s.offer_ma = o.offer_ma;
+    s.offer_top_mv = o.offer_top_mv;
+    s.src_idh = o.src_idh;
+    s.src_host = o.src_host;
+    if (!dev_req) return;
+    s.rdo = o.rdo;
+    s.rdo_ms = o.rdo_ms;
+    s.epr = o.epr;
+    s.mismatch = o.mismatch;
+    s.req_dev = true;
+    pend_ = pend;
+    pend_from_src_ = pend_src;
+    pend_ms_ = pend_ms;
+    wait_psrdy_ = wait;
+    accept_ms_ = accept_ms;
+    if (dev_contract) {
+        s.contract = s.contract_seen = true;
+        s.contract_ms = o.contract_ms;
+        contract_from_rdo();
+    }
+}
+
 // Time-weighted accounting of the held sample up to `ms`.
 void Analyzer::hold_to(std::uint32_t ms) {
     Session& s = cur_;
@@ -531,6 +568,11 @@ void Analyzer::feed_record(std::uint8_t type, std::uint32_t ts_us, std::span<con
             lost_pend_ = plow_ = false;
         }
         return;
+    case Type::Link:
+        // The firmware's inline latch (pd::Link, certain evidence only) while the K2's own sink session runs: that
+        // session is over and the device behind the K2 owns the bus. A passive session goes on as it is.
+        if (s.open && s.active && p.size() >= 1 && (p[0] & 1)) hand_over();
+        return;
     case Type::RxRepeat:
         if (s.open && p.size() >= 2) s.caps = std::uint16_t(s.caps + (p[0] | p[1] << 8));
         return;
@@ -691,6 +733,7 @@ void Analyzer::message(bool rx, std::uint8_t token, std::uint16_t hdr, std::span
             if (pend_ == kPendRequest) { if (s.no_accept++ == 0) s.miss_ms = pend_ms_; }
             s.rdo = rd32(o);
             s.rdo_ms = now_ms_;
+            s.req_dev = rx;
             s.epr = type == kEprRequest;   // RDO bit 22 is "EPR mode capable", set on SPR requests too
             if (s.rdo >> 26 & 1) s.mismatch = true;
             const unsigned pos = s.rdo >> 28 & 0xF;

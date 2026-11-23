@@ -2,6 +2,10 @@
 // Copyright (C) 2026 Yaraslau Furman
 #include "k2/ui/ui_lines.hpp"
 
+#include <iterator>
+
+#include "k2/ui/trunc.hpp"
+
 namespace k2 {
 
 void rp_text(StrBuf<24> &s, bool have, std::uint8_t active_cc, int32_t cc1, int32_t cc2) {
@@ -22,6 +26,25 @@ void mcu_text(StrBuf<24> &s, bool valid, int32_t d) {
     if (!valid) { s.put("--"); return; }
     const int32_t whole = d >= 0 ? (d + 5) / 10 : -((-d + 5) / 10);
     s.put_fixed(whole * 1000, 0).put("\xC2\xB0" "C");
+}
+
+namespace {
+// Indexed by fastcharge::Protocol.
+constexpr const char *kDpDmWords[] = {
+    "--", "--", "none", "DCP short", "QC3.0", "QC2.0 5V", "QC2.0 9V", "QC2.0 12V", "QC2.0 20V", "AFC/FCP", "SCP",
+    "Apple 2.4A", "Apple 2.1A", "Apple 1.0A", "USB2.0", "USB1.1", "Samsung 2A", "VOOC", "SVOOC",
+    "none", "none", "none", "USB data", "none"};
+static_assert(std::size(kDpDmWords) == static_cast<std::size_t>(fastcharge::Protocol::PdLikely) + 1);
+static_assert(all_fit(kDpDmWords, 8, 12 * 8), "the Lines value cell holds 12 cells of the 16 px font");
+}  // namespace
+
+DpDmWord dpdm_word(fastcharge::Protocol p) {
+    using fastcharge::Protocol;
+    const auto i = static_cast<std::size_t>(p);
+    if (i >= std::size(kDpDmWords)) return {"--", true};
+    const bool dim = p == Protocol::Pending || p == Protocol::NoInput || p == Protocol::NoQuick || p == Protocol::Usb2Hi ||
+                     p == Protocol::Usb11Low || p == Protocol::UsbData || kDpDmWords[i][0] == 'n';
+    return {kDpDmWords[i], dim};
 }
 
 LinesVerdict lines_verdict(fastcharge::Protocol p, bool pd_decoded) {

@@ -784,6 +784,46 @@ static void test_lines_page() {
     CHECK_EQ(on_diag(ui), 1);
 }
 
+struct Drawn {
+    std::string text;
+    int y;
+};
+static std::vector<Drawn> g_drawn;
+static void on_drawn(const Font *, std::string_view s, int, int ky, int, int, int, int, int, bool, unsigned) {
+    g_drawn.push_back({std::string(s), ky});
+}
+
+// The D+/D- row says what the data lines carry. A PD source's summary belongs to the verdict chips only (hardware
+// 2026-11-23: a phone charging inline on PPS showed "PD 3.x 105W" in that row).
+static void test_lines_dpdm_row_is_the_lines() {
+    Ui &ui = fresh_ui();
+    adc::Reading r;
+    r.dp_mv = 600; r.vref_raw = 1489; r.vdd_mv = 3300; r.mcu = {245, true, false};
+    g_stub.adc = r;
+    fill_pdos(6);
+    g_stub.caps.active_cc = 1;
+    g_stub.fc = fastcharge::Protocol::Pd;
+    g_stub.fc_lines = static_cast<int>(fastcharge::Protocol::UsbData);
+    g_drawn.clear();
+    trunc::set_text_hook(on_drawn);
+    ui.goto_page(static_cast<uint8_t>(Page::Lines), 20000);
+    settle(ui, 20500);
+    trunc::set_text_hook(nullptr);
+    bool lines_word = false;
+    int pd_rows = 0, pd_y = -1;
+    for (const Drawn &d : g_drawn) {
+        const std::string t = d.text.substr(std::min(d.text.find_first_not_of(' '), d.text.size()));   // a Field pads left
+        if (t == "USB data") lines_word = true;
+        if (t.rfind("PD", 0) == 0 && d.y != pd_y) { pd_rows++; pd_y = d.y; }
+    }
+    CHECK_COND(lines_word);
+    CHECK_EQ(pd_rows, 1);   // the chips row only
+    if (!lines_word || pd_rows != 1)
+        for (const Drawn &d : g_drawn) printf("  drawn y=%d \"%s\"\n", d.y, d.text.c_str());
+    g_stub.fc_lines = -1;
+    g_stub.caps = {};
+}
+
 static std::string cable_text(int i, bool online, int v, int a, const cable_r::Meter &m) {
     StrBuf<24> s;
     cable_row_text(i, online, v, a, m, s);
@@ -2609,6 +2649,7 @@ int main() {
     test_lines_rows();
     test_temp_short();
     test_lines_page();
+    test_lines_dpdm_row_is_the_lines();
     test_cable_rows();
     test_cable_kelvin_rows();
     test_cable_mode_toggle();
