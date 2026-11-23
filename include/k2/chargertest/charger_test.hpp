@@ -226,7 +226,8 @@ bool legacy_guard_override();
 // (7.4 + 2.5 s quiet + the first frame), past kRestartSettleMs; the wait that ends in a detach anyway is lost time.
 inline constexpr uint32_t kOwnReleaseCapsMs = kLegacyGapMs + kRestartCapsMs, kOwnReleaseSettleMs = 12000;
 // Detach: Rd off, wait until VBUS has been below vSafe0V for kDetachDarkHoldMs (at most kDetachDarkMs; a source that never lets
-// go, a USB-A port, gets kDetachQuickMs from the second unit on).
+// go, a USB-A port, gets kDetachQuickMs from the second unit on, and from the first when no source list was ever heard and VBUS
+// stays at 5 V throughout).
 inline constexpr uint32_t kDetachDarkMs = 10000, kDetachDarkHoldMs = 300, kDetachQuickMs = 1500;
 // Pd attach: kAttachContractMs for the 5 V contract after the caps (pd::VbusWait covers VBUS + caps). Nothing back in time: the
 // unit's rows fail with Reason::NoReattach; a PDO 1 contract whose PS_RDY was seen during the wait (latched in poll_attach)
@@ -1121,6 +1122,7 @@ private:
     bool never_dark_ K2_BSS_INIT(false);     // a detach that left VBUS up (a USB-A port has no CC): later detaches do not wait long
     bool rel_rd_ K2_BSS_INIT(false);         // the Rd off that answers a D+/D- release which left VBUS up: its end checks VBUS before going on
     bool dipped_ K2_BSS_INIT(false);         // VBUS fell during this detach
+    bool sagged_ K2_BSS_INIT(false);         // VBUS left vSafe5V at any sample during this detach (a charger on its way down)
     bool late_pd_ K2_BSS_INIT(false);        // no source caps at START: the PD rows are planned from the first list heard
     uint32_t plan_sig_ K2_BSS_INIT(0);       // caps_sig() of the list the PD rows were last planned from
     // Restart rules for a mid-run re-announce (2026-11-09): every new list opens a settle window (list_ms_ = when the

@@ -2231,13 +2231,16 @@ void Runner::begin_detach(const Input& in) {
         if (ending_) { ending_ = false; next(in); } else begin_attach(in);
         return;
     }
-    state_ = State::Detach; att_ms_ = in.now; dark_ = dipped_ = stable_ = false;
+    state_ = State::Detach; att_ms_ = in.now; dark_ = dipped_ = sagged_ = stable_ = false;
     attached_ = legacy_active_ = false;
     env_.detach();
 }
 void Runner::poll_detach(const Input& in) {
     if (in.vbus_mv < pd::kVSafe0Mv) { dipped_ = true; if (!dark_) { dark_ = true; dark_ms_ = in.now; } } else dark_ = false;
-    const uint32_t limit = never_dark_ ? kDetachQuickMs : kDetachDarkMs;
+    if (!safe5(in.vbus_mv)) sagged_ = true;
+    // No list ever heard and VBUS never left 5 V: an always-on port (A-to-C cable, Rp present), not a charger that is slow to drop.
+    const bool always_on = !sagged_ && !evidence_.num_pdos;
+    const uint32_t limit = never_dark_ || always_on ? kDetachQuickMs : kDetachDarkMs;
     if (!((dark_ && in.now - dark_ms_ >= kDetachDarkHoldMs) || in.now - att_ms_ >= limit)) return;
     if (!dipped_) never_dark_ = true;   // a source that kept its output up (a USB-A port has no CC): later detaches do not wait long
     detached_ = true; hot_ = false;

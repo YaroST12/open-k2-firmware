@@ -6534,6 +6534,23 @@ static void test_start_on_a_port_without_cc_detaches_quickly() {
         CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 200000), true);
     }
 }
+// pattern usb-a-never-dark: Rp present (A-to-C cable), no caps ever heard, VBUS steady at 5 V after the Rd off: the first detach is the
+// short one too. A source that sags (a slow C charger) or one that listed PD keeps the long wait.
+static void test_first_detach_on_an_always_on_port_without_pd_is_short() {
+    for (const int arm : {0, 1, 2}) {   // 0 always on, no caps; 1 VBUS sags for 4 s (a slow charger); 2 always on but PD was listed
+        Fake f; ct::Runner r(f);
+        f.caps.active_cc = 1; f.caps.valid = arm == 2; f.never_dark = arm != 1; f.dark_ms = 4000;
+        const auto o = with_units(ct::bit(A::Qc2), {ct::Unit::Qc2});
+        CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+        const uint32_t t0 = f.in.now;
+        CHECK_EQ(run_until(f, r, [&] { return f.attaches_legacy == 1; }, 30000), true);
+        const uint32_t took = f.in.now - t0;
+        if (arm == 0) { CHECK_EQ(took < ct::kDetachQuickMs + 1000, true); printf("first detach, always-on port without PD: %u ms (was at least %u ms)\n", unsigned(took), unsigned(ct::kDetachDarkMs)); }
+        else if (arm == 1) CHECK_EQ(took >= 4000u, true);
+        else CHECK_EQ(took >= ct::kDetachDarkMs, true);
+        CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 300000), true);
+    }
+}
 // pattern release-leaves-vbus-up: a D+/D- release after a high level (QC2 Class B at 12 V) that leaves VBUS up is answered with an
 // Rd off (the source returns to 5 V on a detach) before the run is called unsafe. A port that stays up through the Rd off is unsafe.
 static void test_release_that_leaves_vbus_up_falls_back_to_an_rd_off() {
@@ -9476,7 +9493,7 @@ int main() {
     test_unsafe_clears_when_vbus_is_gone_for_the_debounce();
     test_failed_release_at_low_vbus_is_a_lost_source_not_unsafe();
     test_unsafe_clears_when_vbus_stays_under_vsafe5();
-    test_pd_attach_without_vbus_or_caps_is_no_reattach(); test_legacy_attach_with_rp_but_no_vbus_cycles_rd_early(); test_start_on_a_port_without_cc_detaches_quickly(); test_default_run_on_a_source_without_pd_never_fails_a_pd_row(); test_release_that_leaves_vbus_up_falls_back_to_an_rd_off(); test_pd_plan_comes_from_the_first_attach(); test_source_gone_in_a_unit_skips_the_remaining_units();
+    test_pd_attach_without_vbus_or_caps_is_no_reattach(); test_legacy_attach_with_rp_but_no_vbus_cycles_rd_early(); test_start_on_a_port_without_cc_detaches_quickly(); test_first_detach_on_an_always_on_port_without_pd_is_short(); test_default_run_on_a_source_without_pd_never_fails_a_pd_row(); test_release_that_leaves_vbus_up_falls_back_to_an_rd_off(); test_pd_plan_comes_from_the_first_attach(); test_source_gone_in_a_unit_skips_the_remaining_units();
     test_pd_attach_5v_contract_held_at_wrong_voltage_fails_wrong_voltage();
     test_pd_attach_5v_contract_then_rp_cut_before_timeout_fails_wrong_voltage();
     test_pd_attach_without_any_caps_stays_no_reattach();
