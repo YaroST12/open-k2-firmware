@@ -36,6 +36,17 @@ constexpr std::uint16_t crc16(std::uint16_t crc, std::span<const std::uint8_t> d
     return crc;
 }
 
+// CRC of a 16-bit-word record, low byte first, skipping the magic and CRC words (boottrace, session).
+template <std::size_t N>
+constexpr std::uint16_t crc16_words(const std::array<std::uint16_t, N>& w) {
+    std::uint16_t crc = 0xFFFF;
+    for (std::size_t i = 2; i < N; i++) {
+        const std::uint8_t b[2] = {std::uint8_t(w[i]), std::uint8_t(w[i] >> 8)};
+        crc = crc16(crc, b);
+    }
+    return crc;
+}
+
 inline constexpr std::uint32_t kSector = 0x800;
 inline constexpr std::uint16_t kSectorMagic = 0x4C52;   // "RL"
 inline constexpr std::uint16_t kRecordMagic = 0x4352;   // "RC"
