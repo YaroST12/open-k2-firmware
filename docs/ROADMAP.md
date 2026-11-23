@@ -1204,13 +1204,16 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
     chain pending) and `Ui::auto_read_block()` is clear (no inline latch, tool, spoof, Ra mode, legacy or identify run). It
     runs the survey's Wire and EPR steps: Discover Identity, SVIDs, Modes, Source_Cap_Extended and Manufacturer_Info (PD 3),
     EPR_Get_Source_Cap in SPR mode. No Get_Source_Cap, no cable read, no reset, no EPR entry, VBUS never moves. The Charger
-    tab shows `Reading charger n/m`, then `Read: ...`. Load current or a foreign Request (inline latch) or a tool starting
+    tab rows fill as answers arrive. Load current or a foreign Request (inline latch) or a tool starting
     stops it at once; the rest reads `Inline: blocked` / `Charger test`. A skipped attach (passive link, tool, inline at the
     first Ready) keeps `Not asked` and the hint `Not asked: Reset & re-read`. A read cut by a session change blocks the next
     attach's auto read for 5 s (loop guard for a charger that resets on the questions; its behaviour is unverified).
     Pure `pd::AutoRead` (`test_pd_survey`), glue `core/survey.cpp`. Validate on hardware: plug a PD charger (K2 owns the
     contract): the Charger tab fills and shows the vendor, one pass per attach; plug a load behind it (inline) and confirm the
-    read stops; a charger test or Reset & re-read mid-read still starts; no VBUS dip in the black box.
+    read stops; a charger test started mid-read aborts it; a Reset & re-read press mid-read waits for it (Busy, as for any
+    survey); no VBUS dip in the black box. The twin-rail chrome paints no bottom bar: the progress and the summary show as a
+    toast (`Reading charger n/m`, then `Read: ...`), the rows show the words (`Asking...`, `Not asked`); the
+    `Not asked: Reset & re-read` hint lives in the (unpainted) status line only.
 
 - **Ripple: calibrate PA1, then show it** (the capture works; its scale is unknown).
   - Seen on hardware (2026-11-09, HID power only, no charger, `runs/2026-11-09-ripple/`): `k2_remote ripple` returns
