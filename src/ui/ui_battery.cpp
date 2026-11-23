@@ -198,25 +198,37 @@ void BatteryPage::action_row(Act a, bool focused, kit::RowSpec &out) {
     case Act::Next: note = kNotes[5]; break;
     case Act::Finish: note = kNotes[6]; break;
     case Act::Wiring:
+        out.marker = kit::Marker::Icon;   // the settings carry icons as on the Settings and Display pages
+        out.icon = Icon::Plug;
         tail_.put(same ? "Same port" : "Moved");
         note = same ? kNotes[7] : kNotes[8];
         break;
     case Act::EndMa:
+        out.marker = kit::Marker::Icon;
+        out.icon = Icon::Meter;
         tail_.put_u32(cfg.end_ma).put("mA");
         note = kNotes[9];
         break;
     case Act::EndS:
+        out.marker = kit::Marker::Icon;
+        out.icon = Icon::Clock;
         if (cfg.end_s >= 120 && cfg.end_s % 60 == 0) tail_.put_u32(cfg.end_s / 60u).put_char('m');
         else tail_.put_u32(cfg.end_s).put_char('s');
         note = kNotes[10];
         break;
     case Act::Runs:
+        out.marker = kit::Marker::Icon;
+        out.icon = Icon::Report;
         out.chevron = true;
         note = kNotes[11];
         break;
-    case Act::Share: note = kNotes[12]; break;
+    case Act::Share:
+        out.marker = kit::Marker::Icon;
+        out.icon = Icon::Phone;   // a phone reads the QR
+        note = kNotes[12];
+        break;
     }
-    if (!view::is_fact(a) && a != Act::Runs && a != Act::Wiring && a != Act::EndMa && a != Act::EndS && a != Act::Share) {
+    if (out.marker != kit::Marker::Icon) {   // the verbs: a start, or an end (the cross)
         out.marker = kit::Marker::Icon;
         out.icon = a == Act::EndPhase || a == Act::Finish ? Icon::Cross : Icon::Bolt;
     }
