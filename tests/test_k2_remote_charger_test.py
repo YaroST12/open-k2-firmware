@@ -351,8 +351,7 @@ class ChargerTest(unittest.TestCase):
             with self.assertRaises(kr.FrameError):
                 kr.decode_charger_test(page(meta, 0, [row]))
         bad = bytes([0]) + ROW0[1:]
-        with self.assertRaises(kr.FrameError):
-            kr.decode_charger_test(page(HEADER2, 0, [bad]))
+        self.assertEqual(len(kr.decode_charger_test(page(HEADER2, 0, [bad]))["warnings"]), 1)   # pd2-fixed passed on a PD3 wire: a warning
 
     def test_unrun_pd_rows_do_not_trip_the_wire_revision_check(self):
         # A stopped run (power lost on a USB-A port) still lists its PD rows as pending; the wire says PD2 (code 1) while the
@@ -370,10 +369,19 @@ class ChargerTest(unittest.TestCase):
         m = meta_with(1); m[11] = 2
         r = kr.cmd_charger_test(Link([bytes(m), page(m, 0, [row(1, 0)]), page(m, 1, [row(0, 0)]), bytes(m)]), self.args("results"))
         self.assertEqual([s["result"] for s in r["steps"]], ["pending", "pending"])
-        for wire, code in ((2, 0), (1, 1)):   # a row that ran and contradicts the wire (pd2-fixed on a PD3 wire, pd3x on a PD2 one) still fails
+        # A row that ran and contradicts the wire (pd2-fixed on a PD3 wire, pd3x on a PD2 one, any PD row on an unknown wire) decodes
+        # with a warning: the results of the other rows must stay readable.
+        for wire, code in ((2, 0), (1, 1), (0, 0), (0, 1)):
             for result in (2, 3):
-                with self.subTest(wire=wire, code=code, ran=result), self.assertRaises(kr.FrameError):
-                    kr.decode_charger_test(page(meta_with(wire), 0, [row(code, result)]))
+                with self.subTest(wire=wire, code=code, ran=result):
+                    d = kr.decode_charger_test(page(meta_with(wire), 0, [row(code, result)]))
+                    self.assertEqual(d["steps"][0]["algorithm"], kr.TEST_ALGORITHMS[code])
+                    self.assertEqual(len(d["warnings"]), 1)
+        self.assertNotIn("warnings", kr.decode_charger_test(page(meta_with(2), 0, [row(1, 2)])))
+        m = meta_with(0); m[11] = 2   # the whole read keeps the rows and carries the warnings (A port: no source caps, wire unknown)
+        r = kr.cmd_charger_test(Link([bytes(m), page(m, 0, [row(0, 2)]), page(m, 1, [row(1, 3)]), bytes(m)]), self.args("results"))
+        self.assertEqual([s["result"] for s in r["steps"]], ["pass", "fail"])
+        self.assertEqual(len(r["warnings"]), 2)
 
     def test_a_pending_row_is_not_decoded_as_a_sink_answer(self):
         # A Pending step-walk row's detail byte is not a sink ReqAnswer: it must print "not run", not "ok".

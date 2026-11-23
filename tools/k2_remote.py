@@ -1694,11 +1694,12 @@ def decode_charger_test(p):
                 raise FrameError("charger-test row was not selected")
             if 16 <= code <= 18 and (result != 4 or why != 20):  # revision probes; UFCS/VIVO now run
                 raise FrameError("unavailable charger-test algorithm must SKIP")
-            # Only a row that ran (pass / fail) says anything about the wire revision. A stopped or in-progress run still lists its
-            # unrun PD rows (pending / running, and the placeholder PD rows planned before the source list arrived): those carry
-            # no evidence and must not make the whole results read fail.
+            # Only a row that ran (pass / fail) says anything about the wire revision; unrun rows carry no evidence. A ran row
+            # that disagrees (or an unknown wire: a source that never sent caps) is reported as a warning, not a failed read:
+            # the rest of the results are still good (A-port run, 2026-11-23).
             if code < 2 and result in (2, 3) and wire != code + 1:
-                raise FrameError("charger-test row contradicts negotiated wire revision")
+                out.setdefault("warnings", []).append(
+                    f"row {i} ({TEST_ALGORITHMS[code]}) ran but the wire revision is {SPEC_REVS[wire]}")
             protocol = ("pd2-fixed" if code == 0 else "pd3x-fixed" if code == 1 else
                         "epr-avs" if flags & 2 else "epr-fixed") if code < 3 else TEST_ALGORITHMS[code]
             if 11 <= code <= 13:
@@ -2361,7 +2362,7 @@ def _charger_test_export(link, a):
     result = {k: v for k, v in meta.items() if k not in ("start", "count") and (k != "cursor" or a.test_cmd == "status")}
     if a.test_cmd == "status":
         return result
-    rows = []
+    rows, warnings = [], []
     while len(rows) < meta["total"]:
         req = query + struct.pack("<BII", len(rows), meta["run_id"], meta["revision"])
         page = decode_charger_test(link.call(CMD_CHARGER_TEST, req).payload)
@@ -2369,6 +2370,7 @@ def _charger_test_export(link, a):
                 page["start"] != len(rows) or page["count"] != min(1 if query else 2, meta["total"] - len(rows))):
             raise ResultsChanged("charger-test results changed or page did not advance; retry results")
         rows.extend(page["steps"])
+        warnings.extend(page.get("warnings", []))
     mark_mi_flags(rows)
     end = decode_charger_test(link.call(CMD_CHARGER_TEST, query).payload)
     if end != meta:
@@ -2377,6 +2379,8 @@ def _charger_test_export(link, a):
     attach_svooc_readout(link, result, rows)
     attach_spec_section(link, result, meta["run_id"])
     result["steps"] = rows
+    if warnings:
+        result["warnings"] = warnings
     if a.test_cmd == "summary" and not getattr(a, "json", False):
         result["_summary"] = True
     if a.out:
