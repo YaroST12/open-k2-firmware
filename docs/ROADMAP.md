@@ -161,15 +161,16 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
   QC2 5/9/12 V pass and the running outline moved 5 V -> 12 V with 5 V and 9 V filled green (screenshots every ~3 s, so the
   ~1 s 9 V step was not caught on its own). Not reproduced; the UGREEN 65 W USB-A port (Deep, same build, `153343-ugreen-deep`) showed the same: the outline went
   5 V -> 12 V on QC2 and followed QC3 5 -> 9 -> 12 -> 9 -> 5 V; the UGREEN USB-C port (`153757-ugreen-c-deep`) caught the outline on QC2 9 V.
-  **Cause found 2026-11-23** (Baseus 140 W, user photos, `runs/qc2-baseus-2026-11-23/`; related to the sweep-header report): not the QC2 rows.
+  **Cause found 2026-11-23** (Baseus 140 W, user photos; capture in `runs/qc2-baseus-2026-11-23/`): not the QC2 rows.
   The PD spec stage sweeps the PPS / AVS APDOs and fixed levels after the plan ends, and `Runner::next()` has by then put
   `index()` on the first Pending row of the next unit (QC2 5 V). The Running header (family, name, "target 5V"), the gauge
   target and the grid outline all read `index()`, so the QC2 badge was lit while the voltage swept. The counter reads the
   plan rows (54 of 71 = 17 plan skips not counted), unchanged by the stage.
-  Fix (not verified on hardware): `pdspec::Engine::point()` -> `Runner::spec_point()`; in the Spec state the page names the
+  Fix 7d7517fc (not verified on hardware): `pdspec::Engine::point()` -> `Runner::spec_point()`; in the Spec state the page names the
   engine's point ("PPS 8.02V", "AVS 21V", "PD 9V", "Hard Reset"), its target and gauge follow it, and the outline sits on the
   matching chip of the compact PD row (`test_ui_charger_test` spec-stage walk, `test_charger_test`, `test_step_label`).
-  Open: ceiling-stage points; the remote / web `index()` readers still show the next unit during the stage.
+  Host walk reaches SPR and EPR AVS and fixed 28 V points (every tick checked). Open: ceiling-stage points; the remote / web
+  `index()` readers still show the next unit during the stage; a Hard Reset point leaves the window on the PD row's head.
 
 - **PPS Deep range label disagrees with the range being tested** (2026-11-21, user hardware report). The UI displays a
   `5V-21V` PPS range while the engine is visibly stepping through a `3.3V-5V` range (check APDO min/max formatting vs

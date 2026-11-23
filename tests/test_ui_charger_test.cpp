@@ -4975,7 +4975,7 @@ static void test_the_spec_stage_shows_the_engines_point_not_the_next_unit() {
         ui.tick(t);
         if (g_stub.requests != last_req) { last_req = g_stub.requests; g_stub.sink.accept_at = t; g_stub.sink.ps_rdy_at = t + 5; }   // the sink answers each Request
     };
-    unsigned checked = 0, bad_name = 0, bad_target = 0, bad_counter = 0, double_dots = 0, dot_on_reset = 0, no_dot = 0, same_view_new_chip = 0, levels = 0, pps_seen = 0, avs_seen = 0, band_on_reset = 0;
+    unsigned checked = 0, bad_name = 0, bad_target = 0, bad_counter = 0, double_dots = 0, dot_on_reset = 0, no_dot = 0, same_view_new_chip = 0, levels = 0, pps_seen = 0, avs_seen = 0, band_on_reset = 0, epr_avs_seen = 0, epr_fixed_seen = 0;
     unsigned dumped = 0;   // K2_DUMP: one PPS, one AVS and one fixed point, in the four rotations
     uint32_t prev_hash = 0; uint64_t prev_chip = 0; int fixed_band[2] = {-1, -1}; int fixed_prev_mv = 0; unsigned band_order_bad = 0;
     for (uint32_t now = 1500; now <= 3600000 && ui.charger_test_busy(); now += 100) {
@@ -5003,21 +5003,8 @@ static void test_the_spec_stage_shows_the_engines_point_not_the_next_unit() {
         double_dots += dots.size() > 1;
         if (!level) { dot_on_reset += !dots.empty(); band_on_reset += band.first >= 0; prev_chip = 0; continue; }
         ++levels; pps_seen += p.what == ct::SpecWhat::Pps; avs_seen += p.what == ct::SpecWhat::Avs;
+        epr_avs_seen += p.what == ct::SpecWhat::Avs && p.pos >= 8; epr_fixed_seen += p.what == ct::SpecWhat::Fixed && p.mv > 20000;
         no_dot += dots.empty();
-        if (const unsigned bit = 1u << unsigned(p.what); std::getenv("K2_DUMP") && !(dumped & bit) && (p.what != ct::SpecWhat::Fixed || p.mv == 9000)) {
-            dumped |= bit;
-            static const char* const kName[] = {"none", "fixed", "pps", "avs", "reset"};
-            for (uint8_t rot = 0; rot < 4; ++rot) {
-                ui.set_rotation(rot, now += 100); ui.tick(now += 100);
-                for (int i = 0; i < 64 && ui.painting(); ++i) ui.tick(now += 20);
-                char nm[40];
-                std::snprintf(nm, sizeof nm, "spec_stage_%s_rot%u", kName[unsigned(p.what)], unsigned(rot));
-                dump_screen(nm);
-            }
-            ui.set_rotation(0, now += 100); ui.tick(now += 100);
-            prev_chip = 0;
-            continue;
-        }
         // a different level's chip is a different picture of the grid (the outline moved, or the window followed it)
         const uint64_t chip = uint64_t(p.what) << 40 | uint64_t(p.what == ct::SpecWhat::Fixed ? p.mv : p.pos) << 8 | 1u;
         const uint32_t h = grid_hash();
@@ -5029,9 +5016,24 @@ static void test_the_spec_stage_shows_the_engines_point_not_the_next_unit() {
             if (p.mv > fixed_prev_mv && fixed_prev_mv && band.first < 0) ++band_order_bad;
             fixed_prev_mv = p.mv;
         }
+        const bool epr_avs = p.what == ct::SpecWhat::Avs && p.pos >= 8, epr_fix = p.what == ct::SpecWhat::Fixed && p.mv > 20000;
+        const unsigned kind = epr_avs ? 5u : epr_fix ? 6u : unsigned(p.what);
+        if (const unsigned bit = 1u << kind; std::getenv("K2_DUMP") && !(dumped & bit) && (p.what != ct::SpecWhat::Fixed || p.mv == 9000 || epr_fix)) {
+            dumped |= bit;
+            static const char* const kName[] = {"none", "fixed", "pps", "avs", "reset", "avs_epr", "fixed_epr"};
+            for (uint8_t rot = 0; rot < 4; ++rot) {
+                ui.set_rotation(rot, now += 100); ui.tick(now += 100);
+                for (int i = 0; i < 64 && ui.painting(); ++i) ui.tick(now += 20);
+                char nm[40];
+                std::snprintf(nm, sizeof nm, "spec_stage_%s_rot%u", kName[kind], unsigned(rot));
+                dump_screen(nm);
+            }
+            ui.set_rotation(0, now += 100); ui.tick(now += 100);
+            prev_chip = 0;
+        }
     }
     CHECK_EQ(checked > 60, true);
-    CHECK_EQ(pps_seen > 5, true); CHECK_EQ(avs_seen > 0, true);   // the stage reached the programmable levels, or the check proves nothing
+    CHECK_EQ(pps_seen > 5, true); CHECK_EQ(avs_seen > 0, true); CHECK_EQ(epr_avs_seen > 0, true); CHECK_EQ(epr_fixed_seen > 0, true);   // the stage reached the programmable levels, or the check proves nothing
     CHECK_EQ(bad_name, 0u);
     CHECK_EQ(bad_target, 0u);
     CHECK_EQ(bad_counter, 0u);
@@ -5042,7 +5044,7 @@ static void test_the_spec_stage_shows_the_engines_point_not_the_next_unit() {
     CHECK_EQ(same_view_new_chip, 0u);
     CHECK_EQ(band_order_bad, 0u);
     CHECK_EQ(fixed_band[0] >= 0 && fixed_band[1] > fixed_band[0], true);   // 9 V and 20 V read at their own places on the strip
-    std::printf("[spec-stage] %u ticks checked, %u level points (%u PPS, %u AVS)\n", checked, levels, pps_seen, avs_seen);
+    std::printf("[spec-stage] %u ticks checked, %u level points (%u PPS, %u AVS, %u EPR AVS, %u EPR fixed)\n", checked, levels, pps_seen, avs_seen, epr_avs_seen, epr_fixed_seen);
 }
 // A charger that answers no handshake fails every legacy unit at its first step. Those rows stay where the plan put them, so the
 // running row still has the finished ones above it (hardware 2026-11-08, FH22: the failed rows fell to a trailing "No reply"
