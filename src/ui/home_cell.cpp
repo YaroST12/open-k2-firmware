@@ -4,6 +4,7 @@
 #include "k2/drivers/lcd.hpp"
 #include "k2/ui/blend.hpp"
 #include "k2/ui/text.hpp"
+#include "k2/ui/ui_icons.hpp"
 #include "k2/ui/ui_viewport.hpp"
 
 namespace k2::home {
@@ -67,6 +68,13 @@ void put_item_row(const Item &it, int y, int x0, int x1, uint16_t *out) {
             if (h) out[x - x0] = h == 2 ? it.ink : it.color;
         }
         break;
+    case ItemKind::Link:
+        if (y < it.y || y >= it.y + kLinkBox) return;
+        for (int x = it.x < x0 ? x0 : it.x, e = (it.x + kLinkBox - 1) > x1 ? x1 : (it.x + kLinkBox - 1); x <= e; x++) {
+            const int h = link_hit(it.aux, x - it.x, y - it.y);
+            if (h) out[x - x0] = h == 2 ? it.ink : it.color;
+        }
+        break;
     }
 }
 
@@ -93,6 +101,15 @@ int warn_hit(int x, int y) {
     if (a > y) return 0;
     if (x >= 4 && x <= 6 && ((y >= 4 && y <= 6) || y == 8)) return 2;
     return 1;
+}
+
+int link_hit(uint8_t state, int x, int y) {
+    static_assert(kLinkBox == kIconSize, "the link box is the icon size");
+    if (x < 0 || y < 0 || x >= kLinkBox || y >= kLinkBox || state < 1 || state > 3) return 0;
+    const int sh = kLinkBox - 1 - x;
+    if (state == 3 && (kIconBits[static_cast<int>(Icon::Sand)][y] >> sh & 1)) return 2;
+    const Icon shape = state == 1 ? Icon::Socket : state == 2 ? Icon::Monitor : Icon::Glass;
+    return (kIconBits[static_cast<int>(shape)][y] >> sh & 1) ? 1 : 0;
 }
 
 uint16_t bg_at(const Cell &c, int x, int y) {

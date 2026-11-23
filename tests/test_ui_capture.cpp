@@ -940,6 +940,120 @@ void test_repaint_opaque() {
 }
 }  // namespace
 
+// The PC-link icon (the last cell of the opposite telemetry rail; Home's info row 1 where there is no rail) over every walk
+// page, in the four rotations: none, power (aux rail up), host (mounted) and shell (hourglass) each equal a clean paint of
+// the same state, differ from each other, and leave None whole again.
+namespace {
+// Is panel pixel index i on the opposite telemetry rail's 16 px band (the edge opposite the key strip)?
+bool in_opp_band(unsigned rot, int i) {
+    const int x = i % 240, y = i / 240;
+    return rot == 0 ? x < 16 : rot == 1 ? y >= 224 : rot == 2 ? x >= 224 : y < 16;
+}
+
+// band_only: the Diag pages print live counters that move between two paints; only the rail band is compared there.
+int link_clean_diff(Ui &ui, unsigned rot, bool band_only) {
+    const std::vector<uint16_t> got(g_panel, g_panel + 240 * 240);
+    k2::lcd::fill(kBg);
+    ui.repaint(g_walk_t);
+    while (ui.painting()) ui.tick(g_walk_t);
+    int diff = 0;
+    for (size_t i = 0; i < got.size(); ++i) {
+        const int x = int(i) % 240, y = int(i) / 240;
+        if (in_opp_band(rot, int(i)) || !band_only) diff += got[i] != g_panel[i];
+    }
+    return diff;
+}
+
+// K2_DUMP=dir: the panel as it is now (tools/panel2png.py makes the renders).
+void link_dump(unsigned rot, const char *page, int st, const char *extra) {
+    const char *d = std::getenv("K2_DUMP");
+    if (!d) return;
+    static const char *kName[4] = {"none", "power", "host", "shell"};
+    char path[256];
+    std::snprintf(path, sizeof path, "%s/k2_pclink_%s%s_r%u_%s.panel", d, page, extra, rot, kName[st]);
+    if (FILE *f = std::fopen(path, "wb")) { std::fwrite(g_panel, 2, 240 * 240, f); std::fclose(f); }
+}
+
+// Sets the four link states in turn (aux rail, USB host, a shell control command).
+void link_drive(Ui &ui, int st) {
+    k2::adc::Reading rd; rd.aux_mv = st >= 1 ? 5000 : 0;
+    g_stub.adc = rd;
+    g_stub.usb_configured = st >= 2;
+    if (st == 3) ui.shell_control(g_walk_t += 10);
+    for (int k = 0; k < 12; ++k) ui.tick(g_walk_t += 120);
+    walk_settle(ui);
+}
+
+void test_pc_link_icon() {
+    using k2::pclink::State;
+    const auto old = g_stub;
+    auto holder = std::make_unique<Ui>();
+    Ui &ui = *holder;
+    fill_seven();
+    g_stub.pm_online = true; g_stub.pm.vbus_mv = 20030; g_stub.pm.current_ma = 1520; g_stub.pm.power_mw = 30456;
+    g_stub.pm.flow = k2::power::Flow::Forward;
+    g_stub.adc.reset(); g_stub.usb_configured = false;
+    ui.init(g_walk_t);
+    int bad = 0;
+    // The ring view (the boot state, Back dim-grounded) and a held Back key: both grounds repaint whole in every state.
+    for (uint8_t r = 0; r < 4; ++r) {
+        ui.set_rotation(r, g_walk_t += 10);
+        walk_settle(ui);
+        if (!(ui.session().flags & k2::kSessionRingView)) { std::printf("  link ring r%u: not the ring view\n", unsigned(r)); ++bad; }
+        for (int st = 0; st < 4; ++st) {
+            link_drive(ui, st);
+            const int d = link_clean_diff(ui, r, ui.uses_opp_rail());
+            if (d) { std::printf("  link ring r%u st%d: %d px differ from a clean paint\n", unsigned(r), st, d); ++bad; }
+            link_dump(r, "ring", st, "");
+        }
+        link_drive(ui, 0);
+    }
+    for (uint8_t r = 0; r < 4; ++r) {
+        ui.set_rotation(r, g_walk_t += 10);
+        walk_settle(ui);
+        for (unsigned b = 0; b < kWalkN; ++b) {
+            const bool live_page = std::strcmp(kWalkDests[b].name, "Diag") == 0 || std::strcmp(kWalkDests[b].name, "Diagnosis") == 0;
+            g_stub.adc.reset(); g_stub.usb_configured = false;
+            walk_open(ui, b);
+            for (int k = 0; k < 4; ++k) ui.tick(g_walk_t += 120);
+            walk_settle(ui);
+            std::vector<uint16_t> shot[4];
+            const State want[4] = {State::None, State::Power, State::Host, State::Shell};
+            const bool rail = ui.uses_opp_rail();                  // the icon rides on the rail, or in Home's info row 1
+            const bool home = std::strcmp(kWalkDests[b].name, "Home") == 0;
+            for (int st = 0; st < 4; ++st) {
+                link_drive(ui, st);   // 12 ticks: a page samples the USB rows on its own beat
+                if (ui.pc_link() != want[st]) {
+                    std::printf("  link %s r%u: state %d, want %d\n", kWalkDests[b].name, unsigned(r), int(ui.pc_link()), int(want[st]));
+                    ++bad;
+                }
+                shot[st].assign(g_panel, g_panel + 240 * 240);
+                const int d = link_clean_diff(ui, r, live_page);
+                if (home || std::strcmp(kWalkDests[b].name, "Lines") == 0) link_dump(r, kWalkDests[b].name, st, "");
+                if (d) { std::printf("  link %s r%u st%d: %d px differ from a clean paint\n", kWalkDests[b].name, unsigned(r), st, d); ++bad; }
+            }
+            // Each state paints something the one before did not: in the rail band (the page beside it may move on its own), or
+            // on Home anywhere. A page with no rail and no Home info row (hides_strip) shows no icon.
+            // Home's sweep moves between two shots, so only its portrait rotations (info row 1 at the bottom / top) are counted.
+            for (int st = 1; st < 4 && (rail || (home && (r & 1) == 0)); ++st) {
+                const auto in_home_info = [r](int i) { const int x = i % 240, y = i / 240; return r == 0 ? (x < 224 && y >= 196) : (x >= 16 && y < 44); };
+                const int d = [&] { int n = 0; for (size_t i = 0; i < shot[st].size(); ++i) n += (rail ? in_opp_band(r, int(i)) : in_home_info(int(i))) && shot[st][i] != shot[st - 1][i]; return n; }();
+                if (d < 12 || d > (rail ? 16 * 70 : 44 * 224)) { std::printf("  link %s r%u: state %d vs %d changed %d px\n", kWalkDests[b].name, unsigned(r), st, st - 1, d); ++bad; }
+            }
+            // Unplugged: the icon is gone and the strip is whole again.
+            { k2::adc::Reading rd; rd.aux_mv = 0; g_stub.adc = rd; }   // an unknown reading would keep the last verdict
+            g_stub.usb_configured = false;
+            for (int k = 0; k < 60; ++k) ui.tick(g_walk_t += 120);
+            walk_settle(ui);
+            if (ui.pc_link() != State::None || link_clean_diff(ui, r, live_page) != 0) { std::printf("  link %s r%u: not whole after unplug\n", kWalkDests[b].name, unsigned(r)); ++bad; }
+        }
+    }
+    CHECK_EQ(bad, 0);
+    ui.set_rotation(0, g_walk_t += 10);
+    g_stub = old;
+}
+}  // namespace
+
 int main() {
     setup_stubs();
     k2::g_missing_glyphs = 0;
@@ -1739,6 +1853,7 @@ int main() {
     CHECK_EQ(k2::g_missing_glyphs, 0u);
     test_switch_exact();
     test_repaint_opaque();
+    test_pc_link_icon();
     // Entering and leaving the ring updates both rails and muted RowList pixel-accurately against render_for_capture.
     {
         Ui ring_ui;

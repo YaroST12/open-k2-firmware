@@ -121,7 +121,8 @@ K2_HOT void Ui::pump_paint(uint32_t now_ms) {
     current().update(now_ms);
     // Covered: the body painted, and a panel window crossed the pill since it was last drawn (paint_meter.hpp overlay watch).
     const bool body_painted = (!bg || bg->spent != toast_px0) && paint::meter.watch_hit();
-    const bool toast_dirty = !ctx_.toast.drawn || (toast_was_drawn && body_painted);    if (bg && bg->more) {
+    const bool toast_dirty = !ctx_.toast.drawn || (toast_was_drawn && body_painted);
+    if (bg && bg->more) {
         // A slice that covered the pill raises it again at once, so it never disappears mid-scroll; one that missed it costs nothing.
         if ((toast_dirty || rotation_notice_drawn_) && ctx_.toast.active(now_ms) && !fctrig::paint_critical()) {
             ctx_.toast.drawn = false;
@@ -394,6 +395,8 @@ K2_HOT UiAction Ui::tick(uint32_t now_ms) {
     const bool batt_run = battery::hw::service().rec().active();
     if (batt_dot_ && !batt_run && !hold_shown_ && menu() != Menu::Share && menu() != Menu::QrTest) repaint(now_ms);
     batt_dot_ = batt_run;
+    shell_.tick(now_ms, run_busy());   // the shell's hourglass clock; the rail cell and Home's info row repaint on a state change
+    pc_state_ = pc_.update({ctx_.analog ? static_cast<int32_t>(ctx_.analog->aux_mv) : -1, usb::host_active(), shell_.shown()});
     if (ctx_.trig_armed && now_ms >= trig_until_) ctx_.trig_armed = false;
 
     const RebootChord::Step chord = chord_.step(now_ms);

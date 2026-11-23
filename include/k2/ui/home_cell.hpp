@@ -17,19 +17,20 @@
 namespace k2::home {
 
 // ---- items -----------------------------------------------------------------------------------
-enum class ItemKind : uint8_t { Fill, Text, Arrow, Warn };
+enum class ItemKind : uint8_t { Fill, Text, Arrow, Warn, Link };
 
 constexpr int kArrowBox = 22;     // flow arrow box, px
 constexpr int kWarnBox = 11;      // warning triangle box, px
+constexpr int kLinkBox = 12;      // PC-link icon box, px (ui_icons kIconSize)
 constexpr uint8_t kDashV = 4, kDashH = 5;   // Arrow `aux` values beyond the four directions
 
 struct Item {
     ItemKind kind = ItemKind::Fill;
-    uint8_t aux = 0;              // Arrow: 0 up, 1 left, 2 down, 3 right (screen), kDashV / kDashH for the idle dash
+    uint8_t aux = 0;              // Arrow: 0 up, 1 left, 2 down, 3 right (screen), kDashV / kDashH for the idle dash; Link: pclink::State
     int16_t x = 0, y = 0;         // Fill: top-left; Text: pen x and line-box top (or badge box when w,h > 0)
     int16_t w = 0, h = 0;         // Fill size; Text: >0 centers ink inside badge box (x,y,w,h); Arrow: box size in w
     uint16_t color = 0;           // Fill colour, Text foreground, Arrow colour, Warn triangle colour
-    uint16_t ink = 0;             // Warn: the exclamation mark
+    uint16_t ink = 0;             // Warn: the exclamation mark; Link: the hourglass sand
     const Font *font = nullptr;
     std::string_view text;        // Text: points at storage the page keeps alive while the item is painted
 };
@@ -60,6 +61,12 @@ constexpr Item warn(int16_t x, int16_t y, uint16_t color, uint16_t ink) {
     i.kind = ItemKind::Warn; i.x = x; i.y = y; i.color = color; i.ink = ink;
     return i;
 }
+// The PC-link icon of state `state` (a pclink::State value, 1..3): socket / monitor / hourglass, `color` the glass, `sand` the fill.
+constexpr Item link(int16_t x, int16_t y, uint8_t state, uint16_t color, uint16_t sand) {
+    Item i;
+    i.kind = ItemKind::Link; i.x = x; i.y = y; i.aux = state; i.color = color; i.ink = sand;
+    return i;
+}
 
 // ---- masks -----------------------------------------------------------------------------------
 // Arrow direction on the screen from the physical flow: forward (toward the top port) points up at
@@ -71,6 +78,8 @@ constexpr uint8_t dash_dir(uint8_t rotation) { return (rotation & 1) ? kDashH : 
 bool arrow_hit(uint8_t aux, int x, int y);
 // 0 = outside, 1 = triangle body, 2 = the exclamation mark, for pixel (x, y) of the 11 x 11 box.
 int warn_hit(int x, int y);
+// 0 = outside, 1 = the icon's line, 2 = the hourglass sand (state 3 only), for pixel (x, y) of the 12 x 12 link box.
+int link_hit(uint8_t state, int x, int y);
 
 // ---- sweep -----------------------------------------------------------------------------------
 // Column heights (rows above the sweep bottom, 0 = no sample) of one cell and the cursor that wraps

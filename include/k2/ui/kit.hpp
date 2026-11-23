@@ -12,6 +12,7 @@
 #pragma once
 #include <cstdint>
 #include <string_view>
+#include "k2/core/pc_link.hpp"
 #include "k2/ui/gfx.hpp"
 #include "k2/ui/list_view.hpp"
 #include "k2/ui/ui_calc.hpp"
@@ -82,7 +83,10 @@ struct OppRailSpec {
     OppTelemetry telemetry = OppTelemetry::Vaw;
 };
 
+constexpr int kLinkIconPx = kIconSize;   // the PC-link icon's box (a rail cell reserves kLinkIconPx + 2 px for it)
+
 struct OppCell {
+    pclink::State link = pclink::State::None;   // the PC-link icon at the cell's far end (the rail's last cell only)
     int16_t len = 60;
     bool masthead = false;
     bool active = true;
@@ -95,7 +99,9 @@ struct OppCell {
     uint8_t dot_cur = 0;
 };
 
-// Draws one slot (0..3) of the Opposite Telemetry Rail on its own surface `s` (single-pass via fill_except).
+// Draws one slot (0..3) of the Opposite Telemetry Rail on its own surface `s` (single-pass via fill_except). A cell with a
+// `link` keeps kLinkIconPx + 2 px of its far end for the icon (turned with the text on a side rail); its text centres in the
+// rest and drops the tag's trailing space before it would drop the value.
 void draw_opp_slot(const Surface &s, PanelEdge opp_edge, TextDir dir, unsigned slot, const OppCell &cell);
 
 // A text line of a ground: its origin, font, text and ink (the bg is the ground's).

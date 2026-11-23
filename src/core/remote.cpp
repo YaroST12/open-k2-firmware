@@ -411,6 +411,7 @@ remote::SessionInfo Remote::session() {
     s.depth = u.depth;
     for (size_t i = 0; i < s.stack.size(); i++) s.stack[i] = u.stack[i];
     s.sub = u.sub; s.sel = u.sel; s.count = u.count; s.home_window = u.home_window; s.flags = u.flags;
+    s.pc_link = u.pc_link;
     return s;
 }
 
@@ -972,6 +973,8 @@ remote::UsbLinkSnapshot Remote::usb_link() {
 remote::MemorySnapshot Remote::memory() { return memstat::snapshot(); }
 
 void Remote::request_seen(bool state_changing) { idle_hw::request(state_changing, systick::millis()); }
+
+void Remote::shell_control_seen() { ui_.shell_control(systick::millis()); }
 
 remote::PowerSnapshot Remote::power() {
     const idle_hw::Status st = idle_hw::status();

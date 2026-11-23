@@ -176,6 +176,8 @@ void format_limit(ProtoText &out, ProtoKind kind, uint32_t watts) {
     if (v.size() + suffix.view().size() > static_cast<std::size_t>(kProtoChars)) {
         const std::size_t volt = v.find('V');   // every PD value names its voltage first
         if (volt != std::string_view::npos) v = std::string_view(v.data(), volt + 1);   // not substr: it can throw
+        // "3.3-21V lim100W" is one over: the range loses its unit ("3.3-21 lim100W"), never the limit.
+        if (v.size() + suffix.view().size() > static_cast<std::size_t>(kProtoChars) && v.back() == 'V') v.remove_suffix(1);
     }
     StrBuf<20> joined;
     joined.put(v).put(suffix.view());

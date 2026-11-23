@@ -751,9 +751,9 @@ test("K2Remote.state / ping / setPage / debugPdos / button / action / log reques
   assert.deepEqual([...sent[5].slice(0, 6)], [0xA5, 0x4B, 9, 6, 1, 0]);
 });
 
-// GET_STATE [1]: the same 31-byte vector as tests/test_remote_proto.cpp and tests/test_k2_remote_state_parts.py.
+// GET_STATE [1]: the same 32-byte vector as tests/test_remote_proto.cpp and tests/test_k2_remote_state_parts.py.
 const SESSION_PAYLOAD = [0x02, 0x01, 0, 0, 0x04, 0x03, 0, 0, 1, 0x88, 0x13, 0x20, 0x4E, 0xB8, 0x0B,
-                         4, 1, 3, 2, 1, 0x54, 0x0B, 1, 10, 0xFF, 0xFF, 0x05, 3, 7, 2, 0x14];
+                         4, 1, 3, 2, 1, 0x54, 0x0B, 1, 10, 0xFF, 0xFF, 0x05, 3, 7, 2, 0x14, 2];
 
 test("decodeSession reads every field of GET_STATE part 1", () => {
   const s = P.decodeSession(Uint8Array.from(SESSION_PAYLOAD));
@@ -770,6 +770,13 @@ test("decodeSession reads every field of GET_STATE part 1", () => {
   assert.deepEqual(s.ui, { stack: ["connection"], tab: "cable", popup: true, details: false, sel: 3, count: 7 });
   assert.equal(s.home_window, "10m");
   assert.deepEqual(Object.keys(s.flags).filter((k) => s.flags[k]), ["em_scanning", "em_quiet"]);
+  assert.equal(s.pc_link, "host");
+});
+
+test("decodeSession: pc_link names, and a build before the byte reads none", () => {
+  const p = Uint8Array.from(SESSION_PAYLOAD);
+  for (const [i, n] of ["none", "power", "host", "shell"].entries()) { p[31] = i; assert.equal(P.decodeSession(p).pc_link, n); }
+  assert.equal(P.decodeSession(Uint8Array.from(SESSION_PAYLOAD.slice(0, 31))).pc_link, "none");
 });
 
 test("decodeSession: bit 6 is the ring view flag", () => {

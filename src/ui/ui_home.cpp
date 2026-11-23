@@ -53,13 +53,15 @@ static_assert(kDotX + 5 - 1 <= hm::kW - 2, "the attention dot stays inside the c
 // ---- info block ----------------------------------------------------------------------------------
 constexpr int16_t kInfoRow1Top = 201, kInfoRow2Top = 223;
 constexpr int kDiagChars = 16, kElChars = 5;
-constexpr int16_t kElX = 180, kRoleX = 196;
+constexpr int16_t kElX = 166, kRoleX = 196;   // kElX leaves room for the PC-link icon after the elapsed time
+constexpr int16_t kLinkX = 208;                 // the icon box, kLinkBox wide, at row 1's top
 constexpr int16_t kRowTop[2] = {kInfoRow1Top, kInfoRow2Top};
 // Row 1's diagnosis word (hm::format_diag) and its tag fit between the tag column and the elapsed time.
 static_assert(pd::diag::screen::kLabelChars <= static_cast<std::size_t>(kDiagChars), "the diagnosis word runs into the elapsed time");
-static_assert(hm::kInfoValX + kDiagChars * static_cast<int>(kSmallAdvPx) <= kElX, "the diagnosis word overlaps the elapsed time");
-static_assert(hm::kInfoValX + 15 * static_cast<int>(kSmallAdvPx) <= kElX, "idle wait text overlaps elapsed time");
+static_assert(hm::kInfoValX + kDiagChars * static_cast<int>(kSmallAdvPx) <= kRoleX, "the diagnosis word overlaps the boot role");
+static_assert(hm::kInfoValX + 15 * static_cast<int>(kSmallAdvPx) <= kLinkX - 2, "idle wait text overlaps the PC-link icon");
 static_assert(hm::kInfoValX + hm::kProtoChars * static_cast<int>(kSmallAdvPx) <= kElX, "the protocol value overlaps the elapsed time");
+static_assert(kElX + kElChars * static_cast<int>(kSmallAdvPx) + 2 <= kLinkX && kLinkX + hm::kLinkBox <= hm::kW - 2, "the PC-link icon overlaps the elapsed time or runs off the card");
 static_assert(hm::kInfoTagX + hm::kDiagTag.size() * kSmallAdvPx <= static_cast<unsigned>(hm::kInfoValX), "the Diag tag runs into its value");
 
 // Repaint zones of the info cell (logical, inclusive). A zone is wider and lower than its fields on purpose: a glyph
@@ -67,8 +69,8 @@ static_assert(hm::kInfoTagX + hm::kDiagTag.size() * kSmallAdvPx <= static_cast<u
 // past the logical box of the new one, and the rect repainted for a change has to cover all of it.
 using Zone = HomePage::ZoneRect;
 constexpr Zone kInfoZones[3] = {
-    {0, 196, 186, 226},     // info row 1: tag and value
-    {176, 196, 223, 226},   // info row 1: elapsed time
+    {0, 196, 170, 226},     // info row 1: tag and value
+    {160, 196, 223, 226},   // info row 1: elapsed time and the PC-link icon
     {0, 220, 223, 239},     // info row 2: protocol, value, role
 };
 constexpr int kCatchUpSteps = 3;                      // late sweep steps taken in one update
@@ -864,7 +866,7 @@ void HomePage::paint_info(const Frame &f) {
 
     // ---- the items: structure first, then the three zones in kInfoZones order. Fieldbook session block: row 1 is the
     // protocol (its tag a solid chip) and the elapsed time, row 2 the diagnosis word (or the lines) and the boot role.
-    hm::Item it[10];
+    hm::Item it[11];
     int n = 0;
     int zone_start[4];
     auto add = [&](const hm::Item &item) {
@@ -888,6 +890,12 @@ void HomePage::paint_info(const Frame &f) {
         const int pad = static_cast<int>(eln) < kElChars ? kElChars - static_cast<int>(eln) : 0;
         add(hm::text(kSmall, static_cast<int16_t>(kElX + pad * kSmall.adv), kRowTop[0], {el, eln}, kDim));
     }
+    // Home has no opposite rail, so the PC-link icon rides in row 1 after the elapsed time (pages with a rail show it there).
+    // A long protocol text (no elapsed time then: the power-meter notices) keeps the row; the icon is left out.
+    if (const pclink::State pcs = ctx_.ui->pc_link();
+        pcs != pclink::State::None && !ctx_.ui->uses_opp_rail() &&
+        hm::kInfoValX + static_cast<int>(pt.value.view().size()) * static_cast<int>(kSmallAdvPx) <= kLinkX - 2)
+        add(hm::link(kLinkX, kRowTop[0], static_cast<uint8_t>(pcs), pcs == pclink::State::Power ? kDim : kText, kFocus));
     zone_start[2] = n;
     if (diag_fill != kBg) add(hm::fill(0, static_cast<int16_t>(kRowTop[1] - 1), hm::kW, static_cast<int16_t>(240 - kRowTop[1] + 1), diag_fill));
     add(hm::text(kSmall, hm::kInfoTagX, kRowTop[1], row1_tag, diag_fill != kBg ? diag_ink : row1_tag_col));

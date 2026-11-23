@@ -8,6 +8,8 @@
 #include <cstddef>
 #include <cstdint>
 #include "k2/core/bss_zero.hpp"
+#include "k2/core/pc_link.hpp"
+#include "k2/core/shell_toast.hpp"
 #include "k2/drivers/buttons.hpp"
 #include "k2/ui/gfx.hpp"
 #include "k2/ui/ui_calc.hpp"
@@ -394,6 +396,7 @@ public:
         uint8_t sel = 0xFF, count = 0;
         uint8_t home_window = 0;         // trend::Window
         uint8_t flags = 0;               // kSession*
+        uint8_t pc_link = 0;             // pclink::State: the HID port as the corner icon shows it
     };
     [[gnu::noinline]] Session session();
     // A Device twin live proof (twin_hw::live_running) and a PD Stress run own the ports like a charger test does.
@@ -448,6 +451,11 @@ public:
     const char *foreign_busy() const;
     // The runs that own the ports until they end, which the dead-man lease therefore leaves alone: a charger test or a PD Stress run.
     bool run_busy() const { return charger_test_busy() || pdstress_active() || pdspec_active(); }
+    // A control command from the shell (Remote::shell_control_seen): the PC-link icon turns to the hourglass, and stays for a run the shell started.
+    void shell_control(uint32_t now_ms) { shell_.control(now_ms); }
+    pclink::State pc_link() const { return pc_state_; }
+    // Whether the page shows the opposite telemetry rail (where the PC-link icon rides); Home at its root has none.
+    bool uses_opp_rail() const { return !current().hides_strip() && (depth_ > 0 || page_ != Page::Home); }
     // The remote `stop` (the lease expiry and the shell `stop` land there too): ends a charger test, a twin proof and a PD Stress run.
     // The run releases the source to 5 V itself on the next poll; a PD Stress run waiting to resume after a reboot is dropped.
     void cancel_runs();
@@ -501,7 +509,6 @@ private:
     void paint_incoming(uint32_t now_ms, uint32_t t0, bool blank);
     // Full repaint of the current page after a real lcd::fill (init, rotation change), where the screen is already blank.
     void redraw(uint32_t now_ms);
-    bool uses_opp_rail() const { return !current().hides_strip() && (depth_ > 0 || page_ != Page::Home); }
     const PageIf &current() const { return *pages_.at(depth_); }
     Rect active_dest() const { return uses_opp_rail() ? layout_.twin_content : layout_.content; }
     void sync_surface();
@@ -521,6 +528,9 @@ private:
     bool pop_to(unsigned keep_depth, uint32_t now_ms);
     void draw_opp_slot(unsigned slot);
     void draw_toast_overlay(uint32_t now_ms);
+    shell::Band shell_;
+    pclink::Tracker pc_;
+    pclink::State pc_state_ = pclink::State::None;   // the Back slot's corner icon (slot_sig mixes it in)
     void draw_release_notice();   // the toast notices every page shares, and the battery recorder's running dot
     bool battery_dot() const;     // a battery run is in progress and the page may carry its dot
     static constexpr int16_t kBattDot = 5;
