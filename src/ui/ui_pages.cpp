@@ -1604,7 +1604,7 @@ void CableRPage::update(uint32_t) {
     } else {
         if (ctx_.toast.active(ctx_.now)) {
             ctx_.toast.clear();
-            ctx_.toast.erase_pending = false;
+            ctx_.toast.drop_erase();
         }
         foot_.paint_budgeted(1, ctx_.budget, static_cast<int>(ctx_.content.w) * 20, [&] {
             gfx_fill(ctx_.content, 0, static_cast<int16_t>(ctx_.content.h - 20), ctx_.content.w, 20, kBg);

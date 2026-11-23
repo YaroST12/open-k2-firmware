@@ -120,7 +120,7 @@ void DiagnosisPage::draw_static() {
         foot_.invalidate();
         stamp_.invalidate();
         ctx_.rows.invalidate();
-        toast_sig_ = 0;
+        if (!ctx_.keep_status) toast_sig_ = 0;
         pill_ = false;
         static_step_ = 1;
     }

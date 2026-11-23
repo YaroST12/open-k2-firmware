@@ -314,11 +314,26 @@ void Ui::draw_rotation_notice(uint32_t now_ms) {
     rotation_notice_drawn_ = true;
 }
 
+// A pill that ended or shrank left its pixels over the page, which has no framebuffer to restore them from: wipe the band and
+// repaint the page (static chrome included) through the normal paint pipeline, then the live toast goes on top again.
+bool Ui::restore_under_toast() {
+    ctx_.toast.drop_erase();
+    ctx_.toast.drawn = false;
+    if (depth_ == 0 && page_ == Page::ChargerTest) {   // its grid keeps the band clean itself
+        gfx_fill(ctx_.content, 0, static_cast<int16_t>(ctx_.content.h - kToastH - kToastMarginBottom), ctx_.content.w, kToastH, kBg);
+        return false;
+    }
+    toast_clear_pending_ = true;
+    static_pending_ = true;
+    ctx_.keep_status = true;
+    current().invalidate_for_capture();
+    paint_pending_ = true;
+    return true;
+}
+
 void Ui::draw_toast_overlay(uint32_t now_ms) {
     if (ctx_.toast.erase_pending) {
-        gfx_fill(ctx_.content, 0, static_cast<int16_t>(ctx_.content.h - kToastH - kToastMarginBottom),
-                 ctx_.content.w, kToastH, kBg);
-        ctx_.toast.erase_pending = false;
+        if (restore_under_toast()) return;   // the repaint raises the toast again once the page is back
     }
     if (!ctx_.toast.active(now_ms)) return;
     uint16_t first = 0, last = 0;
@@ -647,6 +662,7 @@ void Ui::reset_paint_pipeline() {
     chrome_gaps_pending_ = false;
     toast_clear_pending_ = false;
     static_pending_ = false;
+    ctx_.keep_status = false;
     panel_pending_ = false;
     opp_pending_ = false;
     timing_in_flight_ = false;
@@ -656,10 +672,7 @@ void Ui::reset_paint_pipeline() {
 
 void Ui::start_full_clear() {
     reset_paint_pipeline();
-    if (ctx_.toast.active(ctx_.now)) {
-        ctx_.toast.drawn = false;
-        ctx_.toast.erase_pending = true;
-    }
+    if (ctx_.toast.active(ctx_.now)) ctx_.toast.drawn = false;   // the full clear below erases the old pill
     clear_pending_ = true;
     clear_full_lcd_ = true;
     clear_y_ = 0;
@@ -681,7 +694,7 @@ bool Ui::clear_for_incoming(uint32_t now_ms, PageIf &outgoing, bool incoming_opa
     reset_paint_pipeline();
     toast_clear_pending_ = clear_toast;
     ctx_.toast.clear();
-    ctx_.toast.erase_pending = false;
+    ctx_.toast.drop_erase();
     if (!incoming_opaque) {
         if (ctx_.content.w == next_w && full_px_ < content_px &&
             (!ctx_.budget || full_px_ <= static_cast<uint32_t>(PaintBudget::kDefaultPx))) {
