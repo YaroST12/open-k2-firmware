@@ -636,5 +636,26 @@ int main() {
         CHECK_EQ(lim_watts(27500), 27u);
         CHECK_EQ(lim_watts(100000), 100u);
     }
+    // ---- a detach ends the sink's attach: its Request and the list we forged for it go, the limit and the give-up counters stay ----
+    {
+        Rig r;
+        r.lim.arm(10000, r.now);
+        r.negotiate(0, rq_fixed(4, 3000, 3000));
+        TxMsg m;
+        CHECK_COND(r.tx(m));
+        r.request(rq_fixed(4, 660, 660));
+        CHECK_EQ(int(r.lim.status().state), int(LimState::Limited));
+        CHECK_EQ(r.lim.status().req_pos, 4);
+        r.lim.on_detach();
+        const LimStatus& s = r.lim.status();
+        CHECK_EQ(int(s.state), int(LimState::Armed));
+        CHECK_EQ(s.limit_mw, 10000u);
+        CHECK_EQ(s.req_pos, 0);
+        CHECK_EQ(s.req_rdo, 0u);
+        CHECK_EQ(s.req_mw, 0u);
+        CHECK_EQ(s.forged_n, 0);
+        CHECK_EQ(s.forged[3], 0u);
+        CHECK_EQ(s.injections, 1);   // the per-arm rate cap is not a per-attach fact
+    }
     return test_report("test_pd_limiter");
 }

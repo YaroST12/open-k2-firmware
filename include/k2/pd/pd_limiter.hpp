@@ -88,7 +88,7 @@ public:
     // false: outside kLimMinMw..kLimMaxMw. `seed` is the always-fed sniffer of this attach: a contract it holds is limited at once.
     bool arm(std::uint32_t limit_mw, std::uint32_t now, const IqWatch* seed = nullptr);
     void disarm() { stop(LimWhy::User); }
-    void on_detach() { restart(); }   // the pair is gone, the limit waits for the next one
+    void on_detach();   // the pair is gone: the limit waits for the next one, the sink's Request and our list go with the attach
     bool armed() const { return st_.state != LimState::Off; }
     bool wants_tx() const { return st_.state == LimState::Pending; }   // the driver opens its TX choke point for it
     const LimStatus& status() const { return st_; }
