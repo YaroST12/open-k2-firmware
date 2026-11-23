@@ -56,7 +56,7 @@ inline constexpr const char *kNoPdUnansweredL = "PD offers went unanswered";  //
 inline constexpr const char *kNoPdLines[] = {kNoPdNeverL, kNoPdUnansweredL};
 static_assert(all_fit(kNoPdLines, 8, kLinePx), "a no-PD line is wider than 26 cells");
 
-// ---- footers (at most 27 characters, facts, no key names) -----------------------------------------------------------
+// ---- footers (at most 27 characters, facts, no key names; the Source hint names an action, not a key) -----------------------------------------------------------
 inline constexpr const char *kSourceUnread = "Not asked: Reset & re-read";   // the attach's auto read did not run (a tool, inline or passive link)
 inline constexpr const char *kCableUnread = "Cable not fully read yet";
 inline constexpr const char *kSinkUnread = "Sink caps not read yet";

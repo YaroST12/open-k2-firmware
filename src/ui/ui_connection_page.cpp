@@ -2724,6 +2724,17 @@ void ConnectionPage::paint_status(uint32_t now_ms) {
             else if (diag_on && txt.view() == s.diag) tone = DiagnosisPage::tone_of(dr);
         }
     }
+    // The bottom bar is not painted in the twin-rail chrome: the survey's progress and summary reach the screen as a toast.
+    if (!before(now_ms, op_until_) && txt.view() != status_txt_.view()) {
+        const pd::Survey &sv = survey::state();
+        if (sv.running()) {
+            ctx_.toast.show(FooterTone::Info, txt.view(), now_ms, 1500);
+        } else if (status_txt_.view().substr(0, 8) == "Reading " && sv.ran()) {
+            StrBuf<conn::kStatusCells + 1> sum;
+            conn::read_summary(sv, sum);
+            ctx_.toast.show(sv.silent() ? FooterTone::Caution : FooterTone::Ok, sum.view(), now_ms, 3000);
+        }
+    }
     status_txt_ = txt;
     (void)tone;
 }

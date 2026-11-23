@@ -269,7 +269,7 @@ constexpr const char *sv_word(const pd::SvEntry &e) {
     return "";
 }
 
-// A field of the open tab was never asked: the fact, per tab (no key name; the Refresh item reads it).
+// A field of the open tab was never asked: the fact per tab; the Source one names the action that asks (no key name).
 constexpr const char *unread_text(Tab t) {
     return t == Tab::Source ? tx::kSourceUnread : t == Tab::Cable ? tx::kCableUnread : tx::kSinkUnread;
 }
