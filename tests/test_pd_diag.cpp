@@ -1187,6 +1187,34 @@ void test_inline_takeover_after_the_device_request() {
     CHECK_EQ(run.a.finished(), 1);
 }
 
+// The latch can also land after the device's PS_RDY: its contract carries over whole.
+void test_inline_takeover_after_the_device_contract() {
+    Trace t;
+    k2_reread_contract(t);
+    t.reset(0);
+    t.hold(0, 0, 300);
+    t.hold(5000, 200, 200);
+    t.rx(true, false, Source_Cap, kPpsCaps);
+    t.rx(false, false, Request, {pps_rdo(3, 8200, 3000)});
+    t.wait(5);
+    t.rx(true, false, Accept, {});
+    t.wait(60);
+    t.rx(true, false, PS_RDY, {});
+    t.hold(8200, 3000, 100);
+    t.put(pdtrace::Type::Link, {1});
+    t.put(pdtrace::Type::Sink, {std::uint8_t(SinkState::Idle), 0, 0, 0});
+    t.hold(8200, 3000, 5000);
+    Run run;
+    run.go(t);
+    const Session& s = run.a.current();
+    CHECK_COND(s.contract && s.contract_seen && s.pps && !s.active);
+    CHECK_EQ(s.c_mv, 8200);
+    CHECK_EQ(s.c_ma, 3000);
+    CHECK_COND(run.r.power != kPowerActive && run.r.power != kPowerUnseen && run.r.power != kPowerNone);
+    EXPECT_NO(run, Code::ActiveSink);
+    CHECK_EQ(run.a.finished(), 1);
+}
+
 // A passive session keeps its real findings across the inline latch: the latch splits only the K2's own sink session.
 void test_inline_latch_keeps_a_passive_cut_out() {
     Trace t;
@@ -1729,6 +1757,7 @@ int main() {
     test_k2_release_is_not_a_cut_out();
     test_inline_takeover_starts_the_device_session();
     test_inline_takeover_after_the_device_request();
+    test_inline_takeover_after_the_device_contract();
     test_inline_latch_keeps_a_passive_cut_out();
     test_k2_requests_are_not_many_requests();
     test_active_sink_pdo_not_captured();
