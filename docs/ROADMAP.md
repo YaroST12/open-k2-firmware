@@ -19,6 +19,10 @@ Everything is C++23; there are no C files left in `src/` (TinyUSB and lwIP under
 
 ## Verified on hardware
 
+- Screen no longer turns off while navigating (2026-11-23, user, K2 1.2.0-100, Cable tab): `idle_hw::service` ticked with
+  the loop's `now`, older than a press stamped in a wait loop; `idle::Machine::advance` read it as a 49-day idle
+  (`idle_s` 4294967) and went Off. Fix ac081b55: an older stamp adds no time (`test_idle`).
+
 - Reboot bridging works again (**was "Reboot bridging dead since the SRAM canary"**) (2026-11-11, IQ4 self-powered charger test, card 65): after a VBUS cut
   the K2 came back plain with no Rd, the charger saw no sink and the K2 stayed dark (found with Rp on CC2, VBUS 0).
   Cause: the `.noinit` SRAM canary of 71bd2345 (ROADMAP "Stale Rd marker") never survives a dark on this board. The
@@ -80,16 +84,11 @@ Everything is C++23; there are no C files left in `src/` (TinyUSB and lwIP under
 
 Open defects, newest first. A row leaves this list when its fix is merged and seen on hardware.
 
-- **Screen turns off while navigating** (2026-11-23, user on the Cable tab; K2 1.2.0-85): `k2_remote power` read `idle_s`
-  4294967 (saturated). Buttons are sampled in wait loops with a fresh `millis()`, then `idle_hw::service` ticks with the loop's
-  older `now`; `idle::Machine::advance` read the backwards step as a 49-day idle -> Off. Fixed: an older stamp adds no time
-  (`test_idle` red first). Not yet seen on hardware.
-
 - **Vendor database follow-ups** (2026-11-23): VID 0x0716 (this K2's own, Oxus Research on the USB-IF list) is left unlabeled;
   `rl::vendor_oem_name` is a separate table. Done: cable names are "<Brand> <W>W" (c23154ac), SVID names come from the one table
   (5f5f3f8c), 0x2B01 reads CUKTECH (USB-IF: Zimi Corporation, c245aa82). 106 Asian cable makers, connector and wire
-  houses added (k2/cable-vids). Check on hardware: the cable with ID header VID 0x2CA1 must read "Veetone" and
-  auto-name "Veetone <W>W". SVID 0x8087 on a cable with VID 0000 is Thunderbolt mode support, not a maker (SVID table).
+  houses added (k2/cable-vids). Verified 2026-11-23 (user, K2 1.2.0-100): the cable with ID header VID 0x2CA1 reads
+  "Veetone". SVID 0x8087 on a cable with VID 0000 is Thunderbolt mode support, not a maker (SVID table).
 
 - **USB 3.2 Gen 2x1 (10 Gbps) / USB4 pass-through cold-attach failure — hardware limit, not firmware** (2026-11-22,
   AMD USB4 `0000:c5:00.3` / `Bus 005` + `Bus 006`, 5 cm cable + Samsung PSSD T7 `04e8:4001`, plus ASMedia `246x` /
