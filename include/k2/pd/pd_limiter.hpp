@@ -45,6 +45,16 @@ struct LimFacts {
 LimRefusal lim_gate(const LimFacts& f, std::uint32_t limit_mw);
 const char* lim_refusal_name(LimRefusal r);
 
+// The picker's levels: whole watts of the charger's own fixed offers below its best, lowest first. mv/ma is the offer that
+// sets the level (the first of equal powers). Offers outside kLimMinMw..kLimMaxMw are dropped, never clamped.
+struct LimPick {
+    std::uint32_t mw = 0;
+    std::uint16_t mv = 0, ma = 0;
+};
+inline constexpr std::size_t kLimMaxPicks = 7;
+std::size_t lim_picks(std::span<const Pdo> pdos, std::span<LimPick> out);   // count written
+constexpr std::uint32_t lim_watts(std::uint32_t mw) { return mw / 1000; }   // every label floors
+
 enum class LimState : std::uint8_t { Off, Armed, Negotiating, Pending, Injected, Limited };
 enum class LimWhy : std::uint8_t { None, User, Detached, Epr, Rate, ChargerResets, SinkResets, SinkIgnores };
 const char* lim_state_name(LimState s);
