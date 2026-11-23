@@ -1503,6 +1503,7 @@ void ChargerTestSession::begin_run() {
     meta.pps_sweep = options_.pps_sweep;   // a resumed run re-plans the sweep rows from the journaled options
     meta.avs_sweep = options_.avs_sweep;
     meta.level = options_.level;           // a resumed Light run stays Light (never replanned as Medium)
+    meta.sweep_depth = options_.sweep_depth;
     meta.unattended = self_supplied();   // the K2 runs on the measured port (pinned Rd or bus-powered): the run never detaches
     self_run_ = meta.unattended;
     meta.cable_kind = static_cast<uint8_t>(run_cable_.kind); meta.cable_seq = run_cable_.seq;

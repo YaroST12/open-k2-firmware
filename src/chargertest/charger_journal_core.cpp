@@ -127,7 +127,7 @@ std::size_t encode_meta(std::span<std::uint8_t> out, const RunMeta& m) {
     std::memset(p, 0, kMetaPayload);
     p[0] = m.units.n;
     p[1] = (m.unattended ? 1 : 0) | (m.pps_sweep ? 2 : 0) | (m.avs_sweep ? 4 : 0) |
-           std::uint8_t((unsigned(m.level) & 3u) << 3);
+           std::uint8_t((unsigned(m.level) & 3u) << 3) | std::uint8_t((unsigned(m.sweep_depth) & 3u) << 5);
     for (std::size_t n = 0; n < m.units.n && n < m.units.u.size(); ++n) p[2 + n] = std::uint8_t(m.units.u[n]);
     p[18] = m.cable_kind; p[19] = m.guard; detail::put16(p + 20, m.cable_seq);
     return finish_record(out, Type::Meta, kMetaPayload);
@@ -174,9 +174,10 @@ void apply(Replay& r, Type t, std::span<const std::uint8_t> p) {
         for (std::size_t n = 0; n < p[0]; ++n) if (!m.units.add(Unit(p[2 + n]))) return;
         m.unattended = p[1] & 1; m.pps_sweep = (p[1] >> 1) & 1; m.avs_sweep = (p[1] >> 2) & 1;
         if (const unsigned l = (p[1] >> 3) & 3u; l < charger_test::kLevelCount) m.level = charger_test::Level(l);
+        m.sweep_depth = ctsweep::Depth((p[1] >> 5) & 3u);
         m.cable_kind = p[18]; m.guard = p[19]; m.cable_seq = detail::get16(p.data() + 20);
         r.meta = m; r.has_meta = true; r.options.units = m.units; r.options.pps_sweep = m.pps_sweep;
-        r.options.avs_sweep = m.avs_sweep; r.options.level = m.level;
+        r.options.avs_sweep = m.avs_sweep; r.options.level = m.level; r.options.sweep_depth = m.sweep_depth;
         break;
     }
     case Type::Attempt:
