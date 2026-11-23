@@ -58,6 +58,7 @@ struct Facts {
     std::int32_t open_cc_mv = -1;
     std::int32_t vbus_mv = -1;
     bool wake_port_off = true;
+    bool idle_rd_held = false;   // that setting's idle Rd hold is on a line now (fusb302::idle_wake_line)
 };
 
 // The idle "source asleep" verdict: an open CC line reading the standby signature (pd::standby_signature: >= 2.8 V
@@ -121,36 +122,54 @@ struct DebouncedSense {
     }
 };
 
-// Wakes a sleeping source once per sleeping episode while the Charger overview is open (the same CC cycle + survey as Refresh).
-// `asleep` = the debounced PortSense::SourceAsleep confirmed by the live facts. A wake that got no VBUS leaves the port asleep:
-// a retry needs the state to leave and come back after kRetryGapMs (a sooner return is the cycle's own blip), or the page to
-// be opened again. A manual Refresh / Reset & re-read spends the episode too (spend()).
+// "Try to wake anything connected" (the Charger overview's auto wake): a dark port (VBUS < kVbusAttachedMv, a monitor present)
+// with no source seen, no inline or decoded sink, no crossed / flipped lines and no idle Rd hold on a line. A waiting Rp and a
+// dual-role toggle are candidates: our Rd makes a DRP bank source, which is the intent. It carries no CC-level test on purpose: a bank that idles dark (CC1 ~0, CC2 1.55 V) reads like the empty
+// port's own bias net (CC2 1.64-1.71 V), so only the wake itself tells them apart. The standby signature is one case of it.
+constexpr bool wake_candidate(const Facts &f) {
+    // Wake sleeping port on: its idle hold owns a standby line, also in the hold's 600 ms re-read gap (line 0 there).
+    if (f.sink_seen || (!f.wake_port_off && (f.idle_rd_held || f.open_cc_mv >= 0))) return false;
+    if (f.vbus_mv < 0 || f.vbus_mv >= raguard::kVbusAttachedMv) return false;
+    const PortSense ps = classify_port_sense(f);
+    return ps == PortSense::NoCharger || ps == PortSense::SourceAsleep || ps == PortSense::ChargerWaiting ||
+           ps == PortSense::DualRolePort;
+}
+
+// Wakes a dark port once per page open of the Charger overview (the same Rd wake + survey as Refresh), and once more per port
+// change: an attach edge (the port looked empty, then a waiting Rp, a dual-role toggle, the standby signature or a lit rail) seen
+// outside the K2's own wake. `own` (our Rd, the re-read's attach and linger, the line trial) and kSettleMs after it, or after a
+// try, only move the baseline: the release of a woken bank is no replug. A dark attach on the bias net is no evidence either way.
+// kMaxTries per page open bounds a port that flips between empty and toggling by itself. A manual Refresh spends the try (spend()).
 class AutoWake {
 public:
-    static constexpr std::uint32_t kRetryGapMs = 15000;
-    static constexpr std::uint8_t kMaxTries = 3;   // wakes in a row that never reached an attach: then only a reopened page tries again
+    static constexpr std::uint32_t kSettleMs = 3000;
+    static constexpr std::uint8_t kMaxTries = 3;
 
+    void sense(PortSense stable, bool lit, bool own, std::uint32_t now_ms) {
+        if (own) quiet_from(now_ms);
+        bool present = present_;
+        if (stable == PortSense::NoCharger) present = false;
+        else if (stable == PortSense::ChargerWaiting || stable == PortSense::DualRolePort || stable == PortSense::SourceAsleep ||
+                 (stable == PortSense::Attached && lit)) present = true;
+        const bool settling = own_seen_ && static_cast<std::uint32_t>(now_ms - own_at_) < kSettleMs;
+        if (primed_ && !settling && present && !present_) armed_ = true;
+        primed_ = true;
+        present_ = present;
+    }
     bool step(bool asleep, bool page_open, bool blocked, std::uint32_t now_ms) {
-        if (!asleep) {
-            if (tried_) left_ = true;
-            return false;
-        }
-        if (tried_ && !(left_ && static_cast<std::uint32_t>(now_ms - at_) >= kRetryGapMs)) {
-            left_ = false;   // a return too soon is consumed: only a fresh departure re-arms
-            return false;
-        }
-        if (!page_open || blocked || tries_ >= kMaxTries) return false;
+        if (!asleep || !armed_ || !page_open || blocked || tries_ >= kMaxTries) return false;
+        tries_++;
         spend(now_ms);
         return true;
     }
-    void spend(std::uint32_t now_ms) { tried_ = true; left_ = false; at_ = now_ms; if (tries_ < 255) tries_++; }
-    void attached() { tries_ = 0; }   // a charger attached: the wakes worked, the cap starts over
+    void spend(std::uint32_t now_ms) { armed_ = false; quiet_from(now_ms); }
     void reset() { *this = {}; }
 
 private:
-    bool tried_ = false, left_ = false;
+    void quiet_from(std::uint32_t now_ms) { own_seen_ = true; own_at_ = now_ms; }
+    bool armed_ = true, primed_ = false, present_ = false, own_seen_ = false;
     std::uint8_t tries_ = 0;
-    std::uint32_t at_ = 0;
+    std::uint32_t own_at_ = 0;
 };
 
 // Projects a debounced idle PortSense back onto Facts when raw port sense has not held long enough.

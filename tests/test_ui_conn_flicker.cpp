@@ -288,7 +288,7 @@ static void test_overview_zero_repaints_on_flap_and_reneg_storm() {
     uint32_t t2 = 30000;
     set_adc(0, 0, 0, 0);
     ui2.open_place(bench::Place::Charger, t2);
-    for (int i = 0; i < 10; i++) ui2.tick(t2 += 100);
+    for (int i = 0; i < 50; i++) ui2.tick(t2 += 100);   // the dark port's one wake attempt (and its toast) is over before we count
     while (ui2.painting()) ui2.tick(t2 += 20);
     lcd::set_sink(&bh::sink);
     bh::reset();

@@ -1441,6 +1441,46 @@ void test_reread_abort_inside_the_linger_releases_at_once() {
     end_start_test();
 }
 
+// The Charger overview's wake (Ui::wake_source -> reread_start) must present Rd on the two dark ports it is aimed at, or the bank is
+// never woken: a bank that dropped its rail and its Rp after the K2's own Hard Reset (pd::HrRecovery asks kHrBackMs later), and the
+// empty port. A source that keeps its Rp through the reset leaves the attach held, so reread_start refuses (the wake then falls back to
+// the Refresh's rescan); such a charger recovers its rail by itself, which is why the recovery only fires on a dark rail.
+void start_attach_to_ready();
+void test_reread_wakes_a_bank_that_slept_after_a_hard_reset() {
+    start_attach_to_ready();
+    fusb302::sink_vbus(5000);
+    CHECK_EQ(fusb302::sink_hard_reset(false), true);
+    const std::uint32_t t0 = g_ms;
+    g_reg[0x40] = 0x00;                                      // the bank sleeps: its Rp goes with its rail
+    while (std::uint32_t(g_ms - t0) < pd::kHrBackMs) { g_ms += 20; fusb302::sink_vbus(0); fusb302::poll(); fusb302::service(); }
+    CHECK_EQ(int(fusb302::active_cc()), 0);
+    CHECK_EQ(int(fusb302::sink_status().state), int(pd::SinkState::Idle));
+    CHECK_EQ(fusb302::reread_start(pd::kRereadDefault), true);
+    CHECK_EQ(usb_has("attach: no CC yet, Rd presented"), true);
+    fusb302::reread_abort();                                 // the run must not leak into the next test
+    settle_ms(4000);
+    end_start_test();
+}
+
+// A wake on a port with nothing on it presents Rd, hears nothing, and ends by itself: the run is bounded and Rd goes back to the boot
+// state, so an overview left open on an empty port never holds Rd.
+void test_reread_on_an_empty_port_ends_and_releases_rd() {
+    reset_world();
+    fusb302::init();
+    fusb302::set_proactive_discover(false);
+    for (int i = 0; i < 20; i++) { g_ms += 20; fusb302::poll(); }
+    const AttachState boot{g_reg[0x02], g_reg[0x03]};
+    CHECK_EQ(fusb302::reread_start(pd::kRereadDefault), true);
+    CHECK_EQ(sw0_rd() != 0, true);
+    CHECK_EQ(fusb302::rd_for_run_on(), true);                // the Charger overview reads this as "our own wake": no replug edge
+    settle_ms(120000);
+    CHECK_EQ(fusb302::rd_for_run_on(), false);
+    CHECK_EQ(int(fusb302::reread_status().state) != int(pd::RereadState::Running), true);
+    CHECK_EQ(sw0_rd(), boot.sw0 & 3u);
+    CHECK_EQ(usb_has("[REREAD] attach released"), true);
+    end_start_test();
+}
+
 // A user trigger that took the sink over during the linger keeps its contract: the re-read never releases it.
 void test_reread_release_leaves_a_held_contract_alone() {
     (void)reread_attach_to_ready();
@@ -4244,6 +4284,23 @@ void test_identify_started_log_format_when_not_alone() {
     end_alone_case();
 }
 
+// The Charger overview's auto wake now takes a dual-role bank and a waiting charger too (2026-11-23): on their dark, detached
+// line reread_start must present Rd (the only thing that makes them source), never a bare Request.
+void test_reread_presents_rd_on_a_dual_role_or_waiting_port() {
+    for (const auto kind : {raguard::WaitKind::DualRolePort, raguard::WaitKind::ChargerWaiting}) {
+        attach_phone_alone_detached();
+        fusb302::set_wait_kind(kind);
+        g_log.clear(); g_usb.clear();
+        CHECK_EQ(fusb302::reread_start(pd::kRereadDefault), true);
+        CHECK_EQ(usb_has("attach: no CC yet, Rd presented"), true);
+        CHECK_EQ(usb_has("Request PDO 1"), false);
+        fusb302::reread_abort();
+        end_alone_case();
+        settle_ms(4000);
+        end_start_test();
+    }
+}
+
 void test_charger_alone_identify_refused_as_today() {
     attach_phone_alone_detached();                       // a steady-Rp charger alone also detaches on dark VBUS
     fusb302::set_wait_kind(raguard::WaitKind::ChargerWaiting);   // the link's verdict for a steady Rp
@@ -5515,6 +5572,8 @@ int main() {
     test_reread_abort_while_waiting_for_a_source_releases_rd();
     test_reread_abort_with_the_request_in_flight_releases_rd();
     test_reread_abort_inside_the_linger_releases_at_once();
+    test_reread_wakes_a_bank_that_slept_after_a_hard_reset();
+    test_reread_on_an_empty_port_ends_and_releases_rd();
     test_reread_release_leaves_a_held_contract_alone();
     test_reread_step_survives_a_tx_timeout_when_the_answer_arrives();
     test_tx_takes_the_goodcrc_in_the_rx_fifo_as_sent();
@@ -5635,6 +5694,7 @@ int main() {
     test_alone_phone_identify_starts_while_still_attached();
     test_identify_started_log_format_when_not_alone();
     test_charger_alone_identify_refused_as_today();
+    test_reread_presents_rd_on_a_dual_role_or_waiting_port();
     test_alone_identify_waits_for_ready_before_the_first_vdm();
     test_alone_identify_timeout_refuses_and_releases_the_line();
     test_alone_identify_end_releases_the_line_and_the_result_survives();

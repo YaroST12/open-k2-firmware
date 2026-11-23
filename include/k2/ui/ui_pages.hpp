@@ -1027,8 +1027,8 @@ private:
     bool actions_gap_cleared_ = false;     // gap below RowList at kPlaceListY cleared once per Actions entry
     conn::DebouncedSense port_sense_;      // 600 ms debounced idle port-sense classifier
     conn::AutoWake wake_;                  // the once-per-episode wake of a sleeping source on the Charger overview
-    bool wake_asleep_ = false;             // SourceAsleep held 600 ms, confirmed by the facts of this tick
-    bool asleep_run_ = false;              // the asleep verdict is running since asleep_since_
+    bool wake_asleep_ = false;             // wake_candidate held 600 ms on the facts of this tick
+    bool asleep_run_ = false;              // the wake_candidate run is going since asleep_since_
     uint32_t asleep_since_ = 0;
     StrBuf<40> status_txt_;                // last status string (for tests / toast mirror)
     bool em_read_pending_ = false;         // Read e-marker started a passive listen window from Actions

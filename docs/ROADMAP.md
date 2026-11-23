@@ -1244,6 +1244,31 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
     the K2 or a charger test blocks it. Open: a real replug within 15 s of the try is swallowed (reopen the page); a sub-page pop re-arms the wake (`enter()`);
     the CC cycle blocks inside one paint tick (as Refresh does); a refused rescan stays silent and spends the episode;
     the single-read after the woken attach is by reading only (no automated test); skipped while the direct-plug line trial is live.
+    **Superseded in part by `k2/wake-any` below: the CC cycle this entry used (`rescan_source()`) cannot wake a power bank in DRP idle.**
+  - **Wake anything dark on the Charger overview; Rd instead of a CC cycle** (2026-11-23, branch `k2/wake-any`, **built, not
+    verified on hardware**): the Baseus 100 W bank idles at VBUS 0, CC1 8 mV, CC2 1.55 V, D+/D- 1.61/1.69 V: no standby
+    signature, so it was `NoCharger` and never woken; and the wake-page wake (a CC cycle) could not wake it anyway, while the
+    remote's `pd-reread` (`fusb302::reread_start`: presents Rd, then reads) wakes it every time. Now `conn::wake_candidate`:
+    VBUS dark with a monitor, no inline / sink evidence, `NoCharger`, `SourceAsleep`, `ChargerWaiting` or `DualRolePort` (the bank idles as a DRP: our Rd makes it source) (so an empty port gets one try too: the
+    empty bias net reads CC2 1.64-1.71 V, no level separates it from the bank), no idle Rd hold of Wake sleeping port on a line (`fusb302::idle_wake_line()`), and `Ui::auto_read_block()`
+    free. `Ui::wake_source()` runs it: no contract + VBUS dark + not inline = `reread_start` (Rd) + the survey hook, else
+    `rescan_source()`; every "wake + read" caller takes it (`Action::PdRescan`: the page's auto wake, Refresh, Reset & re-read, Tools Reset link, the remote's `action 1`, the Hard Reset fallback); `rescan_source()` is left only for a lit rail, a live contract (Get_Source_Cap), inline and a driver refusal. A K2-sent sink Hard Reset on a
+    Ready contract arms `pd::HrRecovery` (`Ui::hr_recover_poll`): VBUS still dark after 1.96 s (tPSHardReset + tSafe0V + tSrcRecover +
+    tSrcTurnOn; 2.39 s out of EPR) = one `wake_source()` (a bank answers the reset by dropping VBUS and sleeping). Inline untouched.
+    One wake per page open, plus one per replug: `AutoWake` re-arms on an attach edge (empty port, then a waiting Rp / DRP toggle /
+    standby signature / lit rail) seen outside the K2's own Rd, re-read attach + linger and a 3 s settle, so the release of a woken bank is
+    no replug; at most 3 auto wakes per page open (a port that flips by itself). The survey's auto read waits while the driver's own re-read runs (`AutoIn::reread_running`). Tests: `test_ui_connection`
+    (`wake_candidate`, `AutoWake` replug / own release / cap), `test_pd_passive` (`HrRecovery`), `test_pd_survey` (deferral), `test_ui_connection_page` (bank,
+    empty port, no loop, ring pass, inline, HR fallback, Rd path vs rescan, each caller), `test_fusb302_scan` (real driver: Rd after a
+    Hard Reset that took the Rp away, empty port bounded and released). Size +348 B text, +16 B bss vs e3b96127. Validate on hardware: bank on the
+    top port, K2 on the PC: open the Charger overview: `Waking charger`, the bank wakes (Rd), 6 PDOs read; empty port: one toast, `NO
+    CHARGER`, no repeated Rd; bank idling as dual-role-port and a charger-waiting brick: one `Waking charger`, PDOs read; after a wake that
+    worked, the ~30 s release brings no second toast; pull and replug the bank within 15 s: one more wake; Reset & re-read on a K2-owned contract with the bank: Hard Reset, VBUS drops, wake within ~2 s
+    (`[UI] link reset: VBUS did not come back`), the read completes. Open: the survey's auto read may be refused while the re-read's
+    own run is active (`[SURVEY] wire refused`; the re-read itself still fills the rows), the Rd made by the wake is released by the
+    re-read, ~30 s after it; a bank that flips between an empty-looking idle (CC1 0 / CC2 1.55 V) and its toggle by itself reads as a replug (capped at 3 per page open); a source that keeps its Rp through the K2's Hard
+    Reset leaves the attach held, so `reread_start` refuses and the fallback is the rescan's CC cycle (it recovers by itself: the
+    recovery only fires on a dark rail); a bank swapped for one that idles empty-looking (no toggle, no Rp) shows no edge and needs Refresh.
 
 - **Ripple: calibrate PA1, then show it** (the capture works; its scale is unknown).
   - Seen on hardware (2026-11-09, HID power only, no charger, `runs/2026-11-09-ripple/`): `k2_remote ripple` returns

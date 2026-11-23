@@ -326,6 +326,19 @@ void test_auto_starts_once_on_an_owned_contract_after_the_settle() {
     CHECK_EQ(int(drive(a, owned(1), now, 60000)), int(AutoAct::None));          // finished: never again on this attach
 }
 
+// A woken attach (fusb302::reread_start) reads the charger itself first: the auto read waits for that run to end, then runs once. It
+// is not refused mid-run (the wire read cannot start beside it), which would spend the attach and leave the survey empty.
+void test_auto_waits_for_the_drivers_own_reread() {
+    AutoRead a;
+    std::uint32_t now = kT0;
+    AutoIn in = owned(1);
+    in.reread_running = true;
+    CHECK_EQ(int(drive(a, in, now, 20000)), int(AutoAct::None));                // the run is long past the settle: still waiting
+    in.reread_running = false;
+    CHECK_EQ(int(drive(a, in, now, kAutoSettleMs - 20)), int(AutoAct::None));   // the settle counts from the run's end
+    CHECK_EQ(int(drive(a, in, now, 200)), int(AutoAct::Start));
+}
+
 void test_auto_never_runs_without_a_contract_of_our_own() {
     AutoRead a;
     std::uint32_t now = kT0;
@@ -481,6 +494,7 @@ int main() {
     test_abandon_ends_the_run_and_keeps_the_answers();
     test_wire_outcome_maps_the_reread_masks();
     test_auto_starts_once_on_an_owned_contract_after_the_settle();
+    test_auto_waits_for_the_drivers_own_reread();
     test_auto_never_runs_without_a_contract_of_our_own();
     test_auto_never_runs_inline_or_beside_a_tool();
     test_auto_aborts_at_once_when_the_link_stops_being_ours();

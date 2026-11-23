@@ -1355,7 +1355,7 @@ bool Ui::run_action(Action a, uint32_t now_ms, bool confirm) {
     }
     switch (a) {
     case Action::PdRescan: {
-        const bool ok = rescan_source();
+        const bool ok = wake_source();
         if (menu() == Menu::Connection) top_as<ConnectionPage>().update(now_ms);
         if (!ok) return false;
         break;
@@ -1548,7 +1548,9 @@ Ui::LinkResetResult Ui::link_reset(bool confirmed, uint32_t now_ms) {
     const pd::SinkStatus &sk = fusb302::sink_status();
     if (sk.state == pd::SinkState::Ready && !fusb302::self_powered() && !power_source::bus_powered()) {
         held::clear_for_reset();
+        const bool epr = sk.epr_mode;
         if (fusb302::sink_hard_reset(false)) {
+            hr_recover_.arm(now_ms, epr);
             if (!survey::running()) survey::on_refresh(rescan::Result::Cycled, false);
             K2LOG("[UI] link reset (sink Hard Reset): sent\n");
             return LinkResetResult::HardReset;
@@ -1632,6 +1634,26 @@ void Ui::refresh_action_views(uint32_t now_ms) {
     ContentViewport viewport(active_dest(), ctx_.content.w, ctx_.content.h);   // rotated layouts scale the logical content onto the panel
     if (menu() == Menu::Connection) top_as<ConnectionPage>().update(now_ms);
     else if (menu() == Menu::Emarker) top_as<EmarkerPage>().update(now_ms);
+}
+
+bool Ui::wake_source() {
+    if (ports_busy()) return false;
+    pd::set_fake(0);   // as rescan_source: a press drops a debug / forced link first
+    link_.clear_force();
+    const bool dark = ctx_.pm_online && ctx_.vbus_fast_mv >= 0 && ctx_.vbus_fast_mv < raguard::kVbusAttachedMv;
+    if (dark && fusb302::sink_status().state != pd::SinkState::Ready && auto_read_block() == pd::SvWhy::None &&
+        fusb302::reread_start(pd::kRereadDefault)) {
+        if (!survey::running()) survey::on_refresh(rescan::Result::Cycled, false);   // the woken attach is a new session: the survey starts clean
+        return true;
+    }
+    return rescan_source();
+}
+
+void Ui::hr_recover_poll(uint32_t now_ms) {
+    const bool blocked = ports_busy() || auto_read_block() != pd::SvWhy::None;
+    if (hr_recover_.step(now_ms, ctx_.pm_online ? ctx_.vbus_fast_mv : -1, blocked) != pd::HrRecovery::Act::Wake) return;
+    K2LOG("[UI] link reset: VBUS did not come back, waking the source\n");
+    (void)wake_source();
 }
 
 bool Ui::rescan_source() {
