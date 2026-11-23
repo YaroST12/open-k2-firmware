@@ -223,11 +223,25 @@ void interrogate_abort() {
 }
 bool interrogate_running() { return g_stub.iq_running; }
 const pd::IqStatus& interrogate_status() { return g_stub.iq_status; }
-static pd::LimStatus g_stub_lim;
-pd::LimRefusal limit_arm(std::uint32_t, const pd::LimFacts&) { return pd::LimRefusal::None; }
-void limit_disarm() {}
-bool limit_armed() { return false; }
-const pd::LimStatus& limit_status() { return g_stub_lim; }
+pd::LimRefusal limit_arm(std::uint32_t mw, const pd::LimFacts& f) {
+    g_stub.lim_arms++;
+    g_stub.lim_arm_mw = mw;
+    if (g_stub.lim_refusal != pd::LimRefusal::None) return g_stub.lim_refusal;
+    const pd::LimRefusal why = pd::lim_gate(f, mw);
+    if (why != pd::LimRefusal::None) return why;
+    g_stub.lim = {};
+    g_stub.lim.state = pd::LimState::Armed;
+    g_stub.lim.limit_mw = mw;
+    return pd::LimRefusal::None;
+}
+void limit_disarm() {
+    g_stub.lim_offs++;
+    g_stub.lim.state = pd::LimState::Off;
+    g_stub.lim.why = pd::LimWhy::User;
+}
+bool limit_armed() { return g_stub.lim.state != pd::LimState::Off; }
+const pd::LimStatus& limit_status() { return g_stub.lim; }
+bool listen_active() { return g_stub.listen_on; }
 void feed(uint8_t, uint16_t, std::span<const uint8_t>) {}
 pd::Err sink_request(const pd::Choice& c, bool confirmed, bool over_load) {
     g_stub.requests++;
@@ -751,6 +765,10 @@ Protocol read() { return g_stub.fc; }
 Protocol label() { return report_label(g_stub.fc, g_stub.vooc.seen); }
 vooc::Live vooc_live() { return g_stub.vooc; }
 }  // namespace fastcharge
+
+#ifndef K2_WORLD_STUBS   // the worlds define their own (tests/world_sim.cpp, tests/world_svooc.cpp)
+namespace dpsniff { bool armed() { return false; } }
+#endif
 
 namespace power_source {
 bool decided() { return g_stub.supply_decided; }

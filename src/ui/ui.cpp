@@ -9,6 +9,7 @@
 #include "k2/core/paint_meter.hpp"
 #include "k2/core/rescan.hpp"
 #include "k2/core/survey.hpp"
+#include "k2/fastcharge/dpsniff.hpp"
 #include "k2/fastcharge/fctrig.hpp"
 #include "k2/fastcharge/svooc_trig.hpp"
 #include "k2/drivers/fusb302.hpp"
@@ -363,6 +364,17 @@ void Ui::set_page(Page p, uint32_t now_ms) {
     if (changed) build_base(p);
     if (p == Page::ChargerTest || p == Page::Settings) pages_.at(0)->enter();
     paint_incoming(now_ms, t0, blank);
+}
+
+bool Ui::port_owner_busy() const {
+    return ports_busy() || fusb302::listen_active() || fctrig::status().state != fc::State::Idle || fctrig::scan_running() ||
+           fctrig::ufcs_exiting() || fctrig::svooc_running() || dpsniff::armed();
+}
+
+pd::LimRefusal Ui::pd_limit_arm(uint32_t limit_mw) const {
+    pd::LimFacts f;
+    f.busy = port_owner_busy();
+    return fusb302::limit_arm(limit_mw, f);
 }
 
 bool Ui::twin_live_busy() const {
