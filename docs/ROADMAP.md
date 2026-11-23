@@ -1438,7 +1438,7 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
 | Extended messages, VDMs, SVID table | done | verified | `pd_ext`, `pd_vdm` | PASSIVE |
 | Attach/detach, inline-load detection and guard | done | verified | `pd_link`, `link`, `link_guard` | |
 | PD trigger (Request, PPS/AVS voltage, voltage-cap safety) | done | verified (lone charger) | `pd_sink` | HV |
-| PD limiter: forged Source_Capabilities clamped to P, inline | done (shell only; test 1 fix in) | not verified | `pd_limiter`, `fusb302` | inline TX |
+| PD limiter: forged Source_Capabilities clamped to P, inline | done (shell only, no UI) | verified 2026-11-23: Anker 100W -> K2 -> Xiaomi 55W bank, `pd-limit 10` mid-contract: 6 clamped PDOs sent, bank re-requested PDO3 15 V 0.66 A (9.9 W) 9 ms later, charger Accept + PS_RDY, no reset (runs/link-ui-2026-11-23/limiter2) | `pd_limiter`, `fusb302` | inline TX |
 | PPS step-down of a running contract | done | partial: small steps verified, a direct 21 V to 13 V step aborts at the +10 % guard | `pd_sink` | HV |
 | PD Spec Check: no-load conformance of the attached charger, 21 checks against named spec limits, score 0 = ideal; its polite 27 checks are a Deep charger-test section (`docs/PD_SPEC_CHECK.md`) | done, opt-in (`K2_PDSPEC=1`) | not verified (engine, protocol, tools and the Deep section host-tested; see Not verified) | `k2::pdspec`, `PdSpecSession`, `specsec` | HV |
 | Identify (identity, SVIDs, modes, sink caps) | done (an action of the Connection page) | verified (Pixel) | `pd_identify` | |
