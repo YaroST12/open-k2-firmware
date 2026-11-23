@@ -126,7 +126,14 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
   verified on hardware: with no source list ever heard and VBUS at 5 V at every sample of the detach, the first detach uses
   `kDetachQuickMs` too (host 2.1 s from START, was at least 10 s). Verify: A-port run, the first Rd off to attach about 1.5 s;
   a C charger without PD that drops VBUS slowly still waits (a drop later than 1.5 s with no sample off 5 V would be missed).
-
+- **A source whose D+/D- read open gave one "no reply" per protocol** (2026-11-23, `runs/ct-usba-2026-11-23/rec1`: `dcp check ...
+  result=1 (open)`, every D+/D- row failed; the flipped plug in `rec2-flipped` read short and QC2/QC3/UFCS passed). Fixed on
+  host, not verified on hardware (k2/dpdm-open): on a source that never spoke PD, an open reading plus one silent D+/D- unit (the
+  confirming attempt) turns the remaining D+/D- units into one reason, `LinesOpen` (wire id 54; schema 1 maps it to Request).
+  Cell/card "lines open", Results fold "No D+/D-", footer "Open: flip or data cable", `k2_remote`/`ct_start` summary, JSON
+  `"dpdm": "open"|"short"|"unknown"` (run-selected word bits 30..31; older firmware sends 0 = unknown). A PD source and a short reading are unchanged. Verify: A-to-C
+  on a USB-A port with the plug the open way round: units end "lines open", footer names flip or data-less cable; flipped, the
+  protocols run.
 - **Back-to-back screenshots stall a charger-test run** (2026-11-21, 1.1.0-217-53dee143, Baseus 140 W). With
   `k2_remote.py screenshot` every ~0.65 s (each ~450 ms on the device) a Medium run sat after `Verify 5V` for ~7 min and
   went on within a second of the loop stopping (`runs/hw-2026-11-21/152248-qc2-fast2/`); one every ~3 s is harmless.

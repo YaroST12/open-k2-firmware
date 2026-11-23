@@ -252,7 +252,11 @@ def summarize(r):
     out += _svooc_lines(r.get("svooc"))
     out += _spec_lines(r.get("spec"))
     for why, names in skipped.items():
-        out.append(f"- {', '.join(dict.fromkeys(names))}: skipped, {why}")
+        units = ', '.join(dict.fromkeys(names))
+        if why == report_card.LINES_OPEN:   # one cause for the whole D+/D- family: a one-sided plug (flip) or a charge-only cable (data cable)
+            out.append(f"- D+/D- open, flip the plug or use a data cable: {units} not run")
+        else:
+            out.append(f"- {units}: skipped, {why}")
     if not_adv:
         out.append(f"- Not advertised: {', '.join(dict.fromkeys(not_adv))}")
     cuts = ev.get("cut_retries", 0)

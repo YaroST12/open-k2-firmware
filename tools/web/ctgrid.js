@@ -91,6 +91,7 @@ var CtGrid = (function () {
   ];
   var SILENT_SKIP = { vivo: ["no response"], ufcs: ["no response", "no handshake"], afc: ["unsupported"], fcp: ["unsupported"], scp: ["unsupported"],
                       qc2: ["no handshake"], qc3: ["no handshake"], "qc3+": ["no handshake"], qc2b: ["no handshake"], qc3b: ["no handshake"] };   // charger_test.hpp never_answered
+  var LINES_OPEN = "D+/D- open: flip or data cable";   // the runner's one reason for every unit it skipped on open D+/D- (charger_test.hpp Reason::LinesOpen)
   var VOOC_ALGS = ["vooc", "svooc", "svooc65"];   // one shared detection: the finished grid reads them as the levels above
   var RAN_ITS_COURSE = { judged: 1, stopped: 1, cap: 1, "time cap": 1 };   // svooc_ceiling::End names (readout, card)
   // "120W", "22.5W" (0.1 W, the tenth only when not 0; whole watts from 100 W, so at most 5 characters); "" for 0 mW.
@@ -265,6 +266,11 @@ var CtGrid = (function () {
     var of = function (a) { return steps.filter(function (s) { return s.alg === a; }); };
     var isPd = function (a) { return has(PD_GROUP, a) || !!REVISIONS[a]; };
     var isRange = function (a) { return has(RANGE_ALGS, a); };
+    // Every row of unit a is skipped and one says the lines are open (result_layout.cpp is_lines_open_unit).
+    function linesOpenUnit(a) {
+      var xs = of(a);
+      return xs.length > 0 && xs.every(function (s) { return s.result === "skip"; }) && xs.some(function (s) { return s.reason === LINES_OPEN; });
+    }
     function silentSkip(s) { return s.result === "skip" && !!s.raw && !!SILENT_SKIP[s.alg] && SILENT_SKIP[s.alg].indexOf(s.raw.detail_reason) >= 0; }
     function isAbsent(a) {
       var xs = of(a);
@@ -356,6 +362,7 @@ var CtGrid = (function () {
       });
     }
     function legacyRow(row, a) {
+      if (linesOpenUnit(a)) { word(row, "No D+/D-", "caution"); return; }   // as legacy_row: one cell, the cause
       var seen = {};
       steps.forEach(function (x) {
         if (x.alg !== a || !x.mv || seen[x.mv]) return;
@@ -397,6 +404,7 @@ var CtGrid = (function () {
     function voocRows(key, a) {
       var fam = steps.filter(function (s) { return has(VOOC_ALGS, s.alg); });
       var pass = fam.some(function (s) { return s.result === "pass"; });
+      if (!pass && opts.fold && VOOC_ALGS.every(function (x) { return !of(x).length || linesOpenUnit(x); })) { open[a] = true; return; }
       var gone = VOOC_ALGS.some(function (x) { return of(x).length && isAbsent(x); });
       var skipOnly = VOOC_ALGS.every(function (x) { return !of(x).length || skippedOnly(x); });
       if (!pass && opts.fold && (gone || skipOnly)) { (gone ? absent : skipped)[a] = true; return; }
@@ -410,7 +418,7 @@ var CtGrid = (function () {
       });
     }
 
-    var absent = {}, skipped = {};
+    var absent = {}, skipped = {}, open = {};
     keys.forEach(function (key) {
       var row, a = key.alg;
       if (opts.oemWatts && has(VOOC_ALGS, a)) {   // the family's rows stand where the plan first runs one of its units
@@ -459,6 +467,7 @@ var CtGrid = (function () {
         return;
       }
       var legacy = true;
+      if (opts.fold && linesOpenUnit(a)) { open[a] = true; return; }
       if (isAbsent(a)) {
         if (opts.fold || !legacy) { absent[a] = true; return; }
         if (opts.absentCell) { row = begin(NAMES[a] || a, key); word(row, "no reply", "dim"); row.chips[0].steps = of(a); return; }
@@ -481,6 +490,7 @@ var CtGrid = (function () {
     }
     collapsed(absent, "No reply", "dim");
     collapsed(skipped, "Skipped", "caution");
+    collapsed(open, "No D+/D-", "caution");
 
     // A lone cell that never ran says why in words (never a bare strike through "5V"); a unit that never answered is dim, not red.
     rows.forEach(function (r) {

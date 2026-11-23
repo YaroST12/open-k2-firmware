@@ -115,6 +115,19 @@ def test_a_skipped_sibling_says_the_engine_words_not_request_failed():
     assert "request failed" not in text and "SCP: skipped, acked, no change" in text
 
 
+def test_open_dpdm_lines_say_the_one_cause():
+    # Every D+/D- unit skipped under one reason: the summary names both causes once, not a skip line per unit.
+    def row(p, res, why):
+        return {"protocol": p, "pos": 0, "result": res, "reason": why, "detail": 0, "detail_reason": "none",
+                "target_mv": 5000, "measured_mv": 5000, "continuous": False, "raw_pdo": 0}
+    open_why = "D+/D- open: flip or data cable"
+    run = {"run_id": 1, "state": "done", "reason": "none", "evidence": {"dpdm": "open"}, "steps": [
+        row("qc2-5v", "skip", open_why), row("qc3-5v", "skip", open_why), row("ufcs-5v", "skip", open_why)]}
+    text = charger_summary.summarize(run)
+    assert "- D+/D- open, flip the plug or use a data cable: " in text and "not run" in text
+    assert "skipped" not in text and "request failed" not in text
+
+
 def test_scp_and_ufcs_rows_read_watts():
     steps = [{"protocol": "scp", "pos": 0, "result": "pass", "reason": "none", "detail_reason": "none", "target_mv": mv,
               "measured_mv": mv, "continuous": False, "raw_pdo": 0, "request_ma": ma} for mv, ma in ((5000, 0), (10000, 2250))]

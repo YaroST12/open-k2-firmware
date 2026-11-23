@@ -21,6 +21,7 @@ bool noted(const ct::Step& s) {
 bool is_no_answer(const ct::Step& x) {
     return x.verdict == ct::Verdict::Skip && x.reason == ct::Reason::Request && ct::no_reply(x.group, fc::Fail(x.detail));
 }
+bool is_lines_open(const ct::Step& x) { return x.verdict == ct::Verdict::Skip && x.reason == ct::Reason::LinesOpen; }
 bool advertised(const ct::Step& s) { return s.verdict == ct::Verdict::Skip && s.reason == ct::Reason::Advertised && s.group == ct::Group::Pd; }
 bool caution(const ct::Step& s) {
     return s.verdict == ct::Verdict::Pass &&
@@ -331,6 +332,16 @@ bool pd_absent(std::span<const ct::Step> s) {
             return false;
     return true;
 }
+// Every row of unit `a` is skipped and one says the lines are open (the runner turns all of a unit's rows at once).
+bool is_lines_open_unit(std::span<const ct::Step> s, A a) {
+    bool open = false;
+    for (const auto& x : s) {
+        if (x.algorithm != a) continue;
+        if (x.verdict != ct::Verdict::Skip) return false;
+        open |= x.reason == ct::Reason::LinesOpen;
+    }
+    return open;
+}
 bool is_skipped_only(std::span<const ct::Step> s, A a) {
     for (const auto& x : s) if (x.algorithm == a && x.verdict != ct::Verdict::Skip) return false;
     return true;
@@ -460,14 +471,15 @@ unsigned tone_rank(Tone t) {
     // A unit whose detection step got no reply (every row a no-answer skip) is one dim cell, as soon as that step settles: the
     // Running grid reads like the Results fold. Chip mv = its first row's, so a token still finds its step.
     const ct::Step* first = nullptr;
-    bool silent = true;
+    bool silent = true, open = false;
     for (const auto& y : s) {
         if (y.algorithm != a || !y.mv) continue;
         if (!first) first = &y;
-        silent &= is_no_answer(y);
+        open |= is_lines_open(y);
+        silent &= is_no_answer(y) || is_lines_open(y);
     }
     if (first && silent) {
-        if (Token* k = b.token(false, Tone::Dim)) { k->mv = first->mv; put_text(*k, "No reply"); }   // a word, not a chip: a chip splits at its space
+        if (Token* k = b.token(false, open ? Tone::Caution : Tone::Dim)) { k->mv = first->mv; put_text(*k, open ? "No D+/D-" : "No reply"); }   // a word, not a chip: a chip splits at its space
         return;
     }
     for (size_t i = 0; i < s.size(); ++i) {
@@ -771,8 +783,9 @@ namespace {
 // The VOOC family as level rows (OemNotes::vooc_watts): "VOOC" then "SVOOC", one row per run of equal words in the level table.
 // A family that never answered (no step passed) folds as its lead unit's one word into "No reply" / "Skipped", never three words.
 [[gnu::noinline]] void vooc_rows(Sink& b, std::span<const ct::Step> steps, const OemNotes& oem, A lead,
-                                 bool (&absent)[unsigned(A::Count)], bool (&skipped)[unsigned(A::Count)]) {
-    bool pass = false, gone = false, skipped_only = true;
+                                 bool (&absent)[unsigned(A::Count)], bool (&skipped)[unsigned(A::Count)],
+                                 bool (&open)[unsigned(A::Count)]) {
+    bool pass = false, gone = false, skipped_only = true, open_only = true;
     for (const A a : {A::Vooc, A::SuperVooc, A::SuperVooc65}) {
         bool planned = false;
         for (const auto& x : steps)
@@ -780,7 +793,9 @@ namespace {
         if (!planned) continue;
         gone |= is_absent(steps, a);
         skipped_only &= is_skipped_only(steps, a);
+        open_only &= is_lines_open_unit(steps, a);
     }
+    if (!pass && oem.fold && open_only) { open[unsigned(lead)] = true; return; }
     if (!pass && oem.fold && (gone || skipped_only)) { (gone ? absent : skipped)[unsigned(lead)] = true; return; }
     const oem_watts::Span sp = oem_watts::span(oem_watts::Family::Vooc);
     for (unsigned i = sp.first; i < unsigned(sp.first) + sp.count;) {
@@ -798,7 +813,7 @@ void build_impl(Sink& b, std::span<const ct::Step> steps, const OemNotes& oem, c
     struct Key { A a; bool probe, pd; };   // a: the protocol, or the PD block's lead (the first PD algorithm the plan runs)
     Key keys[unsigned(A::Count) + 2];
     size_t key_n = 0;
-    bool absent[unsigned(A::Count)] = {}, skipped[unsigned(A::Count)] = {};
+    bool absent[unsigned(A::Count)] = {}, skipped[unsigned(A::Count)] = {}, open[unsigned(A::Count)] = {};
     bool any_probe = false;
     for (const auto& s : steps) {
         if (is_revision(s.algorithm)) continue;
@@ -845,7 +860,7 @@ void build_impl(Sink& b, std::span<const ct::Step> steps, const OemNotes& oem, c
             }
             const A a = key.a;
             if (oem.vooc_watts && is_vooc(a)) {   // the family's rows stand where the plan first runs one of its units
-                if (!vooc_done) vooc_rows(b, steps, oem, a, absent, skipped);
+                if (!vooc_done) vooc_rows(b, steps, oem, a, absent, skipped, open);
                 vooc_done = true;
                 continue;
             }
@@ -859,6 +874,7 @@ void build_impl(Sink& b, std::span<const ct::Step> steps, const OemNotes& oem, c
                 }
                 continue;
             }
+            if (oem.fold && is_lines_open_unit(steps, a)) { open[unsigned(a)] = true; continue; }
             if (oem.fold && is_absent(steps, a)) { absent[unsigned(a)] = true; continue; }
             if (is_no_qc3plus(steps, a)) {
                 b.begin(CompactKind::NoQc3Plus, display_name(a), Tone::Dim, a);
@@ -899,6 +915,7 @@ void build_impl(Sink& b, std::span<const ct::Step> steps, const OemNotes& oem, c
     };
     collapsed(absent, "No reply", Tone::Dim, 0);
     collapsed(skipped, "Skipped", Tone::Caution, 1);
+    collapsed(open, "No D+/D-", Tone::Caution, 2);
     b.flush();
 }
 }  // namespace
@@ -958,7 +975,7 @@ const char* row_label(const CompactGrid& g, size_t row) {
     case CompactKind::Header: return section_name(static_cast<Section>(cr.algo));
     case CompactKind::Probe: return "Xiaomi";
     case CompactKind::Fact: return g.pool.data() + cr.mv;
-    case CompactKind::Collapsed: return cr.mv ? "Skipped" : "No reply";
+    case CompactKind::Collapsed: return cr.mv == 2 ? "No D+/D-" : cr.mv ? "Skipped" : "No reply";
     case CompactKind::Levels: return oem_watts::kLevels[cr.first].word;
     case CompactKind::Pd: return "PD";
     default: return display_name(static_cast<A>(cr.algo));

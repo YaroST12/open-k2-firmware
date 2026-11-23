@@ -43,4 +43,8 @@ Protocol label();
 // 0x82 reply word.
 vooc::Live vooc_live();
 
+// The DCP check's verdict for this attach (Invalid until it ran or when it could not read); kept until VBUS drops, so on a port that never
+// lets go it outlives every unit of a charger-test run.
+DcpCheck dcp_lines();
+
 }  // namespace k2::fastcharge

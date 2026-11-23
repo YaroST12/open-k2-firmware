@@ -1931,6 +1931,35 @@ static void test_a_silent_protocol_folds_as_no_reply_and_a_heard_one_stays_red()
         CHECK_EQ(chips(hl, row_of(hl, "VIVO")).find("No reply") == std::string::npos, true);
     }
 }
+// Units skipped on open D+/D- (the one cause, Reason::LinesOpen) fold as their own "No D+/D-" word, never "Skipped" or "No reply";
+// a PD source (its rows are not LinesOpen) and a real no-reply are unchanged.
+static void test_open_dpdm_units_fold_as_one_cause() {
+    std::vector<ct::Step> s;
+    for (A a : {A::Qc2, A::Qc3, A::Ufcs, A::Vivo}) s.push_back(step(a, 5000, V::Skip, 0, 0, ct::Reason::LinesOpen));
+    s.push_back(step(A::Qc2, 9000, V::Skip, 0, 0, ct::Reason::LinesOpen));
+    auto quiet = step(A::Afc, 5000, V::Skip, 0, 0, ct::Reason::Request); quiet.detail = uint8_t(fc::Fail::Unsupported);
+    s.push_back(quiet);   // a genuine no-reply beside it stays "No reply"
+    s.push_back(step(A::Fcp, 5000, V::Pass));
+    for (const auto& x : s) CHECK_EQ(rl::is_lines_open(x), x.reason == ct::Reason::LinesOpen);
+    rl::Layout l;
+    rl::build(l, s);
+    const std::string od = chips(l, row_of(l, "No D+/D-"));
+    for (const char* name : {"QC2", "QC3", "UFCS", "VIVO"}) CHECK_EQ(od.find(name) != std::string::npos, true);
+    CHECK_EQ(od.find("AFC") == std::string::npos, true);
+    CHECK_STR(chips(l, row_of(l, "No reply")).c_str(), "AFC");
+    CHECK_EQ(find(l, "Skipped") == nullptr, true);
+    CHECK_EQ(int(find(l, "No D+/D-")->label_tone), int(rl::Tone::Caution));
+    {   // the Running grid (no fold): the unit's own row says the cause in one word
+        rl::OemNotes run; run.fold = false; run.headers = false;
+        rl::Layout r; rl::build(r, s, run);
+        CHECK_STR(chips(r, row_of(r, "QC2")).c_str(), "No D+/D-");
+    }
+    {   // short lines (the check read them fine): the rows keep their own reasons, no cause word
+        std::vector<ct::Step> p = {step(A::Qc2, 5000, V::Pass), step(A::Qc3, 5000, V::Skip, 0, 0, ct::Reason::Disabled)};
+        rl::Layout v; rl::build(v, p);
+        CHECK_EQ(find(v, "No D+/D-") == nullptr, true);
+    }
+}
 // SCP names the limit it writes: its chip reads the level's watts (10 V x 2.25 A = 22.5 W) where it used to read the current; the
 // handshake row names none and keeps its volts. The summary line words the best SCP level the same way.
 static void test_scp_chips_and_summary_read_watts() {
@@ -2065,6 +2094,7 @@ int main() {
     test_vooc_family_reads_as_watts_levels();
     test_a_silent_vooc_family_folds_as_one_word();
     test_a_silent_protocol_folds_as_no_reply_and_a_heard_one_stays_red();
+    test_open_dpdm_units_fold_as_one_cause();
     test_scp_chips_and_summary_read_watts();
     test_levels_footer_names_the_top_claim();
     return test_report("test_result_layout");

@@ -43,6 +43,7 @@
 #include "k2/core/storage.hpp"
 #include "k2/ui/uiprefs.hpp"
 #include "k2/drivers/usb.hpp"
+#include "k2/fastcharge/fastcharge.hpp"
 #include "k2/fastcharge/svooc_trig.hpp"
 #include <algorithm>
 #include <bit>
@@ -183,6 +184,9 @@ void review_refusal(ct::Reason r, const char* busy, int vbus_mv, StrBuf<32>& out
 unsigned entries(uint32_t mask) {
     return selected(mask & ~kFamilies[kFamPd]) + bool(mask & ct::kPdFixedAlgorithms) + bool(mask & ct::kPpsAlgorithms);
 }
+// The footer's words for a D+/D- row skipped because the lines read open: both causes (a one-sided plug, a charge-only cable) in the footer's cells.
+constexpr std::string_view kLinesOpenFooter = "Open: flip or data cable";
+static_assert(kLinesOpenFooter.size() <= static_cast<size_t>(kFooterCells), "the lines-open footer is wider than the footer line");
 const char* detail_name(const ct::Step& s) {
     if (s.reason != ct::Reason::Request) return ct::explanation(s);
     if (s.group != ct::Group::Pd) return fc::name(static_cast<fc::Fail>(s.detail));
@@ -274,6 +278,7 @@ charger_test::Input ChargerTestSession::input(uint32_t now) const {
     in.fc_state = fs.state; in.fc_fail = fs.fail; in.fc_tries = static_cast<uint8_t>(fs.tries);
     in.fc_ident = static_cast<uint8_t>(fs.ident);
     in.fc_adapter_mv = fs.adapter_mv; in.fc_held = fs.held;
+    { const auto d = fastcharge::dcp_lines(); in.lines = d == fastcharge::DcpCheck::Open ? ct::Lines::Open : d == fastcharge::DcpCheck::Shorted ? ct::Lines::Short : ct::Lines::Unknown; }
     in.pd_quiet_ms = fusb302::pd_quiet_ms();
     in.probe_done = fusb302::probe_status().state != pd::ProbeState::Running;
 #if K2_PDSPEC
@@ -2315,6 +2320,7 @@ static FooterTone range_footer(StrBuf<32> &f, const ct::Runner &runner, A algo, 
         const size_t r_idx = lines_[static_cast<size_t>(s_.selection_)].row();
         const auto &row = layout_.rows[r_idx];
         const char *lbl = result_layout::row_label(layout_, r_idx);
+        if (row.kind == result_layout::CompactKind::Collapsed && row.mv == 2) { f.put(kLinesOpenFooter); return FooterTone::Caution; }   // the "No D+/D-" row
         if (row.kind == result_layout::CompactKind::Header || row.kind == result_layout::CompactKind::Fact ||
             row.kind == result_layout::CompactKind::Collapsed) {
             f.put(lbl).put(": see steps");
@@ -2380,6 +2386,7 @@ static FooterTone range_footer(StrBuf<32> &f, const ct::Runner &runner, A algo, 
                 // a caution says what folded, from the APDO's sweep: "folds to 19.4V above 19.9V"
                 if (put_fold_footer(f, s_.runner_.sweep_view().apdo(uint8_t(st.algorithm), st.pos))) return FooterTone::Caution;
             }
+            if (result_layout::is_lines_open(st)) { f.put(kLinesOpenFooter); return FooterTone::Caution; }
             if (result_layout::is_no_answer(st)) { f.put(trig::fail_long(fc::Fail(st.detail))); return FooterTone::Info; }   // 27 cells: the card carries ", unloaded"
         }
         f.put("Kept until the next start");

@@ -107,7 +107,7 @@ var K2Proto = (function () {
                       "timeout", "voltage outside band", "hard reset", "source lost", "cancelled", "5V release failed",
                       "offers changed", "PD active: use QC port", "revision cannot be forced", "select at least one test",
                       "physical cable limit", "unsupported PDO layout",
-                      "charger stayed in PD", "rebooted during request", "rebooted during handover", "EPR entry refused", "no contract", "source shut off (needs replug)", "no PD after re-attach", "VBUS cut, source recovered", "blocked by PD", "no QC3+ response", "rebooted 3x", "needs external power", "PD gave up before START", "Class A only (12 V max)", "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution", "HID-cable loop: 5V lock", "advertised", "light run: not asked", "port cuts without load", "output folds back", "Xiaomi chain", "transition check"];
+                      "charger stayed in PD", "rebooted during request", "rebooted during handover", "EPR entry refused", "no contract", "source shut off (needs replug)", "no PD after re-attach", "VBUS cut, source recovered", "blocked by PD", "no QC3+ response", "rebooted 3x", "needs external power", "PD gave up before START", "Class A only (12 V max)", "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution", "HID-cable loop: 5V lock", "advertised", "light run: not asked", "port cuts without load", "output folds back", "Xiaomi chain", "transition check", "D+/D- open: flip or data cable"];
   var TEST_ALL = (1 << TEST_ALGORITHMS.length) - 1;
   // How the Xiaomi 0x2717 auth chain ended, from its row's detail (mi_unlock::chain_text; tools/step_label.py mi_chain_text).
   function miChainText(code) {
@@ -239,9 +239,10 @@ var K2Proto = (function () {
       var level = (draft >>> 28) & 3;           // draft bits 28..29: the level of the next run (charger_test::Level)
       draft = draft & 0x0FFFFFFF;
       var runLevel = (runMask >>> 28) & 3;      // run bits 28..29: the level the run in hand ran at
-      runMask = (runMask & ~0x30000000) >>> 0;   // bits 30..31 stay: they are no field and fail below
+      var dpdm = ["unknown", "open", "short"][runMask >>> 30];   // run bits 30..31: the D+/D- check of this attach (0 on older firmware; 3 is no word)
+      runMask = (runMask & 0x0FFFFFFF) >>> 0;
       wire = p[23] & 3;
-      if ((runMask | draft) & ~TEST_ALL || level >= TEST_LEVELS.length || runLevel >= TEST_LEVELS.length || stage >= TEST_STAGES.length || (p[39] & 15) > 11)
+      if (dpdm === undefined || (runMask | draft) & ~TEST_ALL || level >= TEST_LEVELS.length || runLevel >= TEST_LEVELS.length || stage >= TEST_STAGES.length || (p[39] & 15) > 11)
         throw new FrameError("invalid charger-test selection or evidence");
       out.selection = { run_mask: runMask, configured_mask: draft, pps_sweep: ppsSweep, avs_sweep: avsSweep, level: TEST_LEVELS[level], run_level: TEST_LEVELS[runLevel],
                         run: TEST_ALGORITHMS.filter(function (_, i) { return runMask & (1 << i); }),
@@ -258,6 +259,7 @@ var K2Proto = (function () {
         spoof_on: !!(f & 128), independent_revision_tested: false,
         ps_rdy: header === 42 ? { out_of_band: !!(p[40] & 1), inferred: !!(p[40] & 2), late: !!(p[40] & 4), worst_ms: p[41] * 20 } : null,
         cut_retries: header === 42 ? p[40] >> 3 : 0,   // steps asked again after a legacy port dropped VBUS at 5 V (timing byte bits 3..7)
+        dpdm: dpdm,   // the D+/D- check of this attach (run-selected bits 30..31)
         pass_scope: "negotiation and measured voltage only; not rated-current/power or revision conformance"
       };
     }
@@ -309,6 +311,7 @@ var K2Proto = (function () {
           why === 28 ? "EPR: no PD contract" :
           why === 38 ? (EPR_DETAILS[detail] || TEST_REASONS[why]) :
           why === 46 ? (detail ? "step resolution " + detail + "mV" : "steps ignored") :
+          why === 54 ? "lines open" :   // charger_test.hpp kLinesOpenCell
           why === 53 ? (progCheckText(detail).split(",")[0] || TEST_REASONS[why]) :
           why === 22 && code === 10 ? "SCP 5A modes need an observed 5A cable" : TEST_REASONS[why];
       }

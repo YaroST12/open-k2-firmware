@@ -98,7 +98,8 @@
 //                                    rows are omitted. Selection and source evidence are unavailable.
 //                                    Opt-in schema 2: req 2 (metadata), or 2 start run_id revision.
 //                                    rsp the same first 15 bytes, schema=2, then run_selected(4; bits 28..29 = the
-//                                    level the run in hand ran at, as in draft_selected),
+//                                    level the run in hand ran at, as in draft_selected; bits 30..31 = the D+/D- check of
+//                                    the attach, 0 not read / 1 open / 2 short, always 0 on older firmware),
 //                                    draft_selected(4; bit 31 = the PPS deep sweep on, bit 30 = the AVS deep sweep
 //                                    on, bits 28..29 = the level, 0 Medium / 1 Light / 2 Deep - Options fields, not
 //                                    algorithm bits - they were always 0 before),

@@ -59,9 +59,9 @@ const char* name(Reason r) {
         "Class A only (12 V max)", "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target",
         "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution",
         "HID-cable loop: 5V lock", "advertised", "light run: not asked", "port cuts without load",
-        "output folds back", "Xiaomi chain", "transition check"
+        "output folds back", "Xiaomi chain", "transition check", "D+/D- open: flip or data cable"   // flipping fixes a one-sided plug, a data cable fixes a charge-only one; 30 = the toast pill's cells
     };
-    static_assert(std::size(names) == unsigned(Reason::ProgCheck) + 1);
+    static_assert(std::size(names) == unsigned(Reason::LinesOpen) + 1);
     return names[static_cast<unsigned>(r)];
 }
 const char* refusal_words(Reason r) {
@@ -189,6 +189,7 @@ const char* explanation(const Step& s) {
     if (epr_row && s.reason == Reason::NoOffer) return "EPR: not offered";
     if (s.reason == Reason::CableLimit) return "cable limit";   // a mode over the cable's current (a Xiaomi 6 A mode); 16-cell column
     if (s.reason == Reason::EprRefused) return epr_detail_name(s.detail) ? epr_detail_name(s.detail) : "EPR: entry refused";
+    if (s.reason == Reason::LinesOpen) return kLinesOpenCell;
     if (s.reason == Reason::Capped) return "output capped";   // the Detail value column is 16 cells; name() is the long form
     if (s.reason == Reason::Floored) return "output floored";   // the reached floor is the row's measured_mv
     if (s.reason == Reason::Folded) return "folds back";   // the fold note itself ("folds to 19.4V above 19.9V") is the row's note line
@@ -1324,7 +1325,7 @@ Reason Runner::start(const pd::SourceCaps& caps, Options o, Input in, bool confi
     build(caps, o, in);
     evidence_ = {};
     spec_apdo_ = {};
-    evidence_.selected = o.selected; evidence_.session = in.session;
+    evidence_.selected = o.selected; evidence_.session = in.session; evidence_.dpdm = in.lines;
     evidence_.monitor_mv = std::min<uint32_t>(in.cap_mv, 65535); evidence_.cable_mv = used_cable_mv(in);
     evidence_.cable_ma = used_cable_ma(in);
     evidence_.reported = in.reported;
@@ -1609,6 +1610,23 @@ void Runner::skip_group_rows(Group g, bool raises_only, uint8_t detail) {
         o.verdict = Verdict::Skip; o.reason = Reason::Request; o.detail = detail; env_.record(o);
     }
 }
+// pattern usb-a-dpdm-open: the DCP check read D+/D- open and the source never spoke PD, so a D+/D- unit that got no reply says nothing about
+// the charger. Not while any D+/D- row has passed or failed (the lines carried data), nor on a PD source (the check does not run there).
+bool Runner::lines_open_cause(const Input& in) const {
+    if (evidence_.dpdm != Lines::Open || evidence_.num_pdos || caps_now_.valid || in.pd_seen_attach) return false;
+    for (size_t n = 0; n < count_; ++n)
+        if (steps_[n].group != Group::Pd && (steps_[n].verdict == Verdict::Pass || steps_[n].verdict == Verdict::Fail)) return false;
+    return true;
+}
+void Runner::lines_open_sweep() {
+    for (size_t n = 0; n < count_; ++n) {
+        auto& o = steps_[n];
+        if (o.group == Group::Pd || o.group >= Group::Count) continue;
+        const bool silent = o.verdict == Verdict::Skip && o.reason == Reason::Request && no_reply(o.group, fc::Fail(o.detail));
+        if (o.verdict != Verdict::Pending && !silent) continue;
+        o.verdict = Verdict::Skip; o.reason = Reason::LinesOpen; o.detail = uint8_t(silent_code(o.group)); env_.record(o);
+    }
+}
 void Runner::release(const Input& in, bool stop) {
     stopping_ = stop;
     if (stop) skip_pending(reason_);
@@ -1635,6 +1653,7 @@ void Runner::finish(const Input& in, Verdict v, Reason r, uint8_t detail) {
 bool Runner::race_hold(const Input& in, Verdict v, Reason r, uint8_t detail) {
     const auto why = static_cast<fc::Fail>(detail);
     const bool silent_skip = v == Verdict::Skip && index_ < count_ && never_answered(steps_[index_].group, why);   // a first step's "no reply" is held like the fail it was
+    if (lines_open_cause(in)) return false;   // open lines: the retry cannot hear anything either
     if ((v != Verdict::Fail && !silent_skip) || r != Reason::Request || !race_fast_ || race_tried_ || race_wait_ || cut_wait_ || index_ != race_idx_ || index_ >= count_ ||
         mode_ != Mode::Legacy || pd_owned_ || stopping_ || !silent_ || in.inline_load || steps_[index_].group == Group::Pd) return false;
     if (why != fc::Fail::Inline && why != fc::Fail::NoHandshake) return false;
@@ -1745,6 +1764,9 @@ void Runner::cut_resolve(Input in) {
 void Runner::finish_row(const Input& in, Verdict v, Reason r, uint8_t detail) {
     auto& s = steps_[index_];
     prog_on_ = false;
+    // The first D+/D- unit's "no reply" under open lines is the confirming attempt: it and every other D+/D- row take the one cause.
+    const bool open_cause = v == Verdict::Skip && r == Reason::Request && s.group != Group::Pd && no_reply(s.group, fc::Fail(detail)) && lines_open_cause(in);
+    if (open_cause) { r = Reason::LinesOpen; detail = uint8_t(silent_code(s.group)); }
     const bool sweep_row = is_sweep(s);   // read before detail is overwritten: the marker survives on sweep rows
     s.verdict = v; s.reason = r; s.detail = detail;
     if (sweep_row) { s.detail = kDetailSweep; sweep_close(s); }
@@ -1782,6 +1804,7 @@ void Runner::finish_row(const Input& in, Verdict v, Reason r, uint8_t detail) {
             s.measured_mv = rw->sum.peak_mv;
         }
     env_.record(s);
+    if (open_cause) lines_open_sweep();
     // pattern vooc-family-same-wake: VOOC, SVOOC and SVOOC65 open with the same wake and the K2 stops at the shared ident
     // (it answers nothing), so the first family session that ended on the ident ("detected"), on nothing heard ("no
     // answer") or on frames without an ident ("no response") decides the family's other rows: a pass for "detected", a skip
@@ -2245,7 +2268,7 @@ void Runner::end_legacy() {
     else if (legacy_active_) { env_.legacy_only(false); env_.pd_rescan(); }
     legacy_active_ = false; ending_ = false;
 }
-void Runner::end_run(const Input&) { end_legacy(); if (!pd_skips_recorded_ || pd_skips_held_) record_pd_skips(true); state_ = State::Done; }
+void Runner::end_run(const Input& in) { if (lines_open_cause(in)) lines_open_sweep(); end_legacy(); if (!pd_skips_recorded_ || pd_skips_held_) record_pd_skips(true); state_ = State::Done; }
 void Runner::begin_unit(Unit u, const Input& in) {
     if (selfpwr_ && self_path(u) == SelfPath::NeedsExternalPower) {   // a row that can cut the output cannot run on the output itself
         unit_ = u; skip_unit(Reason::NeedsExternalPower); next(in); return;
@@ -2716,6 +2739,7 @@ void Runner::poll_impl(Input& in, const pd::SourceCaps& caps) {
     if (!busy()) return;
     in.epr_proof = epr_proof_;
     if (in.pd.xiaomi_svid) xiaomi_seen_ = true;
+    if (in.lines != Lines::Unknown) evidence_.dpdm = in.lines;   // the check lands on its own, often after the first D+/D- unit
     if (in.pd.oppo_svid) evidence_.seen |= SeenOppoSvid;   // latched: a Hard Reset in the run clears the sink's own flag
     if (link_resets(in.pd) != hr_count_) { hr_count_ = link_resets(in.pd); xiaomi_reset_ = xiaomi_seen_; }
     if (in.pd.xiaomi_authed) xiaomi_reset_ = false;   // the chain ran again: the list is the real one

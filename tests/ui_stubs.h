@@ -207,6 +207,7 @@ struct StubState {
     int fc_state = 0;            // k2::fc::State returned by the fctrig stub
     int fc_status_fail = 0, fc_status_ident = 0;   // the status()'s fail (k2::fc::Fail; non-zero: a started session reads Failed) and VOOC ident (0xAC)
     k2::fc::Caps fc_caps;        // fctrig::caps() of the stub: what the SCP / UFCS sessions read
+    int dcp_lines = 0;           // fastcharge::dcp_lines() of the stub (k2::fastcharge::DcpCheck: 0 invalid, 1 open, 2 shorted)
     bool fc_critical = false;    // fctrig::paint_critical(): an engine window the idle hook does not service
     bool fc_open_on_start = false;   // fctrig::start opens an engine window (fc_critical) at once for a protocol Engine::blocks_paint names (FCP, SCP, VOOC, UFCS, VIVO; not the QC handshake)
     void (*fc_start_hook)(int proto) = nullptr;   // called at the top of fctrig::start: what the screen holds as the engine is about to start
