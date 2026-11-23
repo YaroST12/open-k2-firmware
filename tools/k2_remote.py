@@ -582,8 +582,10 @@ SESSION_WAIT_KIND = ["unknown", "no-source", "charger-waiting", "dual-role-port"
 SESSION_PD_NONE_WHY = ["none", "sink-silent-source-offered", "source-never-offered"]
 SESSION_TABS = ["source", "cable", "sink"]
 SESSION_HOME_WINDOWS = ["10s", "60s", "10m"]
-SESSION_FLAGS = ["hold_card", "rotation_notice", "em_scanning", "em_listening", "em_quiet", "id_no_device", "ring_view", "shell_toast"]
-SESSION_LEN = 31
+SESSION_FLAGS = ["hold_card", "rotation_notice", "em_scanning", "em_listening", "em_quiet", "id_no_device", "ring_view"]
+SESSION_LEN = 31          # a build before the PC-link byte
+SESSION_PC_LEN = 32      # + pc_link(1)
+PC_LINKS = ["none", "power", "host", "shell"]   # k2::pclink::State
 MENU_NAMES = PAGES[ROTATION_PAGES:]                       # Menu order: the stack holds Menu indices
 
 
@@ -610,7 +612,8 @@ def decode_session(p):
             "pd_none_why": _name(dict(enumerate(SESSION_PD_NONE_WHY)), p[19]),
             "open_cc_mv": None if u16(20) == 0xFFFF else u16(20),
             "ui": ui, "home_window": _name(dict(enumerate(SESSION_HOME_WINDOWS)), p[29]),
-            "flags": {name: bool(p[30] >> i & 1) for i, name in enumerate(SESSION_FLAGS)}}
+            "flags": {name: bool(p[30] >> i & 1) for i, name in enumerate(SESSION_FLAGS)},
+            "pc_link": _name(dict(enumerate(PC_LINKS)), p[31]) if len(p) >= SESSION_PC_LEN else "none"}
 
 
 DIAG_LEN = 26        # a build before the HID-cable loop guard

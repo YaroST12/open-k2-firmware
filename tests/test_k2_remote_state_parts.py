@@ -17,14 +17,15 @@ import k2_remote as kr
 BASE = bytes([2, 2, 2, 4, 1, 2, 1, 1,
               0x20, 0x4E, 0, 0, 0x24, 0xFA, 0xFF, 0xFF, 0x45, 0x23, 0x01, 0, 7, 0, 0, 0]) + bytes(29)
 
-# Part 1, field by field (31 bytes): the same offsets the C++ test checks.
+# Part 1, field by field (32 bytes): the same offsets the C++ test checks.
 SESSION = bytes([0x02, 0x01, 0, 0,                # 258 mAh
                  0x04, 0x03, 0, 0,                # 772 s
                  1, 0x88, 0x13, 0x20, 0x4E, 0xB8, 0x0B,   # PD fixed, 5000 mA, 20000 mV, Type-C 3000 mA
                  4, 1, 3, 2, 1,                   # busy pd-hold, fc_release, direct receptacle, charger waiting, silent sink
                  0x54, 0x0B,                      # open CC 2900 mV
                  1, 10, 0xFF, 0xFF,               # depth 1, stack [connection]
-                 0x05, 3, 7, 2, 0x14])            # sub 5 = Cable tab + popup, sel 3, count 7, window 10m, flags 0x14
+                 0x05, 3, 7, 2, 0x14,            # sub 5 = Cable tab + popup, sel 3, count 7, window 10m, flags 0x14
+                 2])                              # PC link: host
 
 
 # Part 2 (29 bytes): the same literal as test_state_diag_part in tests/test_remote_proto.cpp. The last three bytes are the
@@ -87,18 +88,20 @@ class SessionDecode(unittest.TestCase):
                                    "sel": 3, "count": 7})
         self.assertEqual(s["home_window"], "10m")
         self.assertEqual({k for k, v in s["flags"].items() if v}, {"em_scanning", "em_quiet"})
+        self.assertEqual(s["pc_link"], "host")
+
+    def test_pc_link_names_and_old_firmware(self):
+        p = bytearray(SESSION)
+        for i, n in enumerate(["none", "power", "host", "shell"]):
+            p[31] = i
+            self.assertEqual(kr.decode_session(bytes(p))["pc_link"], n)
+        self.assertEqual(kr.decode_session(SESSION[:31])["pc_link"], "none")   # a build before the byte
 
     def test_ring_view_flag(self):
         p = bytearray(SESSION)
         p[30] = 0x40                               # RingView only (bit 6)
         s = kr.decode_session(bytes(p))
         self.assertEqual({k for k, v in s["flags"].items() if v}, {"ring_view"})
-
-    def test_shell_toast_flag(self):
-        p = bytearray(SESSION)
-        p[30] = 0x80                               # ShellToast only (bit 7)
-        s = kr.decode_session(bytes(p))
-        self.assertEqual({k for k, v in s["flags"].items() if v}, {"shell_toast"})
 
     def test_sentinels_become_null(self):
         p = bytearray(SESSION)
