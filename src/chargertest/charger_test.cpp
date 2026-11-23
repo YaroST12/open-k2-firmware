@@ -1936,6 +1936,9 @@ void Runner::sweep_ask(const Input& in, const Step& s, unsigned mv) {
     if (err == pd::Err::Busy) busy_retry_at_ = in.now + 200;
     else if (err != pd::Err::Ok) finish(in, Verdict::Fail, Reason::Request, 128 + static_cast<uint8_t>(err));
 }
+bool Runner::sweep_settled(const Input& in) const {
+    return in.now - stable_ms_ >= kSweepSettleMs && walk_steady_.tail_steady(in.now, kSweepSettleMs);
+}
 // One granted sweep point (Accept + PS_RDY at sweep_mv_, VBUS steady): record measured - setpoint (a point off the 100 mV cell grid is
 // only judged), then ask the next point of the depth's plan through the sink's single Request gate. A steady OUT-OF-BAND point is
 // recorded too, not a stop - the sweep stops only on a lost source (the row's failure paths in poll_impl: no PS_RDY, Reject, Hard
@@ -1958,7 +1961,7 @@ void Runner::sweep_point(const Input& in, const Step&) {
     }
     // The point's level is the mean of the last kWalkSteadyWindowMs of samples (fed by poll_impl), not the one sample that closes it
     // (review item D: a source in burst mode swings every sample by tens of mV around a level it holds).
-    const int level = walk_steady_.mean(in.vbus_mv);
+    const int level = sweep_settled(in) ? walk_steady_.tail_mean(in.now, kSweepSettleMs, in.vbus_mv) : walk_steady_.mean(in.vbus_mv);
     walk_steady_.clear();
     if (sweep_refining_) {
         sweep_ref_.feed(level);
@@ -3229,7 +3232,7 @@ void Runner::poll_impl(Input& in, const pd::SourceCaps& caps) {
         if (ready && is_sweep(s)) walk_steady_.add(in.now, in.vbus_mv);   // the sweep point's level is the mean of these (sweep_point)
         if (ready && (banded || is_sweep(s))) {
             if (!stable_ || gap > 250) { stable_ = true; stable_ms_ = in.now; }
-            if (in.now - stable_ms_ >= 500) {
+            if (in.now - stable_ms_ >= (is_sweep(s) ? kSweepHoldMs : 500u) || (is_sweep(s) && sweep_settled(in))) {
                 if (is_step_walk(s)) { walk_step(in, eff); return; }   // the walk advances or finishes instead of holding
                 if (is_sweep(s)) { sweep_point(in, eff); return; }   // the sweep records the point and asks the next one
                 state_ = State::Holding; phase_ms_ = stable_ms_;

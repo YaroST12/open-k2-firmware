@@ -127,6 +127,10 @@ inline constexpr unsigned kWalkSteadySamples = 3;
 inline constexpr int kWalkSteadyMv = 3;
 inline constexpr uint32_t kWalkSteadyWindowMs = 300;
 inline constexpr uint32_t kWalkSteadyTimeoutMs = 2000;
+// A sweep point closes once its VBUS has held steady for kSweepSettleMs after PS_RDY (the PD Spec capture needs a 50 ms tail past the
+// Accept), else kSweepHoldMs after PS_RDY as the ceiling: the window mean of a slow or rippling source, as before.
+inline constexpr uint32_t kSweepSettleMs = 100;
+inline constexpr uint32_t kSweepHoldMs = 500;
 // A run that was resumed this many times is not offered again (a step that dies before it can leave a marker would loop forever).
 inline constexpr unsigned kMaxResumes = 16;
 // A unit (protocol) may take the K2 down this many times inside one run: losses 1 .. kRebootBudget-1 resume the same row, the
@@ -394,7 +398,7 @@ ctsweep::PointRange sweep_range(const Step& s, unsigned cap_mv);
 // The row's point sequence at a depth (the phone windows need the source's list for their APDO choice).
 ctsweep::Plan sweep_plan(const Step& s, unsigned cap_mv, ctsweep::Depth d, const pd::SourceCaps& caps);
 // The preview's time per measured sweep point (Request, PS_RDY, settle, window).
-inline constexpr uint32_t kSweepPointMs = 700;
+inline constexpr uint32_t kSweepPointMs = 200;
 // The UFCS mode a step samples, kept in `Step::pdo` (no UFCS row has a PDO): the planner writes it once the charger's
 // Output_Capabilities are read, and the Results chip (the mode's top current), the Detail page (the whole mode) and the journal
 // read it. Four fields in 32 bits, saturating: voltages in 100 mV (9 bits, up to 51.1 V), currents in 50 mA (7 bits, up to 6.35 A).
@@ -787,6 +791,24 @@ public:
         return hi - lo <= kWalkSteadyMv;
     }
     unsigned count() const { return n_; }
+    // The sweep point's early test: the samples of the last span_ms alone (the output after its ramp, not the ramp still in the
+    // window): at least kWalkSteadySamples of them, all within kWalkSteadyMv. Too few (a slow poll cadence) reads not steady.
+    bool tail_steady(uint32_t now_ms, uint32_t span_ms) const {
+        unsigned k = 0; int lo = 0, hi = 0;
+        for (unsigned i = 0; i < n_; ++i) {
+            if (now_ms - t_[i] > span_ms) continue;
+            if (!k || v_[i] < lo) lo = v_[i];
+            if (!k || v_[i] > hi) hi = v_[i];
+            ++k;
+        }
+        return k >= kWalkSteadySamples && hi - lo <= kWalkSteadyMv;
+    }
+    int tail_mean(uint32_t now_ms, uint32_t span_ms, int fallback) const {
+        int32_t sum = 0, k = 0;
+        for (unsigned i = 0; i < n_; ++i)
+            if (now_ms - t_[i] <= span_ms) { sum += v_[i]; ++k; }
+        return k ? (sum + k / 2) / k : fallback;
+    }
     // The level the window stands for: the mean of its samples (a ripple around a held level averages out, one sample reads the
     // ripple). `fallback` (the latest sample) when the window is empty.
     int mean(int fallback) const {
@@ -1059,6 +1081,7 @@ private:
     ctsweep::Refiner sweep_ref_;
     void sweep_begin(const Step&, const Input&);   // request(): the point range from the row's PDO word, the row's record reset
     void sweep_ask(const Input&, const Step&, unsigned mv);   // the Request of one point (or step-back point) through the gate
+    bool sweep_settled(const Input&) const;   // the point's early close: steady for kSweepSettleMs since PS_RDY
     void sweep_point(const Input&, const Step&);   // one granted point: record it, ask the next or finish the row
     void sweep_close(Step&);                // finish(): summarize the row's points into sweep_rows_ (and mark a fold, fold_caution)
     void fold_caution(Step& sweep, const ctsweep::Summary&);   // a fold: the sweep row and the APDO's fixed rows above it read Reason::Folded
