@@ -1318,6 +1318,23 @@ static void test_field_counts_glyphs() {
     CHECK_EQ(ink_in(x0 + 2 * adv, x0 + 6 * adv, y0, y0 + kSmall.height, kBase), 0);
 }
 
+// The dot leader's dots stay 2 x 2 under the landscape stretch (stretched fills made every few a 3 px dash).
+static void test_leader_dots_native() {
+    ContentViewport viewport({0, 16, 240, 208}, 208, 240);
+    std::fill(std::begin(g_panel), std::end(g_panel), kBase);
+    kit::draw_leader(Surface{0, 0, 208, 240}, 30, 200, 100);
+    int dots = 0, bad = 0;
+    for (int y = 0; y < 240; y++)
+        for (int x = 0; x < 240; x++) {
+            if (px(x, y) == kBase || (x && px(x - 1, y) != kBase) || (y && px(x, y - 1) != kBase)) continue;
+            ++dots;   // a dot's top-left pixel: it must be exactly 2 x 2
+            const bool ok = px(x + 1, y) != kBase && px(x + 2, y) == kBase && px(x, y + 1) != kBase && px(x, y + 2) == kBase;
+            bad += !ok;
+        }
+    CHECK_EQ(dots > 10, true);
+    CHECK_EQ(bad, 0);
+}
+
 static void test_hero() {
     Field f;
     kit::HeroSpec h;
@@ -1677,6 +1694,7 @@ static void test_stamp_cross_is_the_icon() {
 }
 
 int main() {
+    test_leader_dots_native();
     test_field_counts_glyphs();
     test_stamp_cross_is_the_icon();
     test_chip_native_in_every_rotation();

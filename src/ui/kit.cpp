@@ -332,9 +332,10 @@ void kv_static(const Surface &s, const KvLayout &l, const char *const *labels, i
              static_cast<int16_t>(y + kBig.ascent - kMid.ascent), unit, col, kBg);
 }
 
+// Native dots at their mapped origins: a stretched 2 px fill came out 3 px wide every few dots in landscape.
 void draw_leader(const Surface &s, int16_t x0, int16_t x1, int16_t y) {
     for (int x = (x0 + kLeaderPitch - 1) / kLeaderPitch * kLeaderPitch; x + kLeaderDot <= x1; x += kLeaderPitch)
-        gfx_fill(s, static_cast<int16_t>(x), y, kLeaderDot, kLeaderDot, kInk3);
+        gfx_fill_panel(gfx_native_rect(s, static_cast<int16_t>(x), y, kLeaderDot, kLeaderDot), kInk3);
 }
 
 int draw_chip(const Surface &s, int16_t x, int16_t y, std::string_view text, uint16_t fill, uint16_t ink, int16_t min_w,
