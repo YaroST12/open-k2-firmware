@@ -494,13 +494,20 @@ void ConnectionPage::read_cable(uint32_t now_ms) {
     const bool ran = ctx_.ui->run_action(Action::EmarkerScan, now_ms);
     if (ran && ctx_.em_found) {
         held::mark_cable_probed();
-        if (view_ == View::Actions) exit_actions();
+        if (view_ == View::Actions) exit_actions();   // the chip details are the result of the read
     } else if (ran && ctx_.em_listen_until != 0) {
         em_read_pending_ = true;
         set_op("Listening...", now_ms);
     } else {
-        set_op("Failed to read", now_ms);
+        read_failed(now_ms);
     }
+}
+
+// A read that found nothing still opens the chip details when a cable record is held (they were one press away before
+// Chip details merged into Read e-marker). The footer says it failed; with no record the menu stays.
+void ConnectionPage::read_failed(uint32_t now_ms) {
+    if (view_ == View::Actions && held::cable_em().valid) enter_spec();   // clears the toast: say it after
+    set_op("Failed to read", now_ms);
 }
 
 void ConnectionPage::activate(const conn::Item &it, uint32_t now_ms) {
@@ -2584,7 +2591,7 @@ bool ConnectionPage::paint_no_pd_locked(const char *line, uint32_t rp_ma) {
 
 void ConnectionPage::row_fn(void *ctx, int index, bool focused, kit::RowSpec &out) {
     static constexpr const char *kNotes[] = {
-        "probe or sniff cable chip",
+        "read chip, open its details",
         "save read to library",
         "view or arm saved clones",
         "spoof e-marker to charger",
@@ -2631,9 +2638,7 @@ void ConnectionPage::row_fn(void *ctx, int index, bool focused, kit::RowSpec &ou
         if ((!it.enabled || it.caution) && it.why && it.why[0]) {
             out.note = it.why;
         } else if (it.act == conn::Act::Details) {
-            out.note = p->tab_ == conn::Tab::Source ? text::conn::kNoteSpecSource
-                     : p->tab_ == conn::Tab::Cable ? text::conn::kNoteSpecCable
-                                                   : text::conn::kNoteSpecSink;
+            out.note = p->tab_ == conn::Tab::Source ? text::conn::kNoteSpecSource : text::conn::kNoteSpecSink;
         } else if (it.act == conn::Act::Bench) {
             const bench::Acts b = bench::actions(conn::place_of(p->tab_));
             if (it.arg >= 0 && it.arg < b.n) out.note = bench::act_hint(b.a[it.arg]);
@@ -2784,7 +2789,7 @@ void ConnectionPage::update(uint32_t now_ms) {
     if (em_read_pending_ && ctx_.em_listen_until == 0) {
         em_read_pending_ = false;
         if (ctx_.em_quiet) {
-            set_op("Failed to read", now_ms);
+            read_failed(now_ms);
         } else if (view_ == View::Actions) {
             exit_actions();
         }

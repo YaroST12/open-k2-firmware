@@ -66,7 +66,7 @@ Home > Lines > Numbers > Graph > Ripple > Link > Tools > Battery > Log > K2 > (H
   separated by a 2 px `RowSpec::section_before` rule — merges `Read again` on Charger; inline links including mid-session
   links arm a 2-press Hard Reset confirm refused when bus-powered; standalone K2-owned contracts send sink Hard Reset when
   host-powered; other standalone/detached states run rescan + survey), followed by the slice's own interrogation & tool entries
-  (including `Spec & offers` / `Chip details` / `Sink details` opening the full scrollable `View::Spec` sheet).
+  (including `Spec & offers` / `Sink details` opening the full scrollable `View::Spec` sheet; on Cable `Read e-marker` opens it once the read ends, also on a failed read when a cable record is held).
 - `7 TOOLS` is `ToolsPage` (`Menu::Tools`, appended right before `Menu::Count` to preserve wire page IDs): full-height `kit::RowList`
   putting `Request voltage` (`Menu::PdTrigger`) and `Fast charge` (`Menu::Trigger`) at the top (moved out of `6 LINK` Charger
   Actions), followed by `Cable R`, `Spoof cable`, `Report cards`, `Black Box`, and opt-in bench tools with live readiness tags/notes.

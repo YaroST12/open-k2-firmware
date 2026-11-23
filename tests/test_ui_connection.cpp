@@ -725,21 +725,20 @@ static void test_place_actions() {
     CHECK_EQ(it[0].caution, true);
     a.reset_inline = false;
 
-    // Cable: 0 = Reset & re-read, 1 = Read e-marker, 2 = Chip details, bench actions, then Save cable, Saved cables, Spoof as...
+    // Cable: 0 = Reset & re-read, 1 = Read e-marker (a good read opens the chip details), bench actions, then Save cable, Saved cables, Spoof as...
     a.inline_sink = false;
     n = place_actions(Tab::Cable, a, it);
     const int cb_n = bench::actions(bench::Place::Cable).n;
-    CHECK_EQ(n, 3 + cb_n + 3);
+    CHECK_EQ(n, 2 + cb_n + 3);
     CHECK_EQ(int(it[0].act), int(Act::ResetLink));
     CHECK_EQ(int(it[1].act), int(Act::ReadCable));
     CHECK_STR(it[1].label, "Read e-marker");
     CHECK_STR(tx::kCableNoneL, (std::string("Actions: ") + it[1].label).c_str());
     CHECK_STR(tx::kOffersNone, "No offers read");
     CHECK_STR(tx::kOffersNoneL, "Tests: Light, PD");
-    CHECK_EQ(int(it[2].act), int(Act::Details));
-    CHECK_STR(it[2].label, "Chip details");
-    for (int i = 0; i < cb_n; i++) CHECK_EQ(int(it[std::size_t(3 + i)].act), int(Act::Bench));
-    const int save_i = 3 + cb_n;
+    for (int i = 0; i < n; i++) CHECK(it[std::size_t(i)].act != Act::Details);   // Read e-marker is the way to the chip sheet
+    for (int i = 0; i < cb_n; i++) CHECK_EQ(int(it[std::size_t(2 + i)].act), int(Act::Bench));
+    const int save_i = 2 + cb_n;
     CHECK_EQ(int(it[std::size_t(save_i)].act), int(Act::SaveCable));
     CHECK_STR(it[std::size_t(save_i)].label, "Save cable");
     CHECK_EQ(int(it[std::size_t(save_i + 1)].act), int(Act::SavedCables));

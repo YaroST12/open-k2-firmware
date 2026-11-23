@@ -1227,6 +1227,7 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
 
 ## Not verified on hardware
 
+- **Cable place: Read e-marker opens the chip details** (k2/cable-read-merge; host tests only). The Chip details row is gone; a good read (immediate or after the passive listen) opens the chip sheet, a failed one opens it too when a cable record is held, with "Failed to read" in the footer; no record stays on Actions. Check on hardware: Cable Actions has no Chip details row; Read e-marker with a cable lands on the sheet; a failed read with a held cable lands on the sheet with the error footer; inline (listen only) does the same after the 5 s window.
 - **PD limiter** (k2/pd-limiter, built and host-tested only; `k2_remote.py pd-limit <watts>|off|status`, Cmd 0x4E). Hardware test 1
   (2026-11-23, Anker 100W -> K2 -> 55W bank, `pd-limit 10`, replug) failed: a detach switched it off, the trigger wanted the inline
   latch, and arming mid-contract had no list to forge from. Fixed (not re-tested): armed waits (nothing attached, detach, replug

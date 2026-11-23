@@ -200,11 +200,11 @@ static void test_place_items_per_tab() {
     ui.tick(20350);
     CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Cable));
     const int cb_n = bench::actions(bench::Place::Cable).n;
-    CHECK_EQ(cp(ui).item_count(), 3 + cb_n + 3);
+    CHECK_EQ(cp(ui).item_count(), 2 + cb_n + 3);
     CHECK_EQ(int(cp(ui).item(0).act), int(conn::Act::ResetLink));
     CHECK_EQ(int(cp(ui).item(1).act), int(conn::Act::ReadCable));
-    CHECK_EQ(int(cp(ui).item(2).act), int(conn::Act::Details));
-    CHECK_EQ(int(cp(ui).item(3 + cb_n + 2).act), int(conn::Act::SpoofAs));
+    CHECK_EQ(int(cp(ui).item(2).act), int(conn::Act::Bench));        // no Chip details row: Read e-marker opens the sheet
+    CHECK_EQ(int(cp(ui).item(2 + cb_n + 2).act), int(conn::Act::SpoofAs));
     ui.goto_page(kConnTabAlias + 2, 20450);                          // Device Spec
     ui.tick(20500);
     CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Sink));
@@ -219,7 +219,7 @@ static void test_place_items_per_tab() {
 
 static void test_cable_place_has_spoof_row() {
     const int cb_n = bench::actions(bench::Place::Cable).n;
-    const int save_i = 3 + cb_n;
+    const int save_i = 2 + cb_n;
     for (bool inl : {false, true}) {
         Ui &ui = fresh_ui();
         if (inl) make_inline(ui, 20000);
@@ -228,7 +228,6 @@ static void test_cable_place_has_spoof_row() {
         CHECK_EQ(cp(ui).item_count(), save_i + 3);
         CHECK_EQ(int(cp(ui).item(0).act), int(conn::Act::ResetLink));
         CHECK_EQ(int(cp(ui).item(1).act), int(conn::Act::ReadCable));
-        CHECK_EQ(int(cp(ui).item(2).act), int(conn::Act::Details));
         CHECK_EQ(int(cp(ui).item(save_i).act), int(conn::Act::SaveCable));
         CHECK_EQ(int(cp(ui).item(save_i + 1).act), int(conn::Act::SavedCables));
         CHECK_EQ(int(cp(ui).item(save_i + 2).act), int(conn::Act::SpoofAs));
@@ -1403,9 +1402,6 @@ static void test_single_tools_lock_one_tab() {
     CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Cable));                // never a tab switch
     CHECK_EQ(cp(ui).action_row(), 1);
     CHECK_STR(ok_label(ui), "Read");
-    ui.on_button(Button::Plus, ButtonEvent::Short, 20110);             // Dn: Chip details
-    CHECK_EQ(cp(ui).action_row(), 2);
-    CHECK_STR(ok_label(ui), "View");
     for (int i = 0; i < 10; i++) ui.on_button(Button::Plus, ButtonEvent::Short, 20150 + i * 10);
     CHECK_EQ(cp(ui).action_row(), cp(ui).act_count() - 1);             // stops on the last Cable action row (Spoof as...)
     CHECK_STR(ok_label(ui), "Open");
@@ -2010,8 +2006,19 @@ static void test_device_place_telemetry_rows_and_live_repaints() {
 #endif
 }
 
+// A cable record the page holds (what the Cable overview shows): the K2 read it earlier.
+static void hold_cable(Ui &ui, uint32_t t) {
+    g_stub.em = {};
+    g_stub.em.valid = true; g_stub.em.vid = 0x0451; g_stub.em.pid = 0x1234; g_stub.em.vendor_str = "TI";
+    g_stub.em.speed_str = "USB4 Gen3"; g_stub.em.latency_str = "<10 ns (~1 m)";
+    g_stub.em.max_current_a = 3; g_stub.em.max_voltage_v = 20; g_stub.em.max_power_w = 60;
+    g_stub.cable_seq++;
+    ui.tick(t += 100);
+    held::poll(t += 10, false);
+}
+
 static void test_cable_read_emarker_ux_paths() {
-    // 1. VCONN ReadCable success -> switches to Spec (spec_mode() == true, actions_mode() == false), no error toast.
+    // 1. VCONN ReadCable success -> opens the chip details (Spec) (spec_mode() == true, actions_mode() == false), no error toast.
     {
         Ui &ui = fresh_ui();
         g_stub.em = {};
@@ -2032,7 +2039,7 @@ static void test_cable_read_emarker_ux_paths() {
         CHECK_EQ(ui.context().toast.active(20200), false);
     }
 
-    // 2. VCONN ReadCable failure -> stays on Actions, "Failed to read" toast with FooterTone::Error.
+    // 2. VCONN ReadCable failure, no held record -> stays on Actions, "Failed to read" toast with FooterTone::Error.
     {
         Ui &ui = fresh_ui();
         g_stub.em = {};
@@ -2087,7 +2094,7 @@ static void test_cable_read_emarker_ux_paths() {
         ui.debug_link(false, t += 100);
     }
 
-    // 4. Sniff async timeout (em_quiet) -> stays on Actions, "Failed to read" toast with FooterTone::Error.
+    // 4. Sniff async timeout (em_quiet), no held record -> stays on Actions, "Failed to read" toast with FooterTone::Error.
     {
         Ui &ui = fresh_ui();
         g_stub.em = {};
@@ -2118,6 +2125,64 @@ static void test_cable_read_emarker_ux_paths() {
         ui.debug_link(false, t += 100);
     }
 
+    // 5. VCONN failure with a held cable record -> the held chip details open, "Failed to read" in the footer.
+    {
+        Ui &ui = fresh_ui();
+        g_stub.pm = {};
+        g_stub.cc = 0;
+        g_stub.scan_result = false;
+        hold_cable(ui, 60000);
+        CHECK_EQ(held::cable_em().valid, true);
+        ui.goto_page(kConnTabAlias + 1, 60500);
+        ui.tick(60550);
+        ui.on_button(Button::Ok, ButtonEvent::Short, 60600);   // Spec -> Actions
+        ui.on_button(Button::Plus, ButtonEvent::Short, 60625); // row 1 = Read e-marker
+        ui.on_button(Button::Ok, ButtonEvent::Short, 60650);   // the read fails
+        ui.tick(60700);
+        CHECK_EQ(int(g_stub.last_scan_mode), int(k2::pd::EmarkerMode::Vconn));
+        CHECK_EQ(cp(ui).actions_mode(), false);
+        CHECK_EQ(cp(ui).spec_mode(), true);
+        CHECK_EQ(ui.context().toast.active(60700), true);
+        CHECK_STR(ui.context().toast.view().data(), "Failed to read");
+        CHECK_EQ(int(ui.context().toast.tone), int(k2::FooterTone::Error));
+        CHECK_EQ(held::cable_em().valid, true);
+        ui.on_button(Button::Ok, ButtonEvent::Short, 60800);   // the sheet is one press from Actions again
+        CHECK_EQ(cp(ui).actions_mode(), true);
+    }
+
+    // 6. Sniff timeout with a held cable record -> the held chip details open, "Failed to read" in the footer.
+    {
+        Ui &ui = fresh_ui();
+        g_stub.scan_result = false;
+        g_stub.pm = {};
+        g_stub.pm.vbus_mv = 5117;
+        g_stub.cc = 1;
+        uint32_t t = 70000;
+        ui.debug_link(true, t);
+        hold_cable(ui, t += 50);
+        CHECK_EQ(held::cable_em().valid, true);
+        t += 600;
+        ui.goto_page(kConnTabAlias + 1, t += 50);
+        while (ui.painting()) ui.tick(t += 2);
+        ui.on_button(Button::Ok, ButtonEvent::Short, t += 50);   // Spec -> Actions
+        while (ui.painting()) ui.tick(t += 2);
+        ui.on_button(Button::Plus, ButtonEvent::Short, t += 50); // row 1 = Read e-marker
+        while (ui.painting()) ui.tick(t += 2);
+        ui.on_button(Button::Ok, ButtonEvent::Short, t += 50);   // Read e-marker (Sniff listen)
+        while (ui.painting()) ui.tick(t += 2);
+        CHECK_EQ(cp(ui).actions_mode(), true);                   // listening: still on the menu
+        ui.tick(t += 5200);                                      // 5 s listen window expires
+        while (ui.painting()) ui.tick(t += 2);
+        CHECK_EQ(ui.context().em_quiet, true);
+        CHECK_EQ(cp(ui).actions_mode(), false);
+        CHECK_EQ(cp(ui).spec_mode(), true);
+        CHECK_EQ(ui.context().toast.active(t), true);
+        CHECK_STR(ui.context().toast.view().data(), "Failed to read");
+        CHECK_EQ(int(ui.context().toast.tone), int(k2::FooterTone::Error));
+        ui.debug_link(false, t += 100);
+    }
+
+    g_stub.em = {};
     g_stub.scan_result = true;
     g_stub.pm = {};
     g_stub.cc = 0;
