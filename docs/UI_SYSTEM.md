@@ -853,6 +853,16 @@ The attach's auto read (the charger's identity, modes and extended caps, once pe
 a toast `Reading charger n/m`, then `Read: 4 got, 1 unsupported`, while the rows move from `Asking...` to the answer. A row
 nothing asked reads `Not asked`; an aborted read leaves `Inline: blocked` / `Charger test` on the rest.
 
+The Source tab (the Charger place) leads with the offers, pure logic in `include/k2/ui/offer_rows.hpp` (`test_offer_rows`): the hero is the
+Source_Capabilities_Extended PDP (EPR PDP when set), else the best offer's watts; the sub-line counts the real offers (EPR survey
+included, gap slots not) and the identity state. Then SPR, EPR, PPS and AVS, always in that order; a kind with no PDO is a dim
+`none` (EPR on an EPR-capable charger whose list was not read shows the survey word). SPR and EPR PDOs are grouped by current
+(`5/9/15V 3A`, one current per row, a row never ends in another group's current); PPS and AVS take a row per APDO; an AVS range
+is rated in watts (`15-28V 140W`, `kWatt`). The row's tail run is drawn from the head's origin with a native pixel offset
+(`kit::TextRun::dx`): the landscape map stretches run origins, not glyphs, so a tail placed by its own origin drifted right.
+The old `PD`, `Ext` and `EPR` detail rows are folded in (the Ext row survives only as `PDP nW EPR mW` when an EPR rating exists);
+the Sink tab's PDO rows share the same builders. Renders: `runs/charger-offers/png/charger_tab_{bank,epr}_rot{0,1}.png`.
+
 Renders: `mock_pd_source.png`, `mock_pd_sink.png`, `mock_pd_cable.png`, `mock_pd_cable_no_chip.png`,
 `mock_pd_cable_not_probed.png`, `mock_pd_cable_chip_silent.png`.
 

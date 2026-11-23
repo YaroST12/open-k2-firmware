@@ -365,9 +365,9 @@ K2_HOT void paint_texts(const Surface &s, Box ground, const TextRun *runs, int n
     Box holes[kMaxHoles];
     int m = 0;
     for (int i = 0; i < n && m < kMaxHoles; i++)
-        holes[m++] = {runs[i].x, runs[i].y, static_cast<int16_t>(text_width(*runs[i].font, runs[i].text)), static_cast<int16_t>(runs[i].font->height)};
+        holes[m++] = {runs[i].x, runs[i].y, static_cast<int16_t>(runs[i].dx + text_width(*runs[i].font, runs[i].text)), static_cast<int16_t>(runs[i].font->height)};
     fill_except(s, ground, holes, m, bg);
-    for (int i = 0; i < n; i++) gfx_text(s, *runs[i].font, runs[i].x, runs[i].y, runs[i].text, runs[i].ink, bg);
+    for (int i = 0; i < n; i++) gfx_text(s, *runs[i].font, runs[i].x, runs[i].y, runs[i].text, runs[i].ink, bg, runs[i].dx);
 }
 
 K2_HOT uint32_t RowList::row_sig_cb(void *ctx, int index) {

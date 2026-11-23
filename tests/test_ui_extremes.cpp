@@ -21,11 +21,11 @@
 using namespace k2;
 
 static void check_text(Ui &ui, int x, int y, int right, int bottom, const Font &font,
-                       std::string_view text, uint16_t fg, uint16_t bg, int rows = 0, bool right_anchored = false) {
+                       std::string_view text, uint16_t fg, uint16_t bg, int rows = 0, bool right_anchored = false, int dx = 0) {
     const Rect box = compute_layout(orientation_for(ui.rotation()).edge, kSlotCenters,
                                     kSlotLens, kPanelThickness).twin_content;   // every page but Home: 208 x 240 logical
     const int edge = box.x + right * box.w / 208, floor = box.y + bottom * box.h / 240;
-    int px = box.x + x * box.w / 208;
+    int px = box.x + x * box.w / 208 + dx;   // dx: a continued run sits native pixels past its head's mapped origin
     const int py = box.y + y * box.h / 240;
     if (right_anchored) {   // a tail ends on the mapped right edge; the column that owns it may start one panel column earlier
         uint16_t lut0[16], line0[240];
@@ -196,14 +196,14 @@ static void test_pd_tabs_text() {
     g_stub.caps.pdos[0] = pd::decode_pdo(fixed);
     ui.goto_page(kPdPage, 1100);
     ui.tick(1200);
-    // Release action focus and scroll to the top of the fact list (ID at y 68, PD at y 88).
+    // Release action focus and scroll to the top of the fact list (SPR at y 46, EPR "none" at y 67).
     ui.on_button(Button::Minus, ButtonEvent::Short, 1220);
     ui.on_button(Button::Minus, ButtonEvent::Short, 1240);
     ui.tick(1300);
     for (uint8_t r = 0; r < 4; ++r) {
         ui.set_rotation(r, 1300);
         settle(ui, 1300);
-        check_text(ui, 4, 72, 50, 88, kLabelFont, "PD", kDim, kBg);   // key at x 4, row_y+5 (row 1 at y 67)
+        check_text(ui, 4, 72, 50, 88, kLabelFont, "EPR", kDim, kBg);   // key at x 4, row_y+5 (row 1 at y 67)
         parity(ui, 1300);
     }
     // Cable place: no cable read, so the identity headline names it.
@@ -233,10 +233,11 @@ static void test_source_fixed_rows_wrap() {
     for (uint8_t r = 0; r < 4; ++r) {
         ui.set_rotation(r, 1300);
         settle(ui, 1300);
-        // rows: ID (y 46), PD (67), Fixed (88), Fixed (109); value column x 52, text 3 px below the row top
-        check_text(ui, 52, 91, 204, 111, kSmall, "5/9/12/15/18/20V", kVolt, kBg);
-        check_text(ui, 52 + 16 * kSmall.adv, 91, 204, 111, kSmall, " 3A", kAmp, kBg);
-        check_text(ui, 52, 112, 204, 132, kSmall, "24V", kVolt, kBg, 15);
+        // rows: SPR (y 46), SPR (67), EPR, PPS, AVS ...; value column x 52, text 3 px below the row top; the wrapped line's
+        // tail continues its head at a native offset (the landscape map stretches origins, never glyph advances)
+        check_text(ui, 52, 49, 204, 69, kSmall, "5/9/12/15/18/20V", kVolt, kBg);
+        check_text(ui, 52, 49, 204, 69, kSmall, " 3A", kAmp, kBg, 0, false, 16 * kSmall.adv);
+        check_text(ui, 52, 70, 204, 90, kSmall, "24V", kVolt, kBg, 15);
         parity(ui, 1300);
     }
 }

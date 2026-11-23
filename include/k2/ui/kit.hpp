@@ -109,6 +109,7 @@ struct TextRun {
     const Font *font;
     std::string_view text;
     uint16_t ink;
+    int16_t dx = 0;   // native pixels past the origin: the landscape map stretches origins, so a run that continues another must not move its own
 };
 // `ground` in `bg` with every run's text on it, each pixel streamed once: the ground is filled around the runs' boxes
 // (the box a gfx_text writes is text_width x font height), then the runs are drawn. At most 6 runs leave a hole; more still draw.

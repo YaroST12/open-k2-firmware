@@ -394,6 +394,28 @@ static bool place_row_value_is(int idx, const char *text, uint16_t colour = kTex
     return same;
 }
 
+// A row whose value is two runs: the volts, then the tail (a current, or the watts of an AVS) in its own colour.
+static bool place_row_split_is(int idx, const char *head, const char *tail, uint16_t hc, uint16_t tc) {
+    constexpr int kValX = kOppRailThickness + 52, kPitch = 21, kRowY0 = kit::kPlaceListY;
+    constexpr int W = 204 - 52;
+    const int y = kRowY0 + idx * kPitch;
+    const int vy = y + kit::row_text_y(kPitch, 16);
+    uint16_t saved[W * (kPitch - 1)];
+    for (int dy = 1; dy < kPitch; dy++)
+        for (int x = 0; x < W; x++) saved[(dy - 1) * W + x] = g_panel[(y + dy) * LCD_WIDTH + kValX + x];
+    const Surface s{0, 0, LCD_WIDTH, LCD_HEIGHT};
+    gfx_fill(s, kValX, y + 1, W, kPitch - 1, kBg);
+    gfx_text(s, kSmall, kValX, vy, head, hc, kBg);
+    gfx_text(s, kSmall, kValX + int(std::strlen(head)) * kSmall.adv, vy, tail, tc, kBg);
+    bool same = true;
+    for (int dy = 1; dy < kPitch && same; dy++)
+        for (int x = 0; x < W; x++)
+            if (g_panel[(y + dy) * LCD_WIDTH + kValX + x] != saved[(dy - 1) * W + x]) { same = false; break; }
+    for (int dy = 1; dy < kPitch; dy++)
+        for (int x = 0; x < W; x++) g_panel[(y + dy) * LCD_WIDTH + kValX + x] = saved[(dy - 1) * W + x];
+    return same;
+}
+
 static bool nopd_row_value_is(int idx, const char *text, uint16_t colour = kText) {
     return place_row_value_is(idx, text, colour);
 }
@@ -3259,7 +3281,102 @@ static void test_charger_slice_revision_chip_names_the_wire_revision() {
     g_stub.caps = {};
 }
 
+// The Charger tab leads with the four offer groups (SPR, EPR, PPS, AVS), a dim "none" for a group the source does not offer,
+// then who made them (ID). A 100 W bank: no EPR, no AVS.
+static void test_source_tab_offer_groups_bank() {
+    Ui &ui = fresh_ui();
+    make_inline(ui, 20000);
+    g_stub.pm_online = true;
+    g_stub.caps.valid = true; g_stub.caps.spec_rev = 2; g_stub.caps.active_cc = 1; g_stub.caps.num_pdos = 6;
+    g_stub.caps.pdos[0] = {pd::PdoType::Fixed, 0, 5000, 5000, 3000, 15000};
+    g_stub.caps.pdos[1] = {pd::PdoType::Fixed, 0, 9000, 9000, 3000, 27000};
+    g_stub.caps.pdos[2] = {pd::PdoType::Fixed, 0, 12000, 12000, 3000, 36000};
+    g_stub.caps.pdos[3] = {pd::PdoType::Fixed, 0, 15000, 15000, 3000, 45000};
+    g_stub.caps.pdos[4] = {pd::PdoType::Fixed, 0, 20000, 20000, 3000, 60000};
+    g_stub.caps.pdos[5] = {pd::PdoType::Pps, 0, 5000, 21000, 3000, 63000};
+    g_stub.caps.raw_header = 0x1181; g_stub.caps.rx_count++;
+    g_stub.pd_seen_attach = true;
+    uint32_t t = 21000;
+    ui.tick(t);
+    set_id(g_stub.vdm, 0x2B01, 0x0000, "Unknown");
+    show(ui, 0, t);
+    CHECK(place_row_split_is(0, "5/9/12/15/20V", " 3A", kVolt, kAmp));
+    CHECK(place_row_value_is(1, "none", kFaint));
+    CHECK(place_row_split_is(2, "5-21V", " 3A", kVolt, kAmp));
+    CHECK(place_row_value_is(3, "none", kFaint));
+    g_stub.vdm = {}; g_stub.caps = {};
+}
+
+// A 140 W EPR source: the extra offers split by kind, the AVS range is rated in watts.
+static void test_source_tab_offer_groups_epr() {
+    Ui &ui = fresh_ui();
+    make_inline(ui, 20000);
+    g_stub.pm_online = true;
+    g_stub.caps.valid = true; g_stub.caps.spec_rev = 2; g_stub.caps.active_cc = 1; g_stub.caps.num_pdos = 10; g_stub.caps.epr = true;
+    g_stub.caps.pdos[0] = {pd::PdoType::Fixed, 0, 5000, 5000, 3000, 15000};
+    g_stub.caps.pdos[1] = {pd::PdoType::Fixed, 0, 9000, 9000, 3000, 27000};
+    g_stub.caps.pdos[2] = {pd::PdoType::Fixed, 0, 15000, 15000, 3000, 45000};
+    g_stub.caps.pdos[3] = {pd::PdoType::Fixed, 0, 20000, 20000, 5000, 100000};
+    g_stub.caps.pdos[4] = {pd::PdoType::Pps, 0, 3300, 21000, 5000, 105000};
+    g_stub.caps.pdos[7] = {pd::PdoType::Fixed, 0, 28000, 28000, 5000, 140000};
+    g_stub.caps.pdos[8] = {pd::PdoType::Avs, 0, 15000, 28000, 5000, 140000};
+    g_stub.caps.raw_header = 0x1181; g_stub.caps.rx_count++;
+    g_stub.pd_seen_attach = true;
+    uint32_t t = 21000;
+    ui.tick(t);
+    set_id(g_stub.vdm, 0x2B01, 0x0000, "Unknown");
+    show(ui, 0, t);
+    CHECK(place_row_split_is(0, "5/9/15V", " 3A", kVolt, kAmp));
+    CHECK(place_row_split_is(1, "20V", " 5A", kVolt, kAmp));
+    CHECK(place_row_split_is(2, "28V", " 5A", kVolt, kAmp));
+    CHECK(place_row_split_is(3, "3.3-21V", " 5A", kVolt, kAmp));
+    CHECK(place_row_split_is(4, "15-28V", " 140W", kVolt, kWatt));
+    g_stub.vdm = {}; g_stub.caps = {};
+}
+
+// The headline watts follow the extended caps (PDP): the cheap page signature must see them arrive and change, or the hero
+// would stay on the best offer until something else repaints the page.
+static uint64_t hero_hash() {
+    uint64_t h = 1469598103934665603ull;
+    for (int y = 0; y < 46; y++)
+        for (int x = 16; x < 224; x++) h = (h ^ g_panel[y * LCD_WIDTH + x]) * 1099511628211ull;
+    return h;
+}
+
+static void test_source_tab_hero_follows_the_pdp() {
+    Ui &ui = fresh_ui();
+    make_inline(ui, 20000);
+    g_stub.pm_online = true;
+    g_stub.caps.valid = true; g_stub.caps.spec_rev = 2; g_stub.caps.active_cc = 1; g_stub.caps.num_pdos = 2;
+    g_stub.caps.pdos[0] = {pd::PdoType::Fixed, 0, 5000, 5000, 3000, 15000};
+    g_stub.caps.pdos[1] = {pd::PdoType::Fixed, 0, 20000, 20000, 3000, 60000};
+    g_stub.caps.raw_header = 0x1181; g_stub.caps.rx_count++;
+    g_stub.pd_seen_attach = true;
+    uint32_t t = 21000;
+    ui.tick(t);
+    show(ui, 0, t);
+    const uint64_t best = hero_hash();
+    auto settle = [&] {
+        for (int i = 0; i < 12; i++) ui.tick(t += 100);
+        while (ui.painting()) ui.tick(t += 2);
+    };
+    g_stub.ext.caps_ext.valid = true; g_stub.ext.caps_ext.pdp_w = 65;
+    settle();
+    const uint64_t pdp65 = hero_hash();
+    CHECK(pdp65 != best);
+    g_stub.ext.caps_ext.pdp_w = 100;
+    settle();
+    CHECK(hero_hash() != pdp65);
+    g_stub.ext.caps_ext = {};
+    settle();
+    CHECK(hero_hash() == best);
+    g_stub.vdm = {}; g_stub.caps = {};
+}
+
 int main() {
+    test_source_tab_hero_follows_the_pdp();
+    test_source_tab_offer_groups_bank();
+    test_source_tab_offer_groups_epr();
     test_auto_wake_once_on_the_charger_overview();
     test_auto_wake_settles_then_toasts();
     test_auto_wake_waits_for_the_line_trial();

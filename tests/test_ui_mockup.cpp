@@ -486,6 +486,30 @@ int main() {
     g_stub.diag_report = {};
     g_stub.diag_state = 0;
 
+    // The Charger tab's offer groups: the 100 W bank (SPR and PPS, no EPR or AVS), then a 140 W EPR source rated by its PDP
+    // (SPR split by current, EPR, PPS and an AVS range in watts).
+    ui.goto_page(kPdPage, t + 100);
+    render(ui, t, "charger_tab_bank");
+    {
+        const auto kept_caps = g_stub.caps;
+        g_stub.caps = {};
+        g_stub.caps.valid = true; g_stub.caps.active_cc = 1; g_stub.caps.spec_rev = 2; g_stub.caps.raw_header = 0x1181; g_stub.caps.epr = true;
+        g_stub.caps.num_pdos = 9;
+        g_stub.caps.pdos[0] = {pd::PdoType::Fixed, 0, 5000, 5000, 3000, 15000};
+        g_stub.caps.pdos[1] = {pd::PdoType::Fixed, 0, 9000, 9000, 3000, 27000};
+        g_stub.caps.pdos[2] = {pd::PdoType::Fixed, 0, 15000, 15000, 3000, 45000};
+        g_stub.caps.pdos[3] = {pd::PdoType::Fixed, 0, 20000, 20000, 5000, 100000};
+        g_stub.caps.pdos[4] = {pd::PdoType::Pps, 0, 3300, 21000, 5000, 105000};
+        g_stub.caps.pdos[7] = {pd::PdoType::Fixed, 0, 28000, 28000, 5000, 140000};
+        g_stub.caps.pdos[8] = {pd::PdoType::Avs, 0, 15000, 28000, 5000, 140000};
+        g_stub.caps.rx_count++;
+        g_stub.ext.caps_ext.valid = true; g_stub.ext.caps_ext.pdp_w = 140; g_stub.ext.caps_ext.epr_pdp_w = 140;
+        for (int i = 0; i < 60; i++) { ui.tick(t); t += 100; }   // the shown caps settle before the rows follow them
+        render(ui, t, "charger_tab_epr");
+        g_stub.caps = kept_caps;
+        g_stub.ext.caps_ext = {};
+    }
+
     // The README's Home, Numbers, Lines, Bench, Battery and Settings pictures (docs/img/ui, tools/panel2png.py --scale 2): one live
     // session on a fresh Ui at rotation 3 - the 100 W charger's contract flowing, a healthy Black Box report, CC1 at the 3 A Rp level
     // with D+/D- at 0 V, the PD fast-charge verdict - so no row says "no session" or "--" beside a live contract. Frames are
