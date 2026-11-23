@@ -121,8 +121,7 @@ void enter(const char *screen, int rot, const char *scenario) {
     trunc::context(label);
 }
 void draw_for_a_while(Ui &ui, const char *screen, int rot, const char *scenario) {
-    enter(screen, rot, scenario);
-    for (int i = 0; i < 6; ++i) { g_t += 150; ui.tick(g_t); }
+    enter(screen, rot, scenario);    for (int i = 0; i < 6; ++i) { g_t += 150; ui.tick(g_t); }
     // A switch paints over several ticks (budgeted rows, the erase pass): tick on at the same time (a run's clock must not
     // move) until a tick paints nothing.
     for (int i = 0, last = -1; i < 60 && static_cast<int>(g_lcd_windows) != last; ++i) { last = static_cast<int>(g_lcd_windows); ui.tick(g_t); }
@@ -478,6 +477,32 @@ void walk_wizard(Ui &ui, int rot, const Scenario &sc) {
     draw_for_a_while(ui, "wizard-back", rot, sc.name);
 }
 
+// The PD limit armed at its widest (100 W): the Home protocol row, the LINK chip, the Tools row and every picker row focused.
+// The limiter's own state is restored, so the other walks keep their scenario.
+void walk_limit(Ui &ui, int rot, const Scenario &sc) {
+    auto press = [&](Button b) { g_t += 150; ui.on_button(b, ButtonEvent::Short, g_t); ui.tick(g_t + 50); g_t += 50; };
+    g_stub.lim = {};
+    g_stub.lim.state = pd::LimState::Armed; g_stub.lim.limit_mw = 100000;
+    ui.goto_page(static_cast<uint8_t>(Page::Home), g_t);
+    draw_for_a_while(ui, "limit-home", rot, sc.name);
+    ui.goto_page(static_cast<uint8_t>(Page::Lines), g_t);
+    ui.goto_page(kMenuPageBase + static_cast<uint8_t>(Menu::Tools), g_t);
+    ui.context().keep.tools_sel = 0;
+    for (int i = 0; i < bench::tools().n + 2; ++i) press(Button::Plus);
+    draw_for_a_while(ui, "limit-tools-row", rot, sc.name);
+    press(Button::Ok);
+    draw_for_a_while(ui, "limit-picker", rot, sc.name);
+    for (int i = 0; i < static_cast<int>(pd::kLimMaxPicks) + 1; ++i) { press(Button::Plus); draw_for_a_while(ui, "limit-picker", rot, sc.name); }
+    press(Button::Back);
+    ui.goto_page(static_cast<uint8_t>(Page::Home), g_t);
+    press(Button::Back);   // Home -> the ring view; Plus walks to LINK, OK enters it
+    for (int i = 0; i < static_cast<int>(ring::Pos::Link); ++i) press(Button::Plus);
+    press(Button::Ok);
+    draw_for_a_while(ui, "limit-link", rot, sc.name);
+    g_stub.lim = {};
+    ui.goto_page(static_cast<uint8_t>(Page::Home), g_t);
+}
+
 void test_walk() {
     for (const Scenario &sc : kScenarios) {
         apply(sc);
@@ -491,6 +516,7 @@ void test_walk() {
             walk_pages(ui, rot, sc);
             walk_survey(ui, rot, sc);
             walk_wizard(ui, rot, sc);
+            walk_limit(ui, rot, sc);
         }
     }
     trunc::context("");
