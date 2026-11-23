@@ -158,6 +158,7 @@ struct UiContext {
     bool inline_mode K2_BSS_INIT(false);    // a live sink is attached: active operations are gated (refused, no confirm)
     bool plus_key K2_BSS_INIT(false);       // the physical + key is down right now (Waiting watches it: it is wired to the CC pins)
     fastcharge::Protocol fc = fastcharge::Protocol::Pending;     // passive D+/D- verdict
+    fastcharge::Protocol fc_lines = fastcharge::Protocol::Pending;   // the pair alone (fastcharge::lines())
     bool trig_armed K2_BSS_INIT(false);     // trigger above 5 V: first OK given, waiting for the second
     cable_r::Mode cable_mode = cable_r::Mode::Passive;           // Cable R submenu: passive meter or Kelvin 8-wire
     bool id_no_device K2_BSS_INIT(false);   // Identify was refused: nothing on CC, VBUS low (clears itself once something appears)

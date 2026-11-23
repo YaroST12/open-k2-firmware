@@ -43,4 +43,12 @@ struct LinesVerdict {
 // to a neutral "PD?" caution.
 LinesVerdict lines_verdict(fastcharge::Protocol p, bool pd_decoded);
 
+// The D+/D- row: what the data lines carry, from fastcharge::lines() (the pair alone, never a PD summary). A PD-family
+// result there is a band's fallback, no handshake on the pair: "none". `dim` when the row holds no fact.
+struct DpDmWord {
+    const char *text;
+    bool dim;
+};
+DpDmWord dpdm_word(fastcharge::Protocol lines);
+
 }  // namespace k2

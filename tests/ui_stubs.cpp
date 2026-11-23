@@ -767,6 +767,7 @@ std::uint32_t capture_ripple(std::span<std::uint16_t, kRippleSamples> out, std::
 
 namespace fastcharge {
 Protocol read() { return g_stub.fc; }
+Protocol lines() { return g_stub.fc_lines < 0 ? g_stub.fc : static_cast<Protocol>(g_stub.fc_lines); }
 Protocol label() { return report_label(g_stub.fc, g_stub.vooc.seen); }
 vooc::Live vooc_live() { return g_stub.vooc; }
 DcpCheck dcp_lines() { return static_cast<DcpCheck>(g_stub.dcp_lines); }

@@ -134,8 +134,24 @@ static void test_verdict_pd_decoded() {
     }
 }
 
+// The D+/D- row names the pair's own state; a PD-family result is no handshake there.
+static void test_dpdm_word() {
+    CHECK_STR(dpdm_word(Protocol::Qc2_9V).text, "QC2.0 9V");
+    CHECK_STR(dpdm_word(Protocol::Apple24).text, "Apple 2.4A");
+    CHECK_STR(dpdm_word(Protocol::Dcp5V).text, "DCP short");
+    CHECK_STR(dpdm_word(Protocol::UsbData).text, "USB data");
+    CHECK_STR(dpdm_word(Protocol::NoQuick).text, "none");
+    CHECK_STR(dpdm_word(Protocol::Pending).text, "--");
+    for (Protocol p : {Protocol::Pd, Protocol::PdPe, Protocol::PdMtk, Protocol::PdLikely}) {
+        CHECK_STR(dpdm_word(p).text, "none");
+        CHECK_EQ(dpdm_word(p).dim, true);
+    }
+    CHECK_EQ(dpdm_word(Protocol::Qc3).dim, false);
+}
+
 int main() {
     test_bars();
+    test_dpdm_word();
     test_rp();
     test_mcu();
     test_verdicts();

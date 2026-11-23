@@ -303,6 +303,7 @@ K2_HOT UiAction Ui::tick(uint32_t now_ms) {
     if (ctx_.cable_mode == cable_r::Mode::Kelvin && ctx_.pm_online && ctx_.analog)
         ctx_.kelvin = cable_r::kelvin(ctx_.analog->cc1_mv, ctx_.analog->cc2_mv, ctx_.analog->dm_mv, ctx_.pm_avg.current_ma);
     ctx_.fc = fastcharge::read();
+    ctx_.fc_lines = fastcharge::lines();
     ctx_.vooc = fastcharge::vooc_live();
     {   // hard cap for requests and the measured VBUS for the engine's over-voltage abort
         const power::Chip chip = power::chip();

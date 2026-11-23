@@ -16,6 +16,7 @@ namespace k2::fastcharge {
 namespace {
 Ring g_ring;
 Protocol g_verdict = Protocol::Pending;
+Protocol g_lines = Protocol::Pending;   // the pair alone, see lines()
 // Any D+/D- handshake pattern seen since the current source attached (the ring is cleared when VBUS
 // drops below presence, so the ring's lifetime is the attach). Fed to classify() as cc_attach_quiet.
 bool g_handshake_seen = false;
@@ -113,7 +114,7 @@ unsigned log_idle() {
 unsigned init() {
     const unsigned bad = log_idle();
     g_ring.clear();
-    g_verdict = Protocol::Pending;
+    g_verdict = g_lines = Protocol::Pending;
     g_handshake_seen = false;
     g_sag.reset();
     dcp_reset();
@@ -127,7 +128,7 @@ void poll() {
     if (!line) {
         dcp_reset();   // the ADC lost the lines (another driver owns them): never leave a probe level behind
         g_sag.reset();
-        g_verdict = vbus < 4000 ? Protocol::NoInput : Protocol::Pending;
+        g_verdict = g_lines = vbus < 4000 ? Protocol::NoInput : Protocol::Pending;
         monitor();
         return;
     }
@@ -156,13 +157,20 @@ void poll() {
     }
     // A sagging or cut output drags the lines with it: the guard holds the last verdict until the supply and the window
     // are good again (hardware 2026-11-11: APPLE 2.4A -> USB DATA -> NO INPUT on a port that cuts VBUS every ~6.5 s).
-    g_verdict = g_sag.apply(classify(g_ring, line->dp_mv, line->dm_mv, vbus, probe.pd_active, link::pd_likely(probe),
+    const bool pd_likely = link::pd_likely(probe);
+    g_verdict = g_sag.apply(classify(g_ring, line->dp_mv, line->dm_mv, vbus, probe.pd_active, pd_likely,
                                      cc_source_no_pd, !g_handshake_seen, g_dcp_proof, floating),
                             vbus, equal_pair_moving(g_ring));
+    // PD stops classify() before it reads the pair: ask again with PD left out for what the pair itself carries.
+    g_lines = probe.pd_active || pd_likely ? classify(g_ring, line->dp_mv, line->dm_mv, vbus, false, false, cc_source_no_pd,
+                                                      !g_handshake_seen, g_dcp_proof, floating)
+                                           : g_verdict;
     monitor();
 }
 
 Protocol read() { return g_verdict; }
+
+Protocol lines() { return g_lines; }
 
 Protocol label() { return report_label(g_verdict, dpsniff::monitor_live().seen); }
 

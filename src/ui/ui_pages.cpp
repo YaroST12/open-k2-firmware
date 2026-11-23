@@ -1033,8 +1033,8 @@ bool LinesPage::paint_verdict(const std::optional<adc::Reading> &r, uint32_t now
         painted_ = true;
     }
     if (!pg::put_field(pv_[0], bg, rp.view(), r ? kText : kFaint)) return false;
-    const std::string_view dd = !v.extra.view().empty() ? v.extra.view() : v.main.view();
-    if (!pg::put_field(pv_[1], bg, dd.empty() ? "--" : dd, v.tone == Tone::Dim ? kFaint : kText)) return false;
+    const DpDmWord dd = dpdm_word(ctx_.fc_lines);   // the pair itself: a PD summary stays in the chips
+    if (!pg::put_field(pv_[1], bg, dd.text, dd.dim ? kFaint : kText)) return false;
     StrBuf<16> vref;
     if (r) {
         vref.put_fixed(r->aux_mv, 2).put("V");

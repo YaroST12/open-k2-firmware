@@ -35,6 +35,10 @@ void poll();
 // Current verdict. Protocol::Pending until the window is full; NoInput without VBUS.
 Protocol read();
 
+// The data lines alone: read() with PD left out (the D+/D- row of Lines). A PD session or a PD-likely bus stops read() at
+// PD before it looks at the pair; this one still says what the pair carries.
+Protocol lines();
+
 // read() as the remote (GET_STATE fc) and the shell report it: Protocol::Svooc while a proven VOOC session is live
 // (report_label), the same word Home shows. read() itself stays the passive classifier's verdict.
 Protocol label();
