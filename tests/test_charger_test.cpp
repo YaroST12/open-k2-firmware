@@ -6897,6 +6897,23 @@ static void test_legacy_preset_plans_no_pd_rows() {
         for (const auto& s : r.steps()) CHECK_EQ(int(s.verdict) != int(ct::Verdict::Pending) && int(s.verdict) != int(ct::Verdict::Running), true);
     }
 }
+// pattern usb-a-no-pd (2026-11-23 A-to-C cable: default-USB Rp, no PD, D+/D- open): a source that never announced PD. The Pd unit
+// must skip with "not advertised", never fail "no PD after re-attach", and the run goes on with the other units.
+static void test_default_run_on_a_source_without_pd_never_fails_a_pd_row() {
+    Fake f; f.caps.valid = false; f.caps.active_cc = 1; f.never_dark = true; f.silent_after_rd = true; ct::Runner r(f);
+    CHECK_EQ(int(r.start(f.caps, ct::Options{.level = ct::Level::Deep}, f.in, true)), int(ct::Reason::None));
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 900000), true);
+    unsigned pd_rows = 0;
+    for (const auto& s : r.steps()) {
+        if (ct::mode(ct::unit_of(s)) != ct::Mode::Pd) continue;
+        ++pd_rows;
+        CHECK_EQ(int(s.verdict), int(ct::Verdict::Skip));   // the Xiaomi chain row too: it sends nothing and has no list to read
+        CHECK_EQ(int(s.reason), int(ct::Reason::NoOffer));
+    }
+    CHECK_EQ(pd_rows > 0, true);
+    CHECK_EQ(count_reason_all(r, ct::Reason::NoReattach), 0u);
+    CHECK_EQ(count_unit_verdict(r, ct::Unit::Pd, ct::Verdict::Fail), 0u);
+}
 // A source that never lets go of VBUS (a USB-A port, or a run on the measured VBUS): the default plan finishes, a self-powered K2
 // never detaches, and a non-self-powered one does not wait out the long dark window at each unit.
 static void test_always_on_source_never_stalls() {
@@ -9459,7 +9476,7 @@ int main() {
     test_unsafe_clears_when_vbus_is_gone_for_the_debounce();
     test_failed_release_at_low_vbus_is_a_lost_source_not_unsafe();
     test_unsafe_clears_when_vbus_stays_under_vsafe5();
-    test_pd_attach_without_vbus_or_caps_is_no_reattach(); test_legacy_attach_with_rp_but_no_vbus_cycles_rd_early(); test_start_on_a_port_without_cc_detaches_quickly(); test_release_that_leaves_vbus_up_falls_back_to_an_rd_off(); test_pd_plan_comes_from_the_first_attach(); test_source_gone_in_a_unit_skips_the_remaining_units();
+    test_pd_attach_without_vbus_or_caps_is_no_reattach(); test_legacy_attach_with_rp_but_no_vbus_cycles_rd_early(); test_start_on_a_port_without_cc_detaches_quickly(); test_default_run_on_a_source_without_pd_never_fails_a_pd_row(); test_release_that_leaves_vbus_up_falls_back_to_an_rd_off(); test_pd_plan_comes_from_the_first_attach(); test_source_gone_in_a_unit_skips_the_remaining_units();
     test_pd_attach_5v_contract_held_at_wrong_voltage_fails_wrong_voltage();
     test_pd_attach_5v_contract_then_rp_cut_before_timeout_fails_wrong_voltage();
     test_pd_attach_without_any_caps_stays_no_reattach();

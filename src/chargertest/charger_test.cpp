@@ -2264,12 +2264,16 @@ void Runner::begin_attach(const Input& in) {
 // A PDO 1 contract whose PS_RDY was seen during the wait (contract_wrong_, latched in poll_attach) with VBUS outside vSafe5V
 // fails WrongVoltage instead (pattern shared-bus-split), with the highest VBUS seen during the wait, not the reading at the timeout.
 void Runner::fail_unit(const Input& in, const pd::SourceCaps& caps, Reason reason, int measured_mv) {
+    // A source that never listed PD has nothing to re-attach to: the rows that are still pending (the Xiaomi chain row, which the
+    // re-plan keeps) skip like the planned ones instead of failing "no PD after re-attach" (A-port, 2026-11-23).
+    const bool no_pd = reason == Reason::NoReattach && !caps.valid && !evidence_.num_pdos;
     if (late_pd_ && !caps.valid && !evidence_.num_pdos) replan_pd(caps, in, true);   // no PD source at all: the plan says NoOffer
     const int measured = reason == Reason::WrongVoltage ? std::max(attach_max_mv_, 0)
                                                         : (measured_mv >= 0 ? measured_mv : in.vbus_mv);   // -1 default: the live reading
     for (auto& s : std::span<Step>(steps_.data(), count_)) {
         if (s.verdict != Verdict::Pending || unit_of(s) != unit_) continue;
-        s.verdict = Verdict::Fail; s.reason = reason;
+        s.verdict = no_pd ? Verdict::Skip : Verdict::Fail;
+        s.reason = !no_pd ? reason : in.self_powered && in.pd_seen_attach ? Reason::PdGaveUp : Reason::NoOffer;
         s.measured_mv = static_cast<uint16_t>(std::clamp(measured, 0, 65535)); env_.record(s);
     }
     ending_ = true; begin_detach(in);
