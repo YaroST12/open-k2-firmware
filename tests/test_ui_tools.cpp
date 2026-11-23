@@ -203,15 +203,15 @@ static void test_place_actions() {
     CHECK_EQ(place_rows(conn::Tab::Source, a) == std::string("Reset & re-read:Spec & offers,Test charger,Report cards") +
                                                       (K2_PDSTRESS ? ",Stress test" : ""),
              true);
-    CHECK_EQ(place_rows(conn::Tab::Cable, a) == std::string("Reset & re-read:Read e-marker,Chip details,Resistance") +
+    CHECK_EQ(place_rows(conn::Tab::Cable, a) == std::string("Reset & re-read:Read e-marker,Resistance") +
                                                     (K2_LOOPPROBE ? ",Loop probe" : "") + ",Save cable,Saved cables,Spoof as...",
              true);
     CHECK_EQ(place_rows(conn::Tab::Sink, a) == (K2_TWIN ? "Reset & re-read:Sink details,Ask device,Twins" : "Reset & re-read:Sink details,Ask device"), true);
     std::array<conn::Item, conn::kMaxItems> it{};
     const int n = conn::place_actions(conn::Tab::Cable, a, it);
     const int cb_n = bench::actions(bench::Place::Cable).n;
-    const int save_i = 3 + cb_n;
-    CHECK_EQ(it[3].act == conn::Act::Bench && it[3].arg == 0, true);  // Resistance: the Cable place's first tool
+    const int save_i = 2 + cb_n;
+    CHECK_EQ(it[2].act == conn::Act::Bench && it[2].arg == 0, true);  // Resistance: the Cable place's first tool
     CHECK_EQ(it[static_cast<size_t>(save_i)].enabled, false);          // Save cable: no cable read
     CHECK_EQ(it[static_cast<size_t>(save_i + 2)].act == conn::Act::SpoofAs && it[static_cast<size_t>(save_i + 2)].enabled, true);
     CHECK_EQ(n, save_i + 3);

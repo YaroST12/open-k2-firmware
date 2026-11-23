@@ -1511,7 +1511,7 @@ static void test_emarker_listen_window() {
         ui.on_button(Button::Plus, ButtonEvent::Short, rt += 5);
     ui.on_button(Button::Ok, ButtonEvent::Short, 80100);  // Read cable: with a source on VBUS it only listens
     CHECK_EQ(int(g_stub.last_scan_mode), int(k2::pd::EmarkerMode::Sniff));
-    // The passive window runs 5 s; a new cable_seq inside it ends it (data arrived) and switches back to Overview/Spec.
+    // The passive window runs 5 s; a new cable_seq inside it ends it (data arrived) and opens the chip details (Spec).
     ui.tick(82000);
     CHECK_EQ(ui.context().em_listen_until != 0, true);
     CHECK_EQ(ui.connection_page().actions_mode(), true);
@@ -1521,6 +1521,7 @@ static void test_emarker_listen_window() {
     CHECK_EQ(ui.context().em_listen_until, 0u);
     CHECK_EQ(ui.context().em_quiet, false);
     CHECK_EQ(ui.connection_page().actions_mode(), false);
+    CHECK_EQ(ui.connection_page().spec_mode(), true);
     // Re-enter Actions and listen again; nothing arrives: the window expires into the quiet state + Error toast.
     ui.on_button(Button::Ok, ButtonEvent::Short, 82300);   // Overview/Spec -> Actions
     CHECK_EQ(ui.connection_page().actions_mode(), true);

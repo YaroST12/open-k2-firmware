@@ -434,7 +434,6 @@ inline int place_actions(Tab t, const ActFacts &a, std::array<Item, kMaxItems> &
         break;
     case Tab::Cable:
         put({Act::ReadCable, tx::kReadEmarker, true, ""});
-        put({Act::Details, tx::kActChipDetails, true, ""});
         for (int i = 0; i < b.n; i++) put({Act::Bench, b.a[i].name, true, "", static_cast<int8_t>(i)});
         put({Act::SaveCable, "Save cable", a.cable_valid, "No cable read"});
         put({Act::SavedCables, "Saved cables", true, ""});

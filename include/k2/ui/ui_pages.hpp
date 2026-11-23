@@ -979,7 +979,8 @@ private:
     void set_op(const char *text, uint32_t now_ms, uint32_t ms = kToastDefaultMs);
     void share_caps(uint32_t now_ms);
     void share_cable(uint32_t now_ms);
-    void read_cable(uint32_t now_ms);      // the cable read of Read e-marker
+    void read_cable(uint32_t now_ms);      // the cable read of Read e-marker; a good read opens the chip details
+    void read_failed(uint32_t now_ms);
     void paint_status(uint32_t now_ms);
     [[gnu::noinline]] bool paint_overview(const MatchResult &r, const pd::SourceCaps &caps, std::span<const uint32_t> sink);
     bool paint_actions_ident(const MatchResult &r, const pd::SourceCaps &caps, std::span<const uint32_t> sink);

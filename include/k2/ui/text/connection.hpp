@@ -73,19 +73,17 @@ inline constexpr int kSliceLineMaxPx = 192;     // 32 cells of font 12 (x8..200 
 
 inline constexpr const char *kActResetLink = "Reset & re-read";
 inline constexpr const char *kActSpecOffers = "Spec & offers";
-inline constexpr const char *kActChipDetails = "Chip details";
 inline constexpr const char *kActSinkDetails = "Sink details";
-inline constexpr const char *kActionLabels[] = {kActResetLink, kActSpecOffers, kActChipDetails, kActSinkDetails, kReadEmarker};
+inline constexpr const char *kActionLabels[] = {kActResetLink, kActSpecOffers, kActSinkDetails, kReadEmarker};
 static_assert(all_fit(kActionLabels, 8, kActionLabelMaxPx), "an Actions row label is wider than the row box");
 
 inline constexpr const char *kNoteResetInline = "Force fresh PD negotiation";
 inline constexpr const char *kNoteResetStand = "Wake / rescan source caps";
 inline constexpr const char *kNoteResetArmed = "Hard Reset drops VBUS ~0.8s";
 inline constexpr const char *kNoteSpecSource = "Open full offers & details";
-inline constexpr const char *kNoteSpecCable = "Open full e-marker details";
 inline constexpr const char *kNoteSpecSink = "Open full sink details";
 inline constexpr const char *kActionNotes[] = {kNoteResetInline, kNoteResetStand, kNoteResetArmed,
-                                               kNoteSpecSource, kNoteSpecCable, kNoteSpecSink};
+                                               kNoteSpecSource, kNoteSpecSink};
 static_assert(all_fit(kActionNotes, 6, kActionNoteMaxPx), "an Actions row note is wider than kit::kNoteMaxPx");
 
 inline constexpr const char *kSliceTagCharger = "CHARGER";
