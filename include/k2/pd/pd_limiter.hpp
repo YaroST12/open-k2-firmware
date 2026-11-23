@@ -5,7 +5,7 @@
 // own list with the same count and positions, every object clamped to P. The charger judges the sink's Request by position
 // against its REAL list, so a Request for a clamped object is always acceptable to it. SPR only: any sign of EPR stops it.
 //
-//   Armed        waiting for a real Source_Capabilities (arming mid-contract needs a replug: nothing to forge from)
+//   Armed        waiting for a real Source_Capabilities (nothing attached, a detach and a replug all land here: the limit stays)
 //   Negotiating  a real list is out: the sink's Request, the charger's Accept (kLimNegMs at most)
 //   Pending      PS_RDY seen: send the forged list on a quiet line (kLimQuietMs), at least kLimGapMs after the last one
 //   Injected     sent: the sink's next Request decides (kLimVerifyMs)
@@ -37,10 +37,10 @@ inline constexpr std::uint32_t kLimPendMs = 2000;      // a line that never goes
 inline constexpr std::uint8_t kLimMaxRejects = 2;
 inline constexpr std::uint8_t kLimMaxInjections = 20;
 
-// Arming gate: what the caller knows (another port owner busy) plus what the driver adds (CC, the inline latch, its own engines).
-enum class LimRefusal : std::uint8_t { None, BadLimit, NoCc, NotInline, Busy };
+// Arming gate: the limit and "another feature owns the wire". Nothing attached, or only a charger, is no refusal: it waits.
+enum class LimRefusal : std::uint8_t { None, BadLimit, Busy };
 struct LimFacts {
-    bool cc = false, inline_link = false, busy = false;
+    bool busy = false;
 };
 LimRefusal lim_gate(const LimFacts& f, std::uint32_t limit_mw);
 const char* lim_refusal_name(LimRefusal r);
@@ -75,9 +75,10 @@ struct LimStatus {
 
 class Limiter {
 public:
-    bool arm(std::uint32_t limit_mw, std::uint32_t now);   // false: outside kLimMinMw..kLimMaxMw
+    // false: outside kLimMinMw..kLimMaxMw. `seed` is the always-fed sniffer of this attach: a contract it holds is limited at once.
+    bool arm(std::uint32_t limit_mw, std::uint32_t now, const IqWatch* seed = nullptr);
     void disarm() { stop(LimWhy::User); }
-    void on_detach() { stop(LimWhy::Detached); }
+    void on_detach() { restart(); }   // the pair is gone, the limit waits for the next one
     bool armed() const { return st_.state != LimState::Off; }
     bool wants_tx() const { return st_.state == LimState::Pending; }   // the driver opens its TX choke point for it
     const LimStatus& status() const { return st_; }
