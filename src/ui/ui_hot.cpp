@@ -89,6 +89,7 @@ K2_HOT void Ui::pump_paint(uint32_t now_ms) {
         current().draw_static();
         if (bg && bg->more) { paint_pending_ = true; return; }
         static_pending_ = false;
+        ctx_.keep_status = false;
     }
     if (panel_pending_) {
         for (unsigned i = 0; i < 4; i++) {
@@ -421,12 +422,10 @@ K2_HOT UiAction Ui::tick(uint32_t now_ms) {
                 paint_pending_ = true;
                 pump_paint(now_ms);
             }
-            if (!paint_pending_ && !fctrig::paint_critical() && ctx_.toast.expired(now_ms)) {
-                ctx_.toast.clear();
-                ctx_.toast.erase_pending = false;
-                toast_clear_pending_ = true;
-                current().invalidate_for_capture();
-                paint_pending_ = true;
+            const bool lapsed = ctx_.toast.expired(now_ms);
+            if (!paint_pending_ && !fctrig::paint_critical() && (lapsed || ctx_.toast.erase_pending)) {
+                if (lapsed) ctx_.toast.clear();
+                restore_under_toast();
                 pump_paint(now_ms);
             }
             if (hold_shown_) hold_shown_ = false;

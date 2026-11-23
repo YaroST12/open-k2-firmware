@@ -150,6 +150,7 @@ struct UiContext {
     // is still there, and the page must write every pixel of the content itself, the gaps between its cells included
     // (kit::fill_except / kv_ground lay the ground in the same pass, so no pixel is streamed twice).
     bool blank K2_BSS_INIT(false);
+    bool keep_status K2_BSS_INIT(false);   // a static repaint that only restores pixels (a toast ended): status toasts are not raised again
     bool em_scanned K2_BSS_INIT(false);
     bool em_scanning K2_BSS_INIT(false);
     bool em_found K2_BSS_INIT(false);

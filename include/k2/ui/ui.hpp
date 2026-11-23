@@ -534,6 +534,7 @@ private:
     bool pop_to(unsigned keep_depth, uint32_t now_ms);
     void draw_opp_slot(unsigned slot);
     void draw_toast_overlay(uint32_t now_ms);
+    bool restore_under_toast();   // false: only the band was wiped (no page repaint queued)
     shell::Band shell_;
     pclink::Tracker pc_;
     pclink::State pc_state_ = pclink::State::None;   // the Back slot's corner icon (slot_sig mixes it in)

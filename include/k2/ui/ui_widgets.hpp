@@ -157,20 +157,26 @@ struct Toast {
     FooterTone tone = FooterTone::Info;
     uint32_t until_ms = 0;
     bool drawn = false;
-    bool erase_pending = false;
+    bool erase_pending = false;   // pixels of a longer or dropped pill are on screen: the page under them needs repainting
+    uint8_t ink = 0;              // the longest pill drawn since the last restore (a pill is centred and its width follows its length)
 
     void show(FooterTone t, std::string_view msg, uint32_t now_ms, uint32_t dwell_ms = kToastDefaultMs) {
-        const bool changed = t != tone || msg != view();
-        erase_pending = erase_pending || (drawn && changed);
+        if (drawn && len > ink) ink = len;
         tone = t;
         len = static_cast<uint8_t>(msg.size() < sizeof(text) - 1 ? msg.size() : sizeof(text) - 1);
         for (uint8_t i = 0; i < len; i++) text[i] = msg[i];
         text[len] = '\0';
+        erase_pending = erase_pending || ink > len;   // a pill the same width or wider paints over the old one
         until_ms = now_ms + dwell_ms;
         if (until_ms == 0) until_ms = 1;
         drawn = false;
     }
-    void clear() { erase_pending = erase_pending || drawn; len = 0; text[0] = '\0'; until_ms = 0; drawn = false; }
+    void clear() {
+        if (drawn && len > ink) ink = len;
+        erase_pending = erase_pending || ink > 0;
+        len = 0; text[0] = '\0'; until_ms = 0; drawn = false;
+    }
+    void drop_erase() { erase_pending = false; ink = 0; }   // the caller repainted the area itself
     bool active(uint32_t now_ms) const {
         return until_ms != 0 && len > 0 && static_cast<int32_t>(now_ms - until_ms) < 0;
     }

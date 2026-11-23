@@ -2511,7 +2511,8 @@ static void test_device_scroll_toast_stays_on_top() {
     const int total = cp(ui).result_rows();
     CHECK(total > ConnectionPage::kPlaceRows);
 
-    ui.context().toast.show(FooterTone::Info, "OK again: resets link", t, kToastDefaultMs);
+    constexpr std::string_view kText = "OK again: resets link";
+    ui.context().toast.show(FooterTone::Info, kText, t, kToastDefaultMs);
     ui.tick(t += 100);
     while (ui.painting()) ui.paint_more(t += 2);
     CHECK(ui.context().toast.active(t));
@@ -2522,17 +2523,12 @@ static void test_device_scroll_toast_stays_on_top() {
     constexpr int x0 = kOppRailThickness + 4;
     constexpr int w = kTwinContentW - 8;
     std::vector<uint16_t> expected(static_cast<size_t>(kToastH) * w);
-    int pill_l = w, pill_r = -1;
-    for (int dy = 0; dy < kToastH; dy++) {
-        for (int dx = 0; dx < w; dx++) {
-            const uint16_t px = g_panel[(py + dy) * LCD_WIDTH + x0 + dx];
-            expected[static_cast<size_t>(dy) * w + dx] = px;
-            if (dy == 0 && px != kBg) {
-                if (dx < pill_l) pill_l = dx;
-                if (dx > pill_r) pill_r = dx;
-            }
-        }
-    }
+    // The pill's own columns from its geometry: the page rows beside it are live and scroll under it.
+    const int pill_w = static_cast<int>(kText.size() * kLabelAdv) + 16;
+    const int pill_l = (kTwinContentW - pill_w) / 2 - (x0 - kOppRailThickness);
+    const int pill_r = pill_l + pill_w - 1;
+    for (int dy = 0; dy < kToastH; dy++)
+        for (int dx = 0; dx < w; dx++) expected[static_cast<size_t>(dy) * w + dx] = g_panel[(py + dy) * LCD_WIDTH + x0 + dx];
     CHECK(pill_r - pill_l + 1 > 32);
 
     auto check_toast_band = [&]() {
