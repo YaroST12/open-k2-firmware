@@ -264,7 +264,7 @@ test("charger-test exact schema2 selection and retained evidence", () => {
     advertised: { pps: true, epr_table: true, spr_avs: true, epr_capable: true, partial_epr: true },
     monitor_mv: 36000, physical_cable: { observed: true, max_mv: 50000, max_ma: 5000 },
     spoof_on: true, independent_revision_tested: false,
-    ps_rdy: { out_of_band: true, inferred: false, late: true, worst_ms: 700 }, cut_retries: 0,
+    ps_rdy: { out_of_band: true, inferred: false, late: true, worst_ms: 700 }, cut_retries: 0, dpdm: "unknown",
     pass_scope: "negotiation and measured voltage only; not rated-current/power or revision conformance"
   });
   const empty = new Uint8Array(42); empty[0] = 2;
@@ -276,9 +276,16 @@ test("charger-test exact schema2 selection and retained evidence", () => {
   const cut = new Uint8Array(empty); cut[40] = 4 | (3 << 3); cut[41] = 35;
   assert.deepEqual(P.decodeChargerTest(cut).evidence.ps_rdy, { out_of_band: false, inferred: false, late: true, worst_ms: 700 });
   assert.equal(P.decodeChargerTest(cut).evidence.cut_retries, 3);
-  cut[40] = 31 << 3;
+  cut[40] = 31 << 3;   // the run's count saturates at 31; older firmware sends this and the D+/D- check stays "unknown"
   assert.equal(P.decodeChargerTest(cut).evidence.cut_retries, 31);
   assert.equal(P.decodeChargerTest(cut).evidence.ps_rdy.late, false);
+  assert.equal(P.decodeChargerTest(cut).evidence.dpdm, "unknown");
+  // run-selected bits 30..31: the D+/D- check of this attach (0 not read, 1 open, 2 short); the level and the selection read as before
+  for (const [bits, word] of [[0, "unknown"], [1, "open"], [2, "short"]]) {
+    const d = new Uint8Array(empty); new DataView(d.buffer).setUint32(15, ((bits << 30) | (2 << 28) | 1) >>> 0, true);
+    const r = P.decodeChargerTest(d);
+    assert.equal(r.evidence.dpdm, word); assert.equal(r.selection.run_level, "deep"); assert.equal(r.selection.run_mask, 1);
+  }
   assert.equal(e.evidence.cut_retries, 0);
   assert.equal(e.evidence.origin, "no-run"); assert.equal(e.evidence.source_rmdo, null);
   assert.deepEqual(e.selection.run, []); assert.deepEqual(e.steps, []);
@@ -491,8 +498,8 @@ test("charger-test sweep row: flags bit 5, the detail byte is the recorded point
 
 test("charger-test schema2 rejects malformed shapes, unknown masks and unselected rows", () => {
   const good = testPage(TEST_HEADER2, 0, [TEST_ROWS[0]]);
-  for (const [at, value] of [[0, 3], [11, 107], [23, 0x42], [39, 12], [18, 0x80], [22, 0x30], [22, 0x08],
-                            [42, 20], [43, 12], [44, 0x80], [51, 5], [52, 54]]) {   // 54 = one past the last reason (53 = ProgCheck); [22, 0x30] = draft bits 28..29 = 3, no level; [22, 0x08] = draft bit 27, below the level
+  for (const [at, value] of [[0, 3], [11, 107], [23, 0x42], [39, 12], [18, 0xC0], [22, 0x30], [22, 0x08],
+                            [42, 20], [43, 12], [44, 0x80], [51, 5], [52, 55]]) {   // 55 = one past the last reason (54 = LinesOpen); [22, 0x30] = draft bits 28..29 = 3, no level; [22, 0x08] = draft bit 27, below the level
     const bad = new Uint8Array(good); bad[at] = value;
     assert.throws(() => P.decodeChargerTest(bad), P.FrameError, "offset " + at);
   }
@@ -500,6 +507,14 @@ test("charger-test schema2 rejects malformed shapes, unknown masks and unselecte
   assert.throws(() => P.decodeChargerTest(unselected), P.FrameError);
   for (const bad of [TEST_HEADER2.slice(0, 39), u8(...TEST_HEADER2, 0), u8(...good, ...TEST_ROWS[0]), good.slice(0, -1)])
     assert.throws(() => P.decodeChargerTest(bad), P.FrameError);
+});
+
+test("charger-test reason 54 is the open-lines cause: a skip that says so in one cell word", () => {
+  const row = new Uint8Array(TEST_ROWS[1]);
+  row[9] = 4; row[10] = 54;
+  const step = P.decodeChargerTest(testPage(TEST_HEADER2, 0, [row])).steps[0];
+  assert.equal(step.result, "skip"); assert.equal(step.reason, "D+/D- open: flip or data cable");
+  assert.equal(step.explanation, "lines open");
 });
 
 test("charger-test reason 44 is 'needs load': a PPS row skipped with the collapse voltage decodes", () => {

@@ -706,7 +706,7 @@ var K2Proto = (function () {
                       "timeout", "voltage outside band", "hard reset", "source lost", "cancelled", "5V release failed",
                       "offers changed", "PD active: use QC port", "revision cannot be forced", "select at least one test",
                       "physical cable limit", "unsupported PDO layout",
-                      "charger stayed in PD", "rebooted during request", "rebooted during handover", "EPR entry refused", "no contract", "source shut off (needs replug)", "no PD after re-attach", "VBUS cut, source recovered", "blocked by PD", "no QC3+ response", "rebooted 3x", "needs external power", "PD gave up before START", "Class A only (12 V max)", "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution", "HID-cable loop: 5V lock", "advertised", "light run: not asked", "port cuts without load", "output folds back", "Xiaomi chain", "transition check"];
+                      "charger stayed in PD", "rebooted during request", "rebooted during handover", "EPR entry refused", "no contract", "source shut off (needs replug)", "no PD after re-attach", "VBUS cut, source recovered", "blocked by PD", "no QC3+ response", "rebooted 3x", "needs external power", "PD gave up before START", "Class A only (12 V max)", "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution", "HID-cable loop: 5V lock", "advertised", "light run: not asked", "port cuts without load", "output folds back", "Xiaomi chain", "transition check", "D+/D- open: flip or data cable"];
   var TEST_ALL = (1 << TEST_ALGORITHMS.length) - 1;
   // How the Xiaomi 0x2717 auth chain ended, from its row's detail (mi_unlock::chain_text; tools/step_label.py mi_chain_text).
   function miChainText(code) {
@@ -838,9 +838,10 @@ var K2Proto = (function () {
       var level = (draft >>> 28) & 3;           // draft bits 28..29: the level of the next run (charger_test::Level)
       draft = draft & 0x0FFFFFFF;
       var runLevel = (runMask >>> 28) & 3;      // run bits 28..29: the level the run in hand ran at
-      runMask = (runMask & ~0x30000000) >>> 0;   // bits 30..31 stay: they are no field and fail below
+      var dpdm = ["unknown", "open", "short"][runMask >>> 30];   // run bits 30..31: the D+/D- check of this attach (0 on older firmware; 3 is no word)
+      runMask = (runMask & 0x0FFFFFFF) >>> 0;
       wire = p[23] & 3;
-      if ((runMask | draft) & ~TEST_ALL || level >= TEST_LEVELS.length || runLevel >= TEST_LEVELS.length || stage >= TEST_STAGES.length || (p[39] & 15) > 11)
+      if (dpdm === undefined || (runMask | draft) & ~TEST_ALL || level >= TEST_LEVELS.length || runLevel >= TEST_LEVELS.length || stage >= TEST_STAGES.length || (p[39] & 15) > 11)
         throw new FrameError("invalid charger-test selection or evidence");
       out.selection = { run_mask: runMask, configured_mask: draft, pps_sweep: ppsSweep, avs_sweep: avsSweep, level: TEST_LEVELS[level], run_level: TEST_LEVELS[runLevel],
                         run: TEST_ALGORITHMS.filter(function (_, i) { return runMask & (1 << i); }),
@@ -857,6 +858,7 @@ var K2Proto = (function () {
         spoof_on: !!(f & 128), independent_revision_tested: false,
         ps_rdy: header === 42 ? { out_of_band: !!(p[40] & 1), inferred: !!(p[40] & 2), late: !!(p[40] & 4), worst_ms: p[41] * 20 } : null,
         cut_retries: header === 42 ? p[40] >> 3 : 0,   // steps asked again after a legacy port dropped VBUS at 5 V (timing byte bits 3..7)
+        dpdm: dpdm,   // the D+/D- check of this attach (run-selected bits 30..31)
         pass_scope: "negotiation and measured voltage only; not rated-current/power or revision conformance"
       };
     }
@@ -908,6 +910,7 @@ var K2Proto = (function () {
           why === 28 ? "EPR: no PD contract" :
           why === 38 ? (EPR_DETAILS[detail] || TEST_REASONS[why]) :
           why === 46 ? (detail ? "step resolution " + detail + "mV" : "steps ignored") :
+          why === 54 ? "lines open" :   // charger_test.hpp kLinesOpenCell
           why === 53 ? (progCheckText(detail).split(",")[0] || TEST_REASONS[why]) :
           why === 22 && code === 10 ? "SCP 5A modes need an observed 5A cable" : TEST_REASONS[why];
       }
@@ -3627,6 +3630,7 @@ var CtGrid = (function () {
   ];
   var SILENT_SKIP = { vivo: ["no response"], ufcs: ["no response", "no handshake"], afc: ["unsupported"], fcp: ["unsupported"], scp: ["unsupported"],
                       qc2: ["no handshake"], qc3: ["no handshake"], "qc3+": ["no handshake"], qc2b: ["no handshake"], qc3b: ["no handshake"] };   // charger_test.hpp never_answered
+  var LINES_OPEN = "D+/D- open: flip or data cable";   // the runner's one reason for every unit it skipped on open D+/D- (charger_test.hpp Reason::LinesOpen)
   var VOOC_ALGS = ["vooc", "svooc", "svooc65"];   // one shared detection: the finished grid reads them as the levels above
   var RAN_ITS_COURSE = { judged: 1, stopped: 1, cap: 1, "time cap": 1 };   // svooc_ceiling::End names (readout, card)
   // "120W", "22.5W" (0.1 W, the tenth only when not 0; whole watts from 100 W, so at most 5 characters); "" for 0 mW.
@@ -3801,6 +3805,11 @@ var CtGrid = (function () {
     var of = function (a) { return steps.filter(function (s) { return s.alg === a; }); };
     var isPd = function (a) { return has(PD_GROUP, a) || !!REVISIONS[a]; };
     var isRange = function (a) { return has(RANGE_ALGS, a); };
+    // Every row of unit a is skipped and one says the lines are open (result_layout.cpp is_lines_open_unit).
+    function linesOpenUnit(a) {
+      var xs = of(a);
+      return xs.length > 0 && xs.every(function (s) { return s.result === "skip"; }) && xs.some(function (s) { return s.reason === LINES_OPEN; });
+    }
     function silentSkip(s) { return s.result === "skip" && !!s.raw && !!SILENT_SKIP[s.alg] && SILENT_SKIP[s.alg].indexOf(s.raw.detail_reason) >= 0; }
     function isAbsent(a) {
       var xs = of(a);
@@ -3892,6 +3901,7 @@ var CtGrid = (function () {
       });
     }
     function legacyRow(row, a) {
+      if (linesOpenUnit(a)) { word(row, "No D+/D-", "caution"); return; }   // as legacy_row: one cell, the cause
       var seen = {};
       steps.forEach(function (x) {
         if (x.alg !== a || !x.mv || seen[x.mv]) return;
@@ -3933,6 +3943,7 @@ var CtGrid = (function () {
     function voocRows(key, a) {
       var fam = steps.filter(function (s) { return has(VOOC_ALGS, s.alg); });
       var pass = fam.some(function (s) { return s.result === "pass"; });
+      if (!pass && opts.fold && VOOC_ALGS.every(function (x) { return !of(x).length || linesOpenUnit(x); })) { open[a] = true; return; }
       var gone = VOOC_ALGS.some(function (x) { return of(x).length && isAbsent(x); });
       var skipOnly = VOOC_ALGS.every(function (x) { return !of(x).length || skippedOnly(x); });
       if (!pass && opts.fold && (gone || skipOnly)) { (gone ? absent : skipped)[a] = true; return; }
@@ -3946,7 +3957,7 @@ var CtGrid = (function () {
       });
     }
 
-    var absent = {}, skipped = {};
+    var absent = {}, skipped = {}, open = {};
     keys.forEach(function (key) {
       var row, a = key.alg;
       if (opts.oemWatts && has(VOOC_ALGS, a)) {   // the family's rows stand where the plan first runs one of its units
@@ -3995,6 +4006,7 @@ var CtGrid = (function () {
         return;
       }
       var legacy = true;
+      if (opts.fold && linesOpenUnit(a)) { open[a] = true; return; }
       if (isAbsent(a)) {
         if (opts.fold || !legacy) { absent[a] = true; return; }
         if (opts.absentCell) { row = begin(NAMES[a] || a, key); word(row, "no reply", "dim"); row.chips[0].steps = of(a); return; }
@@ -4017,6 +4029,7 @@ var CtGrid = (function () {
     }
     collapsed(absent, "No reply", "dim");
     collapsed(skipped, "Skipped", "caution");
+    collapsed(open, "No D+/D-", "caution");
 
     // A lone cell that never ran says why in words (never a bare strike through "5V"); a unit that never answered is dim, not red.
     rows.forEach(function (r) {

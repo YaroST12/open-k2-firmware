@@ -473,6 +473,16 @@ test("a VOOC family that was skipped as 'no answer' folds as No reply, not Skipp
   assert.ok(!got.some((l) => /^Skipped/.test(l)), got.join(" | "));
 });
 
+test("units skipped on open D+/D- fold as one No D+/D- word, not Skipped or No reply", () => {
+  const open = (alg, mv) => S(alg, mv, "skip", { reason: "D+/D- open: flip or data cable" });
+  const got = lines([open("qc2", 5000), open("qc3", 5000), open("ufcs", 5000), S("fcp", 5000, "pass")], { fold: true });
+  assert.ok(got.some((l) => /^No D\+\/D-: .*QC2/.test(l) && /UFCS/.test(l)), got.join(" | "));
+  assert.ok(!got.some((l) => /^(Skipped|No reply)/.test(l)), got.join(" | "));
+  // the Running grid (no fold): the unit's own row says the cause
+  const run = lines([open("qc2", 5000)], { fold: false });
+  assert.ok(run.some((l) => /No D\+\/D-/.test(l)), run.join(" | "));
+});
+
 test("a silent VIVO / UFCS / AFC unit (skipped, no first answer) folds as No reply; a heard one stays a fail row", () => {
   const row = (alg, mv, detail_reason) => ({ ...S(alg, mv, "skip", { reason: "request failed", detail: 7 }), detail_reason });
   const got = lines([row("vivo", 5000, "no response"), row("vivo", 9000, "no response"), row("afc", 5000, "unsupported"), S("fcp", 5000, "fail")], { fold: true });

@@ -293,7 +293,7 @@ TEST_REASONS = ["none", "disabled", "not advertised", "over voltage cap", "not i
                 "rebooted during request", "rebooted during handover", "EPR entry refused", "no contract",
                 "source shut off (needs replug)", "no PD after re-attach", "VBUS cut, source recovered", "blocked by PD",
                 "no QC3+ response", "rebooted 3x", "needs external power", "PD gave up before START", "Class A only (12 V max)",
-                "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution", "HID-cable loop: 5V lock", "advertised", "light run: not asked", "port cuts without load", "output folds back", "Xiaomi chain", "transition check"]
+                "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution", "HID-cable loop: 5V lock", "advertised", "light run: not asked", "port cuts without load", "output folds back", "Xiaomi chain", "transition check", "D+/D- open: flip or data cable"]
 TEST_MAX_STEPS = 112  # Runner's bounded storage: pd::kMaxPdos * 6 + 46
 # fastcharge::Protocol in enum order (include/k2/fastcharge/fastcharge_classify.hpp)
 FC_NAMES = ["...", "NO INPUT", "NO QUICK", "DCP 5V", "QC3.0", "QC2.0 5V", "QC2.0 9V", "QC2.0 12V",
@@ -1653,8 +1653,9 @@ def decode_charger_test(p):
         level = (draft_mask & TEST_LEVEL_MASK) >> TEST_LEVEL_SHIFT   # draft bits 28..29: the level of the next run
         draft_mask &= ~(TEST_SWEEP_BIT | TEST_AVS_SWEEP_BIT | TEST_LEVEL_MASK)
         run_level = (run_mask & TEST_LEVEL_MASK) >> TEST_LEVEL_SHIFT   # run bits 28..29: the level the run in hand ran at
-        run_mask &= ~TEST_LEVEL_MASK
-        if (run_mask | draft_mask) & ~TEST_ALL or level >= len(TEST_LEVELS) or run_level >= len(TEST_LEVELS) \
+        dpdm_bits = run_mask >> 30   # run bits 30..31: the D+/D- check of this attach (0 on older firmware; 3 is no word)
+        run_mask &= ~(TEST_LEVEL_MASK | 3 << 30)
+        if dpdm_bits == 3 or (run_mask | draft_mask) & ~TEST_ALL or level >= len(TEST_LEVELS) or run_level >= len(TEST_LEVELS) \
                 or stage >= len(TEST_STAGES) or p[39] & 15 > 11:
             raise FrameError("invalid charger-test selection or evidence")
         out["selection"] = {"run_mask": run_mask, "configured_mask": draft_mask, "pps_sweep": sweep,
@@ -1680,6 +1681,7 @@ def decode_charger_test(p):
                        "worst_ms": p[41] * 20} if header == 42 else None,   # None: this firmware does not report it
             # steps asked again after a legacy port dropped VBUS for a moment at 5 V (timing byte bits 3..7, saturating at 31)
             "cut_retries": p[40] >> 3 if header == 42 else 0,
+            "dpdm": ("unknown", "open", "short")[dpdm_bits],
             "pass_scope": "negotiation and measured voltage only; not rated-current/power or revision conformance"}
     rows = []
     for i in range(n):
@@ -1754,6 +1756,7 @@ def decode_charger_test(p):
                 "EPR: no PD contract" if why == 28 else
                 EPR_DETAILS.get(detail, TEST_REASONS[why]) if why == 38 else
                 f"step resolution {detail}mV" if why == 46 and detail else "steps ignored" if why == 46 else
+                "lines open" if why == 54 else   # charger_test.hpp kLinesOpenCell
                 step_label.prog_check_text(detail).split(",")[0] or TEST_REASONS[why] if why == 53 else
                 "SCP 5A modes need an observed 5A cable" if why == 22 and code == 10 else TEST_REASONS[why])
         rows.append(row)
