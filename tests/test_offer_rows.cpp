@@ -176,6 +176,11 @@ static void test_summary_flags_for_the_chips() {
     CHECK_EQ(s.pps, 1);
     CHECK_EQ(s.avs, 1);   // the AVS sits in the EPR list only
     CHECK_EQ(s.epr, 1);
+    CHECK_EQ(int(offers::count(c, c.num_pdos, epr)), 4);   // two live offers and the two EPR ones, not the empty slots between
+    CHECK_EQ(int(offers::count(c, c.num_pdos, {})), 2);
+    pd::SourceCaps bare;   // a decoded entry without its raw word still counts (the page tests build them that way)
+    bare.valid = true; bare.num_pdos = 1; bare.pdos[0] = {pd::PdoType::Fixed, 0, 5000, 5000, 3000, 15000};
+    CHECK_EQ(int(offers::count(bare, 1, {})), 1);
     const offers::Summary none = offers::summarize(caps_of({fixed(5000, 3000)}), 1, {});
     CHECK_EQ(none.pps, 0);
     CHECK_EQ(none.avs, 0);
