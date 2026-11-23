@@ -27,6 +27,9 @@ void Machine::advance(std::uint32_t now_ms) {
         return;
     }
     const std::uint32_t delta = now_ms - last_ms_;   // modular: the clock wrap cancels
+    // An older stamp (a press sampled in a wait loop with a fresh millis(), then the loop's tick with its earlier now) is no
+    // elapsed time: read modular, it would be a 49-day idle that turns the screen off.
+    if (static_cast<std::int32_t>(delta) <= 0) return;
     last_ms_ = now_ms;
     idle_ms_ = delta > 0xFFFFFFFFu - idle_ms_ ? 0xFFFFFFFFu : idle_ms_ + delta;
 }

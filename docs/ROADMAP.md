@@ -80,6 +80,11 @@ Everything is C++23; there are no C files left in `src/` (TinyUSB and lwIP under
 
 Open defects, newest first. A row leaves this list when its fix is merged and seen on hardware.
 
+- **Screen turns off while navigating** (2026-11-23, user on the Cable tab; K2 1.2.0-85): `k2_remote power` read `idle_s`
+  4294967 (saturated). Buttons are sampled in wait loops with a fresh `millis()`, then `idle_hw::service` ticks with the loop's
+  older `now`; `idle::Machine::advance` read the backwards step as a 49-day idle -> Off. Fixed: an older stamp adds no time
+  (`test_idle` red first). Not yet seen on hardware.
+
 - **Vendor database follow-ups** (2026-11-23): VID 0x0716 (this K2's own, Oxus Research on the USB-IF list) is left unlabeled;
   `rl::vendor_oem_name` is a separate table. Done: cable names are "<Brand> <W>W" (c23154ac), SVID names come from the one table
   (5f5f3f8c), 0x2B01 reads CUKTECH (USB-IF: Zimi Corporation, c245aa82).

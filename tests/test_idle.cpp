@@ -566,6 +566,21 @@ static void test_clock_wrap_and_long_gaps() {
     }
 }
 
+// A press stamped later than the next tick (buttons are sampled inside wait loops with a fresh millis(); the service tick uses
+// the loop's older now): the older timestamp is no elapsed time at all, never a 49-day idle that turns the screen off.
+static void test_older_timestamp_after_a_press_is_no_idle_time() {
+    idle::Machine m;
+    m.tick(quiet(1000));
+    CHECK_EQ(m.press(1500), true);
+    const idle::Output o = m.tick(quiet(1490));
+    CHECK_EQ(o.state == idle::State::Active, true);
+    CHECK_EQ(m.idle_s(), 0u);
+    m.touch(2000);
+    CHECK_EQ(m.tick(quiet(1995)).state == idle::State::Active, true);
+    CHECK_EQ(m.tick(quiet(61999)).state == idle::State::Active, true);   // 59.999 s after the touch at 2000
+    CHECK_EQ(m.tick(quiet(62000)).state == idle::State::Dim, true);
+}
+
 // The glue's backlight decision against what the PWM carries (not what was last asked for): panel_sleep(true) zeroes the PWM
 // without touching the request, so a wake back to the pre-sleep level must still write. FakeBacklight mirrors lcd.cpp:
 // sleeping zeroes the PWM; set_brightness writes only while the panel is awake.
@@ -681,5 +696,6 @@ int main() {
     test_zero_brightness_is_honoured_at_runtime();
     test_idle_seconds_and_config_change();
     test_clock_wrap_and_long_gaps();
+    test_older_timestamp_after_a_press_is_no_idle_time();
     return test_report("test_idle");
 }

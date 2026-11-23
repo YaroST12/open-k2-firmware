@@ -29,7 +29,8 @@
 // busy. Any activity above returns to Active in the same tick, so the clock is full again before the work is handled.
 //
 // All times are the 32-bit millisecond clock. The machine adds each tick's elapsed time to a saturating idle counter, so the
-// clock wrap is harmless and an idle period longer than the wrap never reads as activity.
+// clock wrap is harmless and an idle period longer than the wrap never reads as activity. A stamp older than the last one
+// (callers sample the clock at different points of a loop pass) adds nothing.
 #pragma once
 
 #include <cstdint>
