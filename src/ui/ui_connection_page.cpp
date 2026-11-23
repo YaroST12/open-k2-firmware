@@ -2375,11 +2375,11 @@ void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
     for (int i = 0; i < shown; i++) {
         const SliceSpec::Chip &ch = sl.chip[i];
         switch (ch.k) {
-        case SliceSpec::Solid: kit::draw_chip(c, cx[i], chip_y, ch.t.view(), kChip, kOnChip); break;
-        case SliceSpec::Ok: kit::draw_chip(c, cx[i], chip_y, ch.t.view(), kOkT, kOk); break;
-        case SliceSpec::Warn: kit::draw_chip(c, cx[i], chip_y, ch.t.view(), kCautionT, kCaution); break;
-        case SliceSpec::Neutral: kit::draw_chip(c, cx[i], chip_y, ch.t.view(), kBg2, kInk); break;
-        case SliceSpec::Last: kit::draw_chip(c, cx[i], chip_y, ch.t.view(), kStale, kBg); break;
+        case SliceSpec::Solid: kit::draw_chip(c, cx[i], chip_y, ch.t.view(), kChip, kOnChip, 0, bg_col); break;
+        case SliceSpec::Ok: kit::draw_chip(c, cx[i], chip_y, ch.t.view(), kOkT, kOk, 0, bg_col); break;
+        case SliceSpec::Warn: kit::draw_chip(c, cx[i], chip_y, ch.t.view(), kCautionT, kCaution, 0, bg_col); break;
+        case SliceSpec::Neutral: kit::draw_chip(c, cx[i], chip_y, ch.t.view(), kBg2, kInk, 0, bg_col); break;
+        case SliceSpec::Last: kit::draw_chip(c, cx[i], chip_y, ch.t.view(), kStale, kBg, 0, bg_col); break;
         }
     }
     if (l1w > 0) gfx_text(c, kLabelFont, 8, l1_y, l1_v, l1_col, bg_col);

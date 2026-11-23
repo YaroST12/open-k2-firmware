@@ -88,7 +88,19 @@ void draw_verdict(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, 
         if (st.marked) draw_run_mark(s, {x, y, w, h}, true);   // over the cell's rim, after the text
         return;
     }
-    // No label: the state's glyph, centred.
+    // No label: the state's glyph, centred, in a square cell kept at its native size like a row marker (a squeeze dropped rows of
+    // the cell and of its 1 px rims); `under` fills the rest of the mapped box.
+    if (ContentViewport::scaled()) {
+        const Rect m = ContentViewport::mapped_rect({static_cast<int16_t>(s.x + x), static_cast<int16_t>(s.y + y), w, h});
+        const Rect n = gfx_native_rect(s, x, y, w, h);
+        if (n.w != w || n.h != h) return;
+        ContentViewport::Pause unscaled;
+        const Surface panel{0, 0, kScreenW, kScreenH};
+        if (m.x + m.w > n.x + w) gfx_fill(panel, static_cast<int16_t>(n.x + w), m.y, static_cast<int16_t>(m.x + m.w - n.x - w), m.h, under);
+        if (m.y + m.h > n.y + h) gfx_fill(panel, m.x, static_cast<int16_t>(n.y + h), m.w, static_cast<int16_t>(m.y + m.h - n.y - h), under);
+        draw_verdict(panel, n.x, n.y, w, h, v, label, under, sweep);
+        return;
+    }
     int sz = (w < h ? w : h) - 4;
     if (sz > 12) sz = 12;
     const int16_t gx = static_cast<int16_t>(x + (w - sz) / 2), gy = static_cast<int16_t>(y + (h - sz) / 2);
@@ -320,22 +332,29 @@ void kv_static(const Surface &s, const KvLayout &l, const char *const *labels, i
              static_cast<int16_t>(y + kBig.ascent - kMid.ascent), unit, col, kBg);
 }
 
+// Native dots at their mapped origins: a stretched 2 px fill came out 3 px wide every few dots in landscape.
 void draw_leader(const Surface &s, int16_t x0, int16_t x1, int16_t y) {
     for (int x = (x0 + kLeaderPitch - 1) / kLeaderPitch * kLeaderPitch; x + kLeaderDot <= x1; x += kLeaderPitch)
-        gfx_fill(s, static_cast<int16_t>(x), y, kLeaderDot, kLeaderDot, kInk3);
+        gfx_fill_panel(gfx_native_rect(s, static_cast<int16_t>(x), y, kLeaderDot, kLeaderDot), kInk3);
 }
 
-int draw_chip(const Surface &s, int16_t x, int16_t y, std::string_view text, uint16_t fill, uint16_t ink, int16_t min_w) {
+int draw_chip(const Surface &s, int16_t x, int16_t y, std::string_view text, uint16_t fill, uint16_t ink, int16_t min_w,
+              uint16_t ground) {
     const int16_t w = std::max<int16_t>(static_cast<int16_t>(badge_text_bounds(kLabelFont, text).w + 8), min_w);
-    draw_label_box(s, x, y, w, kChipH, text, ink, fill);
+    draw_pill_box(s, x, y, w, kChipH, text, ink, fill, fill, ground);
     return w;
+}
+
+void erase_chips(const Surface &s, int16_t x, int16_t y, int16_t w, uint16_t ground) {
+    gfx_fill(s, x, y, w, kChipH, ground);
+    if (!ContentViewport::scaled() || w <= 0) return;
+    const Rect m = ContentViewport::mapped_rect({static_cast<int16_t>(s.x + x), static_cast<int16_t>(s.y + y), w, kChipH});
+    if (m.h < kChipH) gfx_fill_panel({m.x, static_cast<int16_t>(m.y + m.h), m.w, static_cast<int16_t>(kChipH - m.h)}, ground);
 }
 
 int draw_chip_frame(const Surface &s, int16_t x, int16_t y, std::string_view text, uint16_t frame, uint16_t ink, uint16_t bg) {
     const int16_t w = static_cast<int16_t>(badge_text_bounds(kLabelFont, text).w + 8);
-    draw_frame(s, x, y, w, kChipH, 1, frame);
-    draw_label_box(s, static_cast<int16_t>(x + 1), static_cast<int16_t>(y + 1), static_cast<int16_t>(w - 2),
-                   static_cast<int16_t>(kChipH - 2), text, ink, bg);
+    draw_pill_box(s, x, y, w, kChipH, text, ink, bg, frame, bg);
     return w;
 }
 

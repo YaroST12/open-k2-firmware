@@ -150,9 +150,8 @@ void DetailPage::draw_static() {
         if (!ctx_.blank) lay_values_ground(c);   // a blank screen is kBg already
         for (int q = 0; q < 3; q++) {
             const int16_t x = static_cast<int16_t>(q * kValPitch);
-            gfx_fill(c, static_cast<int16_t>(x + kChipX), kChipY, kChipW, kChipH, chip_fill(q));
-            gfx_text(c, kLabelFont, static_cast<int16_t>(x + kChipX + (kChipW - kLabelAdv) / 2), static_cast<int16_t>(kChipY + 1),
-                     kChipLetter[q], chip_ink(q), chip_fill(q));
+            static_assert(kChipH == kit::kChipH, "the unit badge is a kit chip");
+            kit::draw_chip(c, static_cast<int16_t>(x + kChipX), kChipY, kChipLetter[q], chip_fill(q), chip_ink(q), kChipW);
             gfx_fill(c, x, kUnderY, kUnderW, kUnderH, chip_fill(q));
         }
         static_step_ = 2;

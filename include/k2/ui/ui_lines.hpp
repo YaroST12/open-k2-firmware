@@ -11,7 +11,7 @@
 
 namespace k2 {
 
-constexpr int kLinesBarW = 104;          // track width, 0 .. 3.3 V (208 px twin-rail canvas)
+constexpr int kLinesBarW = 108;          // track width, 0 .. 3.3 V: x94..201, ends on the Lines value column (208 px canvas)
 constexpr int32_t kLinesFullMv = 3300;
 constexpr int lines_bar_px(int32_t mv) {
     if (mv <= 0) return 0;

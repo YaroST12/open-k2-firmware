@@ -73,6 +73,10 @@ enum class TextDir : uint8_t { Ccw, Cw };
 // horizontal text, returned as Ccw but not used).
 constexpr TextDir panel_text_dir(PanelEdge edge) { return edge == PanelEdge::Left ? TextDir::Cw : TextDir::Ccw; }
 constexpr bool panel_is_column(PanelEdge edge) { return edge == PanelEdge::Right || edge == PanelEdge::Left; }
+// The telemetry rail's text reads bottom-to-top on either side, so both side rotations show the title at the bottom and the
+// readouts above it (rotation 2 read top-down, title at the top, and looked flipped against rotation 0). The strip keeps
+// panel_text_dir.
+constexpr TextDir rail_text_dir(PanelEdge) { return TextDir::Ccw; }
 
 // The telemetry rail's four cells in reading order (page title, then the readouts); the lengths and the order are the same in
 // every rotation. A column rail whose text reads bottom-to-top (TextDir::Ccw) lays them out from the bottom up.

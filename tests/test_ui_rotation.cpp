@@ -60,14 +60,13 @@ static void test_native_menu_fonts() {
         const int pill_w = text_w + 16;
         const int pill_x = (logical.w - pill_w) / 2;
         Rect inner;
-        {
+        {   // the pill keeps its native size hanging from its mapped box's top row; the label centres inside its 1 px frame
             ContentViewport viewport(box);
-            inner = ContentViewport::mapped_rect({
-                static_cast<int16_t>(pill_x + 1),
-                static_cast<int16_t>(logical.h - kToastH - kToastMarginBottom + 1),
-                static_cast<int16_t>(pill_w - 2),
-                static_cast<int16_t>(kToastH - 2),
-            });
+            const Rect pill = ContentViewport::native_box({static_cast<int16_t>(pill_x),
+                                                           static_cast<int16_t>(logical.h - kToastH - kToastMarginBottom),
+                                                           static_cast<int16_t>(pill_w), kToastH}, true);
+            inner = {static_cast<int16_t>(pill.x + 1), static_cast<int16_t>(pill.y + 1), static_cast<int16_t>(pill_w - 2),
+                     static_cast<int16_t>(kToastH - 2)};
         }
         const TextOrigin origin = center_in_box(inner, badge_text_bounds(kLabelFont, "Identify"));
         for (int row = 0; row < kLabelFont.height; ++row) {
@@ -729,7 +728,45 @@ static void test_remote_keys_are_logical() {
     CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Tools));
 }
 
+// A live Ui turned into a rotation paints the same telemetry rail as one booted there: a turn leaves no rail cell of the
+// old layout behind (the rail's cell signatures carry the edge and the position, so the reversed side rails repaint whole).
+static void test_rail_after_turn_matches_fresh() {
+    for (uint8_t to = 0; to < 4; ++to) {
+        g_stub = {};
+        g_stub.pm_online = true;
+        g_stub.pm.vbus_mv = 20000;
+        g_stub.pm.current_ma = 1830;
+        g_stub.pm.power_mw = 36600;
+        const auto settle = [](Ui &u, uint32_t t) { u.tick(t); while (u.painting()) u.tick(t); };
+        Ui fresh;
+        fresh.init(0);
+        CHECK_EQ(fresh.goto_page(static_cast<uint8_t>(Page::Lines), 100), true);
+        fresh.set_rotation(to ^ 1, 200);
+        fresh.set_rotation(to, 300);
+        settle(fresh, 6000);
+        std::array<uint16_t, 240 * 240> want;
+        std::copy(std::begin(g_panel), std::end(g_panel), want.begin());
+        Ui turned;
+        turned.init(0);
+        CHECK_EQ(turned.goto_page(static_cast<uint8_t>(Page::Lines), 100), true);
+        for (uint8_t r = 0; r < 4; ++r) {   // every other rotation first, painted out, then the one under test
+            if (r == to) continue;
+            turned.set_rotation(r, 200 + r);
+            settle(turned, 1000 + r * 100);
+        }
+        turned.set_rotation(to, 2000);
+        settle(turned, 6000);
+        const Rect rail = compute_layout(orientation_for(to).edge, kSlotCenters, kSlotLens, kPanelThickness).opp_rail;
+        int bad = 0;
+        for (int y = rail.y; y < rail.y + rail.h; ++y)
+            for (int x = rail.x; x < rail.x + rail.w; ++x) bad += g_panel[y * 240 + x] != want[y * 240 + x];
+        if (bad) std::printf("  rotation %u: %d rail px differ from a fresh boot\n", unsigned(to), bad);
+        CHECK_EQ(bad, 0);
+    }
+}
+
 int main() {
+    test_rail_after_turn_matches_fresh();
     test_remote_keys_are_logical();
     test_native_menu_fonts();
     test_static_flow_indicator();

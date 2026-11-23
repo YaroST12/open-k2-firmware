@@ -82,7 +82,27 @@ Everything is C++23; there are no C files left in `src/` (TinyUSB and lwIP under
 
 ## Current bugs
 
-- **Rail flips in the two side rotations** (2026-11-23, v1.2.0-192, user): the fixed rail order holds top/bottom, but left/right still flips. Fix the reading order for the side rails.
+- **Rail flips in the two side rotations** (2026-11-23, v1.2.0-192, user): the fixed rail order holds top/bottom, but left/right
+  still flips. Fixed in k2/ui-native (ab89ae9d): both side rails read bottom-up (`rail_text_dir`), so rotation 2 has its title
+  at the bottom like rotation 0; the button strip keeps `panel_text_dir`. Host tests `test_ui_layout` (side rails read alike),
+  `test_ui_rotation` (a turned Ui draws the rail of a fresh one), `test_ui_capture`. Not verified on hardware. Verify: rotations
+  0 and 2, the rail title at the bottom, cells reading upward.
+- **Pills squeezed in landscape** (2026-11-23, user): chips (Charger tab hero PD3.x/EPR/PPS, Lines tags, verdict chips), the
+  Numbers V/A/W badges and the toast lost rows and edges in rotations 1 and 3. Fixed in k2/ui-native (69cb1bc8, ce87a3e4,
+  d6d8f348, 48b14a4a): `draw_pill_box` draws every pill at native size from its mapped origin (the toast centred, hanging from its band
+  top); `erase_toast` and `kit::erase_chips` wipe the rows a native pill hangs below its mapped box. Host tests `test_kit`, `test_ui_rotation`,
+  `test_ui_memory`, `test_ui_charger_test`. Not verified on hardware. Verify: rotations 1 and 3, chips and badges with four
+  whole edges, a toast that clears without a red line under it (Memory page at low space).
+- **LOG stamp cross glitched** (2026-11-23, user): the 16 px cross sampled to 12 px on one side only. Fixed in k2/ui-native
+  (37ce915a): a 12 px mark is the icon table's glyph; smaller marks sample symmetrically; the label-less verdict cell stays
+  native. Host tests `test_kit`, `test_ui_widgets`. Not verified on hardware. Verify: Log place, the stamp's X in 4 rotations.
+- **Lines alignment** (2026-11-23, audit): VREF ended one cell short (the two-byte degree sign counted as two cells), the bars
+  ended at x198 against the values' x202, and landscape leader dots came out 2 or 3 px wide. Fixed in k2/ui-native (12474667,
+  82312fcb, 9156320a). Not verified on hardware. Open: in rotations 1 and 3 a right-aligned field starts at its mapped origin at
+  native width, so values end about 15 px short of the stretched bars (217 against 232; kit-wide). Route: shift a right-aligned
+  field's logical origin as the RowList tail does (`tail_origin`, kit_hot.cpp), so the ground holes stay consistent.
+- **Battery rows mixed icons** (2026-11-23, user): the settings rows, Saved runs and Share had no marker. Fixed in k2/ui-native
+  (5ff1c12e): Plug, Meter, Clock, Report, Phone. Host test `test_ui_battery`. Not verified on hardware.
 - **PC-link socket icon too dim on the rail** (2026-11-23, user): brighten it for the next release.
 
 Open defects, newest first. A row leaves this list when its fix is merged and seen on hardware.

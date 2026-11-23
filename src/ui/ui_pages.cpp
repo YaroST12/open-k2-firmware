@@ -819,7 +819,7 @@ void MemoryPage::update(uint32_t) {
         if (lv != memstat::Level::Ok) {
             draw_toast(ctx_.content, tone, fv);
         } else if (had_toast && !ctx_.toast.active(ctx_.now)) {
-            gfx_fill(ctx_.content, 0, static_cast<int16_t>(ctx_.content.h - 20), ctx_.content.w, 16, kBg);
+            erase_toast(ctx_.content);
         }
     });
 }
@@ -875,6 +875,7 @@ constexpr const char *kLnTag[4] = {"D+", "D-", "CC1", "CC2"};
 constexpr int32_t kLnFaintMv = 100;                         // a line under 0.1 V reads as nothing on it
 // Three receipt rows (Rp, D+/D-, VREF): key font 16 at x 6, dot leader, 12-char value right-aligned to x 202.
 constexpr kit::KvLayout kLnKv{154, 26, 6, nullptr, nullptr, static_cast<int16_t>(202 - 12 * 8), 12, Align::Right};
+static_assert(kLnBarX + kLinesBarW == 202, "the bars end on the receipt values' right edge");
 constexpr const char *kLnReceiptLabels[3] = {"Rp", "D+/D-", "VREF"};
 
 int16_t tick_x(int32_t mv) { return static_cast<int16_t>(kLnBarX + lines_tick_px(mv)); }
@@ -1020,7 +1021,7 @@ bool LinesPage::paint_verdict(const std::optional<adc::Reading> &r, uint32_t now
         const ChipStyle ts = tone_chip(v.tone);
         const int16_t y = static_cast<int16_t>(kVerdictY + 2);
         auto draw_next = [&](int16_t x, std::string_view text, uint16_t fill, uint16_t ink) {
-            gfx_fill(c, x, y, 6, kit::kChipH, kBg);
+            kit::erase_chips(c, x, y, 6, kBg);
             return static_cast<int16_t>(x + 6 + kit::draw_chip(c, static_cast<int16_t>(x + 6), y, text, fill, ink));
         };
         int16_t x = draw_next(0, v.main.view(), ts.fill, ts.ink);
@@ -1029,7 +1030,7 @@ bool LinesPage::paint_verdict(const std::optional<adc::Reading> &r, uint32_t now
             const bool volts = ex.back() == 'V';
             x = draw_next(x, ex, volts ? kSpotVolt : kBg2, volts ? kSpotInk : kInk);
         }
-        if (x < c.w) gfx_fill(c, x, y, static_cast<int16_t>(c.w - x), kit::kChipH, kBg);   // a shorter row must not leave the old tail
+        if (x < c.w) kit::erase_chips(c, x, y, static_cast<int16_t>(c.w - x), kBg);   // a shorter row must not leave the old tail
         painted_ = true;
     }
     if (!pg::put_field(pv_[0], bg, rp.view(), r ? kText : kFaint)) return false;

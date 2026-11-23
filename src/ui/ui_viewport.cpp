@@ -65,6 +65,14 @@ K2_HOT Rect ContentViewport::mapped_rect(Rect source) {
             static_cast<int16_t>(mapped(source.y + source.h, d.h, active->logical_h_) - y)};
 }
 
+Rect ContentViewport::native_box(Rect source, bool centred) {
+    if (!active || lcd::get_sink() == active->previous_) return source;
+    const Rect m = mapped_rect(source), &d = active->destination_;
+    const int x = std::clamp<int>(centred ? m.x + (m.w - source.w) / 2 : m.x, d.x, d.x + d.w - source.w);
+    const int y = std::clamp<int>(m.y, d.y, d.y + d.h - source.h);
+    return {static_cast<int16_t>(x), static_cast<int16_t>(y), source.w, source.h};
+}
+
 ContentViewport::ContentViewport(Rect destination, int16_t logical_w, int16_t logical_h)
     : destination_(destination), logical_w_(logical_w), logical_h_(logical_h) {
     static constexpr lcd::Sink sink{begin, pixels, fill};

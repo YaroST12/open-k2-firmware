@@ -175,20 +175,32 @@ K2_HOT void readout_row(BandRow &row, StatusReadout mode, std::string_view v, st
     lcd::stream_end();
 }
 
+namespace {
+// The source column / row behind output pixel i of n: centre sampling mirrored about the middle, so a symmetric source stays
+// symmetric at any size (plain i * src / n skipped columns on one side only).
+K2_HOT int mono_src(int i, int n, int src) {
+    if (n == src) return i;
+    if (2 * i >= n) return src - 1 - (2 * (n - 1 - i) + 1) * src / (2 * n);
+    return (2 * i + 1) * src / (2 * n);
+}
+}  // namespace
+
+// Always a native square: a landscape viewport stretches the fills around it, never the bitmap (the box is mapped once).
 K2_HOT void stream_mono(const Surface &s, int16_t x, int16_t y, int sz, int src,
                         const uint16_t *rows, int msb, uint16_t fg, uint16_t bg) {
-    if (sz <= 0 || sz > 16 || !fits(s, x, y, sz, sz)) return;
-    int r0 = 0, r1 = sz;
-    if (!clip_box_to_band(s, x, y, sz, sz, r0, r1)) return;
+    if (sz <= 0 || sz > 16) return;
+    const Rect m = gfx_native_rect(s, x, y, static_cast<int16_t>(sz), static_cast<int16_t>(sz));
+    if (m.w != sz || m.h != sz) return;
+    ContentViewport::Pause unscaled;
+    uint16_t band_y = static_cast<uint16_t>(m.y), band_h = static_cast<uint16_t>(sz);
+    if (!lcd::clip_to_band(band_y, band_h)) return;
+    const int r0 = band_y - m.y;
     uint16_t line[16];
-    lcd::stream_begin(static_cast<uint16_t>(s.x + x), static_cast<uint16_t>(s.y + y + r0),
-                      static_cast<uint16_t>(s.x + x + sz - 1), static_cast<uint16_t>(s.y + y + r1 - 1));
-    for (int r = r0; r < r1; r++) {
-        const uint16_t bits = rows[sz == src ? r : (r * src) / sz];
-        for (int c = 0; c < sz; c++) {
-            const int sc = sz == src ? c : (c * src) / sz;
-            line[c] = (bits >> (msb - sc)) & 1 ? fg : bg;
-        }
+    lcd::stream_begin(static_cast<uint16_t>(m.x), band_y, static_cast<uint16_t>(m.x + sz - 1),
+                      static_cast<uint16_t>(band_y + band_h - 1));
+    for (int r = r0; r < r0 + band_h; r++) {
+        const uint16_t bits = rows[mono_src(r, sz, src)];
+        for (int c = 0; c < sz; c++) line[c] = (bits >> (msb - mono_src(c, sz, src))) & 1 ? fg : bg;
         lcd::stream_pixels({line, static_cast<std::size_t>(sz)});
     }
     lcd::stream_end();
@@ -196,23 +208,8 @@ K2_HOT void stream_mono(const Surface &s, int16_t x, int16_t y, int sz, int src,
 
 }  // namespace detail
 
-// Always a native 12x12: a landscape viewport stretches the fills around it, never the bitmap (the box is mapped once, like a marker).
 K2_HOT void draw_icon(const Surface &s, int16_t x, int16_t y, Icon icon, uint16_t fg, uint16_t bg) {
-    const Rect m = gfx_native_rect(s, x, y, kIconSize, kIconSize);
-    if (m.w != kIconSize || m.h != kIconSize) return;
-    ContentViewport::Pause unscaled;
-    uint16_t band_y = static_cast<uint16_t>(m.y), band_h = kIconSize;
-    if (!lcd::clip_to_band(band_y, band_h)) return;
-    const int r0 = band_y - m.y;
-    const uint16_t *rows = kIconBits[static_cast<int>(icon)];
-    uint16_t line[kIconSize];
-    lcd::stream_begin(static_cast<uint16_t>(m.x), band_y, static_cast<uint16_t>(m.x + kIconSize - 1),
-                      static_cast<uint16_t>(band_y + band_h - 1));
-    for (int r = r0; r < r0 + band_h; r++) {
-        for (int c = 0; c < kIconSize; c++) line[c] = (rows[r] >> (kIconSize - 1 - c)) & 1 ? fg : bg;
-        lcd::stream_pixels({line, static_cast<std::size_t>(kIconSize)});
-    }
-    lcd::stream_end();
+    detail::stream_mono(s, x, y, kIconSize, kIconSize, kIconBits[static_cast<int>(icon)], kIconSize - 1, fg, bg);
 }
 
 namespace { bool g_footer_error; }
@@ -223,8 +220,9 @@ namespace {
 // The pill itself; `erase` first clears the band either side of it (a footer line repaints over its previous pill).
 void toast_pill(const Surface &s, FooterTone tone, std::string_view text, bool erase K2_TRUNC_DEF) {
     const int16_t py = static_cast<int16_t>(s.h - kToastH - kToastMarginBottom);
+    const int16_t eh = ContentViewport::scaled() ? static_cast<int16_t>(s.h - py) : kToastH;   // see erase_toast
     if (text.empty() || s.w < 32 || s.h < kToastH + kToastMarginBottom) {
-        if (erase && py >= 0) gfx_fill(s, 0, py, s.w, kToastH, kBg);
+        if (erase && py >= 0) erase_toast(s);
         return;
     }
     if (tone == FooterTone::Error) g_footer_error = true;
@@ -243,14 +241,18 @@ void toast_pill(const Surface &s, FooterTone tone, std::string_view text, bool e
     const int16_t px = static_cast<int16_t>((s.w - pw) / 2);
     K2_OVERLAP_OK;   // a pill floats over the page
     if (erase) {
-        if (px > 0) gfx_fill(s, 0, py, px, kToastH, kBg);
-        if (s.w - px - pw > 0) gfx_fill(s, static_cast<int16_t>(px + pw), py, static_cast<int16_t>(s.w - px - pw), kToastH, kBg);
+        if (px > 0) gfx_fill(s, 0, py, px, eh, kBg);
+        if (s.w - px - pw > 0) gfx_fill(s, static_cast<int16_t>(px + pw), py, static_cast<int16_t>(s.w - px - pw), eh, kBg);
     }
-    draw_frame(s, px, py, pw, kToastH, 1, border);
-    draw_label_box(s, static_cast<int16_t>(px + 1), static_cast<int16_t>(py + 1),
-                   static_cast<int16_t>(pw - 2), static_cast<int16_t>(kToastH - 2), fitted, ink, fill);
+    draw_pill_box(s, px, py, pw, kToastH, fitted, ink, fill, border, kBg, true);
 }
 }  // namespace
+
+int16_t erase_toast(const Surface &s) {
+    const int16_t py = static_cast<int16_t>(s.h - kToastH - kToastMarginBottom);
+    gfx_fill(s, 0, py, s.w, ContentViewport::scaled() ? static_cast<int16_t>(s.h - py) : kToastH, kBg);
+    return py;
+}
 
 // A page's status line: the toast pill, repainted over its own previous pill (the band beside it is the page ground).
 K2_HOT void draw_footer(const Surface &s, FooterTone tone, std::string_view text K2_TRUNC_DEF) {

@@ -1281,6 +1281,60 @@ static void test_range_gauge() {
     CHECK_EQ(changed_in(still, snap(), 0, 240), 0);
 }
 
+// A field lays out cells, not bytes: the two-byte degree sign takes one cell, so a right-aligned reading ends on the field's
+// last cell (the Lines VREF row ended a cell short), a changed digit repaints one cell, and a shorter left-aligned text
+// leaves nothing behind.
+static void test_field_counts_glyphs() {
+    const std::string_view deg = "0.00V 33\xC2\xB0" "C", deg2 = "0.00V 34\xC2\xB0" "C";
+    const int x0 = 10, y0 = 100, adv = kSmall.adv, end = x0 + 12 * adv;
+    lcd::fill(kBase);
+    Field f;
+    f.init(kSurf, kSmall, x0, y0, 12, Align::Right, kText, kBase);
+    f.draw(deg);
+    CHECK_EQ(ink_in(end - adv, end, y0, y0 + kSmall.height, kBase) > 0, true);   // "C" in the last cell
+    CHECK_EQ(ink_in(x0, x0 + 2 * adv, y0, y0 + kSmall.height, kBase), 0);       // two blank cells ahead of 10 glyphs
+    const auto before = snap();
+    f.draw(deg2);
+    int cols = 0;
+    for (int x = 0; x < 240; x++) {
+        bool any = false;
+        for (int y = y0; y < y0 + kSmall.height; y++) any = any || g_panel[y * 240 + x] != before[y * 240 + x];
+        cols += any;
+    }
+    CHECK_EQ(cols > 0 && cols <= adv, true);   // only the "3" -> "4" cell
+    const auto diffed = snap();
+    lcd::fill(kBase);
+    Field fresh;
+    fresh.init(kSurf, kSmall, x0, y0, 12, Align::Right, kText, kBase);
+    fresh.draw(deg2);
+    CHECK_EQ(changed_in(diffed, snap(), 0, 240), 0);
+    // left-aligned: "33°C" then "5V" blanks the old cells 2..3
+    lcd::fill(kBase);
+    Field l;
+    l.init(kSurf, kSmall, x0, y0, 6, Align::Left, kText, kBase);
+    l.draw("33\xC2\xB0" "C");
+    CHECK_EQ(ink_in(x0 + 3 * adv, x0 + 4 * adv, y0, y0 + kSmall.height, kBase) > 0, true);
+    l.draw("5V");
+    CHECK_EQ(ink_in(x0 + 2 * adv, x0 + 6 * adv, y0, y0 + kSmall.height, kBase), 0);
+}
+
+// The dot leader's dots stay 2 x 2 under the landscape stretch (stretched fills made every few a 3 px dash).
+static void test_leader_dots_native() {
+    ContentViewport viewport({0, 16, 240, 208}, 208, 240);
+    std::fill(std::begin(g_panel), std::end(g_panel), kBase);
+    kit::draw_leader(Surface{0, 0, 208, 240}, 30, 200, 100);
+    int dots = 0, bad = 0;
+    for (int y = 0; y < 240; y++)
+        for (int x = 0; x < 240; x++) {
+            if (px(x, y) == kBase || (x && px(x - 1, y) != kBase) || (y && px(x, y - 1) != kBase)) continue;
+            ++dots;   // a dot's top-left pixel: it must be exactly 2 x 2
+            const bool ok = px(x + 1, y) != kBase && px(x + 2, y) == kBase && px(x, y + 1) != kBase && px(x, y + 2) == kBase;
+            bad += !ok;
+        }
+    CHECK_EQ(dots > 10, true);
+    CHECK_EQ(bad, 0);
+}
+
 static void test_hero() {
     Field f;
     kit::HeroSpec h;
@@ -1551,7 +1605,118 @@ static void test_rail_link_icon_upright() {
             }
 }
 
+// A chip (solid or outlined) is its native w x 14 box in every rotation, all four edges whole: a landscape viewport squeezes
+// 240 rows into 208, so a stretched 1 px edge could map to no row at all. Every y over a full squeeze period is tried.
+// A short chip painted over a long one (the caller's ground first, the chip as its hole) leaves nothing of the long one.
+static void test_chip_native_in_every_rotation() {
+    const Rect dests[4] = {{16, 0, 208, 240}, {0, 16, 240, 208}, {0, 0, 208, 240}, {0, 16, 240, 208}};   // rotations 0..3
+    const Surface s{0, 0, 208, 240};
+    constexpr uint16_t kFrame = 0xF800, kFill = 0x07E0, kShort = 0x001F, kInkC = 0xFFFF, kGround = 0x2222;
+    // The bounding box of colour c; true when it is exactly w x h and its four edges are all c.
+    const auto whole_box = [](uint16_t c, int w, int h) {
+        int l = 240, r = -1, t = 240, b = -1;
+        for (int y = 0; y < 240; y++)
+            for (int x = 0; x < 240; x++)
+                if (px(x, y) == c) { l = std::min(l, x); r = std::max(r, x); t = std::min(t, y); b = std::max(b, y); }
+        if (r < 0 || r - l + 1 != w || b - t + 1 != h) return false;
+        for (int x = l; x <= r; x++) if (px(x, t) != c || px(x, b) != c) return false;
+        for (int y = t; y <= b; y++) if (px(l, y) != c || px(r, y) != c) return false;
+        return true;
+    };
+    for (int r = 0; r < 4; ++r)
+        for (int16_t y = 60; y < 76; ++y) {
+            ContentViewport viewport(dests[r], 208, 240);
+            std::fill(std::begin(g_panel), std::end(g_panel), kBase);
+            const int wf = kit::draw_chip_frame(s, 20, y, "EPR", kFrame, kInkC, kBg);
+            const bool frame_ok = whole_box(kFrame, wf, kit::kChipH);
+            std::fill(std::begin(g_panel), std::end(g_panel), kBase);
+            const int ws = kit::draw_chip(s, 20, y, "PD3.x", kFill, kInkC);
+            const bool solid_ok = whole_box(kFill, ws, kit::kChipH);
+            {   // it hangs from its mapped origin like text, so a chip column keeps the key column's left edge
+                const Rect o = ContentViewport::native_rect({20, y, 1, 1});
+                int l = 240, t = 240;
+                for (int i = 0; i < 240 * 240; i++)
+                    if (g_panel[i] == kFill) { l = std::min(l, i % 240); t = std::min(t, i / 240); }
+                if (l != o.x || t != o.y) std::printf("  rotation %d y %d: chip at %d,%d, origin %d,%d\n", r, y, l, t, o.x, o.y);
+                CHECK_EQ(l, o.x);
+                CHECK_EQ(t, o.y);
+            }
+            if (!frame_ok || !solid_ok) std::printf("  rotation %d y %d: outline %d solid %d\n", r, y, frame_ok, solid_ok);
+            CHECK_EQ(frame_ok, true);
+            CHECK_EQ(solid_ok, true);
+            std::fill(std::begin(g_panel), std::end(g_panel), kBase);
+            const kit::Box band{0, static_cast<int16_t>(y - 6), 208, 26};
+            gfx_fill(s, band.x, band.y, band.w, band.h, kGround);
+            kit::draw_chip(s, 20, y, "PD3.x 100W", kFill, kInkC);
+            const int16_t sw = static_cast<int16_t>(badge_text_bounds(kLabelFont, "PD").w + 8);
+            const kit::Box hole{20, y, sw, kit::kChipH};
+            kit::fill_except(s, band, &hole, 1, kGround);
+            kit::draw_chip(s, 20, y, "PD", kShort, kInkC);
+            int left = 0;
+            for (int i = 0; i < 240 * 240; i++) left += g_panel[i] == kFill;
+            if (left) std::printf("  rotation %d y %d: %d px of the long chip left\n", r, y, left);
+            CHECK_EQ(left, 0);
+        }
+}
+
+// A chip row that shrinks (the Lines verdict) wipes the old tail at chip height: under the squeeze the native chip hangs below
+// its mapped rows, and those rows must go too.
+static void test_chip_tail_erase() {
+    const Surface s{0, 0, 208, 240};
+    constexpr uint16_t kFill = 0x07E0, kShort = 0x001F, kInkC = 0xFFFF;
+    for (int16_t y = 120; y < 136; ++y) {   // rotations 1 and 3 share the landscape map
+            ContentViewport viewport({0, 16, 240, 208}, 208, 240);
+            std::fill(std::begin(g_panel), std::end(g_panel), kBg);
+            kit::draw_chip(s, 20, y, "PD3.x 100W", kFill, kInkC);
+            const int w = kit::draw_chip(s, 20, y, "PD", kShort, kInkC);
+            kit::erase_chips(s, static_cast<int16_t>(20 + w), y, static_cast<int16_t>(208 - 20 - w), kBg);
+            int left = 0;
+            for (int i = 0; i < 240 * 240; i++) left += g_panel[i] == kFill;
+            if (left) std::printf("  y %d: %d px of the long chip left\n", y, left);
+            CHECK_EQ(left, 0);
+    }
+}
+
+// The Diagnosis stamp's fail cell (a label-less 20 x 20 VerdictCell) draws the icon table's 12 px cross, native and whole, in
+// every rotation.
+static void test_stamp_cross_is_the_icon() {
+    const Rect dests[4] = {{16, 0, 208, 240}, {0, 16, 240, 208}, {0, 0, 208, 240}, {0, 16, 240, 208}};
+    const Surface s{0, 0, 208, 240};
+    const kit::VerdictStyle st = kit::verdict_style(kit::Verdict::Fail);
+    const uint16_t *bits = kIconBits[static_cast<int>(Icon::Cross)];
+    for (int r = 0; r < 4; ++r) {
+        ContentViewport viewport(dests[r], 208, 240);
+        std::fill(std::begin(g_panel), std::end(g_panel), kBase);
+        kit::draw_verdict(s, 4, 30, 20, 20, kit::Verdict::Fail, "", kBg);
+        const Rect cell = ContentViewport::native_rect({4, 30, 20, 20});
+        const Rect m{static_cast<int16_t>(cell.x + 4), static_cast<int16_t>(cell.y + 4), kIconSize, kIconSize};   // centred in the cell
+        int bad = 0;
+        for (int y = 0; y < kIconSize; y++)
+            for (int x = 0; x < kIconSize; x++)
+                bad += px(m.x + x, m.y + y) != ((bits[y] >> (kIconSize - 1 - x)) & 1 ? st.ink : st.fill);
+        if (bad) std::printf("  stamp cross rotation %d: %d px off the icon\n", r, bad);
+        CHECK_EQ(bad, 0);
+        // the cell itself is a native 20 x 20 square of the fail fill round the glyph, like a row marker
+        int outside = 0, hole = 0;
+        for (int y = 0; y < 240; y++)
+            for (int x = 0; x < 240; x++) {
+                const bool in = x >= cell.x && x < cell.x + 20 && y >= cell.y && y < cell.y + 20;
+                const bool glyph = x >= m.x && x < m.x + kIconSize && y >= m.y && y < m.y + kIconSize;
+                if (!in) outside += px(x, y) == st.fill;
+                else if (!glyph) hole += px(x, y) != st.fill;
+            }
+        if (outside || hole) std::printf("  stamp cell rotation %d: %d fill px outside, %d holes\n", r, outside, hole);
+        CHECK_EQ(outside, 0);
+        CHECK_EQ(hole, 0);
+    }
+}
+
 int main() {
+    test_chip_tail_erase();
+    test_leader_dots_native();
+    test_field_counts_glyphs();
+    test_stamp_cross_is_the_icon();
+    test_chip_native_in_every_rotation();
     test_rail_link_icon_upright();
     test_rail_link_cell_fits();
     test_draw_key_slot_arrows();

@@ -73,9 +73,14 @@ constexpr int mark_cell(const Font &f) { return mark_size(f) + 4; }   // 2 px le
 int draw_marked_text(const Surface &s, const Font &f, int16_t x, int16_t y, std::string_view text, uint16_t fg, uint16_t bg);
 int marked_width(const Font &f, std::string_view text);
 
-// Shared single-pass S12 label-in-box painter (chips, LAST badge).
+// Shared single-pass S12 label-in-box painter, every pixel once. Unstretched surfaces only: draw_pill_box handles a stretch.
 void draw_label_box(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, std::string_view text,
                     uint16_t fg, uint16_t bg);
+// A pill: the font 12 word centred in a w x h box of `fill`, ringed by a 1 px `frame` unless it equals the fill. Native size in
+// every rotation (ContentViewport::native_box): under a stretch `ground` takes the rest of the mapped box. It hangs
+// from its mapped origin like text; `centred`: across its mapped box instead (the toast).
+void draw_pill_box(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, std::string_view text, uint16_t ink,
+                   uint16_t fill, uint16_t frame, uint16_t ground, bool centred = false);
 
 // w x h sparkline of `w` samples (oldest first, each 0..h-1): bg box, three rule lines, a fill
 // under the trace in `tint`, and a one-pixel trace in `color`.
@@ -194,6 +199,9 @@ bool status_toast(Toast &t, uint32_t now_ms, uint32_t &shown, FooterTone tone, s
 // Draws the 16 px floating toast pill centred near the bottom of `s` (s.h - kToastH - kToastMarginBottom).
 // Single-pass fill + 1 px tone border + S12 text; sets footer_error_shown() when tone == FooterTone::Error.
 void draw_toast(const Surface &s, FooterTone tone, std::string_view text K2_TRUNC_DECL);
+// Wipes the toast band of `s` to kBg; returns its top row. Under a squeeze it takes the margin under the band too, where the
+// native pill hangs from the band's top row.
+int16_t erase_toast(const Surface &s);
 
 // ---- top chrome bar (micro-GUI phase 1): 20 px band + 1 px hairline at y kBarH-1 -----------------
 // Page name left; on every page except Home the right side carries the compact fmt3(V) x fmt3(A)
