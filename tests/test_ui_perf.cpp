@@ -839,10 +839,14 @@ static void test_home_idle_tick() {
     }
 }
 
-// The "Shell access" band over Home: the hero's trend sweep paints under it every tick, so each tick re-raises the band
-// (208x16 = 3.3 k px, ~2 ms of wire) while a shell session is up; the band costs nothing on pages that do not paint under it.
+// The "Shell access" band costs what it covers: a page that paints under its 16 rows pays one raise per paint (208x16 = 3.3 k px,
+// ~2 ms of wire). Home's hero trend sweep paints there every tick, so Home re-raises each tick while a shell command keeps
+// arriving; Settings has nothing live in those rows and pays nothing in steady state (the band is raised once).
 static void test_shell_band_cost() {
-    for (const bool moving : {false, true}) {
+    struct Case { const char* name; uint8_t page; bool moving; bool repeat; } cases[] = {
+        {"home steady", 0, false, true}, {"home moving", 0, true, true},
+        {"settings steady", static_cast<uint8_t>(Page::Settings), false, false}};
+    for (const auto& c : cases) {
         unsigned mean[2] = {0, 0};
         for (const bool band : {false, true}) {
             fixture();
@@ -850,23 +854,24 @@ static void test_shell_band_cost() {
             ui.init(1000);
             ui.set_rotation(0, 1000);
             uint32_t now = 1000;
-            ui.goto_page(0, now);
+            ui.goto_page(c.page, now);
             for (int i = 0; i < 140; i++) { now += kPageTickMs; ui.tick(now); }
             if (band) { ui.shell_control(now); for (int i = 0; i < 10; i++) { now += kPageTickMs; ui.tick(now); } }
             unsigned sum = 0;
             const int n = 20;
             for (int i = 0; i < n; i++) {
-                if (moving) g_stub.pm.power_mw = 36753 + 1000 * (i & 1);   // the hero's last digits flip every tick
+                if (c.moving) g_stub.pm.power_mw = 36753 + 1000 * (i & 1);   // the hero's last digits flip every tick
                 g_lcd_pixels = 0;
                 now += kPageTickMs;
-                if (band) ui.shell_control(now);
+                if (band && c.repeat) ui.shell_control(now);
                 ui.tick(now);
                 sum += g_lcd_pixels;
             }
             mean[band] = sum / n;
         }
-        std::printf("home %s tick: mean %u px without the band, %u px with it\n", moving ? "moving" : "steady", mean[0], mean[1]);
+        std::printf("%s tick: mean %u px without the band, %u px with it\n", c.name, mean[0], mean[1]);
         CHECK_EQ(mean[1] <= mean[0] + 4000u, true);
+        if (!c.repeat) CHECK_EQ(mean[1], mean[0]);   // nothing paints under the band: a steady tick costs the same
     }
 }
 
