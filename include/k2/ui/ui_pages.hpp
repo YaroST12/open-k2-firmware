@@ -393,7 +393,8 @@ public:
         uint8_t stage = 0, cursor = 0, rows = 0;
         bool on_screen = false, confirming = false, confirm_reattach = false, self_supplied = false, resume_pending = false,
              auto_resume = false, gate_ready = false, resume_held = false, behind_cable = false, resume_rd = false,
-             wait_paused = false, wait_retry = false, armed_is_pick = false, rmdo_valid = false, cable_armed = false;
+             wait_paused = false, wait_retry = false, armed_is_pick = false, rmdo_valid = false, cable_armed = false,
+             legacy_shown = false;
         uint32_t confirm_left_ms = 0, wait_elapsed_ms = 0, wait_total_ms = 0, run_elapsed_s = 0;
         uint16_t card_no = 0, delta_runs = 0;
         uint8_t delta_n = 0;

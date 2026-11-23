@@ -328,6 +328,9 @@ test("charger-test view decodes the screen as data", async () => {
   assert.deepEqual(v.guard, { topology: "direct", run_guard: 0x84 });
   assert.deepEqual(v.wait, { elapsed_ms: 0, total_ms: 0, retry: false, paused: false });
   assert.equal(v.rmdo, "3.2"); assert.equal(v.armed_is_pick, true); assert.equal(v.cable_armed, false);
+  assert.equal(v.legacy_units, false);   // the Huawei/Samsung switch: off (hidden) is the fresh K2's default
+  const shown = new Uint8Array(TEST_VIEW); shown[4] |= 0x80;   // flags bit 15: shown
+  assert.equal(P.decodeChargerTestView(shown).legacy_units, true);
   assert.deepEqual(v.resume, { pending: false, auto: false, gate_ready: false, held: false, behind_cable: false, rd: false });
   const w = new Uint8Array(TEST_VIEW.slice(0, 30));
   w[0] = 13; new DataView(w.buffer).setUint16(3, 0x0C09, true); new DataView(w.buffer).setUint16(7, 4200, true);

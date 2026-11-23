@@ -1036,7 +1036,8 @@ constexpr uint16_t kCtViewOnScreen = 1u << 0,       // the page is on screen (ro
                    kCtViewWaitRetry = 1u << 11,     // Waiting: the second attempt is running
                    kCtViewArmedIsPick = 1u << 12,   // the identity the Spoof tool armed is the one the Cable step has picked
                    kCtViewRmdoValid = 1u << 13,     // `rmdo` holds the live source's Revision message
-                   kCtViewCableArmed = 1u << 14;    // some identity is armed (the ARMED / CURR pills exist)
+                   kCtViewCableArmed = 1u << 14,    // some identity is armed (the ARMED / CURR pills exist)
+                   kCtViewLegacyShown = 1u << 15;   // Settings > Huawei/Samsung is on: FCP, SCP, AFC are in the tests (clear = hidden, the default)
 struct ChargerTestView {
     uint8_t stage = 0, cursor = 0, rows = 0;
     uint16_t flags = 0;

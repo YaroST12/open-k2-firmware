@@ -922,7 +922,7 @@ var K2Proto = (function () {
   function decodeChargerTestView(p) {
     if (p.length < 30 || p.length > 57) throw new FrameError("invalid charger-test view length");
     var v = dv(p), flags = v.getUint16(3, true), refusal = p[20], topology = p[27];
-    if (p[0] >= TEST_STAGES.length || refusal >= TEST_REASONS.length || topology >= CT_TOPOLOGIES.length || (flags & 0x8000))
+    if (p[0] >= TEST_STAGES.length || refusal >= TEST_REASONS.length || topology >= CT_TOPOLOGIES.length)
       throw new FrameError("invalid charger-test view");
     var message = "";
     for (var i = 30; i < p.length; i++) {
@@ -938,7 +938,7 @@ var K2Proto = (function () {
              sweep_points: { pps: v.getUint16(23, true), avs: v.getUint16(25, true) },
              guard: { topology: CT_TOPOLOGIES[topology], run_guard: p[28] },
              resume: { pending: f(4), auto: f(5), gate_ready: f(6), held: f(7), behind_cable: f(8), rd: f(9) },
-             self_supplied: f(3), armed_is_pick: f(12), cable_armed: f(14),
+             self_supplied: f(3), armed_is_pick: f(12), cable_armed: f(14), legacy_units: f(15),
              rmdo: f(13) ? (p[29] >> 4) + "." + (p[29] & 15) : null, message: message };
   }
 

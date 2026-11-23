@@ -1771,7 +1771,7 @@ def decode_charger_test_view(p):
         raise FrameError("invalid charger-test view length")
     stage, cursor, rows, flags, confirm, w_el, w_tot, run_s, card, delta_n, delta_runs = struct.unpack_from("<BBBHHHHHHBH", p, 0)
     runnable, skipped, refusal, refusal_mv, pps, avs, topology, guard, rmdo = struct.unpack_from("<BBBHHHBBB", p, 18)
-    if stage >= len(TEST_STAGES) or refusal >= len(TEST_REASONS) or topology >= len(CT_TOPOLOGIES) or flags & 0x8000:
+    if stage >= len(TEST_STAGES) or refusal >= len(TEST_REASONS) or topology >= len(CT_TOPOLOGIES):
         raise FrameError("invalid charger-test view")
     try:
         message = p[CT_VIEW_FIXED:].decode("ascii")
@@ -1792,6 +1792,7 @@ def decode_charger_test_view(p):
             "guard": {"topology": CT_TOPOLOGIES[topology], "run_guard": guard},
             "resume": {"pending": f(4), "auto": f(5), "gate_ready": f(6), "held": f(7), "behind_cable": f(8), "rd": f(9)},
             "self_supplied": f(3), "armed_is_pick": f(12), "cable_armed": f(14),
+            "legacy_units": f(15),
             "rmdo": f"{rmdo >> 4}.{rmdo & 15}" if f(13) else None,
             "message": message}
 
@@ -5480,7 +5481,8 @@ def _render(name, r):
                      (f"; START refused: {pv['refusal']}" + (f" at {pv['refusal_mv']} mV" if pv["refusal_mv"] else "")
                       if pv["refusal"] != "none" else ""))
         lines.append(f"  guard {r['guard']['topology']}; self-supplied {'yes' if r['self_supplied'] else 'no'}; "
-                     f"sweeps pps {r['sweep_points']['pps']} avs {r['sweep_points']['avs']}")
+                     f"sweeps pps {r['sweep_points']['pps']} avs {r['sweep_points']['avs']}; "
+                     f"FCP/SCP/AFC {'shown' if r['legacy_units'] else 'hidden'}")
         return "\n".join(lines)
     if name == "charger-test":
         head =f"run {r['run_id']} rev {r['revision']}: {r['state']} ({r['reason']}); step {r['current']}/{r['total']}"

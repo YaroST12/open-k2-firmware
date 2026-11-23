@@ -1887,6 +1887,7 @@ ChargerTestSession::View ChargerTestSession::view() {
     v.avs_points = avs_sweep_points();
     v.armed_is_pick = ctx_.cables.armed() && ctx_.cables.armed_choice() == ctx_.cables.selected();
     v.cable_armed = ctx_.cables.armed();
+    v.legacy_shown = !legacy_hidden();
     v.topology = static_cast<uint8_t>(topology_);
     v.run_guard = run_guard_;
     const pd::Revision& rev = fusb302::source_revision();
