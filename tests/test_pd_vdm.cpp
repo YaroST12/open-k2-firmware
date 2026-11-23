@@ -50,7 +50,7 @@ static void test_names() {
     CHECK_STR(svid_name(0x2E87).c_str(), "INJOINIC");   // the USB-IF owner; no longer the old hand-written "Cuktech"
     CHECK_STR(svid_name(0x2B89).c_str(), "UGREEN");
     CHECK_STR(svid_name(0x291A).c_str(), "ANKER");
-    CHECK_STR(svid_name(0x2B01).c_str(), "CUKTECH");
+    CHECK_STR(svid_name(0x2B01).c_str(), "ZIMI");
     CHECK_STR(svid_name(0x0451).c_str(), "TI");       // falls back to the cable-vendor table
     CHECK_STR(svid_name(0x1234).c_str(), "Unknown");
     CHECK_STR(vendor_name(0x2109).c_str(), "VIA LABS");

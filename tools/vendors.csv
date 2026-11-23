@@ -3,6 +3,10 @@
 # lower-case in 6-bit symbols and the K2, the card tool and the results page show it in capitals, so only spelling matters here.
 # cat: brand oem tool chip cable psu shared. chip, cable, psu and shared are weak: they lose to a charger's own manufacturer string.
 # usbif: the registrant in the USB-IF Valid Vendor IDs list (2026-03-10), checked by: python3 tools/gen_vendors.py --verify <pdftotext -layout of that list>.
+# The name is a shortening of usbif, never a brand, parent or subsidiary (one VID can sit in products of many brands).
+# Rule (gen_vendors.derives, enforced on every generation): case and punctuation ignored, each name word is the joined
+# prefixes of consecutive registrant words (whole word, prefix, acronym, glued as in MornStar), name words in registrant
+# order, registrant words may be skipped. Contractions the rule can't spell sit in gen_vendors.SHORTHAND with a reason.
 vid,name,cat,usbif,why
 0x03F0,HP,oem,HP Inc.,laptops/chargers
 0x0403,FTDI,chip,Future Technology Devices International Limited,USB bridges
@@ -39,7 +43,7 @@ vid,name,cat,usbif,why
 0x05AC,Apple,oem,Apple,chargers/cables/phones/laptops
 0x05AD,YC Cable,cable,Y.C. Cable U.S.A. Inc,cable assembler
 0x05AF,Sunrex,cable,Sunrex Technology Corp.,cable assembler
-0x05BE,TE Conn,cable,Tyco Electronics Corp. a TE Connectivity Ltd. company,cable assembler
+0x05BE,Tyco,cable,Tyco Electronics Corp. a TE Connectivity Ltd. company,cable assembler
 0x05C6,Qualcomm,chip,Qualcomm Inc,Quick Charge sources/phones
 0x05C8,Foxlink,cable,Foxlink/Cheng Uei Precision Industry Co. Ltd,cable assembler
 0x05DC,Lexar,oem,Lexar Media Inc.,storage
@@ -83,7 +87,7 @@ vid,name,cat,usbif,why
 0x0DA7,IOGEAR,brand,IOGEAR Inc.,docks/adapters
 0x0DB0,MSI,oem,Micro-Star International Co. Ltd.,laptops/chargers
 0x0DB2,Shian Hwi,cable,Shian Hwi Plug Parts Plastic Factory,plug parts
-0x0DBF,JPC,cable,Jess-Link International,cable assembler
+0x0DBF,Jess,cable,Jess-Link International,cable assembler
 0x0E24,Samson,cable,Samson Electric Wire Co. Ltd.,wire & cable
 0x0E4A,Bao Hing,cable,Shenzhen Bao Hing Electric Wire & Cable Mfr. Co.,wire & cable
 0x0E82,Ching Tai,cable,Ching Tai Electric Wire & Cable Co. Ltd.,wire & cable
@@ -151,7 +155,7 @@ vid,name,cat,usbif,why
 0x19D2,ZTE,oem,ZTE Corporation,phones
 0x1A40,Terminus,chip,TERMINUS TECHNOLOGY INC.,hub controllers
 0x1A80,Zhong Ming,cable,Zhong Ming Wire Cable Technology (Xiamen) Co. Ltd.,wire & cable
-0x1A86,WCH,chip,Nanjing Qinheng Microelectronics Co. Ltd.,PD and USB bridges
+0x1A86,Qinheng,chip,Nanjing Qinheng Microelectronics Co. Ltd.,PD and USB bridges
 0x1AD1,Desan,cable,Desan Wire Co. Ltd.,wire & cable
 0x1B1C,Corsair,oem,CORSAIR MEMORY INC.,peripherals/banks
 0x1BEF,Tongyuan,cable,Shenzhen Tongyuan Network-Communication Cables Co. Ltd,wire & cable
@@ -203,7 +207,7 @@ vid,name,cat,usbif,why
 0x2A8D,Keysight,tool,Keysight Technologies Inc.,bench instruments
 0x2ACD,Silergy,chip,Silergy Corp.,power chips
 0x2AE5,Fairphone,oem,Fairphone B.V.,phones
-0x2B01,CUKTECH,shared,Zimi Corporation,CUKTECH (Zimi's product brand) and ZMI banks/chargers
+0x2B01,Zimi,shared,Zimi Corporation,maker of CUKTECH/ZMI and some Xiaomi-branded banks/chargers
 0x2B14,EverPro,cable,EverPro Technologies Company Ltd.,cable assembler
 0x2B1D,Lintes,cable,Lintes Technology Co. Ltd.,cable assembler
 0x2B89,UGREEN,brand,Ugreen Group Limited,chargers/cables/docks

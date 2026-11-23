@@ -30,6 +30,14 @@ SYMBOLS = "\0abcdefghijklmnopqrstuvwxyz0123456789 -_."   # the 6-bit code of a c
 CATS = {"brand": False, "oem": False, "tool": False, "chip": True, "cable": True, "psu": True, "shared": True}
 NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+(?: [A-Za-z0-9_.-]+)*$")   # emlib::name_valid, no edge spaces
 
+# Contractions the registrant rule (derives) cannot express: (vid, name, registrant) -> why. Keyed on the registrant, so an
+# edited registrant needs a new look. Never a brand, parent or subsidiary.
+SHORTHAND = {
+    (0x08E7, "Pan-Intl", "PAN-INTERNATIONAL WIRE & CABLE (M) SDN BHD"): "Intl, the usual contraction of International",
+    (0x10C4, "Silabs", "Silicon Laboratories Inc."): "Si + Labs, the company's own contraction",
+    (0x315C, "Convpower", "Chengdu Convenientpower Semiconductor Co. LTD"): "Conv + power of the one word Convenientpower",
+}
+
 Row = namedtuple("Row", "vid name cat usbif why")
 Row.weak = property(lambda r: CATS[r.cat])
 Row.display = property(lambda r: r.name.upper())   # what the K2, the card tool and the results page show
@@ -47,6 +55,32 @@ def load(path):
     return rows
 
 
+def _words(s):
+    return re.findall(r"[a-z0-9]+", s.lower())
+
+
+def derives(name, registrant):
+    """True when the name is a shortening of the registrant: every name word (split at space - _ .) is the joined non-empty
+    prefixes of one run of consecutive registrant words (a word, its prefix, an acronym, a glued "MornStar"), and the
+    runs of successive name words come in the registrant's order. Registrant words may be skipped (legal suffixes,
+    cities, trailing words). Case and punctuation are ignored."""
+    nw, rw = _words(name), _words(registrant)
+
+    def run(word, k):   # registrant indexes just past each consecutive run from k that spells the word
+        if not word:
+            yield k
+            return
+        if k < len(rw):
+            for n in range(min(len(word), len(rw[k])), 0, -1):
+                if rw[k][:n] == word[:n]:
+                    yield from run(word[n:], k + 1)
+
+    def match(i, j):
+        return i == len(nw) or any(match(i + 1, e) for k in range(j, len(rw)) for e in run(nw[i], k))
+
+    return bool(nw) and match(0, 0)
+
+
 def check_rows(rows):
     seen = set()
     for r in rows:
@@ -55,6 +89,8 @@ def check_rows(rows):
         seen.add(r.vid)
         if len(r.name) > NAME_MAX or not NAME_RE.match(r.name):
             raise ValueError("%04X: name %r is over %d characters or outside the name alphabet" % (r.vid, r.name, NAME_MAX))
+        if not derives(r.name, r.usbif) and (r.vid, r.name, r.usbif) not in SHORTHAND:
+            raise ValueError("%04X: name %r is not a shortening of its USB-IF registrant %r" % (r.vid, r.name, r.usbif))
         if r.cat not in CATS:
             raise ValueError("%04X: unknown category %r" % (r.vid, r.cat))
 
@@ -149,7 +185,7 @@ def render_expect(rows):
 
 def parse_usbif(text):
     db = {}
-    for ln in text.splitlines():
+    for ln in text.replace("\u2010", "-").splitlines():
         m = re.match(r"^(.*?)\s{2,}(\d{1,5})\s*$", ln.rstrip())
         if m and m.group(1).strip():
             db.setdefault(int(m.group(2)), []).append(m.group(1).strip())
