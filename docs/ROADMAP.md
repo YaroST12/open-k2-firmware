@@ -1392,6 +1392,7 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
 | 240 MHz clock tree, HICK fallback | done | verified | `k2::crm` | |
 | Layout invariants, flash map | done (gate) | verified | `startup.cpp`, `link.ld`, `flash_map.hpp` | |
 | Pin map, SWJ disabled | done | verified | `k2::pins` | |
+| Math selftest behind `K2_SELFTEST` (default 0; pre-release builds only; `make gate K2_SELFTEST=1` -> flash -> `make perf-check`, the perf step says SKIPPED on a default image) | done: text 713156 -> 696948 B (-16208 B, bss unchanged) | n/a (build switch; host-tested) | `math_selftest.cpp`, `shell_hw.cpp`, `perf_gate.py` | |
 | ST7789V 240x240 LCD, screenshots | done | verified | `k2::lcd`, `gfx`, `capture` | |
 | 4 buttons, long/hold events | done | verified | `buttons`, `ui_events` | |
 | Reboot gesture: OK + BACK held 3 s (HoldCard from 1 s, replaces the 5 s BACK hold, 2026-11-12) | done | not verified (host-tested: `test_ui_calc`, `test_ui_pages`) | `RebootChord` (`ui_calc`), `Ui::feed_chord` | |

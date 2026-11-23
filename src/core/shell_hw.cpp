@@ -31,7 +31,9 @@
 #include "k2/fastcharge/vooc.hpp"
 #include "k2/core/lab.hpp"
 #include "k2/core/main_loop.hpp"
+#if K2_SELFTEST
 #include "k2/core/math_selftest.hpp"
+#endif
 #include "k2/core/memstat.hpp"
 #include "k2/core/shell.hpp"
 #include "k2/drivers/systick.hpp"
@@ -1018,12 +1020,14 @@ struct Hw final : shell::Backend {
         }
         return nullptr;
     }
+#if K2_SELFTEST
     const char* selftest() override {
         // One line per check: each check runs with IRQs masked (the longest about 3.5 ms), PD gets its service in between
         // instead of once after the whole run (about 13 ms of checks plus the output).
         return selftest::run_math([](std::string_view s, void*) { put(s); mainloop::idle_hook(); }, nullptr) ? nullptr
                                                                                                            : "math selftest failed";
     }
+#endif
     // The guarded SuperVOOC trigger (HID remote only) drives D-: the parser keeps every D+/D- and sniffer command out.
     const char* lines_locked() override { return fctrig::svooc_running() ? "busy (SuperVOOC trigger running)" : nullptr; }
 

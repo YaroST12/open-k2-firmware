@@ -77,6 +77,11 @@ K2_SCREENSHOT ?= 1
 # interrupted PC / LR at each new low, the main loop logs "[STK] low=<free> pc=0x.. lr=0x..". Off by default (diagnosis builds
 # only; give one its own BUILD_DIR).
 K2_STACKPROBE ?= 0
+# K2_SELFTEST=1 builds the on-device math selftest in (src/core/math_selftest.cpp, the shell `selftest` command, the
+# link.ld placement canaries; docs/MATH_SELFTEST.md): the perf gate's data source. Off by default (12 KB flash): the shipping
+# image answers "selftest not available". Pre-release flow: make gate K2_SELFTEST=1 -> flash -> make perf-check.
+# The host tests always compile it.
+K2_SELFTEST ?= 0
 # K2_HOST_REPORT=1 builds the loop probe's Host report prototype (the PD interrogation of a USB-C host port through the HID
 # loop, docs/LOOP_PROBE.md): its K2 binding, the FUSB302 loop-host line, the USB enumeration tap and the Loop probe page's
 # Host view. Off by default (flash). Its pure logic is host-tested either way (TEST_CXX_LIB).
@@ -168,6 +173,10 @@ HOST_REPORT_CXX_SRCS = $(SRC_DIR)/loopprobe/host_report.cpp $(SRC_DIR)/loopprobe
 ifneq ($(K2_HOST_REPORT),1)
 CXX_SRCS := $(filter-out $(HOST_REPORT_CXX_SRCS),$(CXX_SRCS))
 endif
+SELFTEST_CXX_SRCS = $(SRC_DIR)/core/math_selftest.cpp   # K2_SELFTEST=1 only
+ifneq ($(K2_SELFTEST),1)
+CXX_SRCS := $(filter-out $(SELFTEST_CXX_SRCS),$(CXX_SRCS))
+endif
 OBJS    = $(patsubst $(SRC_DIR)/%.c, $(BUILD_DIR)/%.o, $(SRCS)) \
           $(patsubst $(SRC_DIR)/%.cpp, $(BUILD_DIR)/%.o, $(CXX_SRCS))
 ifeq ($(K2_NET),1)
@@ -248,7 +257,7 @@ endif
 # Measured -800 B text under LTO.
 CFLAGS += -fmerge-all-constants
 CFLAGS += -I$(INC_DIR)
-CFLAGS += -DK2_NET=$(K2_NET) -DK2_WEBUSB=$(K2_WEBUSB) -DK2_PDSTRESS=$(K2_PDSTRESS) -DK2_PDSPEC=$(K2_PDSPEC) -DK2_LOOPPROBE=$(K2_LOOPPROBE) -DK2_TWIN=$(K2_TWIN) -DK2_OPPO_PROBE=$(K2_OPPO_PROBE) -DK2_EEPROM_READ=$(K2_EEPROM_READ) -DK2_EEPROM_CAL_CLEAR=$(K2_EEPROM_CAL_CLEAR) -DK2_EEPROM_WRITE=$(K2_EEPROM_WRITE) -DK2_SPECROWS=$(K2_SPECROWS) -DK2_SCREENSHOT=$(K2_SCREENSHOT) -DK2_STACKPROBE=$(K2_STACKPROBE)
+CFLAGS += -DK2_NET=$(K2_NET) -DK2_WEBUSB=$(K2_WEBUSB) -DK2_PDSTRESS=$(K2_PDSTRESS) -DK2_PDSPEC=$(K2_PDSPEC) -DK2_LOOPPROBE=$(K2_LOOPPROBE) -DK2_TWIN=$(K2_TWIN) -DK2_OPPO_PROBE=$(K2_OPPO_PROBE) -DK2_EEPROM_READ=$(K2_EEPROM_READ) -DK2_EEPROM_CAL_CLEAR=$(K2_EEPROM_CAL_CLEAR) -DK2_EEPROM_WRITE=$(K2_EEPROM_WRITE) -DK2_SPECROWS=$(K2_SPECROWS) -DK2_SCREENSHOT=$(K2_SCREENSHOT) -DK2_STACKPROBE=$(K2_STACKPROBE) -DK2_SELFTEST=$(K2_SELFTEST)
 CFLAGS += -DK2_HOST_REPORT=$(K2_HOST_REPORT)
 CFLAGS += -DK2_HOT_BLOCK=$(K2_HOT_BLOCK)
 CFLAGS += -MMD -MP
@@ -540,7 +549,7 @@ HOST_K2_SPECROWS ?= 0
 # DR_Swap, the FUSB302 data-role bit and the command 0x4D run only with `make test K2_OPPO_PROBE=1`. The flag changes the Sink
 # layout, so it is a whole-tree choice with its own object directory (host-build-oppo, host-build-rows-oppo), never a per-object one.
 HOST_K2_OPPO_PROBE ?= $(K2_OPPO_PROBE)
-HOST_CXXFLAGS  = -std=c++23 -Wall -Wextra -O0 -g -I$(INC_DIR) -Itests -I$(LFS_DIR) -I$(QR_DIR) -DK2_NET=$(HOST_K2_NET) -DK2_WEBUSB=$(HOST_K2_WEBUSB) -DK2_PDSTRESS=1 -DK2_PDSPEC=1 -DK2_LOOPPROBE=1 -DK2_TWIN=1 -DK2_OPPO_PROBE=$(HOST_K2_OPPO_PROBE) -DK2_EEPROM_READ=1 -DK2_EEPROM_CAL_CLEAR=1 -DK2_EEPROM_WRITE=1 -DK2_SPECROWS=$(HOST_K2_SPECROWS) -DK2_SCREENSHOT=$(HOST_K2_SCREENSHOT) -DK2_TRUNC_LOG=1
+HOST_CXXFLAGS  = -std=c++23 -Wall -Wextra -O0 -g -I$(INC_DIR) -Itests -I$(LFS_DIR) -I$(QR_DIR) -DK2_NET=$(HOST_K2_NET) -DK2_WEBUSB=$(HOST_K2_WEBUSB) -DK2_PDSTRESS=1 -DK2_PDSPEC=1 -DK2_LOOPPROBE=1 -DK2_TWIN=1 -DK2_OPPO_PROBE=$(HOST_K2_OPPO_PROBE) -DK2_EEPROM_READ=1 -DK2_EEPROM_CAL_CLEAR=1 -DK2_EEPROM_WRITE=1 -DK2_SPECROWS=$(HOST_K2_SPECROWS) -DK2_SCREENSHOT=$(HOST_K2_SCREENSHOT) -DK2_SELFTEST=1 -DK2_TRUNC_LOG=1
 TEST_CXX_LIB   = $(SRC_DIR)/ui/ui.cpp $(SRC_DIR)/ui/ui_hot.cpp $(SRC_DIR)/ui/ui_pages.cpp $(SRC_DIR)/ui/ui_detail.cpp $(SRC_DIR)/ui/capture.cpp tests/ui_stubs.cpp $(SRC_DIR)/ui/gfx.cpp $(SRC_DIR)/ui/rle565.cpp tests/fake_lcd.cpp $(SRC_DIR)/core/remote_proto.cpp $(SRC_DIR)/core/fmt.cpp $(SRC_DIR)/pd/pd.cpp $(SRC_DIR)/pd/pd_engine.cpp $(SRC_DIR)/pd/pd_ext.cpp $(SRC_DIR)/pd/pd_vdm.cpp $(SRC_DIR)/pd/usb_link.cpp $(SRC_DIR)/pd/pd_link.cpp $(SRC_DIR)/drivers/power_calc.cpp $(SRC_DIR)/drivers/adc_calc.cpp $(SRC_DIR)/fastcharge/fastcharge_classify.cpp $(SRC_DIR)/ui/ui_calc.cpp $(SRC_DIR)/drivers/buttons.cpp $(SRC_DIR)/ui/ui_layout.cpp $(SRC_DIR)/ui/ui_labels.cpp $(SRC_DIR)/ui/list_view.cpp $(SRC_DIR)/pd/pd_source.cpp $(SRC_DIR)/pd/pd_sink.cpp $(SRC_DIR)/pd/xiaomi_auth.cpp $(SRC_DIR)/pd/pd_identify.cpp $(SRC_DIR)/pd/pd_probe.cpp $(SRC_DIR)/ui/ui_pdtrig.cpp $(SRC_DIR)/ui/ui_wizard.cpp $(SRC_DIR)/fastcharge/fc_engine.cpp $(SRC_DIR)/fastcharge/fc_scan.cpp $(SRC_DIR)/ui/text.cpp $(SRC_DIR)/pd/emrec.cpp $(SRC_DIR)/pd/emk_quirk.cpp $(SRC_DIR)/pd/emk_respond.cpp $(SRC_DIR)/pd/emk_learn.cpp $(SRC_DIR)/pd/cable_full.cpp $(SRC_DIR)/pd/emname.cpp $(SRC_DIR)/pd/emjson.cpp $(SRC_DIR)/drivers/vfat.cpp $(SRC_DIR)/drivers/drive.cpp $(SRC_DIR)/ui/ui_widgets.cpp $(SRC_DIR)/ui/ui_widgets_cold.cpp $(SRC_DIR)/ui/ui_icons.cpp $(SRC_DIR)/ui/ui_match.cpp $(SRC_DIR)/ui/ui_lines.cpp $(SRC_DIR)/ui/ui_tools.cpp $(SRC_DIR)/ui/ui_emarker.cpp $(SRC_DIR)/ui/ui_cabler.cpp $(SRC_DIR)/ui/ui_connection_page.cpp $(SRC_DIR)/ui/ui_blackbox.cpp $(SRC_DIR)/ui/ui_spoof.cpp $(SRC_DIR)/ui/ui_cards.cpp $(SRC_DIR)/pd/pdtrace.cpp $(SRC_DIR)/pd/pdtrace_view.cpp $(SRC_DIR)/pd/pdtrace_link.cpp $(wildcard $(SRC_DIR)/ui/fonts/*.cpp)
 TEST_CXX_SRCS  = $(wildcard tests/test_*.cpp)
 ifneq ($(HOST_K2_SPECROWS),1)
@@ -825,7 +834,7 @@ nav-headers:
 	@$(COMPDB)
 
 docker-build: | $(NAV_DIR)/dirs.txt
-	$(DOCKER_RUN) $(DOCKER_IMG) make K2_GIT=$(K2_GIT) K2_FW_VERSION=$(K2_FW_VERSION) K2_WERROR=$(K2_WERROR) K2_64BIT=$(K2_64BIT) K2_NET=$(K2_NET) K2_WEBUSB=$(K2_WEBUSB) K2_PDSTRESS=$(K2_PDSTRESS) K2_PDSPEC=$(K2_PDSPEC) K2_LOOPPROBE=$(K2_LOOPPROBE) K2_TWIN=$(K2_TWIN) K2_OPPO_PROBE=$(K2_OPPO_PROBE) K2_EEPROM_READ=$(K2_EEPROM_READ) K2_EEPROM_CAL_CLEAR=$(K2_EEPROM_CAL_CLEAR) K2_EEPROM_WRITE=$(K2_EEPROM_WRITE) K2_SPECROWS=$(K2_SPECROWS) K2_SCREENSHOT=$(K2_SCREENSHOT) K2_HOST_REPORT=$(K2_HOST_REPORT) K2_HOT_BLOCK=$(K2_HOT_BLOCK) K2_STACKPROBE=$(K2_STACKPROBE) BUILD_DIR=$(BUILD_DIR) K2_HOST_ROOT=$(CURDIR)
+	$(DOCKER_RUN) $(DOCKER_IMG) make K2_GIT=$(K2_GIT) K2_FW_VERSION=$(K2_FW_VERSION) K2_WERROR=$(K2_WERROR) K2_64BIT=$(K2_64BIT) K2_NET=$(K2_NET) K2_WEBUSB=$(K2_WEBUSB) K2_PDSTRESS=$(K2_PDSTRESS) K2_PDSPEC=$(K2_PDSPEC) K2_LOOPPROBE=$(K2_LOOPPROBE) K2_TWIN=$(K2_TWIN) K2_OPPO_PROBE=$(K2_OPPO_PROBE) K2_EEPROM_READ=$(K2_EEPROM_READ) K2_EEPROM_CAL_CLEAR=$(K2_EEPROM_CAL_CLEAR) K2_EEPROM_WRITE=$(K2_EEPROM_WRITE) K2_SPECROWS=$(K2_SPECROWS) K2_SCREENSHOT=$(K2_SCREENSHOT) K2_HOST_REPORT=$(K2_HOST_REPORT) K2_HOT_BLOCK=$(K2_HOT_BLOCK) K2_STACKPROBE=$(K2_STACKPROBE) K2_SELFTEST=$(K2_SELFTEST) BUILD_DIR=$(BUILD_DIR) K2_HOST_ROOT=$(CURDIR)
 
 docker-flash:
 	docker run --rm --init --privileged -v $(CURDIR):/workspace -v /dev:/dev $(DOCKER_IMG) make flash
@@ -834,7 +843,8 @@ docker-flash:
 gate:
 	@$(PYTHON) tools/gate.py
 
-# Intended flow: make gate -> flash -> make perf-check. The perf step of the gate only looks at the build that is on the
+# Pre-release flow: make gate K2_SELFTEST=1 -> flash -> make perf-check. The selftest is not in the default (shipping) image, so
+# without K2_SELFTEST=1 the perf step reports SKIPPED. The perf step of the gate only looks at the build that is on the
 # K2 already, so after a flash this runs just that step (on-device selftest vs tools/perf_baseline.json, 3 runs).
 # perf-baseline re-takes the baseline (5 runs, minimum) from a K2 that runs the image in $(BUILD_DIR). Both take the device lock.
 .PHONY: perf-check perf-baseline
