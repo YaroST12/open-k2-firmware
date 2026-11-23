@@ -1092,6 +1092,40 @@ static bool start_cell_says(std::string_view hint) {
 // Review carries no alert band and no warning lines (user decision 2026-11-21): the other port is START's hint only. The table
 // starts at the body top, the rule and the 64 px ticket follow, and no amber is painted above the ticket (the Tests row is text).
 // The idle footer is empty: "Check the other port" only repeated the fixed warning, so no toast rides on a bare Review.
+// A fresh draft sweeps every 200 mV; Review names the step beside the level when a sweep runs, and says nothing of it when none does.
+static void dump_screen(const char* name);
+static void test_review_names_the_sweep_step() {
+    fixture();
+    {
+        Ui ui; open(ui);
+        CHECK_EQ(unsigned(ui.charger_test_sweep_depth()), unsigned(ctsweep::Depth::Step200));
+        CHECK_EQ(ui.charger_test_set_sweep_depth(ctsweep::kDepthCount), false);
+        CHECK_EQ(unsigned(ui.charger_test_sweep_depth()), unsigned(ctsweep::Depth::Step200));
+    }
+    struct Case { bool pps, avs; ctsweep::Depth depth; const char* text; };
+    static const Case cases[] = {
+        {true, false, ctsweep::Depth::Step200, "Medium 200 mV"},
+        {false, true, ctsweep::Depth::Phone, "Medium Phone"},
+        {true, true, ctsweep::Depth::Step20, "Medium 20 mV"},
+        {true, false, ctsweep::Depth::Step100, "Medium 100 mV"},
+        {false, false, ctsweep::Depth::Step20, "Medium"},   // no sweep: no step
+    };
+    for (const auto& c : cases) {
+        Ui ui; open(ui);
+        ui.charger_test_set_sweep(c.pps); ui.charger_test_set_avs_sweep(c.avs);
+        ui.charger_test_set_sweep_depth(uint8_t(c.depth));
+        review(ui);
+        check_text_at(kSmall, review_row_y(1), c.text, kText, kBg, 68);
+        char name[40]; std::snprintf(name, sizeof name, "sweep_review_%s_rot0", c.pps || c.avs ? c.text + 7 : "none");
+        for (char* p = name; *p; ++p) if (*p == ' ') *p = '_';
+        dump_screen(name);   // K2_DUMP: the Depth value, the walk of the other three rotations below
+        for (uint8_t rot = 1; rot < 4; ++rot) {
+            ui.set_rotation(rot, 1300); settle(ui, 1300);
+            name[std::strlen(name) - 1] = char('0' + rot);
+            dump_screen(name);
+        }
+    }
+}
 static void test_review_carries_the_other_port_warning() {
     static_assert(kit::kBodyY + 5 * kit::kRowH <= kReviewRuleY && kReviewCellY + kReviewCellH <= kFooterY, "five rows, rule, ticket");
     for (unsigned mode = 0; mode < 2; ++mode) {
@@ -2285,6 +2319,7 @@ static void test_a_voltage_fold_reads_as_a_caution() {
     Ui ui; open(ui);
     CHECK_EQ(ui.charger_test_set_units(kPdOnly), true);
     ui.charger_test_set_sweep(true);
+    ui.charger_test_set_sweep_depth(unsigned(ctsweep::Depth::Step100));   // the record below is written cell by cell: every cell measured
     review(ui);
     start_press(ui, 1300); press(ui, Button::Ok, 1400);
     uint32_t t = 1500;
@@ -6587,6 +6622,63 @@ static void test_silent_qc_reads_no_reply_not_a_fail() {
         std::snprintf(name, sizeof name, "qc_none_rot%u", unsigned(rot)); dump_panel(name);
     }
 }
+// pattern usb-a-dpdm-open: a source that never spoke PD, D+/D- read open by the DCP check. The first QC unit's silence is the one
+// confirming attempt; every D+/D- unit then reads "lines open", one "No D+/D-" word in Results, the cause in the footer. A PD source
+// with the same reading gets no cause (the check does not run there), and short lines keep the plain "No reply".
+static void open_lines_run(Ui& ui, uint32_t& t, uint8_t rot, bool pd_source, int dcp) {
+    fixture();
+    if (pd_source) six_pdo_fixture(); else { g_stub.caps.valid = false; g_stub.caps.num_pdos = 0; g_stub.caps.active_cc = 0; }
+    g_stub.dcp_lines = dcp;
+    constexpr uint8_t kUnits[] = {uint8_t(ct::Unit::Qc2), uint8_t(ct::Unit::Qc3), uint8_t(ct::Unit::Ufcs)};
+    open(ui); ui.set_rotation(rot, 1050); settle(ui, 1050);
+    CHECK_EQ(ui.charger_test_set_units(kUnits), true);
+    CHECK_EQ(ui.charger_test_set_level(uint8_t(ct::Level::Medium)), true);
+    review(ui);
+    start_press(ui, 1300); press(ui, Button::Ok, 1400);
+    g_stub.fc_start_hook = qc_silent;
+    t = 1500;
+    for (; t <= 900000 && ui.charger_test_busy(); t += 100) ui.tick(t);
+    g_stub.fc_start_hook = nullptr;
+    g_stub.fc_status_fail = g_stub.fc_status_ident = 0;
+    CHECK_EQ(ui.charger_test_stage(), 6);
+    ui.tick(t); t += 200; ui.tick(t); t += 200;
+    settle(ui, t);
+}
+static void test_open_dpdm_lines_read_one_cause() {
+    for (uint8_t rot = 0; rot < 4; ++rot) {
+        Ui ui; uint32_t t;
+        open_lines_run(ui, t, rot, false, 1);
+        unsigned open_rows = 0, other = 0;
+        for (const auto& s : ui.charger_test_results().steps()) {
+            if (s.group == ct::Group::Pd) continue;
+            if (s.reason == ct::Reason::LinesOpen) { ++open_rows; CHECK_EQ(result_layout::is_lines_open(s), true); }
+            else ++other;
+        }
+        CHECK_EQ(open_rows >= 5, true);
+        CHECK_EQ(other, 0u);
+        CHECK_EQ(int(ui.charger_test_results().evidence().dpdm), int(ct::Lines::Open));
+        // the Results fold says it in one word, and the focused word's footer names both causes
+        unsigned n = 0;
+        bool footer = false;
+        for (; n < 12 && !footer; ++n) { footer = view_says(ui, "Open: flip or data cable"); if (!footer) { press(ui, Button::Plus, t); ui.tick(t += 100); settle(ui, t); } }
+        CHECK_EQ(footer, true);
+        if (rot == 0) CHECK_EQ(footer_shows("Open: flip or data cable", kCaution), true);   // the pill helper draws the unrotated toast rect only
+        char name[64];
+        std::snprintf(name, sizeof name, "dpdm_open_rot%u", unsigned(rot)); dump_panel(name);
+        press(ui, Button::Ok, t); ui.tick(t += 100); settle(ui, t);   // the rows behind the word: the unit's reason cell
+        std::snprintf(name, sizeof name, "dpdm_open_rows_rot%u", unsigned(rot)); dump_panel(name);
+    }
+    {   // a PD source: the same reading gives no cause, the units keep their plain no-reply skips
+        Ui ui; uint32_t t;
+        open_lines_run(ui, t, 0, true, 1);
+        for (const auto& s : ui.charger_test_results().steps()) CHECK_EQ(s.reason == ct::Reason::LinesOpen, false);
+    }
+    {   // short lines: a genuine no reply stays a no reply
+        Ui ui; uint32_t t;
+        open_lines_run(ui, t, 0, false, 2);
+        for (const auto& s : ui.charger_test_results().steps()) CHECK_EQ(s.reason == ct::Reason::LinesOpen, false);
+    }
+}
 static void test_vooc_family_results_read_watts_levels() {
     struct Scene { const char* name; ct::Level level; uint16_t ceiling; int32_t vmax_mv; };
     // deep69: the ladder stood at 6.3 A under 11.0 V (69 W): 50 and 65 W claimed, 100 and 120 W not reached
@@ -7041,7 +7133,7 @@ int main() {
     test_depth_row_cycles_and_shows_on_review();
     test_preset_counts_follow_the_depth();
     test_an_old_journal_resumes_without_the_default_sweep();
-    test_self_powered_review_note(); test_review_carries_the_other_port_warning(); test_phantom_evidence_does_not_refuse_a_run_but_a_load_does(); test_self_powered_run_is_on_the_card(); test_a_cable_read_once_stays_with_the_run();
+    test_self_powered_review_note(); test_review_carries_the_other_port_warning(); test_review_names_the_sweep_step(); test_phantom_evidence_does_not_refuse_a_run_but_a_load_does(); test_self_powered_run_is_on_the_card(); test_a_cable_read_once_stays_with_the_run();
     test_pps_wire_headroom_note();
     test_first_menu_and_pd_bundles();
     test_tests_step_presets();
@@ -7062,6 +7154,7 @@ int main() {
     test_vooc_family_silent_reads_no_answer();
     test_silent_vivo_reads_no_reply_not_a_fail();
     test_silent_qc_reads_no_reply_not_a_fail();
+    test_open_dpdm_lines_read_one_cause();
     test_xiaomi_unit_scenes();
     test_transient_current_spike_does_not_abort_run();
     return test_report("test_ui_charger_test");

@@ -800,6 +800,21 @@ static void test_meta_keeps_the_level() {
         CHECK_EQ(int(r.meta.level), int(ct::Level::Medium)); CHECK_EQ(int(r.options.level), int(ct::Level::Medium));
     }
 }
+// The sweep depth rides in bits 5..6; a journal from before them (zero bits) replays as 100 mV, the step it ran.
+static void test_meta_keeps_the_sweep_depth() {
+    for (const auto d : {ctsweep::Depth::Step100, ctsweep::Depth::Step200, ctsweep::Depth::Phone, ctsweep::Depth::Step20}) {
+        Vol v; cj::Replay r;
+        cj::RunMeta m = meta3(); m.level = ct::Level::Deep; m.pps_sweep = true; m.sweep_depth = d;
+        arm(v, plan(6));
+        CHECK_EQ(int(v.j->meta(m)), 0);
+        v.reboot(); v.j->replay(r);
+        CHECK_EQ(int(r.meta.sweep_depth), int(d)); CHECK_EQ(int(r.options.sweep_depth), int(d));
+        CHECK_EQ(int(r.meta.level), int(ct::Level::Deep)); CHECK_EQ(r.options.pps_sweep, true);   // its neighbours stay
+    }
+    std::array<std::uint8_t, 64> buf{};
+    cj::RunMeta m = meta3(); cj::encode_meta(buf, m);
+    CHECK_EQ((buf[4 + 1] >> 5) & 3, 0);
+}
 // A meta written without a guard reading (no identity, or a firmware before the byte existed) replays as "not judged".
 static void test_meta_without_a_guard_reads_zero() {
     Vol v; cj::Replay r;
@@ -1314,7 +1329,7 @@ int main() {
     test_polled_arm_stops_at_a_failure_and_a_too_big_plan();
     test_failure_keeps_the_filesystem_error();
     test_roundtrip(); test_capped_step_roundtrip(); test_power_cut_at_every_operation(); test_power_cut_during_begin();
-    test_restart_replaces_the_run(); test_flash_failure_marks_broken(); test_meta_and_attempt_roundtrip(); test_meta_without_a_guard_reads_zero(); test_meta_keeps_the_level();
+    test_restart_replaces_the_run(); test_flash_failure_marks_broken(); test_meta_and_attempt_roundtrip(); test_meta_without_a_guard_reads_zero(); test_meta_keeps_the_level(); test_meta_keeps_the_sweep_depth();
     test_meta_and_attempt_power_cut(); test_an_ended_run_is_not_resumable(); test_finish_cut_at_every_operation();
     test_finish_is_tried_after_a_failed_write(); test_resume_gate();
     test_the_spec_result_rides_in_its_own_record(); test_a_damaged_spec_record_reads_as_not_run(); test_the_spec_record_is_even_and_fits();

@@ -33,7 +33,7 @@ REASONS = ["", "disabled", "not advertised", "over voltage cap", "not implemente
            "request failed", "timeout", "voltage outside band", "hard reset", "source lost",
            "cancelled", "5V release failed", "offers changed", "PD active: use QC port",
            "revision cannot be forced", "select at least one test", "physical cable limit", "unsupported PDO layout",
-           "charger stayed in PD", "rebooted during request", "rebooted during handover", "EPR entry refused", "no contract", "source shut off (needs replug)", "no PD after re-attach", "VBUS cut, source recovered", "blocked by PD", "no QC3+ response", "rebooted 3x", "needs external power", "PD gave up before START", "Class A only (12 V max)", "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution", "HID-cable loop: 5V lock", "advertised", "light run: not asked", "port cuts without load", "output folds back", "Xiaomi chain", "transition check"]
+           "charger stayed in PD", "rebooted during request", "rebooted during handover", "EPR entry refused", "no contract", "source shut off (needs replug)", "no PD after re-attach", "VBUS cut, source recovered", "blocked by PD", "no QC3+ response", "rebooted 3x", "needs external power", "PD gave up before START", "Class A only (12 V max)", "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution", "HID-cable loop: 5V lock", "advertised", "light run: not asked", "port cuts without load", "output folds back", "Xiaomi chain", "transition check", "D+/D- open: flip or data cable"]
 STATES = ["Setup", "Verify 5V", "Negotiating", "Hold", "Return to 5V", "Complete", "Stopped",
           "UNSAFE: unplug source", "Detach charger", "Initializing...", "SVOOC ceiling", "PD spec"]
 HANDOVER = ["not tried", "fell back", "stayed PD", "fault", "reboot", "in PD contract"]
@@ -75,7 +75,8 @@ class BadCard(ValueError):
 
 
 # ---- the Deep block (format 11): include/k2/chargertest/report_card_deep.hpp, tests/test_report_card_py.py compares the name tables ----
-DEEP_MAX_BITS = 3811   # report_card::deep::kMaxBits (3638 before the format 13 ranges, 3274 without the format 12 Xiaomi section)
+DEEP_MAX_BITS = 3813   # report_card::deep::kMaxBits (3811 before the step tail, 3638 before the format 13 ranges, 3274 without the Xiaomi section)
+DEEP_DEPTHS = ((100, "100 mV"), (200, "200 mV"), (20, "Phone"), (20, "20 mV"))   # ctsweep::Depth order: the step tail's names
 VERDICTS = ["pending", "running", "pass", "fail", "skip"]   # charger_test::Verdict, the Xiaomi section's verdict field
 MI_BEFORE_LOST = 0xFFFFFFFF   # deep::kBeforeLost: the PDO before the chain is not known (the run resumed)
 DEEP_BUCKETS = 32
@@ -191,9 +192,13 @@ def decode_deep(blob, ranges=()):
         graphs.append(g)
     if graphs:
         out["graphs"] = graphs
-    if r.left() >= 8:   # format 12: the Xiaomi section is the block's tail
+    left = nbits - r.pos   # bits, not the padded bytes: the two-bit step tail must not read as 8 bits to a byte count
+    if left >= 8:   # format 12: the Xiaomi section is the block's tail
         out["xiaomi"] = _decode_mi(r)
-    if r.left() >= 8:
+        left = nbits - r.pos
+    if left == 2:   # the step tail (two bits: an older reader never takes it for the Xiaomi section); no tail = 100 mV
+        out["sweep_depth"] = DEEP_DEPTHS[r.get(2)][1]
+    if nbits - r.pos >= 8:
         raise BadCard("Deep block has trailing data")
     return out
 
@@ -256,6 +261,9 @@ def _u(b, at, n):
     return int.from_bytes(b[at:at + n], "little")
 
 
+LINES_OPEN = "D+/D- open: flip or data cable"   # charger_test::Reason::LinesOpen's name
+
+
 # A skipped unit whose protocol never answered its first request is "not offered", not a failure (report_card.hpp silent_skip).
 SILENT_SKIPS = {("AFC", "unsupported"), ("FCP", "unsupported"), ("SCP", "unsupported"), ("UFCS", "no response"), ("VIVO", "no response"),
                 ("QC2", "no handshake"), ("QC3", "no handshake"), ("QC3+", "no handshake"), ("UFCS", "no handshake"),
@@ -266,6 +274,8 @@ def group_why(group, detail, reason, skipped=False):
     """The readable cause of a failed or skipped group: the engine's code when one was stored, else the reason."""
     if reason == "no QC3+ response":
         return "no QC3+"   # the engine code is "no response"; the group says "no QC3+" (report_card.hpp group_why)
+    if reason == LINES_OPEN:
+        return "lines open"   # the engine code stays as detail; the cell says the cause (charger_test.hpp kLinesOpenCell)
     if detail:
         if group == "PD":
             if detail in EPR_DETAILS:   # an EPR skip: the monitor ceiling or Enter_Failed's reason (charger_test.hpp kDetailEprFail)

@@ -335,6 +335,13 @@ public:
         charger_test_.set_level(charger_test::Level(level));
         return true;
     }
+    // The sweep depth of the next run (ctsweep::Depth as a byte; false for an unknown depth): Settings > Sweep depth, the remote.
+    bool charger_test_set_sweep_depth(uint8_t depth) {
+        if (depth >= ctsweep::kDepthCount) return false;
+        charger_test_.set_sweep_depth(ctsweep::Depth(depth));
+        return true;
+    }
+    uint8_t charger_test_sweep_depth() const { return uint8_t(charger_test_.sweep_depth()); }
     // Settings > Huawei/Samsung tests (uiprefs::legacy_units_shown) changed: FCP, SCP and AFC leave or rejoin the draft.
     void charger_test_legacy_changed() { charger_test_.sync_legacy(); }
     void charger_test_set_sweep(bool on) { charger_test_.set_sweep(on); }

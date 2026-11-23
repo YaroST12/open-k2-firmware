@@ -33,6 +33,14 @@ constexpr bool never_answered(Group g, fc::Fail f) {
 // A VOOC family that clocked no opener after either wake (NoAnswer): a skip too, an unloaded adapter may stay silent.
 constexpr bool silent_vooc(Group g, fc::Fail f) { return g >= Group::Vooc && g <= Group::SuperVooc65 && f == fc::Fail::NoAnswer; }
 constexpr bool no_reply(Group g, fc::Fail f) { return never_answered(g, f) || silent_vooc(g, f); }
+// The engine word a unit's silence has (the one no_reply() accepts for its group): what a LinesOpen row keeps as its detail, so a decoder
+// that does not know the reason still reads "no reply".
+constexpr fc::Fail silent_code(Group g) {
+    return g == Group::Afc || g == Group::Fcp || g == Group::Scp ? fc::Fail::Unsupported :
+           g == Group::Vivo ? fc::Fail::NoResponse : g >= Group::Vooc && g <= Group::SuperVooc65 ? fc::Fail::NoAnswer : fc::Fail::NoHandshake;
+}
+// What the DCP check (fastcharge::dcp_lines) found on D+/D-. The wire value of Evidence::dpdm; Unknown = not checked or not readable.
+enum class Lines : uint8_t { Unknown, Open, Short };
 static_assert(unsigned(Algorithm::Count) < 32);
 inline constexpr uint32_t kAllAlgorithms = (1u << unsigned(Algorithm::Count)) - 1;
 inline constexpr size_t kMaxSteps = pd::kMaxPdos * 6 + 46;   // 40 + the six default Class B rows (Qc2ClassB 1, Qc3ClassB 5); the journal's one-block section assert caps this
@@ -90,8 +98,10 @@ enum class Reason : uint8_t {
                          // same APDO at or above the first folded setpoint that read below the peak - never a fail (Summary::fold_mv)
     MiChain,             // the Xiaomi unit's chain row (is_mi_chain): detail = mi_unlock::chain_code. Pass = the 0x2717 chain finished
                          // (with or without new modes), Skip = no SVID 0x2717, no answer or a stall; nothing is requested on this row
-    ProgCheck            // a Deep PPS / AVS row whose transition capture broke a spec limit (progcheck::Flag bits in detail: overshoot, slow rise,
+    ProgCheck,           // a Deep PPS / AVS row whose transition capture broke a spec limit (progcheck::Flag bits in detail: overshoot, slow rise,
                          // transient, level off): a CAUTION on a Pass, never a fail - the level was delivered
+    LinesOpen            // a D+/D- unit skipped because the DCP check found the lines open (Lines::Open) on a source that never spoke PD and the first
+                         // attempt got no reply: one cause for the whole D+/D- family. detail = silent_code(group), the same word as its no-reply skip
 };
 // Step.detail of a PPS step-walk row while it is Pending/Running (finish() overwrites it with the result); sits above every
 // engine code and the EPR skip codes so the card and the tools never mistake it for one.
@@ -127,6 +137,10 @@ inline constexpr unsigned kWalkSteadySamples = 3;
 inline constexpr int kWalkSteadyMv = 3;
 inline constexpr uint32_t kWalkSteadyWindowMs = 300;
 inline constexpr uint32_t kWalkSteadyTimeoutMs = 2000;
+// A sweep point closes once its VBUS has held steady for kSweepSettleMs after PS_RDY (the PD Spec capture needs a 50 ms tail past the
+// Accept), else kSweepHoldMs after PS_RDY as the ceiling: the window mean of a slow or rippling source, as before.
+inline constexpr uint32_t kSweepSettleMs = 100;
+inline constexpr uint32_t kSweepHoldMs = 500;
 // A run that was resumed this many times is not offered again (a step that dies before it can leave a marker would loop forever).
 inline constexpr unsigned kMaxResumes = 16;
 // A unit (protocol) may take the K2 down this many times inside one run: losses 1 .. kRebootBudget-1 resume the same row, the
@@ -291,6 +305,8 @@ struct Options {
     bool pps_sweep = false;
     // The AVS deep sweep (ROADMAP "AVS deep sweep"): its own flag next to the PPS one, opt-in (off in the default run).
     bool avs_sweep = false;
+    // How finely the deep sweeps step (Settings "Sweep depth", sweep.hpp Depth). Journaled in the meta byte; Step100 = 0 on every wire.
+    ctsweep::Depth sweep_depth = ctsweep::Depth::Step100;
     // The SVOOC ceiling stage (svooc_ceiling.hpp): opt-in like the sweeps, never in a preset. On = after a detected VOOC family
     // the guarded trigger asks the adapter 1.5 / 4 / 6.3 / 10.9 A (a protocol word, no load) and the highest ask it went on
     // under is the result. UsbA (the retired USB-A waiver, kept for the wire) runs as On: the inline latch only keeps certain evidence now.
@@ -392,6 +408,10 @@ constexpr bool is_mi_mode(const Step& s) { return s.group == Group::Pd && s.hunt
 constexpr bool sweep_low(const Step& s) { return s.mv && s.mv < ctsweep::kSplitMv; }
 // The setpoints a sweep row walks: its part of the APDO's point range, capped at cap_mv (monitor ceiling, cable limit).
 ctsweep::PointRange sweep_range(const Step& s, unsigned cap_mv);
+// The row's point sequence at a depth (the phone windows need the source's list for their APDO choice).
+ctsweep::Plan sweep_plan(const Step& s, unsigned cap_mv, ctsweep::Depth d, const pd::SourceCaps& caps);
+// The preview's time per measured sweep point (Request, PS_RDY, settle, window).
+inline constexpr uint32_t kSweepPointMs = 200;
 // The UFCS mode a step samples, kept in `Step::pdo` (no UFCS row has a PDO): the planner writes it once the charger's
 // Output_Capabilities are read, and the Results chip (the mode's top current), the Detail page (the whole mode) and the journal
 // read it. Four fields in 32 bits, saturating: voltages in 100 mV (9 bits, up to 51.1 V), currents in 50 mA (7 bits, up to 6.35 A).
@@ -455,6 +475,7 @@ struct Input {
     // D+/D- are free for the ceiling stage's trigger: no owner holds them and they sit at the passive idle (the trigger's own
     // start check, svooc_trig::lines_free()). False for 500 ms after a legacy session's release (the engine's 0 V discharge).
     bool lines_free = true;
+    Lines lines = Lines::Unknown;   // fastcharge::dcp_lines(): the verdict of the once-per-attach DCP check (kept until VBUS drops)
 };
 // The runner waits for the source probe at most this long, so a charger that ignores it costs the run under 1 s.
 inline constexpr uint32_t kProbeMaxMs = 1000;
@@ -526,6 +547,8 @@ struct Evidence {
     // (the median gap between the last kCutOnsets onsets, in 100 ms units; 0 = fewer than two cuts seen or over 25.5 s). Only cut_retries
     // is exported (timing byte bits 3..7, saturating at 31: the 42-byte page header is full); the period is a [CT] cut period log line.
     uint8_t cut_retries = 0, cut_period_ds = 0;
+    // The DCP check's last verdict seen in the run (Lines); exported in bits 30..31 of the run-selected word (older firmware always sends 0 there).
+    Lines dpdm = Lines::Unknown;
     pd::Revision reported{};
     // The Xiaomi unit (Runner::mi_latch): the chain outcome (mi_unlock::chain_code, 0 = not run) and the unlocked modes, before and
     // after word and slot. Not journaled; the card carries it in its extension block (report_card_deep.hpp).
@@ -546,6 +569,8 @@ pd::SourceCaps nominal_caps();
 // (caps.valid false) it plans the nominal one, so the count still scales with the depth.
 unsigned planned_tests(const pd::SourceCaps&, Options, Input);
 const char* explanation(const Step&);
+// The short word for a LinesOpen row in a 16-cell value column (explanation, the card's Why); name(Reason::LinesOpen) is the full cause.
+inline constexpr const char* kLinesOpenCell = "lines open";
 // The step-walk caution's note, "steps 100mV, not 20mV" (the mean move, rounded to 10 mV from 50 up, then the nominal step) or
 // "steps ignored"; or a transition check's finding, "overshoot +1" (the first flag, then how many more); 0 characters for any other reason.
 // NUL-terminated within `out`, 24 characters at most.
@@ -784,6 +809,24 @@ public:
         return hi - lo <= kWalkSteadyMv;
     }
     unsigned count() const { return n_; }
+    // The sweep point's early test: the samples of the last span_ms alone (the output after its ramp, not the ramp still in the
+    // window): at least kWalkSteadySamples of them, all within kWalkSteadyMv. Too few (a slow poll cadence) reads not steady.
+    bool tail_steady(uint32_t now_ms, uint32_t span_ms) const {
+        unsigned k = 0; int lo = 0, hi = 0;
+        for (unsigned i = 0; i < n_; ++i) {
+            if (now_ms - t_[i] > span_ms) continue;
+            if (!k || v_[i] < lo) lo = v_[i];
+            if (!k || v_[i] > hi) hi = v_[i];
+            ++k;
+        }
+        return k >= kWalkSteadySamples && hi - lo <= kWalkSteadyMv;
+    }
+    int tail_mean(uint32_t now_ms, uint32_t span_ms, int fallback) const {
+        int32_t sum = 0, k = 0;
+        for (unsigned i = 0; i < n_; ++i)
+            if (now_ms - t_[i] <= span_ms) { sum += v_[i]; ++k; }
+        return k ? (sum + k / 2) / k : fallback;
+    }
     // The level the window stands for: the mean of its samples (a ripple around a held level averages out, one sample reads the
     // ripple). `fallback` (the latest sample) when the window is empty.
     int mean(int fallback) const {
@@ -840,6 +883,7 @@ public:
     bool suspended() const { return suspended_; }
     Reason resume(Input, bool confirmed);
     uint8_t resumed() const { return resumed_; }
+    ctsweep::Depth sweep_depth() const { return opts_.sweep_depth; }   // the step of the run in hand (the card names it)
     Level level() const { return opts_.level; }   // the level of the run in hand (started or restored)
     uint8_t reattach_count() const { return reattach_; }   // how many times the run went through the planned re-attach
     bool busy() const { return (state_ >= State::Baseline && state_ <= State::Releasing) || state_ == State::Unsafe || state_ == State::Detach || state_ == State::Attach || state_ == State::Ceiling || state_ == State::Spec; }
@@ -905,7 +949,7 @@ public:
         if (busy()) return {};
         n_sweep_rows_ = 0;
         sweep_used_ = 0;
-        sweep_first_ = sweep_n_ = 0;
+        sweep_first_ = sweep_n_ = sweep_pts_ = 0;
         return {sweep_err_.data(), sweep_err_.size()};
     }
     // The sweep row under test, live: its point range, the setpoint in flight and the last recorded point (the Running view).
@@ -913,8 +957,8 @@ public:
         ctsweep::Live l;
         if (index_ >= count_ || steps_[index_].verdict != Verdict::Running || !is_sweep(steps_[index_]) || sweep_hi_ < sweep_lo_) return l;
         l.active = true;
-        l.lo_mv = sweep_lo_; l.hi_mv = sweep_hi_; l.set_mv = sweep_mv_; l.n = sweep_n_;
-        if (sweep_n_ && sweep_first_ + sweep_n_ <= ctsweep::kMaxPoints) l.last_err = sweep_err_[sweep_first_ + sweep_n_ - 1u];
+        l.lo_mv = sweep_lo_; l.hi_mv = sweep_hi_; l.set_mv = sweep_mv_; l.n = sweep_pts_;
+        l.last_mv = sweep_prev_mv_; l.last_err = int16_t(std::clamp(int(sweep_prev_lv_) - int(sweep_prev_mv_), -32767, 32767));
         return l;
     }
 private:
@@ -945,7 +989,9 @@ private:
     void next(const Input&);
     size_t pick() const;
     size_t scp_next(const Input&, bool passed) const;
-    void skip_group_rows(Group g, bool raises_only, uint8_t detail);   // every Pending row of g (only those above 5 V) ends Skip / Request
+    void skip_group_rows(Group g, bool raises_only, uint8_t detail);
+    bool lines_open_cause(const Input&) const;   // the DCP check found D+/D- open on a source that never spoke PD, and no D+/D- row has answered
+    void lines_open_sweep();                      // every D+/D- row still Pending, or ended "no reply", reads LinesOpen
     void skip_pending(Reason);
     void suspend();
     bool unfinished() const;   // a row is still Pending or Running
@@ -1053,9 +1099,18 @@ private:
     std::array<ctsweep::RowView, ctsweep::kMaxRows> sweep_rows_ K2_BSS_ZERO;
     uint8_t n_sweep_rows_ K2_BSS_INIT(0);
     uint16_t sweep_used_ K2_BSS_INIT(0);                 // points recorded so far, all sweep rows together
-    uint16_t sweep_first_ K2_BSS_INIT(0), sweep_n_ K2_BSS_INIT(0);   // the row in flight: first slot in sweep_err_, points so far
-    uint16_t sweep_mv_ K2_BSS_INIT(0), sweep_lo_ K2_BSS_INIT(0), sweep_hi_ K2_BSS_INIT(0);   // the point whose Request is out / the row's point range
+    uint16_t sweep_first_ K2_BSS_INIT(0), sweep_n_ K2_BSS_INIT(0);   // the row in flight: first slot in sweep_err_, cells spanned so far
+    uint16_t sweep_mv_ K2_BSS_INIT(0), sweep_lo_ K2_BSS_INIT(0), sweep_hi_ K2_BSS_INIT(0);   // the Request out (a point or a step-back one) / the row's cell range
+    // The row's depth plan and the points it measured (the record holds the on-grid ones only). The fold rule runs live over every point
+    // (sweep_scan_); the first finding is stepped back from once per row (sweep_ref_), the located fold goes into the row's summary.
+    ctsweep::Plan sweep_plan_{};
+    uint16_t sweep_pts_ K2_BSS_INIT(0), sweep_prev_mv_ K2_BSS_INIT(0), sweep_prev_lv_ K2_BSS_INIT(0), sweep_resume_mv_ K2_BSS_INIT(0);
+    bool sweep_refining_ K2_BSS_INIT(false), sweep_refined_ K2_BSS_INIT(false), sweep_fed_ K2_BSS_INIT(false);   // sweep_fed_: the last move went to the spec stage
+    pd::TrackScan sweep_scan_;
+    ctsweep::Refiner sweep_ref_;
     void sweep_begin(const Step&, const Input&);   // request(): the point range from the row's PDO word, the row's record reset
+    void sweep_ask(const Input&, const Step&, unsigned mv);   // the Request of one point (or step-back point) through the gate
+    bool sweep_settled(const Input&) const;   // the point's early close: steady for kSweepSettleMs since PS_RDY
     void sweep_point(const Input&, const Step&);   // one granted point: record it, ask the next or finish the row
     void sweep_close(Step&);                // finish(): summarize the row's points into sweep_rows_ (and mark a fold, fold_caution)
     void fold_caution(Step& sweep, const ctsweep::Summary&);   // a fold: the sweep row and the APDO's fixed rows above it read Reason::Folded

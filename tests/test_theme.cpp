@@ -58,7 +58,7 @@ void test_tokens_follow_the_table() {
     CHECK_EQ(kAlarmInk, 0xFFFF);
 }
 
-// The K2 place has no Theme row: the list is USB Link ... Wake sleeping port, Test level, Huawei/Samsung, Long Back, Display, System state, Memory, Boot info.
+// The K2 place has no Theme row: the list is USB Link ... Wake sleeping port, Test level, Huawei/Samsung, Sweep depth, Long Back, Display, System state, Memory, Boot info.
 void test_settings_has_no_theme_row() {
     auto ui = std::make_unique<Ui>();
     g_stub = StubState();
@@ -68,15 +68,16 @@ void test_settings_has_no_theme_row() {
     std::uint32_t t = 1200;
     ui->goto_page(static_cast<uint8_t>(Page::Settings), t);
     while (ui->painting()) ui->tick(t += 20);
-    CHECK_EQ(SettingsPage::kRows, 13);
-    CHECK_EQ(ui->list_state().count, 13);
+    CHECK_EQ(SettingsPage::kRows, 13 + SettingsPage::kScreenshotRows);
+    CHECK_EQ(ui->list_state().count, SettingsPage::kRows);
     for (int i = 0; i < 20; i++) ui->on_button(Button::Plus, ButtonEvent::Short, 1300 + i * 10);
     CHECK_EQ(ui->context().keep.settings_sel, SettingsPage::kRows - 1);   // clamps at Boot info
     CHECK_EQ(SettingsPage::kBootRow, SettingsPage::kRows - 1);
     CHECK_EQ(SettingsPage::kMemoryRow, SettingsPage::kRows - 2);
     CHECK_EQ(SettingsPage::kSystemRow, SettingsPage::kRows - 3);
-    for (int i = 0; i < 7; i++) ui->on_button(Button::Minus, ButtonEvent::Short, 1600 + i * 10);   // up to the wake row
-    CHECK_EQ(ui->context().keep.settings_sel, 5);
+    const int wake = 4 + SettingsPage::kScreenshotRows;
+    for (int i = 0; i < SettingsPage::kRows - 1 - wake; i++) ui->on_button(Button::Minus, ButtonEvent::Short, 1600 + i * 10);   // up to the wake row
+    CHECK_EQ(ui->context().keep.settings_sel, wake);
     const auto before = g_stub.prefs_sets;
     ui->on_button(Button::Ok, ButtonEvent::Short, 1800);   // the wake row toggles and stores its own flag
     CHECK_EQ(g_stub.prefs_sets, before + 1);

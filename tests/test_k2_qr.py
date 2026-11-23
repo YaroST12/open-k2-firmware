@@ -309,6 +309,28 @@ class DeepBlob(unittest.TestCase):
         self.assertIsNone(g["buckets"][1])                                  # nothing recorded there
         self.assertEqual(g["buckets"][2], {"mean_mv": -4, "min_mv": -10, "max_mv": -4})
 
+    def test_step_tail_names_the_sweep_depth(self):
+        # a sweep block with no tail is 100 mV (every earlier card); a two-bit tail after it names the step, and the reader never
+        # takes those two bits for the Xiaomi section (it needs 8). docs/site/r/deep.js reads the same bits.
+        import shutil
+        import subprocess
+        bits = _bits(0, 1) + _bits(0, 1) + _bits(0b0001, 4) + _bits(50, 9) + _bits(2, 10) + _bits(0, 3)
+        bits += _bits(3, 8) + _bits(1, 4) + _bits(2, 4) + _bits(0x80, 8) + _bits(0, 4) + _bits(0, 4)
+        self.assertNotIn("sweep_depth", report_card.decode_deep(_blob(bits), [{"alg": "Pps"}]))
+        node = shutil.which("node")
+        js = os.path.join(ROOT, "docs", "site", "r", "deep.js")
+        for code, name in enumerate(["100 mV", "200 mV", "Phone", "20 mV"]):
+            blob = _blob(bits + _bits(code, 2))
+            d = report_card.decode_deep(blob, [{"alg": "Pps"}])
+            self.assertEqual(d["sweep_depth"], name)
+            self.assertNotIn("xiaomi", d)
+            self.assertEqual(len(d["graphs"][0]["buckets"]), 2)
+            if node:
+                out = subprocess.run([node, "-e", "const d=require(process.argv[1]).decode(Buffer.from(process.argv[2],'hex'),[],[]);"
+                                      "process.stdout.write(JSON.stringify([d.sweep_depth,'xiaomi' in d]))", js, blob.hex()],
+                                     capture_output=True, text=True, timeout=30, check=True).stdout
+                self.assertEqual(json.loads(out), [name, False])
+
     def test_web_viewer_tables_match_the_firmware_tables(self):
         # docs/site/r/deep.js carries the same tables as pdspec_blob.py (parsed from the firmware headers) and report_card.py
         import shutil
@@ -343,6 +365,7 @@ class DeepBlob(unittest.TestCase):
         self.assertEqual(t["SVOOC_REFUSALS"], report_card.SVOOC_REFUSALS)
         self.assertEqual(t["MAX_BITS"], report_card.DEEP_MAX_BITS)
         self.assertEqual(t["BUCKETS"], report_card.DEEP_BUCKETS)
+        self.assertEqual(t["DEPTHS"], [n for _, n in report_card.DEEP_DEPTHS])
         self.assertEqual(t["APDO"], {k: [None if d is None else [d["key"], d["label"]] for d in v] for k, v in s["apdo"].items()})
         self.assertEqual(t["RANGE_TONES"], s["range_tones"])
         self.assertEqual(t["GROUPS"], s["groups"])

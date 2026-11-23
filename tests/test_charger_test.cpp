@@ -22,6 +22,15 @@ using A = ct::Algorithm;
 static constexpr ct::Options kPd{.selected = ct::bit(A::Pd3Fixed) | ct::bit(A::Pps)};
 // kPd plus the Deep checks: the step walk is planned only with pps_sweep / avs_sweep.
 static constexpr ct::Options kPdWalk = [] { ct::Options o = kPd; o.pps_sweep = true; return o; }();
+// The engine word of a silent unit of each protocol (what ct::silent_code names per group).
+static fc::Fail silent_fail(fc::Proto p) {
+    switch (p) {
+    case fc::Proto::Afc: case fc::Proto::Fcp: case fc::Proto::Scp: return fc::Fail::Unsupported;
+    case fc::Proto::Vivo: return fc::Fail::NoResponse;
+    case fc::Proto::Vooc: case fc::Proto::SuperVooc: case fc::Proto::SuperVooc65: return fc::Fail::NoAnswer;
+    default: return fc::Fail::NoHandshake;
+    }
+}
 struct Fake final : ct::Env {
     ct::Input in;
     pd::SourceCaps caps;
@@ -92,6 +101,8 @@ struct Fake final : ct::Env {
     fc::Proto unsupported_proto = fc::Proto::Count;
     // A port that speaks no QC (JT-P18 USB-C, 2026-11-07): every request of the protocol ends in the engine's NoHandshake, VBUS stays at 5 V.
     fc::Proto no_handshake_proto = fc::Proto::Count;
+    // pattern usb-a-dpdm-open: every D+/D- protocol ends in its own "no reply" word (the lines go nowhere), whatever the unit.
+    bool silent_legacy = false;
     // A source still announcing (PD quiet under kLegacyQuietMs) spoils a new session's first try: race_kind Inline = the request is refused,
     // anything else = the engine's handshake fails with it. race_load also plugs a sink in at the refusal.
     fc::Fail race_kind = fc::Fail::None; bool race_load = false; int race_hits = 0;
@@ -116,6 +127,8 @@ struct Fake final : ct::Env {
     int out_script_mv = 0; std::vector<std::pair<uint32_t, int>> out_script; uint32_t out_t0 = 0; bool out_on = false;
     uint32_t ka_period_ms = 0, ka_at = 0, ka_end = 0; std::vector<uint32_t> ka_windows; size_t ka_i = 0;
     unsigned step_ms = 100;   // the poll period of tick()
+    // A PD request's output slews linearly from the old level over pd_slew_ms (the source's ramp after PS_RDY; 0 = it jumps).
+    unsigned pd_slew_ms = 0; int slew_from = 0, slew_to = 0; uint32_t slew_t0 = 0;
     // Item G (PS_RDY timing quirks): the Accept -> PS_RDY time the sink status stamps (ps_rdy_delay_ms, only for a request at
     // ps_rdy_delay_mv when that is set), and a PS_RDY the sink took as inferred (ps_rdy_inferred_fake).
     uint32_t ps_rdy_delay_ms = 0; int ps_rdy_delay_mv = 0; bool ps_rdy_inferred_fake = false;
@@ -217,6 +230,7 @@ struct Fake final : ct::Env {
     pd::Err request_pd(pd::Choice c) override {
         if (!alive()) return pd::Err::Busy;
         ++pd_requests; choices.push_back(c); req_times.push_back(in.now);
+        const int vbus_before = in.vbus_mv;
         out_on = false; ka_at = ka_end = 0;   // a new Request ends the scripted output and the keep-alive of the old one
         if (c.pos == 0 || (c.pos >= 8 && !in.pd.epr_mode && epr_caps.valid)) {
             entry_times.push_back(in.now);
@@ -303,6 +317,7 @@ struct Fake final : ct::Env {
             out_on = true; out_t0 = in.now; in.vbus_mv = out_script.front().second;
             if (ka_period_ms) ka_at = in.now + ka_period_ms;
         }
+        if (pd_slew_ms && c.mv >= 5000 && in.vbus_mv != vbus_before) { slew_from = vbus_before; slew_to = in.vbus_mv; slew_t0 = in.now; in.vbus_mv = vbus_before; }
         return pd::Err::Ok;
     }
     fc::Fail request_fc(fc::Proto p, int mv, bool retarget, int ma) override {
@@ -330,6 +345,7 @@ struct Fake final : ct::Env {
         if (redetect_gap_ms && !retarget && (p == fc::Proto::Qc2 || p == fc::Proto::Qc3) && fc_released && in.now - fc_released_at < redetect_gap_ms) {
             ++redetect_refused; in.fc_state = fc::State::Failed; in.fc_fail = fc::Fail::NoHandshake; in.vbus_mv = 5000; return fc::Fail::None;
         }
+        if (silent_legacy) { in.fc_state = fc::State::Failed; in.fc_fail = silent_fail(p); in.vbus_mv = 5000; return fc::Fail::None; }
         if (no_handshake_proto == p) { in.fc_state = fc::State::Failed; in.fc_fail = fc::Fail::NoHandshake; in.vbus_mv = 5000; return fc::Fail::None; }
         if (unsupported_proto == p) { in.fc_state = fc::State::Failed; in.fc_fail = fc::Fail::Unsupported; in.vbus_mv = 5000; return fc::Fail::None; }
         if (no_change_proto == p && (mv >= 5300 || mv <= 4700)) {
@@ -757,6 +773,11 @@ struct Fake final : ct::Env {
                 const uint32_t t = in.now - settle_t0;
                 if (t >= walk_settle_hold_ms + walk_settle_ms) settle_on = false;
                 in.vbus_mv = settle_v(t);
+            }
+            if (slew_t0) {
+                const uint32_t t = in.now - slew_t0;
+                if (t >= pd_slew_ms) { in.vbus_mv = slew_to; slew_t0 = 0; }
+                else in.vbus_mv = slew_from + int(int64_t(slew_to - slew_from) * int(t) / int(pd_slew_ms));
             }
             if (walk_ripple_mv && in.vbus_mv > 1000) in.vbus_mv += ((in.now / 100) % 2) ? walk_ripple_mv : -walk_ripple_mv;
             if (out_on) {   // the scripted output of out_script_mv's Request
@@ -2052,6 +2073,72 @@ static void test_a_handshake_that_answered_then_fails_stays_a_fail() {
         CHECK_EQ(int(r.steps()[1].detail), int(fc::Fail::NoHandshake));
         CHECK_EQ(result_layout::is_no_answer(r.steps()[1]), false);
     }
+}
+// pattern usb-a-dpdm-open (2026-11-23, A-to-C cable the wrong way round): the DCP check found D+/D- open on a port that never spoke PD and the
+// first D+/D- unit got no reply. One cause for the whole family, one confirming attempt: every other D+/D- row is a skip LinesOpen, no unit
+// after the first asks the engine, and the run's evidence names the lines.
+static const uint32_t kDpdmUnits = ct::bit(A::Qc2) | ct::bit(A::Qc2ClassB) | ct::bit(A::Qc3) | ct::bit(A::Qc3Plus) | ct::bit(A::Ufcs) | ct::bit(A::Vivo);
+static size_t lines_open_rows(const ct::Runner& r) {
+    size_t n = 0;
+    for (const auto& s : r.steps()) n += s.verdict == ct::Verdict::Skip && s.reason == ct::Reason::LinesOpen;
+    return n;
+}
+static void test_open_lines_give_one_cause_after_one_attempt() {
+    Fake f; f.caps = {}; f.silent_legacy = true; f.in.lines = ct::Lines::Open;
+    ct::Runner r(f);
+    r.start(f.caps, {.selected = kDpdmUnits}, f.in, true);
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 300000), true);
+    CHECK_EQ(f.fc_requests, 1);   // the confirming attempt; the other units never got a session
+    CHECK_EQ(int(r.evidence().dpdm), int(ct::Lines::Open));
+    for (const auto& s : r.steps()) {
+        CHECK_EQ(s.verdict, ct::Verdict::Skip); CHECK_EQ(s.reason, ct::Reason::LinesOpen);
+        CHECK_EQ(int(s.detail), int(ct::silent_code(s.group)));   // an old decoder still reads "no reply"
+        CHECK_EQ(result_layout::is_no_answer(s), false);
+    }
+    CHECK_EQ(lines_open_rows(r), r.steps().size());
+}
+// The verdict comes late (the check runs on its own after the PD attach): the units that already ran read "no reply", the first unit after
+// the verdict is the confirming attempt and takes them all with it.
+static void test_late_open_verdict_relabels_the_earlier_no_reply_rows() {
+    Fake f; f.caps = {}; f.silent_legacy = true;
+    ct::Runner r(f);
+    r.start(f.caps, {.selected = kDpdmUnits}, f.in, true);
+    CHECK_EQ(run_until(f, r, [&] { return r.steps()[0].verdict == ct::Verdict::Skip; }, 300000), true);
+    CHECK_EQ(int(r.steps()[0].reason), int(ct::Reason::Request));   // judged before the verdict: a plain "no reply"
+    f.in.lines = ct::Lines::Open;
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 300000), true);
+    CHECK_EQ(lines_open_rows(r), r.steps().size());
+    CHECK_EQ(f.fc_requests, 2);   // the unit before the verdict and the confirming one; the late verdict ended the family at the next unit
+}
+// A port whose lines read short (or unread) that gets no reply is a plain "no reply" per unit, every unit tried: unchanged.
+static void test_short_or_unknown_lines_keep_the_no_reply_rows() {
+    for (const auto lines : {ct::Lines::Short, ct::Lines::Unknown}) {
+        Fake f; f.caps = {}; f.silent_legacy = true; f.in.lines = lines;
+        ct::Runner r(f);
+        r.start(f.caps, {.selected = kDpdmUnits}, f.in, true);
+        CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 300000), true);
+        CHECK_EQ(lines_open_rows(r), 0u);
+        CHECK_EQ(f.fc_requests >= 4, true);
+        for (const auto& s : r.steps()) CHECK_EQ(result_layout::is_no_answer(s), true);
+        CHECK_EQ(int(r.evidence().dpdm), int(lines));
+    }
+}
+// A source that sent PD is not a D+/D- port: open lines are no cause there, whatever the lines read.
+static void test_open_lines_on_a_pd_source_give_no_hint() {
+    Fake f; f.silent_legacy = true; f.in.lines = ct::Lines::Open;   // the fixture's source lists PDOs
+    ct::Runner r(f);
+    r.start(f.caps, {.selected = ct::bit(A::Qc2) | ct::bit(A::Qc3)}, f.in, true);
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 300000), true);
+    CHECK_EQ(lines_open_rows(r), 0u);
+}
+// A unit that answered proves the lines carry data: no hint, whatever the verdict said.
+static void test_open_lines_but_an_answering_unit_give_no_hint() {
+    Fake f; f.caps = {}; f.in.lines = ct::Lines::Open; f.no_handshake_proto = fc::Proto::Qc3;
+    ct::Runner r(f);
+    r.start(f.caps, {.selected = ct::bit(A::Qc2) | ct::bit(A::Qc3)}, f.in, true);
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 300000), true);
+    CHECK_EQ(lines_open_rows(r), 0u);
+    CHECK_EQ(int(r.steps()[0].verdict), int(ct::Verdict::Pass));
 }
 // The same units against a charger that answers the handshake: the 5 V row passes, and only because the engine ran.
 static void test_answered_handshake_passes_the_5v_row() {
@@ -4441,6 +4528,116 @@ static void test_pps_deep_sweep_stops_at_the_first_lost_source() {
     CHECK_EQ(dropped, true);
     CHECK_EQ(after, 0u);
 }
+// Sweep depth (Settings "Sweep depth", Options::sweep_depth): the record stays the 100 mV cell grid, the cells a coarser depth does not
+// measure hold kHole, the APDO top is always a point, and a fold between two points is located to the 20 mV quantum
+// (ctsweep::Refiner: the last tracking request and the first folded one).
+static std::vector<unsigned> sweep_requests(const Fake& f, unsigned pos, unsigned lo, unsigned hi) {
+    std::vector<unsigned> v;
+    for (const auto& c : f.choices) if (c.pos == pos && c.mv >= lo && c.mv <= hi && c.ma <= 1000) v.push_back(c.mv);
+    return v;
+}
+static void test_sweep_depth_200_skips_cells_and_keeps_the_top() {
+    Fake f;   // APDOs 5-11 V (pos 6) and 5-21 V (pos 7)
+    f.pd_offset_mv = -150;
+    ct::Runner r(f);
+    ct::Options o{.selected = ct::bit(A::Pps)}; o.pps_sweep = true; o.sweep_depth = ctsweep::Depth::Step200;
+    CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+    f.tick(r, 900000);
+    CHECK_EQ(r.state(), ct::State::Done);
+    const auto v = r.sweep_view();
+    const auto* rw6 = v.find(uint8_t(A::Pps), 6, false);
+    const auto* rw7 = v.find(uint8_t(A::Pps), 7, false);
+    CHECK_EQ(rw6 && rw7, true);
+    if (!rw6 || !rw7) return;
+    CHECK_EQ(rw6->n, 61u); CHECK_EQ(rw7->n, 161u);   // the record spans every 100 mV cell
+    CHECK_EQ(rw6->sum.points, 31u); CHECK_EQ(rw7->sum.points, 81u);   // ... half of them measured, the top included
+    CHECK_EQ(v.points[rw7->first + 1], ctsweep::kHole);   // 5.1 V: not asked
+    CHECK_EQ(v.points[rw7->first + 160] != ctsweep::kHole, true);   // 21.0 V: the top
+    CHECK_EQ(rw7->sum.peak_mv, 20850u);
+    // 5.0, 5.2 ... 21.0 V were requested, no odd cell
+    const auto req = sweep_requests(f, 7, 5000, 21000);
+    unsigned odd = 0, top = 0;
+    for (const unsigned mv : req) { odd += (mv - 5000) % 200 != 0 && (mv < 13000 || mv > 13100); top += mv == 21000; }   // 13.00-13.10 V: the spec stage's 20 mV walk
+    CHECK_EQ(odd, 0u);
+    CHECK_EQ(top >= 1u, true);
+}
+// Point time at the UI's 20 ms tick: a steady point closes as soon as VBUS has held for kSweepSettleMs, not after the old fixed 500 ms.
+static unsigned sweep_point_ms(unsigned slew_ms, unsigned* mid_ramp = nullptr) {
+    Fake f;
+    f.step_ms = 20; f.pd_offset_mv = -150; f.pd_slew_ms = slew_ms;
+    ct::Runner r(f);
+    ct::Options o{.selected = ct::bit(A::Pps)}; o.pps_sweep = true; o.sweep_depth = ctsweep::Depth::Step200;
+    if (r.start(f.caps, o, f.in, true) != ct::Reason::None) return 0;
+    f.tick(r, 900000);
+    if (r.state() != ct::State::Done) return 0;
+    // the median gap between consecutive pos-7 sweep requests
+    std::vector<unsigned> gaps;
+    for (size_t k = 1; k < f.choices.size(); ++k)
+        if (f.choices[k].pos == 7 && f.choices[k - 1].pos == 7 && f.choices[k].mv == f.choices[k - 1].mv + 200 && f.choices[k].ma <= 1000) gaps.push_back(f.req_times[k] - f.req_times[k - 1]);
+    std::sort(gaps.begin(), gaps.end());
+    if (mid_ramp) {   // errors beyond the scripted -150 mV offset would be a point recorded mid-ramp
+        const auto v = r.sweep_view();
+        const auto* rw = v.find(uint8_t(A::Pps), 7, false);
+        *mid_ramp = 0;
+        if (rw) for (unsigned i = 0; i < rw->n; ++i) if (v.points[rw->first + i] != ctsweep::kHole && v.points[rw->first + i] != -150) ++*mid_ramp;
+    }
+    return gaps.empty() ? 0 : gaps[gaps.size() / 2];
+}
+static void test_sweep_point_time_is_short_when_vbus_is_steady() {
+    unsigned wrong = 0;
+    const unsigned jump = sweep_point_ms(0, &wrong);
+    std::printf("sweep point: %u ms (jump), recorded off-offset %u\n", jump, wrong);
+    CHECK_EQ(jump > 0 && jump <= 200, true);
+    CHECK_EQ(wrong, 0u);
+    const unsigned ramp = sweep_point_ms(80, &wrong);   // an 80 ms output slew: the point waits for it, never records mid-ramp
+    std::printf("sweep point: %u ms (80 ms slew), recorded off-offset %u\n", ramp, wrong);
+    CHECK_EQ(ramp > 0 && ramp <= 300, true);
+    CHECK_EQ(ramp > jump, true);
+    CHECK_EQ(wrong, 0u);
+}
+static void test_sweep_depth_200_catches_the_fh22_fold_and_locates_it() {
+    Fake f;
+    f.pd_offset_mv = -150;
+    f.pd_fold_from_mv = 20000; f.pd_fold_to_mv = 19420;
+    ct::Runner r(f);
+    ct::Options o{.selected = ct::bit(A::Pps)}; o.pps_sweep = true; o.sweep_depth = ctsweep::Depth::Step200;
+    CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+    f.tick(r, 900000);
+    CHECK_EQ(r.state(), ct::State::Done);
+    const auto* rw7 = r.sweep_view().find(uint8_t(A::Pps), 7, false);
+    CHECK_EQ(rw7 != nullptr, true);
+    if (!rw7) return;
+    CHECK_EQ(rw7->sum.fold_mv, 19420u);
+    CHECK_EQ(rw7->sum.fold_located, true);
+    CHECK_EQ(rw7->sum.fold_ok_mv, 19980u); CHECK_EQ(rw7->sum.fold_from_mv, 20000u);
+    // the located fold is the finding: a caution on the sweep row
+    for (const auto& s : r.steps())
+        if (ct::is_sweep(s) && s.pos == 7) CHECK_EQ(s.reason, ct::Reason::Folded);
+    // the step-back asked 100 mV points from the last good one, then the 20 mV ones
+    const auto req = sweep_requests(f, 7, 19800, 20000);
+    unsigned fine = 0;
+    for (const unsigned mv : req) fine += mv % 100 != 0;
+    CHECK_EQ(fine, 4u);   // 19.92 .. 19.98 V
+}
+static void test_sweep_depth_phone_runs_the_windows_at_20mv() {
+    Fake f;
+    f.pd_offset_mv = -150;
+    ct::Runner r(f);
+    ct::Options o{.selected = ct::bit(A::Pps)}; o.pps_sweep = true; o.sweep_depth = ctsweep::Depth::Phone;
+    CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+    f.tick(r, 900000);
+    CHECK_EQ(r.state(), ct::State::Done);
+    // one window on one APDO: the pos-6 APDO (5-11 V) carries 8-11 V, the pos-7 one (5-21 V) 14-19 V when both offer the same current
+    const auto* rw6 = r.sweep_view().find(uint8_t(A::Pps), 6, false);
+    const auto* rw7 = r.sweep_view().find(uint8_t(A::Pps), 7, false);
+    CHECK_EQ(rw6 && rw7, true);
+    if (!rw6 || !rw7) return;
+    unsigned fine6 = 0, fine7 = 0;
+    for (const unsigned mv : sweep_requests(f, 6, 5000, 11000)) fine6 += mv % 100 != 0;
+    for (const unsigned mv : sweep_requests(f, 7, 5000, 21000)) fine7 += mv % 100 != 0;
+    CHECK_EQ(fine6 > 0, true); CHECK_EQ(fine7 > 0, true);
+    CHECK_EQ(rw6->n, 61u); CHECK_EQ(rw7->n, 161u);
+}
 // The Running view reads the sweep row in flight through Runner::sweep_live(): active only while a sweep row is the step under
 // test, the planned point range, the setpoint whose Request is out, and the last recorded point (measured - setpoint).
 static void test_sweep_live_follows_the_row_in_flight() {
@@ -5837,7 +6034,7 @@ static void test_the_7s_cut_sequence_over_the_5v_steps_of_the_cuktech_run() {
     // the export carries the count: timing byte bits 3..7 of the schema-2 page header
     std::array<uint8_t, 58> page{};
     CHECK_EQ(remote::encode_charger_test(page, remote::charger_test_snapshot(r), 0, false, 2), remote::kChargerTestHeader2);
-    CHECK_EQ(unsigned(page[40] >> 3), unsigned(r.evidence().cut_retries));
+    CHECK_EQ(unsigned(page[40] >> 3 & 7), unsigned(r.evidence().cut_retries));
 }
 // The whole 10-unit run of the CUKTECH port, with a silent VOOC family (the port's real answer), the first cut swept over the whole
 // period (every 200 ms) once the first engine session has opened: whatever unit or row it lands in (a row, the Baseline or the detach
@@ -9550,7 +9747,7 @@ int main() {
     test_a_cut_short_list_without_a_xiaomi_chain_is_still_offers_changed();
     test_an_unsolicited_list_change_during_a_normal_row_replans_per_row();
     test_plan_and_run(); test_an_auto_hold_counts_as_released(); test_quiet_is_exactly_the_row_in_flight(); test_paint_blocked_needs_flight_and_an_engine_window(); test_refusals(); test_hold_keeps_the_baseline_until_released(); test_safe5_baseline();test_cancel_and_failed_release(); test_release_waits_for_the_sink_verification_and_its_hard_reset();
-    test_faults(); test_loop_lock_refuses_and_aborts(); test_timeouts_and_skips(); test_one_second_holds(); test_qc2_settles_within_two_percent(); test_qc2_5v_accepts_vsafe5_reading(); test_legacy_5v_accepts_vsafe5_reading(); test_qc3_rows_use_an_asymmetric_band(); test_legacy_rows_use_a_five_percent_band(); test_legacy_5v_row_uses_the_vsafe5_window(); test_scp_4v5_row_judges_the_adapter_readback(); test_qc3plus_without_response_is_a_distinct_skip(); test_unsupported_protocol_skips_its_other_rows(); test_silent_source_fails_every_handshake_row(); test_silent_first_handshake_is_no_reply(); test_a_handshake_that_answered_then_fails_stays_a_fail(); test_answered_handshake_passes_the_5v_row(); test_svooc_row_follows_the_adapter_ramp(); test_svooc_detected_is_a_pass(); test_vooc_family_shares_one_session(); test_ceiling_off_runs_no_stage(); test_ceiling_is_deep_only_and_the_ident_is_kept(); test_ceiling_judged_ladder_is_the_result(); test_ceiling_refusal_is_recorded_and_the_run_goes_on(); test_ceiling_no_adapter_and_early_abort(); test_ceiling_cap_stops_a_session_that_is_never_judged(); test_ceiling_cancel_stops_the_trigger(); test_ceiling_needs_a_detected_svooc_family(); test_ceiling_waits_for_the_lines_after_the_family_release(); test_ceiling_lines_never_free_is_a_recorded_refusal(); test_ceiling_usb_a_mode_is_the_plain_on(); test_ceiling_quiet_adapter_is_stopped_at(); test_ceiling_runner_guard_names_its_cause(); test_ceiling_vbus_lost_after_the_stage_is_recovered_by_an_rd_cycle(); test_ceiling_vbus_that_never_returns_ends_the_run(); test_ceiling_adapter_ramp_is_part_of_the_stage(); test_ceiling_vbus_stuck_high_after_the_stage_is_unsafe(); test_vivo_no_response_skips_the_other_vivo_rows(); test_vivo_that_answered_then_fails_stays_a_fail(); test_pps_min_step_accepts_unloaded_floor(); test_pps_up_step_uses_the_tight_band();
+    test_faults(); test_loop_lock_refuses_and_aborts(); test_timeouts_and_skips(); test_one_second_holds(); test_qc2_settles_within_two_percent(); test_qc2_5v_accepts_vsafe5_reading(); test_legacy_5v_accepts_vsafe5_reading(); test_qc3_rows_use_an_asymmetric_band(); test_legacy_rows_use_a_five_percent_band(); test_legacy_5v_row_uses_the_vsafe5_window(); test_scp_4v5_row_judges_the_adapter_readback(); test_qc3plus_without_response_is_a_distinct_skip(); test_unsupported_protocol_skips_its_other_rows(); test_silent_source_fails_every_handshake_row(); test_silent_first_handshake_is_no_reply(); test_a_handshake_that_answered_then_fails_stays_a_fail(); test_open_lines_give_one_cause_after_one_attempt(); test_late_open_verdict_relabels_the_earlier_no_reply_rows(); test_short_or_unknown_lines_keep_the_no_reply_rows(); test_open_lines_on_a_pd_source_give_no_hint(); test_open_lines_but_an_answering_unit_give_no_hint(); test_answered_handshake_passes_the_5v_row(); test_svooc_row_follows_the_adapter_ramp(); test_svooc_detected_is_a_pass(); test_vooc_family_shares_one_session(); test_ceiling_off_runs_no_stage(); test_ceiling_is_deep_only_and_the_ident_is_kept(); test_ceiling_judged_ladder_is_the_result(); test_ceiling_refusal_is_recorded_and_the_run_goes_on(); test_ceiling_no_adapter_and_early_abort(); test_ceiling_cap_stops_a_session_that_is_never_judged(); test_ceiling_cancel_stops_the_trigger(); test_ceiling_needs_a_detected_svooc_family(); test_ceiling_waits_for_the_lines_after_the_family_release(); test_ceiling_lines_never_free_is_a_recorded_refusal(); test_ceiling_usb_a_mode_is_the_plain_on(); test_ceiling_quiet_adapter_is_stopped_at(); test_ceiling_runner_guard_names_its_cause(); test_ceiling_vbus_lost_after_the_stage_is_recovered_by_an_rd_cycle(); test_ceiling_vbus_that_never_returns_ends_the_run(); test_ceiling_adapter_ramp_is_part_of_the_stage(); test_ceiling_vbus_stuck_high_after_the_stage_is_unsafe(); test_vivo_no_response_skips_the_other_vivo_rows(); test_vivo_that_answered_then_fails_stays_a_fail(); test_pps_min_step_accepts_unloaded_floor(); test_pps_up_step_uses_the_tight_band();
     test_missing_samples_and_wrap();
     test_fixed_band_judges_a_burst_mode_ripple_on_its_mean(); test_fixed_band_still_fails_a_steady_low_or_high_level(); test_fixed_band_keeps_the_per_sample_overvoltage_guards();
     test_pps_renewal();
@@ -9598,6 +9795,7 @@ int main() {
     test_a_step_walk_miss_never_stores_a_row_marker();
     test_a_fold_the_sweep_finds_is_a_caution_on_the_apdos_rows(); test_a_fold_never_softens_a_capped_row(); test_an_avs_fold_marks_the_fixed_row_inside_the_band(); test_the_fh22_list_cautions_pdo6_and_pdo7(); test_pps_deep_sweep_records_every_point_and_the_fold_back(); test_pps_deep_sweep_stops_at_the_first_lost_source(); test_pps_deep_sweep_is_opt_in();
     test_sweep_live_follows_the_row_in_flight(); test_sweep_live_is_idle_without_a_sweep_row();
+    test_sweep_depth_200_skips_cells_and_keeps_the_top(); test_sweep_depth_200_catches_the_fh22_fold_and_locates_it(); test_sweep_depth_phone_runs_the_windows_at_20mv(); test_sweep_point_time_is_short_when_vbus_is_steady();
     test_claim_sweep_record_lends_the_point_buffer();
     test_avs_deep_sweep_plans_and_runs_per_spr_avs_apdo(); test_avs_deep_sweep_epr_capped_at_the_monitor_ceiling();
     test_pps_step_walk_passes_a_noisy_step_and_fails_a_short_sum();

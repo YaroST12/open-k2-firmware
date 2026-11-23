@@ -1859,6 +1859,35 @@ class ChargerSweepCli(unittest.TestCase):
             kr.build_parser().parse_args(["charger-level", "max"])
 
 
+class ChargerSweepDepthCli(unittest.TestCase):
+    """`charger-sweep-depth [200|100|phone|20]`: the deep-sweep step of the NEXT charger run (firmware command 0x5D): no
+    argument reads it, a name sets it; the wire index follows ctsweep::Depth (0 100 mV, 1 200 mV, 2 phone, 3 20 mV)."""
+
+    Link = ChargerSweepCli.Link
+
+    def test_set_sends_the_index_and_names_the_reply(self):
+        link = self.Link([bytes([1])])
+        self.assertEqual(kr.charger_sweep_depth(link, "200"), "200")
+        self.assertEqual(link.sent, [(kr.CMD_CHARGER_SWEEP_DEPTH, bytes([1]))])
+        for name, code in (("100", 0), ("200", 1), ("phone", 2), ("20", 3)):
+            link = self.Link([bytes([code])])
+            self.assertEqual(kr.charger_sweep_depth(link, name), name)
+            self.assertEqual(link.sent, [(kr.CMD_CHARGER_SWEEP_DEPTH, bytes([code]))])
+        self.assertEqual(kr.CMD_CHARGER_SWEEP_DEPTH, 0x5D)
+
+    def test_no_argument_reads(self):
+        link = self.Link([bytes([2])])
+        self.assertEqual(kr.charger_sweep_depth(link), "phone")
+        self.assertEqual(link.sent, [(kr.CMD_CHARGER_SWEEP_DEPTH, b"")])
+
+    def test_parser_takes_only_the_names(self):
+        a = kr.build_parser().parse_args(["charger-sweep-depth", "phone"])
+        self.assertEqual(a.depth, "phone")
+        self.assertIsNone(kr.build_parser().parse_args(["charger-sweep-depth"]).depth)
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+            kr.build_parser().parse_args(["charger-sweep-depth", "50"])
+
+
 class ChargerSvoocCapCli(unittest.TestCase):
     """`charger-svooc-cap [off|on|usb-a]`: the SuperVOOC ceiling stage of the NEXT charger run (firmware command 0x59), and
     the latest run's result read back. The reply is [mode, end, why, asks, word(2), vmax_mv(2), stop_ms(2), ident]; the word is

@@ -767,6 +767,7 @@ namespace fastcharge {
 Protocol read() { return g_stub.fc; }
 Protocol label() { return report_label(g_stub.fc, g_stub.vooc.seen); }
 vooc::Live vooc_live() { return g_stub.vooc; }
+DcpCheck dcp_lines() { return static_cast<DcpCheck>(g_stub.dcp_lines); }
 }  // namespace fastcharge
 
 #ifndef K2_WORLD_STUBS   // the worlds define their own (tests/world_sim.cpp, tests/world_svooc.cpp)

@@ -38,6 +38,12 @@ struct Fake {
     Status charger_avs_sweep(bool on) { calls++; avs_sweep_set = on; ++avs_sweep_sets; return avs_sweep_status; }
     int level_set = -1, level_sets = 0; Status level_status = Status::Ok;
     Status charger_level(uint8_t l) { calls++; level_set = l; ++level_sets; return level_status; }
+    uint8_t depth_set = 0xFF, depth_now = 1; int depth_sets = 0; Status depth_status = Status::Ok;   // what charger_sweep_depth() was given, and its answer
+    ChargerSweepDepthReply charger_sweep_depth(const uint8_t* set) {
+        calls++;
+        if (set) { depth_set = *set; ++depth_sets; if (depth_status == Status::Ok) depth_now = *set; }
+        return {depth_status, depth_now};
+    }
     uint8_t svooc_cap_set = 0; int svooc_cap_sets = 0; Status svooc_cap_status = Status::Ok;   // what charger_svooc_cap() was given, and its answer
     ChargerSvoocCap svooc_cap_info{};
     ChargerSvoocCapReply charger_svooc_cap(const uint8_t* set) {

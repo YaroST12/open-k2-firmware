@@ -126,7 +126,14 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
   verified on hardware: with no source list ever heard and VBUS at 5 V at every sample of the detach, the first detach uses
   `kDetachQuickMs` too (host 2.1 s from START, was at least 10 s). Verify: A-port run, the first Rd off to attach about 1.5 s;
   a C charger without PD that drops VBUS slowly still waits (a drop later than 1.5 s with no sample off 5 V would be missed).
-
+- **A source whose D+/D- read open gave one "no reply" per protocol** (2026-11-23, `runs/ct-usba-2026-11-23/rec1`: `dcp check ...
+  result=1 (open)`, every D+/D- row failed; the flipped plug in `rec2-flipped` read short and QC2/QC3/UFCS passed). Fixed on
+  host, not verified on hardware (k2/dpdm-open): on a source that never spoke PD, an open reading plus one silent D+/D- unit (the
+  confirming attempt) turns the remaining D+/D- units into one reason, `LinesOpen` (wire id 54; schema 1 maps it to Request).
+  Cell/card "lines open", Results fold "No D+/D-", footer "Open: flip or data cable", `k2_remote`/`ct_start` summary, JSON
+  `"dpdm": "open"|"short"|"unknown"` (run-selected word bits 30..31; older firmware sends 0 = unknown). A PD source and a short reading are unchanged. Verify: A-to-C
+  on a USB-A port with the plug the open way round: units end "lines open", footer names flip or data-less cable; flipped, the
+  protocols run.
 - **Back-to-back screenshots stall a charger-test run** (2026-11-21, 1.1.0-217-53dee143, Baseus 140 W). With
   `k2_remote.py screenshot` every ~0.65 s (each ~450 ms on the device) a Medium run sat after `Verify 5V` for ~7 min and
   went on within a second of the loop stopping (`runs/hw-2026-11-21/152248-qc2-fast2/`); one every ~3 s is harmless.
@@ -1259,6 +1266,16 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
 ## Not verified on hardware
 
 - **Shell access band** (k2/shell-toast; host tests and renders only, runs/shell-toast). A full-width 16 px band "Shell access" (kBar fill, kFocus rule) at the top of the content body on every page, raised by a CONTROL remote command (presses, page, actions, charger-test start/stop, PD/FC writes, store writes, reboot/DFU; reads never), cleared 5 s after the last one, held for a charger test or tool run the shell started (a local key press does not clear it). One table `kShellRules` in remote_proto.hpp classifies every command id (static_assert); sub-ops by op byte. `k2_remote state` shows `flags.shell_toast` (bit 7 of the session flags; mirrored in k2proto.js and k2.html). Costs while up: the band is re-raised after any page paint that crosses it (Home: every tick, ~3.3 k px, ~2 ms of wire). Check on hardware: press via k2_remote, band within a tick, gone 5 s later with no remnant on Home / Lines / Settings in all rotations; ct_start keeps it up to the end of the run. Running with the band: it hides the "n/N steps" line and the progress rule's top for the whole run, and is re-raised about once a second (the elapsed clock, +3.3 k px). Open: QR pages are not excluded; Log is classified as a read (its `[1]` toggle is not).
+- **Sweep depth** (k2/sweep-depth, 2026-11-23; host tests and renders only: runs/sweep-depth/png). Settings row `Sweep depth` (200 mV default,
+  100 mV, Phone, 20 mV) sets the charger-test PPS/AVS deep sweeps' step: Phone is 100 mV plus 20 mV points in 8.0-11.0 V and
+  14.0-19.0 V (PPS only, once per APDO on the one with the most current); 20 mV every PPS quantum; AVS stays 100 mV; the APDO top is always
+  a point. A Fold or Break is stepped back from once (100 then 20 mV points). A steady point closes after 100 ms (was a fixed 500 ms):
+  about 520 -> 120 ms a point, 180 ms with an 80 ms slew; kWalkSteadyTimeoutMs stays the ceiling. Review and the Running header name the
+  step; the Deep block of the card carries a 2-bit step tail (old cards decode as 100 mV; `sweep_depth` in report_card.py and deep.js);
+  the journal meta byte carries it; remote `charger-sweep-depth` (0x5D) and `ct_start.py --sweep-depth 100|200|phone|20`. Commits 
+  d47ba035..4ce75d9d. Validate: cycle the row; FH22 PPS 20 V fold found at 200 mV and located by the step-back; Pixel / OnePlus 15 Phone
+  windows; share and web-card decode; point time on a steady charger. Open: old byte-based card readers misread about 2 in 8 new
+  tailed cards; a sweep span under 6.4 V can have empty one-cell buckets at 200 mV (the viewer shows gaps).
 - **Huawei/Samsung switch** (k2/ct-huawei-switch; host tests and renders only). Settings row `Huawei/Samsung`, OFF by default, hides FCP, SCP and AFC from the charger test (presets, Custom, plan, step counts, Results); ON is the old behaviour; `ct_start.py --units fcp,scp,afc` (or `charger-units`) still runs them; `k2_remote charger-test view` reports `FCP/SCP/AFC shown|hidden` (view flag bit 15, set = shown; firmware older than this always reads hidden). Check on hardware: fresh K2 shows OFF and the Tests step counts drop, Results has no Huawei/Samsung rows; ON restores them; the choice survives a reboot. Open: no remote setter for Settings toggles; the preset name "Legacy only" now means QC/UFCS/OPPO/vivo while hidden.
 - **Cable place: Read e-marker opens the chip details** (k2/cable-read-merge; host tests only). The Chip details row is gone; a good read (immediate or after the passive listen) opens the chip sheet, a failed one opens it too when a cable record is held, with "Failed to read" in the footer; no record stays on Actions. Check on hardware: Cable Actions has no Chip details row; Read e-marker with a cable lands on the sheet; a failed read with a held cable lands on the sheet with the error footer; inline (listen only) does the same after the 5 s window.
 - **PD limiter** (k2/pd-limiter, built and host-tested only; `k2_remote.py pd-limit <watts>|off|status`, Cmd 0x4E). Hardware test 1

@@ -27,6 +27,7 @@ SagGuard g_sag;   // holds the last verdict through an output sag or cut (see Sa
 std::size_t g_dcp_step = 0;     // probe steps applied so far; 0 = no check running
 bool g_dcp_done = false;        // the check ran for this attach
 bool g_dcp_proof = false;       // it found D- following D+: a real short
+DcpCheck g_dcp_result = DcpCheck::Invalid;   // the last verdict (dcp_lines)
 int g_dcp_ref_dm_mv = 0;        // D- in the Ref step
 int g_ring_skip = 0;            // polls to keep out of the ring after the probe (the averaged ADC reading lags)
 
@@ -34,6 +35,7 @@ void dcp_reset() {
     if (g_dcp_step) dpdm::dcp_probe_end(g_dcp_step - 1);
     g_dcp_step = 0;
     g_dcp_done = g_dcp_proof = false;
+    g_dcp_result = DcpCheck::Invalid;
     g_ring_skip = 0;
 }
 
@@ -71,6 +73,7 @@ void dcp_advance() {
     g_ring_skip = 2;
     const DcpCheck r = dcp_check_result(g_dcp_ref_dm_mv, dm);
     g_dcp_proof = r == DcpCheck::Shorted;
+    g_dcp_result = r;
     K2LOG("[FC] dcp check dm_ref=%d dm_pulled=%d dp_pulled=%d result=%d (0 invalid, 1 open, 2 short)",
           static_cast<int>(g_dcp_ref_dm_mv), static_cast<int>(dm), static_cast<int>(dp), static_cast<int>(r));
 }
@@ -164,5 +167,7 @@ Protocol read() { return g_verdict; }
 Protocol label() { return report_label(g_verdict, dpsniff::monitor_live().seen); }
 
 vooc::Live vooc_live() { return dpsniff::monitor_live(); }
+
+DcpCheck dcp_lines() { return g_dcp_result; }
 
 }  // namespace k2::fastcharge

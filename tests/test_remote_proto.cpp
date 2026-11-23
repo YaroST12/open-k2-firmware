@@ -3155,7 +3155,7 @@ static void test_charger_test_wire() {
     std::array<uint8_t, 57> short2{};
     CHECK_EQ(encode_charger_test(short2, f.test_results, 0, true, 2), 42);
     CHECK_EQ(short2[14], 0); CHECK_EQ(encode_charger_test(short2, f.test_results, 0, true, 3), 0);
-    // timing byte bits 3..7: the run's port-cut retries (the header is full at 42 bytes, so they ride in the unused bits)
+    // timing byte bits 3..7: the run's port-cut retries (the header is full at 42 bytes, so they ride in unused bits)
     std::array<uint8_t, 58> cutbuf{};
     f.test_results.evidence.cut_retries = 3;
     CHECK_EQ(encode_charger_test(cutbuf, f.test_results, 0, false, 2), 42);
@@ -3163,6 +3163,19 @@ static void test_charger_test_wire() {
     f.test_results.evidence.cut_retries = 200;   // saturates at 31, never spills into the timing flags
     CHECK_EQ(encode_charger_test(cutbuf, f.test_results, 0, false, 2), 42);
     CHECK_EQ(cutbuf[40], 5 | (31 << 3));
+    // the D+/D- check rides bits 30..31 of the run-selected word (older firmware sends 0 there), beside the level; the retries stay whole
+    const auto run_word = [&] { return uint32_t(cutbuf[15]) | uint32_t(cutbuf[16]) << 8 | uint32_t(cutbuf[17]) << 16 | uint32_t(cutbuf[18]) << 24; };
+    f.test_results.evidence.selected = 0x7; f.test_results.level = ct::Level::Deep;
+    CHECK_EQ(encode_charger_test(cutbuf, f.test_results, 0, false, 2), 42);
+    CHECK_EQ(run_word() >> 30, 0u);
+    f.test_results.evidence.dpdm = ct::Lines::Open;
+    CHECK_EQ(encode_charger_test(cutbuf, f.test_results, 0, false, 2), 42);
+    CHECK_EQ(run_word() >> 30, 1u); CHECK_EQ(run_word() >> 28 & 3, unsigned(ct::Level::Deep)); CHECK_EQ(run_word() & 0x0FFFFFFFu, 0x7u);
+    CHECK_EQ(cutbuf[40], 5 | (31 << 3));
+    f.test_results.evidence.dpdm = ct::Lines::Short;
+    CHECK_EQ(encode_charger_test(cutbuf, f.test_results, 0, false, 2), 42);
+    CHECK_EQ(run_word() >> 30, 2u);
+    f.test_results.evidence.dpdm = ct::Lines::Unknown; f.test_results.evidence.selected = 0; f.test_results.level = ct::Level::Medium;
     f.test_results.evidence.cut_retries = 0;
 
     const ct::Step revision{.algorithm = ct::Algorithm::Pd30Revision,
@@ -3580,6 +3593,27 @@ static void test_charger_level() {
     CHECK_EQ(f.calls, calls);
     f.level_status = Status::Busy;
     CHECK_EQ(run(f, request(0x5B, 7, {1}), r), 1); check_header(r, 0x5B, 7, Status::Busy, 0);
+}
+
+// Cmd::ChargerSweepDepth (0x5D): [] reads, [depth(1)] sets the sweep step of the next run (0 100 mV, 1 200 mV, 2 Phone, 3 20 mV),
+// rsp [depth]; BadArg from 4 up, BadLength past one byte; Busy while a run is active.
+static void test_charger_sweep_depth() {
+    Fake f; Frame r;
+    CHECK_EQ(run(f, request(0x5D, 1, {}), r), 1); check_header(r, 0x5D, 1, Status::Ok, 1); check_bytes(r, kRspHeader, {1});
+    CHECK_EQ(f.depth_sets, 0);
+    for (uint8_t d = 0; d < 4; ++d) {
+        CHECK_EQ(run(f, request(0x5D, uint8_t(2 + d), {d}), r), 1);
+        check_header(r, 0x5D, uint8_t(2 + d), Status::Ok, 1); check_bytes(r, kRspHeader, {d});
+        CHECK_EQ(f.depth_set, d);
+    }
+    CHECK_EQ(f.depth_sets, 4);
+    CHECK_EQ(run(f, request(0x5D, 7, {}), r), 1); check_header(r, 0x5D, 7, Status::Ok, 1); check_bytes(r, kRspHeader, {3});
+    const int calls = f.calls;
+    CHECK_EQ(run(f, request(0x5D, 8, {1, 1}), r), 1); check_header(r, 0x5D, 8, Status::BadLength, 0);
+    CHECK_EQ(run(f, request(0x5D, 9, {4}), r), 1); check_header(r, 0x5D, 9, Status::BadArg, 0);
+    CHECK_EQ(f.calls, calls);
+    f.depth_status = Status::Busy;
+    CHECK_EQ(run(f, request(0x5D, 10, {1}), r), 1); check_header(r, 0x5D, 10, Status::Busy, 0);
 }
 
 // Cmd::ChargerSvoocCap (0x59): no payload reads, [mode(1)] sets the ceiling stage of the next run (0 off, 1 on, 2 USB-A); the
@@ -4009,6 +4043,7 @@ int main() {
     test_charger_test_start_cancel_wire();
     test_charger_avs_sweep();
     test_charger_level();
+    test_charger_sweep_depth();
     test_charger_svooc_cap();
     test_charger_test_wire(); test_charger_test_now_wire(); test_charger_test_view_wire(); test_charger_test_spec_wire();
 #if K2_SPECROWS

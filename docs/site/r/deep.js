@@ -11,7 +11,8 @@
 // same headers); tests/test_k2_qr.py runs this file and compares them with what tools/pdspec_blob.py parses from the headers.
 // Logic only, no DOM: view.js draws plot(). Loaded by the page as a script (window.K2Deep, before card.js) and by Node.
 var K2Deep = (function () {
-  var MAX_BITS = 3811;        // report_card::deep::kMaxBits (3638 before format 13's ranges, 3274 before the Xiaomi section)
+  var MAX_BITS = 3813;        // report_card::deep::kMaxBits (3811 before the step tail, 3638 before format 13's ranges, 3274 before the Xiaomi section)
+  var DEPTHS = ["100 mV", "200 mV", "Phone", "20 mV"];   // ctsweep::Depth order: the step tail's names
   var MAX_RANGES = 4;
   var BUCKETS = 32;           // report_card::deep::kBuckets
   var NEVER = 99999999;       // pdspec::kNever: an event that never came
@@ -198,7 +199,7 @@ var K2Deep = (function () {
     return "APDO " + (a & 15) + " " + (c >= 3 ? "slams" : PLAN[kind][c] + " mV") + " " + (a & 0x80 ? "down" : "up") + " to " + (b / 10).toFixed(1) + " V";
   }
 
-  // The block (u16 LE bit count, then the bits) -> {svooc?, spec?, graphs?, xiaomi?}; ranges are the card's decoded ranges (their
+  // The block (u16 LE bit count, then the bits) -> {svooc?, spec?, graphs?, xiaomi?, sweep_depth?}; ranges are the card's decoded ranges (their
   // algorithm names the graph), reasons the card's reason table (a Xiaomi mode's reason). Throws an Error with code "bad-deep" for a
   // block this file cannot read.
   function decode(blob, ranges, reasons) {
@@ -266,8 +267,10 @@ var K2Deep = (function () {
       graphs.push(g);
     }
     if (graphs.length) out.graphs = graphs;
-    if (r.left() >= 8) out.xiaomi = decodeMi(r, reasons);   // format 12: the Xiaomi section is the block's tail
-    if (r.left() >= 8) throw fail("Deep block has trailing data");
+    // Bits, not the padded bytes: the two-bit step tail (none = 100 mV) must not read as a byte's 8.
+    if (nbits - r.pos >= 8) out.xiaomi = decodeMi(r, reasons);   // format 12: the Xiaomi section
+    if (nbits - r.pos === 2) out.sweep_depth = DEPTHS[r.get(2)];
+    if (nbits - r.pos >= 8) throw fail("Deep block has trailing data");
     return out;
   }
 
@@ -329,7 +332,7 @@ var K2Deep = (function () {
 
   return {decode: decode, plot: plot, rangeWord: rangeWord, summary: summary, fmtValue: fmtValue, fmtAt: fmtAt, psText: psText, pdoText: pdoText, NEVER: NEVER,
     tables: {CELLS: CELLS, ENDS: ENDS, VERDICTS: VERDICTS, SKIPS: SKIPS, STOPS: STOPS, STARTS: STARTS, STEPS: STEPS, PLAN: PLAN,
-      SVOOC_ENDS: SVOOC_ENDS, SVOOC_ABORTS: SVOOC_ABORTS, SVOOC_REFUSALS: SVOOC_REFUSALS, MAX_BITS: MAX_BITS, BUCKETS: BUCKETS, CT_VERDICTS: CT_VERDICTS,
+      SVOOC_ENDS: SVOOC_ENDS, SVOOC_ABORTS: SVOOC_ABORTS, SVOOC_REFUSALS: SVOOC_REFUSALS, MAX_BITS: MAX_BITS, BUCKETS: BUCKETS, DEPTHS: DEPTHS, CT_VERDICTS: CT_VERDICTS,
       APDO: APDO, RANGE_TONES: RANGE_TONES, GROUPS: GROUPS}};
 })();
 

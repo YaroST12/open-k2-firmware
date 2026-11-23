@@ -5,7 +5,27 @@
 
 namespace k2::ctsweep {
 
-unsigned plan_total(const pd::SourceCaps& caps, unsigned cap_mv, Kind kind) {
+unsigned phone_wins(const pd::SourceCaps& caps, unsigned cap_mv, unsigned slot) {
+    if (!caps.valid || slot < 1 || slot > 7 || slot > caps.num_pdos) return 0;
+    const size_t n = std::min<size_t>(caps.num_pdos, 7);
+    unsigned mask = 0;
+    for (unsigned w = 0; w < kWinCount; ++w) {
+        unsigned best_ma = 0, best_ov = 0;
+        size_t best = 0;   // slot index + 1 of the winner
+        for (size_t i = 0; i < n; ++i) {
+            const auto& p = caps.pdos[i];
+            if (!p.raw || !p.min_mv || p.type != pd::PdoType::Pps) continue;
+            const unsigned lo = std::max<unsigned>(p.min_mv, kWinMv[w][0]), hi = std::min({unsigned(p.max_mv), cap_mv, kWinMv[w][1]});
+            if (hi <= lo) continue;
+            const unsigned ma = pd::current_limit_ma(p, uint16_t(hi)), ov = hi - lo;
+            if (!best || ma > best_ma || (ma == best_ma && ov > best_ov)) { best = i + 1; best_ma = ma; best_ov = ov; }
+        }
+        if (best == slot) mask |= 1u << w;
+    }
+    return mask;
+}
+
+unsigned plan_total(const pd::SourceCaps& caps, unsigned cap_mv, Kind kind, Depth depth) {
     if (!caps.valid) return 0;
     unsigned total = 0;
     const size_t n = std::min<size_t>(caps.num_pdos, caps.pdos.size());
@@ -16,9 +36,18 @@ unsigned plan_total(const pd::SourceCaps& caps, unsigned cap_mv, Kind kind) {
         const bool want = kind == Kind::Pps ? (!epr_slot && p.type == pd::PdoType::Pps)
                                              : (p.type == pd::PdoType::Avs && (!epr_slot || caps.epr));
         if (!want) continue;
-        const unsigned c = point_count(point_range(p.min_mv, p.max_mv, cap_mv));
+        const auto r = point_range(p.min_mv, p.max_mv, cap_mv);
+        const unsigned c = point_count(r);   // the record's cells: the budget is memory, whatever the depth
         if (total >= kMaxPoints) break;
-        total += std::min(c, kMaxPoints - total);
+        // The points measured: both parts of the split row, each stepped by the depth (the top point included).
+        unsigned n = 0;
+        const unsigned limit = std::min<unsigned>(p.max_mv, cap_mv), wins = kind == Kind::Pps ? phone_wins(caps, cap_mv, unsigned(i + 1)) : 0u;
+        for (const bool low : {false, true}) {
+            const auto part = part_range(r, low);
+            if (!part.empty()) n += plan_points(make_plan(depth, kind, part, limit, wins));
+        }
+        const unsigned room = kMaxPoints - total;
+        total += c <= room ? n : n * room / c;
     }
     return total;
 }
@@ -26,45 +55,59 @@ unsigned plan_total(const pd::SourceCaps& caps, unsigned cap_mv, Kind kind) {
 Summary summarize(std::span<const int16_t> err, unsigned lo_mv) { return summarize(err, lo_mv, {}, 0); }
 
 // The points in setpoint order: segment a from a_lo_mv, then segment b from b_lo_mv (the parts of a split sweep; b empty for one row).
+// A kHole cell (not measured at this depth) is skipped; the fold rule then judges neighbouring MEASURED points.
 Summary summarize(std::span<const int16_t> a, unsigned a_lo_mv, std::span<const int16_t> b, unsigned b_lo_mv) {
     Summary s;
     const size_t total = a.size() + b.size();
-    s.points = uint16_t(total);
-    if (!total) return s;
     auto err_at = [&](size_t i) { return int(i < a.size() ? a[i] : b[i - a.size()]); };
     auto set_at = [&](size_t i) { return i < a.size() ? a_lo_mv + unsigned(i) * kStepMv : b_lo_mv + unsigned(i - a.size()) * kStepMv; };
     int worst_abs = -1;
     pd::TrackScan track;   // the shared fold / track-break rule (k2/pd/prog_track.hpp), fed in setpoint order
-    size_t fold_at = 0;    // index of the first point it names
+    // The first finding of either kind is the onset. A fold is a Fold, or a Break (what a 200 mV step shows of a fold: the output
+    // moves +14 mV for a 200 mV request) that a later point then falls away from; a Break that stays level is no fold.
+    size_t onset_at = 0;
+    bool onset = false;
+    unsigned onset_ok = 0, onset_err = 0;   // the last tracking setpoint and the worst |err| before the onset
+    int onset_level = 0;
+    unsigned prev_set = 0;   // the last measured setpoint (the fold's "last tracking" one)
     for (size_t i = 0; i < total; ++i) {
+        if (err_at(i) == kHole) continue;
         const unsigned set = set_at(i);
         const int e = err_at(i);
         const int measured = e + int(set);
-        if (i == 0 || e < s.min_err) s.min_err = int16_t(e);
-        if (i == 0 || e > s.max_err) s.max_err = int16_t(e);
+        const bool first = s.points == 0;
+        ++s.points;
+        if (first || e < s.min_err) s.min_err = int16_t(e);
+        if (first || e > s.max_err) s.max_err = int16_t(e);
         // The fold rule runs before this point's own worst-error update, so the worst |err| held at the onset is the one over the
         // points BEFORE it (track_err_mv) without a per-point max: that update is the rare branch, the loop stays as it was.
         track.feed(int(set), measured);
-        if (!fold_at && track.kind() == pd::Track::Fold) {   // a break is not a fold: it names no level
-            fold_at = i;
-            s.track_err_mv = uint16_t(std::max(worst_abs, 0));   // the points before the onset: how it tracked
+        if (!onset && track.found()) {
+            onset = true; onset_at = i; onset_ok = prev_set; onset_level = measured;
+            onset_err = unsigned(std::max(worst_abs, 0));   // the points before the onset: how it tracked
         }
         if (std::abs(e) > worst_abs) { worst_abs = std::abs(e); s.worst_err = int16_t(e); s.worst_mv = uint16_t(set); }
-        if (i == 0 || measured > s.peak_mv) { s.peak_mv = uint16_t(measured); s.peak_at_mv = uint16_t(set); }
+        if (first || measured > s.peak_mv) { s.peak_mv = uint16_t(measured); s.peak_at_mv = uint16_t(set); }
         // A point outside the row's band (the PPS band is one-sided: within 5 % / 100 mV below, the ceiling above) was
         // steady and recorded; the summary says so, the strip colours it.
         if (out_of_band(set, measured)) s.out_of_band = true;
+        prev_set = set;
     }
-    if (!fold_at) s.track_err_mv = uint16_t(worst_abs);   // no fold: every point is tracking
-    if (fold_at) {   // at 100 mV steps the rule can only name a fold; a break needs a gap in the points (the two parts of a split sweep)
-        s.fold_from_mv = uint16_t(set_at(fold_at));
-        int low = 0;
-        for (size_t i = fold_at; i < total; ++i) {
+    if (!s.points) return s;
+    int low = 0;   // the lowest level from the onset on
+    bool have = false;
+    if (onset)
+        for (size_t i = onset_at; i < total; ++i) {
+            if (err_at(i) == kHole) continue;
             const int measured = err_at(i) + int(set_at(i));
-            if (i == fold_at || measured < low) low = measured;
+            if (!have || measured < low) { low = measured; have = true; }
         }
-        s.fold_mv = uint16_t(std::max(low, 0));
-    }
+    const bool fold = onset && (track.kind() == pd::Track::Fold || low < onset_level - pd::kTrackFoldMv);
+    if (!fold) { s.track_err_mv = uint16_t(worst_abs); return s; }   // every point is tracking
+    s.fold_from_mv = uint16_t(set_at(onset_at));
+    s.fold_ok_mv = uint16_t(onset_ok);
+    s.track_err_mv = uint16_t(onset_err);
+    s.fold_mv = uint16_t(std::max(low, 0));
     return s;
 }
 
@@ -83,6 +126,12 @@ std::optional<RowView> View::apdo(uint8_t alg, uint8_t pos) const {
     m.lo_mv = lo->lo_mv;
     m.n = uint16_t(lo->n + hi->n);
     m.sum = summarize(pts(*lo), lo->lo_mv, pts(*hi), hi->lo_mv);
+    // A located fold (Refiner) is finer than the cells the merge re-reads: it survives from whichever part found it.
+    for (const RowView* r : {lo, hi})
+        if (r->sum.fold_located && m.sum.fold_mv) {
+            m.sum.fold_located = true; m.sum.fold_ok_mv = r->sum.fold_ok_mv; m.sum.fold_from_mv = r->sum.fold_from_mv;
+            m.sum.fold_mv = std::min(m.sum.fold_mv, r->sum.fold_mv);
+        }
     return m;
 }
 
@@ -161,7 +210,7 @@ size_t format_fold(const Summary& s, std::span<char> out) {
         put("V");
     };
     put("folds to "); tenths(s.fold_mv);
-    put(" above "); tenths(s.fold_from_mv > kStepMv ? s.fold_from_mv - kStepMv : 0u);
+    put(" above "); tenths(s.fold_ok_mv ? s.fold_ok_mv : s.fold_from_mv > kStepMv ? s.fold_from_mv - kStepMv : 0u);
     if (n < out.size()) out[n] = 0;
     return n;
 }

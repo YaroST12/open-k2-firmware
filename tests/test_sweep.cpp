@@ -82,6 +82,30 @@ static void test_plan_total_counts_every_pps_apdo_within_the_budget() {
     CHECK_EQ(sw::plan_total(big, 36000), sw::kMaxPoints);
 }
 
+// The Tests-list count follows the depth: measured points, while the budget stays in record cells.
+static void test_plan_total_counts_the_points_of_the_depth() {
+    const auto caps = caps_with({pd::decode_pdo((100u << 10) | 300), pps_apdo(3300, 11000, 5000), pps_apdo(5000, 21000, 3200)});
+    using sw::Depth;
+    CHECK_EQ(sw::plan_total(caps, 36000, sw::Kind::Pps, Depth::Step100), 239u);
+    CHECK_EQ(sw::plan_total(caps, 36000, sw::Kind::Pps, Depth::Step200), 40u + 81u);      // 3.3-4.9 and 5-11 V; 5-21 V every 200 mV
+    CHECK_EQ(sw::plan_total(caps, 36000, sw::Kind::Pps, Depth::Step20), 382u + 801u);
+    // phone: 8-11 V on the APDO with the most current (slot 2: +120 points), 14-19 V on the only one that covers it (+200)
+    CHECK_EQ(sw::plan_total(caps, 36000, sw::Kind::Pps, Depth::Phone), 239u + 120u + 200u);
+    CHECK_EQ(sw::plan_total_capped(caps, 36000, 20000, sw::Kind::Pps, Depth::Step200), 121u);   // a 20 V cable still permits 21 V of PPS
+    CHECK_EQ(sw::plan_total_capped(caps, 36000, 9000, sw::Kind::Pps, Depth::Step200), 30u + 21u);   // a 9 V cable: 3.3-9 V, 5-9 V
+}
+
+static void test_depth_cycle_visits_every_depth_once_and_returns() {
+    using sw::Depth;
+    Depth d = Depth::Step200;
+    unsigned seen = 0;
+    for (unsigned i = 0; i < sw::kDepthCount; ++i) { seen |= 1u << unsigned(d); d = sw::next_depth(d); }
+    CHECK_EQ(seen, 0xFu);
+    CHECK_EQ(unsigned(d), unsigned(Depth::Step200));   // the default is the cycle's start
+    CHECK_STR(sw::depth_name(Depth::Step200), "200 mV");
+    CHECK_STR(sw::depth_name(Depth::Phone), "Phone");
+}
+
 static void test_summary_of_a_clean_track_names_peak_and_errors() {
     std::vector<int16_t> err;
     for (unsigned set = 5000; set <= 21000; set += 100) err.push_back(int16_t(set - 150 - int(set)));   // -150 mV throughout
@@ -336,11 +360,11 @@ static void test_format_point_reads_req_got_and_the_error() {
     CHECK_EQ(text(36000, 36000).size() <= 34u, true);   // fits the 34-char cell
     CHECK_STR(text(12000, -50).c_str(), "req 12.00V  got 0.00V  err-9999mV");   // a negative reading shows as 0
 }
-// The live view of a row: the last recorded point is derived from the range and the count.
+// The live view of a row: the last measured point is the setpoint the runner stored (the points need not sit on one grid).
 static void test_live_derives_the_last_point() {
     sw::Live l;
     CHECK_EQ(l.last_set_mv(), 0u); CHECK_EQ(l.last_measured_mv(), 0);
-    l.lo_mv = 5000; l.hi_mv = 11000; l.n = 4; l.last_err = -150;
+    l.lo_mv = 5000; l.hi_mv = 11000; l.n = 4; l.last_mv = 5300; l.last_err = -150;
     CHECK_EQ(l.last_set_mv(), 5300u);
     CHECK_EQ(l.last_measured_mv(), 5150);
 }
@@ -448,7 +472,196 @@ static void test_a_break_is_not_a_fold() {
     CHECK_EQ(f.fold_from_mv, 5600u); CHECK_EQ(f.fold_mv, 4900u);
 }
 
+// ---- sweep depth (Settings "Sweep depth"): the point sequence of a row, the phone windows, the located fold ----
+static std::vector<unsigned> seq(const sw::Plan& p) {
+    std::vector<unsigned> v;
+    for (unsigned mv = p.first(); mv; mv = p.next(mv)) v.push_back(mv);
+    return v;
+}
+// part: 0 = the part from 5 V up, 1 = the low part, 2 = the whole range
+static sw::Plan plan_of(sw::Depth d, sw::Kind k, unsigned min_mv, unsigned max_mv, unsigned cap, unsigned wins = 0, int part_sel = 2) {
+    const auto whole = sw::point_range(min_mv, max_mv, cap);
+    const auto part = part_sel == 2 ? whole : sw::part_range(whole, part_sel == 1);
+    return sw::make_plan(d, k, part, std::min(max_mv, cap), wins);
+}
+static void test_depth_100_is_the_old_plan() {
+    const auto s = seq(plan_of(sw::Depth::Step100, sw::Kind::Pps, 3300, 11000, 36000));
+    CHECK_EQ(s.size(), 78u); CHECK_EQ(s.front(), 3300u); CHECK_EQ(s.back(), 11000u);
+    for (size_t i = 1; i < s.size(); ++i) CHECK_EQ(s[i] - s[i - 1], 100u);
+    CHECK_EQ(sw::plan_points(plan_of(sw::Depth::Step100, sw::Kind::Pps, 3300, 11000, 36000)), 78u);
+}
+static void test_depth_200_is_a_subset_of_100_plus_the_top() {
+    const auto s = seq(plan_of(sw::Depth::Step200, sw::Kind::Pps, 3300, 21000, 36000));
+    CHECK_EQ(s.size(), 90u);                       // 3.3 .. 20.9 V every 200 mV (89), then the 21.0 V top
+    CHECK_EQ(s.front(), 3300u); CHECK_EQ(s.back(), 21000u);
+    CHECK_EQ(s[s.size() - 2], 20900u);
+    for (size_t i = 1; i + 1 < s.size(); ++i) CHECK_EQ(s[i] - s[i - 1], 200u);
+    CHECK_EQ(s[s.size() - 1] - s[s.size() - 2], 100u);
+    for (unsigned mv : s) CHECK_EQ((mv - 3300u) % 100u, 0u);   // every point is a record cell
+    // a range that ends on the 200 mV grid adds nothing
+    CHECK_EQ(seq(plan_of(sw::Depth::Step200, sw::Kind::Pps, 5000, 9000, 36000)).back(), 9000u);
+    CHECK_EQ(seq(plan_of(sw::Depth::Step200, sw::Kind::Pps, 5000, 9000, 36000)).size(), 21u);
+    // AVS 200 mV too
+    CHECK_EQ(seq(plan_of(sw::Depth::Step200, sw::Kind::Avs, 9000, 20000, 36000)).size(), 56u);   // 9.0 .. 20.0 V, the top on the grid
+}
+static void test_the_apdo_top_is_always_a_point() {
+    for (auto d : {sw::Depth::Step100, sw::Depth::Step200, sw::Depth::Phone, sw::Depth::Step20}) {
+        CHECK_EQ(seq(plan_of(d, sw::Kind::Pps, 3300, 21000, 36000)).back(), 21000u);
+        CHECK_EQ(seq(plan_of(d, sw::Kind::Pps, 3300, 21000, 12300)).back(), 12300u);   // the monitor / cable cap is the top
+        CHECK_EQ(seq(plan_of(d, sw::Kind::Avs, 9000, 20000, 36000)).back(), 20000u);
+    }
+    // an APDO top between two cells but on the 20 mV grid is the exact last point (and off the record's cell grid)
+    const auto p = plan_of(sw::Depth::Step100, sw::Kind::Pps, 5000, 11020, 36000);
+    CHECK_EQ(seq(p).back(), 11020u); CHECK_EQ(sw::plan_cell(p, 11020), -1); CHECK_EQ(sw::plan_cell(p, 11000), 60);
+    // not on the 20 mV grid: the floor
+    CHECK_EQ(seq(plan_of(sw::Depth::Step20, sw::Kind::Pps, 5000, 11010, 36000)).back(), 11000u);
+    // the split parts each end on their own top
+    CHECK_EQ(seq(plan_of(sw::Depth::Step200, sw::Kind::Pps, 3300, 21000, 36000, 0, 1)).back(), 4900u);
+    CHECK_EQ(seq(plan_of(sw::Depth::Step200, sw::Kind::Pps, 3400, 21000, 36000, 0, 1)).back(), 4900u);
+}
+static void test_depth_20_steps_every_pps_quantum_but_avs_stays_100() {
+    const auto s = seq(plan_of(sw::Depth::Step20, sw::Kind::Pps, 3300, 21000, 36000));
+    CHECK_EQ(s.size(), 886u);
+    for (size_t i = 1; i < s.size(); ++i) CHECK_EQ(s[i] - s[i - 1], 20u);
+    CHECK_EQ(seq(plan_of(sw::Depth::Step20, sw::Kind::Avs, 9000, 20000, 36000)).size(), 111u);
+    CHECK_EQ(sw::plan_cell(plan_of(sw::Depth::Step20, sw::Kind::Pps, 3300, 21000, 36000), 3400), 1);
+    CHECK_EQ(sw::plan_cell(plan_of(sw::Depth::Step20, sw::Kind::Pps, 3300, 21000, 36000), 3320), -1);
+}
+static void test_phone_depth_is_20mv_inside_the_two_windows_only() {
+    const auto s = seq(plan_of(sw::Depth::Phone, sw::Kind::Pps, 3300, 21000, 36000, 3));
+    CHECK_EQ(s.size(), 498u);                    // 178 cells, 30 + 50 of them replaced by 150 + 250 twenty-mV points
+    for (size_t i = 1; i < s.size(); ++i) {
+        const bool fine = (s[i - 1] >= 8000 && s[i - 1] < 11000) || (s[i - 1] >= 14000 && s[i - 1] < 19000);
+        CHECK_EQ(s[i] - s[i - 1], fine ? 20u : 100u);
+    }
+    // a window the APDO does not own (wins bit clear) is swept at 100 mV; AVS never has windows
+    CHECK_EQ(seq(plan_of(sw::Depth::Phone, sw::Kind::Pps, 3300, 21000, 36000, 0)).size(), 178u);
+    CHECK_EQ(seq(plan_of(sw::Depth::Phone, sw::Kind::Pps, 3300, 21000, 36000, 2)).size(), 178u - 50u + 250u);
+    CHECK_EQ(seq(plan_of(sw::Depth::Phone, sw::Kind::Avs, 9000, 20000, 36000, 3)).size(), 111u);
+    // the cap clips the window: 11.0 V ceiling ends inside neither
+    const auto c = seq(plan_of(sw::Depth::Phone, sw::Kind::Pps, 3300, 21000, 9000, 3));
+    CHECK_EQ(c.back(), 9000u); CHECK_EQ(c.size(), 47u + 51u);   // 3.3..7.9 V (47 cells), then 8.0..9.0 V at 20 mV (51)
+}
+static void test_phone_windows_go_to_the_apdo_with_the_most_current() {
+    const auto small = pps_apdo(3300, 11000, 3000), big = pps_apdo(3300, 21000, 5000), mid = pps_apdo(3300, 21000, 3000);
+    // 8-11 V: both cover it, the 5 A one wins; 14-19 V: only the big one reaches
+    const auto caps = caps_with({pd::decode_pdo(0x0001912c), small, big});
+    CHECK_EQ(sw::phone_wins(caps, 36000, 1), 0u);   // the fixed 5 V PDO has no window
+    CHECK_EQ(sw::phone_wins(caps, 36000, 2), 0u);
+    CHECK_EQ(sw::phone_wins(caps, 36000, 3), 3u);
+    // equal current: the wider overlap wins (the 21 V one covers more of 14-19 V than the 11 V one covers of 8-11 V: both fully)
+    const auto tie = caps_with({small, mid});
+    CHECK_EQ(sw::phone_wins(tie, 36000, 1), 1u);    // 8-11 V: tie on current and overlap -> the first APDO
+    CHECK_EQ(sw::phone_wins(tie, 36000, 2), 2u);    // 14-19 V: only the 21 V one reaches
+    // the monitor / cable cap clips what an APDO can reach: a 12 V cap leaves no 14-19 V window at all
+    CHECK_EQ(sw::phone_wins(caps, 12000, 3), 1u);
+    // a partial overlap still counts (an APDO that stops at 9 V covers 1 V of the 8-11 V window)
+    const auto part = caps_with({pps_apdo(3300, 9000, 3000)});
+    CHECK_EQ(sw::phone_wins(part, 36000, 1), 1u);
+}
+// The FH22 fold sits in the last 100 mV (19.9 V gives 19.75 V; 20.0 V gives 19.66 V; then 19.42 V): a 200 mV sweep has to catch it
+// (track_limit(200) = 150: 200 mV request step, the output moved +14 mV, so 186 behind is a Break at 20.0 V; 20.2 V is the Fold).
+static int fh22_level(int req) {
+    if (req <= 19980) return req - 150;
+    return req == 20000 ? 19664 : req == 20100 ? 19503 : req <= 20200 ? 19423 : 19420;
+}
+static void test_fh22_fold_is_caught_at_200mv() {
+    const auto p = plan_of(sw::Depth::Step200, sw::Kind::Pps, 5000, 21000, 36000);
+    pd::TrackScan scan;
+    std::vector<int16_t> rec(161, sw::kHole);
+    for (unsigned mv = p.first(); mv; mv = p.next(mv)) {
+        scan.feed(int(mv), fh22_level(int(mv)));
+        if (scan.found() && scan.req_mv() == int(mv) && scan.kind() == pd::Track::Break) CHECK_EQ(mv, 20000u);
+        const int c = sw::plan_cell(p, mv);
+        CHECK_EQ(c >= 0, true);
+        rec[size_t(c)] = int16_t(fh22_level(int(mv)) - int(mv));
+    }
+    CHECK_EQ(scan.found(), true);
+    CHECK_EQ(scan.kind(), pd::Track::Break);           // 20.0 V: +14 mV for a 200 mV step
+    const auto s = sw::summarize(rec, 5000);
+    CHECK_EQ(s.points, 81u);                           // 5.0..21.0 V every 200 mV
+    CHECK_EQ(s.peak_mv, 19664u); CHECK_EQ(s.peak_at_mv, 20000u);
+    CHECK_EQ(s.fold_from_mv, 20000u);                  // the break the 20.2 V point falls away from is the fold's onset
+    CHECK_EQ(s.fold_ok_mv, 19800u);
+    CHECK_EQ(s.fold_mv, 19420u);
+    char buf[sw::kFoldTextMax];
+    CHECK_STR(std::string(buf, sw::format_fold(s, buf)).c_str(), "folds to 19.4V above 19.8V");
+    // a break that stays level is no fold
+    std::vector<int16_t> flat(rec.begin(), rec.end());
+    for (size_t i = 76; i < flat.size(); ++i) if (flat[i] != sw::kHole) flat[i] = int16_t(19664 - int(5000 + 100 * i));
+    CHECK_EQ(sw::summarize(flat, 5000).fold_mv, 0u);
+}
+// The located fold: Refiner re-sweeps between the last good and the first bad request at 100 mV, then 20 mV.
+static void test_refiner_locates_the_fh22_fold_to_20mv() {
+    sw::Refiner r;
+    r.begin(sw::Kind::Pps, pd::Track::Break, 19800, fh22_level(19800), 20000, fh22_level(20000));
+    std::vector<unsigned> asked;
+    while (!r.done() && asked.size() < 20) {
+        const unsigned mv = r.next();
+        CHECK_EQ(mv != 0, true);
+        asked.push_back(mv);
+        r.feed(fh22_level(int(mv)));
+    }
+    const std::vector<unsigned> want = {19800, 19900, 19900, 19920, 19940, 19960, 19980};   // recheck, 100 mV, recheck, 20 mV x4
+    CHECK_EQ(asked.size(), want.size());
+    for (size_t i = 0; i < want.size() && i < asked.size(); ++i) CHECK_EQ(asked[i], want[i]);
+    CHECK_EQ(r.done(), true);
+    const auto& l = r.result();
+    CHECK_EQ(l.found, true);
+    CHECK_EQ(l.kind, pd::Track::Fold);
+    CHECK_EQ(l.ok_mv, 19980u); CHECK_EQ(l.ok_level_mv, 19830u);
+    CHECK_EQ(l.bad_mv, 20000u); CHECK_EQ(l.bad_level_mv, 19664u);
+}
+static void test_refiner_gives_up_when_the_good_point_no_longer_tracks_and_skips_a_20mv_gap() {
+    sw::Refiner r;   // the re-measured last good point has itself folded: a latched state, nothing to locate
+    r.begin(sw::Kind::Pps, pd::Track::Fold, 19900, 19750, 20000, 19420);
+    CHECK_EQ(r.next(), 19900u);
+    r.feed(19420);
+    CHECK_EQ(r.done(), true); CHECK_EQ(r.result().found, false);
+    // two points one quantum apart are already located
+    sw::Refiner q;
+    q.begin(sw::Kind::Pps, pd::Track::Fold, 19980, 19830, 20000, 19420);
+    CHECK_EQ(q.done(), true); CHECK_EQ(q.result().found, true); CHECK_EQ(q.result().ok_mv, 19980u);
+    // AVS: 100 mV is the floor, so a 100 mV pair is located and a 200 mV pair takes one recheck and one point
+    sw::Refiner a;
+    a.begin(sw::Kind::Avs, pd::Track::Fold, 19800, 19650, 20000, 19664 - 400);
+    CHECK_EQ(a.next(), 19800u); a.feed(19650);
+    CHECK_EQ(a.next(), 19900u); a.feed(19750);
+    CHECK_EQ(a.done(), true); CHECK_EQ(a.result().ok_mv, 19900u); CHECK_EQ(a.result().bad_mv, 20000u);
+}
+
+// A fold located by Refiner survives the merge of the APDO's two parts (the merge re-reads the cells and would lose it).
+static void test_apdo_view_keeps_a_located_fold() {
+    std::vector<int16_t> rec;
+    for (unsigned set = 5000; set <= 21000; set += 100) rec.push_back(int16_t(fh22_level(int(set)) - int(set)));
+    std::vector<int16_t> low(5, 0);
+    sw::RowView rows[2];
+    rows[0].pos = 7; rows[0].alg = 4; rows[0].lo_mv = 5000; rows[0].hi_mv = 21000; rows[0].first = 0; rows[0].n = 161;
+    rows[0].sum = sw::summarize(rec, 5000);
+    rows[0].sum.fold_located = true; rows[0].sum.fold_ok_mv = 19980; rows[0].sum.fold_from_mv = 20000; rows[0].sum.fold_mv = 19419;
+    rows[1].pos = 7; rows[1].alg = 4; rows[1].lo_mv = 3300; rows[1].hi_mv = 4900; rows[1].first = 161; rows[1].n = 5;
+    rows[1].sum = sw::summarize(low, 3300);
+    std::vector<int16_t> all = rec; all.insert(all.end(), low.begin(), low.end());
+    const sw::View v{{rows, 2}, {all.data(), all.size()}};
+    const auto m = v.apdo(4, 7);
+    CHECK_EQ(m.has_value(), true);
+    if (!m) return;
+    CHECK_EQ(m->sum.fold_located, true); CHECK_EQ(m->sum.fold_ok_mv, 19980u); CHECK_EQ(m->sum.fold_from_mv, 20000u);
+    char b[sw::kFoldTextMax];
+    CHECK_STR(std::string(b, sw::format_fold(m->sum, b)).c_str(), "folds to 19.4V above 20V");
+}
+
 int main() {
+    test_apdo_view_keeps_a_located_fold();
+    test_depth_100_is_the_old_plan();
+    test_depth_200_is_a_subset_of_100_plus_the_top();
+    test_the_apdo_top_is_always_a_point();
+    test_depth_20_steps_every_pps_quantum_but_avs_stays_100();
+    test_phone_depth_is_20mv_inside_the_two_windows_only();
+    test_phone_windows_go_to_the_apdo_with_the_most_current();
+    test_fh22_fold_is_caught_at_200mv();
+    test_refiner_locates_the_fh22_fold_to_20mv();
+    test_refiner_gives_up_when_the_good_point_no_longer_tracks_and_skips_a_20mv_gap();
     test_format_fold_names_the_level_and_the_last_good_setpoint();
     test_a_break_is_not_a_fold();
     test_part_range_splits_at_5v();
@@ -459,6 +672,8 @@ int main() {
     test_point_plan_covers_the_apdo_in_100mv_steps();
     test_point_current_is_1a_never_above_the_offer_or_cable();
     test_plan_total_counts_every_pps_apdo_within_the_budget();
+    test_plan_total_counts_the_points_of_the_depth();
+    test_depth_cycle_visits_every_depth_once_and_returns();
     test_avs_plan_spr_only();
     test_avs_plan_spr_plus_epr_capped_at_the_ceiling();
     test_avs_point_current_never_above_the_pdp_limit_or_1a();

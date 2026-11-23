@@ -2133,6 +2133,7 @@ enum class SettingRow : uint8_t {
     IdleWake,
     TestLevel,
     LegacyUnits,
+    SweepDepth,
     LongBack,
     Display,
     SystemState,
@@ -2144,6 +2145,7 @@ constexpr int kSettingsRows = static_cast<int>(SettingRow::Count);
 // Checked in both builds (K2_SCREENSHOT 0 and 1): the page's public constants must follow the enum.
 static_assert(kSettingsRows == SettingsPage::kRows);
 static_assert(static_cast<int>(SettingRow::LegacyUnits) == SettingsPage::kUnitsRow);
+static_assert(static_cast<int>(SettingRow::SweepDepth) == SettingsPage::kSweepRow);
 static_assert(static_cast<int>(SettingRow::Display) == SettingsPage::kDisplayRow);
 static_assert(static_cast<int>(SettingRow::SystemState) == SettingsPage::kSystemRow);
 static_assert(static_cast<int>(SettingRow::Memory) == SettingsPage::kMemoryRow);
@@ -2152,7 +2154,9 @@ static_assert(static_cast<int>(SettingRow::BootInfo) == SettingsPage::kBootRow);
 
 void SettingsPage::enter() {
     sel_ = std::clamp(sel_, 0, kSettingsRows - 1);
-    ct_level_ = uiprefs::stored().ct_level;   // one volume read per visit; row_fn paints from the copy
+    const auto stored = uiprefs::stored();   // one volume read per visit; row_fn paints from the copy
+    ct_level_ = stored.ct_level;
+    sweep_depth_ = stored.sweep_depth;
     ctx_.rows.init(ctx_.content, kListY, row_fn, this);
     ctx_.rows.set_count(kSettingsRows);
     ctx_.rows.select(sel_);
@@ -2228,13 +2232,13 @@ void SettingsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
 #if K2_SCREENSHOT
         "Screenshot",
 #endif
-        "Smoothing", "Wake port", "Test level", "Huawei/Samsung", "Long Back", "Display", "System state", "Memory", "Boot info"};
+        "Smoothing", "Wake port", "Test level", "Huawei/Samsung", "Sweep depth", "Long Back", "Display", "System state", "Memory", "Boot info"};
     static constexpr Icon kIcons[kSettingsRows] = {
         Icon::Usb, Icon::Rotate, Icon::Keys,
 #if K2_SCREENSHOT
         Icon::Camera,
 #endif
-        Icon::Wave, Icon::Plug, Icon::Bolt, Icon::Brick, Icon::Clock, Icon::Meter, Icon::Chip, Icon::Chip, Icon::Report};
+        Icon::Wave, Icon::Plug, Icon::Bolt, Icon::Brick, Icon::Ohm, Icon::Clock, Icon::Meter, Icon::Chip, Icon::Chip, Icon::Report};
     static constexpr const char *kPresets[smoothing::kPresetCount] = {"Off", "Low", "Medium", "High"};
     static constexpr const char *kPresetNotes[smoothing::kPresetCount] = {"Raw readings", "Light calming", "Balanced", "Steady, slower"};
     // charger_test::Level order (Medium 0, Light 1, Deep 2): the charger test's default level and what it runs.
@@ -2247,6 +2251,9 @@ void SettingsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
         "Sweeps & voltage accuracy"
 #endif
     };
+    // ctsweep::Depth order (100 mV 0, 200 mV 1, Phone 2, 20 mV 3): the deep sweeps' step.
+    static constexpr const char *kDepthNotes[ctsweep::kDepthCount] = {"Every 100 mV, PPS and AVS", "Every 200 mV, quickest", "100 mV, 20 mV in phone zones", "Every 20 mV on PPS, slowest"};
+    static_assert(all_fit(kDepthNotes, kLabelAdv, kit::kNoteMaxPx), "a Sweep depth note is wider than the row note");
     const auto *self = static_cast<const SettingsPage *>(ctx);
     out.marker = kit::Marker::Icon;
     out.icon = kIcons[i];
@@ -2293,6 +2300,12 @@ void SettingsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
     case SettingRow::LegacyUnits:   // FCP, SCP and AFC: slow to run and rarely answered, so off until asked for
         set_toggle(uiprefs::legacy_units_shown, "FCP, SCP, AFC in the test", "FCP, SCP, AFC hidden");
         break;
+    case SettingRow::SweepDepth: {
+        const unsigned d = self->sweep_depth_ < ctsweep::kDepthCount ? self->sweep_depth_ : 1;
+        out.tail = ctsweep::depth_name(ctsweep::Depth(d));
+        out.note = kDepthNotes[d];
+        break;
+    }
     case SettingRow::LongBack:   // the ring view's long Back target (ring::view_key)
         out.tail = ring::name(ring::sanitize_target(self->ctx_.keep.long_back));
         out.note = "Where Long Back jumps";
@@ -2369,6 +2382,15 @@ bool SettingsPage::on_event(Event e) {
             update(ctx_.now);
             break;
         }
+        case SettingRow::SweepDepth: {   // 200 -> 100 -> Phone -> 20 -> 200 mV; remembered, the idle draft follows
+            uiprefs::Prefs p = uiprefs::stored();
+            p.sweep_depth = static_cast<uint8_t>(ctsweep::next_depth(ctsweep::Depth(sweep_depth_ < ctsweep::kDepthCount ? sweep_depth_ : 1)));
+            uiprefs::set(p);
+            sweep_depth_ = p.sweep_depth;
+            if (!ctx_.ui->charger_test_busy()) ctx_.ui->charger_test_set_sweep_depth(p.sweep_depth);   // a running test keeps its step
+            update(ctx_.now);
+            break;
+        }
         case SettingRow::LongBack:   // Home -> Lines -> ... -> K2 -> Home; remembered
             ctx_.ui->set_long_back(static_cast<uint8_t>(ring::next(ring::sanitize_target(ctx_.keep.long_back))));
             update(ctx_.now);
@@ -2413,7 +2435,7 @@ bool SettingsPage::on_event(Event e) {
 Strip SettingsPage::labels() const {
     const auto row = static_cast<SettingRow>(sel_);
     const bool opens = row < SettingRow::RotateButtons || row >= SettingRow::Display;
-    const bool cycles = row == SettingRow::Smoothing || row == SettingRow::TestLevel || row == SettingRow::LongBack;
+    const bool cycles = row == SettingRow::Smoothing || row == SettingRow::TestLevel || row == SettingRow::SweepDepth || row == SettingRow::LongBack;
     return setting_labels(base_labels(), opens ? sl::Open : cycles ? sl::Cycle : sl::Toggle);
 }
 

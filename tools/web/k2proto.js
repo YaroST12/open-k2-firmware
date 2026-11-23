@@ -12,7 +12,7 @@ var K2Proto = (function () {
   var FACTORY_WIPE_MAGIC = [0x57, 0x49, 0x50, 0x45];   // "WIPE", u32 0x45504957 little endian (kFactoryWipeMagic)
   var CMD = { PING: 1, BUTTON: 2, GET_STATE: 3, GET_PDOS: 4, GET_EMARKER: 5, ACTION: 6, SET_PAGE: 7,
               REBOOT: 8, LOG: 9, SCREENSHOT: 10, CHARGER_TEST: 0x0B, CHARGER_UNITS: 0x0C, CHARGER_CABLE: 0x0D, CHARGER_SWEEP: 0x0F, DEBUG_PDOS: 0x20, ADC_RAW: 0x21, RIPPLE: 0x22, DEBUG_PD_MSG: 0x23,
-              GET_IDENTITY: 0x24, DEBUG_LINK: 0x25, DEBUG_CC_PROBE: 0x2A, DFU_ENTER: 0x30, DEBUG_FAULT: 0x31, FC: 0x32, FACTORY_WIPE: 0x33, BOOT_INFO: 0x35, MEMORY: 0x36, POWER: 0x37, CABLE_R: 0x50, LAB: 0x51, UFCS: 0x52, QRTEST: 0x53, CHARGER_AVS_SWEEP: 0x54, PD_STRESS: 0x55, LOOP_PROBE: 0x57, PD_SPEC: 0x5A, CHARGER_LEVEL: 0x5B, BATTERY: 0x58, CHARGER_SVOOC_CAP: 0x59, EM_LIB: 0x61, CARDS: 0x62, TWIN: 0x63, BLACK_BOX: 0x70, TRANS_CAP: 0x71, DIAGNOSE: 0x72,
+              GET_IDENTITY: 0x24, DEBUG_LINK: 0x25, DEBUG_CC_PROBE: 0x2A, DFU_ENTER: 0x30, DEBUG_FAULT: 0x31, FC: 0x32, FACTORY_WIPE: 0x33, BOOT_INFO: 0x35, MEMORY: 0x36, POWER: 0x37, CABLE_R: 0x50, LAB: 0x51, UFCS: 0x52, QRTEST: 0x53, CHARGER_AVS_SWEEP: 0x54, PD_STRESS: 0x55, LOOP_PROBE: 0x57, PD_SPEC: 0x5A, CHARGER_LEVEL: 0x5B, CHARGER_SWEEP_DEPTH: 0x5D, BATTERY: 0x58, CHARGER_SVOOC_CAP: 0x59, EM_LIB: 0x61, CARDS: 0x62, TWIN: 0x63, BLACK_BOX: 0x70, TRANS_CAP: 0x71, DIAGNOSE: 0x72,
               IDENTIFY_DEVICE: 0x40, PD_REQUEST: 0x41, PD_RESET: 0x42, PD_TRIGGER_STATUS: 0x43, PD_RELEASE: 0x44, PD_MATCH: 0x45, PD_ATTACH: 0x48, PD_HANDBACK: 0x49, APPLE_READ: 0x4A, STOP: 0x4B, LEASE: 0x4C, OPPO_PROBE: 0x4D, PD_LIMIT: 0x4E,
               SCREEN_DATA: 0x8A, RIPPLE_DATA: 0x8B };
   var STATUS = { OK: 0, UNKNOWN_CMD: 1, BAD_LENGTH: 2, BAD_ARG: 3, BUSY: 4, NEED_CONFIRM: 5 };
@@ -107,7 +107,7 @@ var K2Proto = (function () {
                       "timeout", "voltage outside band", "hard reset", "source lost", "cancelled", "5V release failed",
                       "offers changed", "PD active: use QC port", "revision cannot be forced", "select at least one test",
                       "physical cable limit", "unsupported PDO layout",
-                      "charger stayed in PD", "rebooted during request", "rebooted during handover", "EPR entry refused", "no contract", "source shut off (needs replug)", "no PD after re-attach", "VBUS cut, source recovered", "blocked by PD", "no QC3+ response", "rebooted 3x", "needs external power", "PD gave up before START", "Class A only (12 V max)", "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution", "HID-cable loop: 5V lock", "advertised", "light run: not asked", "port cuts without load", "output folds back", "Xiaomi chain", "transition check"];
+                      "charger stayed in PD", "rebooted during request", "rebooted during handover", "EPR entry refused", "no contract", "source shut off (needs replug)", "no PD after re-attach", "VBUS cut, source recovered", "blocked by PD", "no QC3+ response", "rebooted 3x", "needs external power", "PD gave up before START", "Class A only (12 V max)", "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution", "HID-cable loop: 5V lock", "advertised", "light run: not asked", "port cuts without load", "output folds back", "Xiaomi chain", "transition check", "D+/D- open: flip or data cable"];
   var TEST_ALL = (1 << TEST_ALGORITHMS.length) - 1;
   // How the Xiaomi 0x2717 auth chain ended, from its row's detail (mi_unlock::chain_text; tools/step_label.py mi_chain_text).
   function miChainText(code) {
@@ -239,9 +239,10 @@ var K2Proto = (function () {
       var level = (draft >>> 28) & 3;           // draft bits 28..29: the level of the next run (charger_test::Level)
       draft = draft & 0x0FFFFFFF;
       var runLevel = (runMask >>> 28) & 3;      // run bits 28..29: the level the run in hand ran at
-      runMask = (runMask & ~0x30000000) >>> 0;   // bits 30..31 stay: they are no field and fail below
+      var dpdm = ["unknown", "open", "short"][runMask >>> 30];   // run bits 30..31: the D+/D- check of this attach (0 on older firmware; 3 is no word)
+      runMask = (runMask & 0x0FFFFFFF) >>> 0;
       wire = p[23] & 3;
-      if ((runMask | draft) & ~TEST_ALL || level >= TEST_LEVELS.length || runLevel >= TEST_LEVELS.length || stage >= TEST_STAGES.length || (p[39] & 15) > 11)
+      if (dpdm === undefined || (runMask | draft) & ~TEST_ALL || level >= TEST_LEVELS.length || runLevel >= TEST_LEVELS.length || stage >= TEST_STAGES.length || (p[39] & 15) > 11)
         throw new FrameError("invalid charger-test selection or evidence");
       out.selection = { run_mask: runMask, configured_mask: draft, pps_sweep: ppsSweep, avs_sweep: avsSweep, level: TEST_LEVELS[level], run_level: TEST_LEVELS[runLevel],
                         run: TEST_ALGORITHMS.filter(function (_, i) { return runMask & (1 << i); }),
@@ -258,6 +259,7 @@ var K2Proto = (function () {
         spoof_on: !!(f & 128), independent_revision_tested: false,
         ps_rdy: header === 42 ? { out_of_band: !!(p[40] & 1), inferred: !!(p[40] & 2), late: !!(p[40] & 4), worst_ms: p[41] * 20 } : null,
         cut_retries: header === 42 ? p[40] >> 3 : 0,   // steps asked again after a legacy port dropped VBUS at 5 V (timing byte bits 3..7)
+        dpdm: dpdm,   // the D+/D- check of this attach (run-selected bits 30..31)
         pass_scope: "negotiation and measured voltage only; not rated-current/power or revision conformance"
       };
     }
@@ -309,6 +311,7 @@ var K2Proto = (function () {
           why === 28 ? "EPR: no PD contract" :
           why === 38 ? (EPR_DETAILS[detail] || TEST_REASONS[why]) :
           why === 46 ? (detail ? "step resolution " + detail + "mV" : "steps ignored") :
+          why === 54 ? "lines open" :   // charger_test.hpp kLinesOpenCell
           why === 53 ? (progCheckText(detail).split(",")[0] || TEST_REASONS[why]) :
           why === 22 && code === 10 ? "SCP 5A modes need an observed 5A cable" : TEST_REASONS[why];
       }
