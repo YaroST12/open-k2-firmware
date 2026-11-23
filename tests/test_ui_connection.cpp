@@ -802,7 +802,77 @@ static void test_debounced_port_sense() {
     CHECK_EQ(source_asleep(f), true);
 }
 
+// The Charger overview wakes a sleeping source by itself, once per sleeping episode. `asleep` is the debounced PortSense::SourceAsleep
+// confirmed by the live facts. A wake that got no VBUS is not retried: the port must leave the asleep state and come back after
+// the retry gap (a return before it is the K2's own failed cycle and is swallowed), or the page is opened again.
+static void test_auto_wake_once_per_sleeping_episode() {
+    AutoWake w;
+    CHECK_EQ(w.step(true, true, false, 1000), true);
+    for (std::uint32_t t = 1100; t < 120000; t += 100) CHECK_EQ(w.step(true, true, false, t), false);   // no loop on a silent port
+}
+
+static void test_auto_wake_needs_asleep_page_and_no_block() {
+    AutoWake w;
+    CHECK_EQ(w.step(false, true, false, 1000), false);   // not asleep
+    CHECK_EQ(w.step(true, false, false, 1100), false);   // another view or tab
+    CHECK_EQ(w.step(true, true, true, 1200), false);     // a tool, a test or an inline link owns the port
+    CHECK_EQ(w.step(true, true, false, 1300), true);     // the block cleared: not tried yet, so it goes
+    CHECK_EQ(w.step(true, true, false, 1400), false);
+}
+
+static void test_auto_wake_own_failed_cycle_is_swallowed() {
+    AutoWake w;
+    CHECK_EQ(w.step(true, true, false, 1000), true);
+    CHECK_EQ(w.step(false, true, false, 2000), false);   // the cycle moved the lines ...
+    for (std::uint32_t t = 3000; t < 120000; t += 100) CHECK_EQ(w.step(true, true, false, t), false);   // ... and the port fell asleep again
+}
+
+static void test_auto_wake_new_episode_after_the_gap() {
+    AutoWake w;
+    CHECK_EQ(w.step(true, true, false, 1000), true);
+    CHECK_EQ(w.step(false, true, false, 2000), false);
+    CHECK_EQ(w.step(true, true, false, 3000), false);                                // too soon: swallowed
+    CHECK_EQ(w.step(false, true, false, 20000), false);
+    CHECK_EQ(w.step(true, true, false, 1000 + AutoWake::kRetryGapMs - 1), false);    // back before the gap ran out
+    CHECK_EQ(w.step(false, true, false, 40000), false);
+    CHECK_EQ(w.step(true, true, false, 41000), true);                                // left and back after the gap: a real replug
+    CHECK_EQ(w.step(true, true, false, 42000), false);
+}
+
+static void test_auto_wake_gives_up_after_three_tries_without_an_attach() {
+    AutoWake w;
+    std::uint32_t t = 1000;
+    int fires = 0;
+    for (int i = 0; i < 6; i++) {
+        fires += w.step(true, true, false, t);
+        t += 1000;
+        w.step(false, true, false, t);
+        t += AutoWake::kRetryGapMs + 1000;
+    }
+    CHECK_EQ(fires, int(AutoWake::kMaxTries));            // a charger that never wakes is not cycled forever
+    w.attached();
+    CHECK_EQ(w.step(true, true, false, t), true);         // an attach showed the wakes work: the cap starts over
+}
+
+static void test_auto_wake_page_reopen_and_manual_refresh() {
+    AutoWake w;
+    CHECK_EQ(w.step(true, true, false, 1000), true);
+    CHECK_EQ(w.step(true, true, false, 1100), false);
+    w.reset();                                            // the page is opened again
+    CHECK_EQ(w.step(true, true, false, 1200), true);
+    AutoWake m;
+    m.spend(500);                                         // a manual Refresh / Reset & re-read took the episode
+    CHECK_EQ(m.step(true, true, false, 600), false);
+    CHECK_EQ(m.step(true, true, false, 100000), false);
+}
+
 int main() {
+    test_auto_wake_once_per_sleeping_episode();
+    test_auto_wake_needs_asleep_page_and_no_block();
+    test_auto_wake_own_failed_cycle_is_swallowed();
+    test_auto_wake_new_episode_after_the_gap();
+    test_auto_wake_gives_up_after_three_tries_without_an_attach();
+    test_auto_wake_page_reopen_and_manual_refresh();
     test_default_tab();
     test_tab_empty();
     test_topology_word();

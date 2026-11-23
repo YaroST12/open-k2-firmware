@@ -108,6 +108,8 @@ void ConnectionPage::enter() {
     guard_.clear();
     guard_primed_ = false;
     port_sense_.reset();
+    wake_.reset();
+    wake_asleep_ = asleep_run_ = false;
     op_ = StrBuf<24>();
     op_until_ = 0;
     em_read_pending_ = false;
@@ -516,6 +518,7 @@ void ConnectionPage::activate(const conn::Item &it, uint32_t now_ms) {
     case conn::Act::ResetLink: {
         const bool confirmed = before(now_ms, reset_armed_until_);
         reset_armed_until_ = 0;
+        if (confirmed) wake_.spend(now_ms);   // a manual re-read takes the sleeping episode
         switch (ctx_.ui->link_reset(confirmed, now_ms)) {
         case Ui::LinkResetResult::NeedConfirm:
             reset_armed_until_ = now_ms + Ui::kConfirmWindowMs;
@@ -543,6 +546,7 @@ void ConnectionPage::activate(const conn::Item &it, uint32_t now_ms) {
         break;
     }
     case conn::Act::Refresh:
+        wake_.spend(now_ms);
         // Inline the K2 only listens (a re-read asks nothing of the charger or the device): say so, instead of a rescan that
         // shows nothing. "Ask device" is what asks.
         if (ctx_.ui->run_action(Action::PdRescan, now_ms))
@@ -657,6 +661,16 @@ conn::Facts Ui::passive_facts() const {
     return f;
 }
 
+// The Charger overview wakes a source that holds VBUS off (standby signature) once per sleeping episode, through the Refresh path:
+// the woken attach is a new session, so the survey's auto read runs on it once. Never while anything blocks the auto read.
+void ConnectionPage::auto_wake(uint32_t now_ms) {
+    if (fusb302::line_trial().live) return;   // the direct-plug fallback is moving our Rd on this attach: its own wake, not ours
+    const bool open = view_ == View::Overview && tab_ == conn::Tab::Source;
+    if (!wake_.step(wake_asleep_, open, ctx_.ui->auto_read_block() != pd::SvWhy::None, now_ms)) return;
+    K2LOG("[UI] source asleep: waking it from the Charger overview\n");
+    if (ctx_.ui->rescan_source()) set_op(conn::tx::kWakingCharger, now_ms, 2500);   // a refusal stays silent: the episode is spent
+}
+
 void ConnectionPage::sense(uint32_t now_ms) {
     const pd::Link &link = ctx_.ui->link();
     if (!guard_primed_ || uint32_t(now_ms - guard_t_) >= raguard::kSampleMs) {
@@ -671,7 +685,15 @@ void ConnectionPage::sense(uint32_t now_ms) {
     // The charger went quiet but its offers are held: the Overview and Source views keep showing them.
     if ((view_ == View::Overview || tab_ == conn::Tab::Source) && !raw_f.charger && held::showing_held()) raw_f.charger = true;
     if (held::cable_em().valid) raw_f.cable = true;   // a read cable stays after it is unplugged
+    const bool asleep_now = conn::source_asleep(raw_f);   // the debounce lags 600 ms: the wake needs the facts of this tick too
     const conn::PortSense stable_ps = port_sense_.commit(conn::classify_port_sense(raw_f), now_ms);
+    if (stable_ps == conn::PortSense::SourceAsleep && asleep_now) {
+        if (!asleep_run_) { asleep_run_ = true; asleep_since_ = now_ms; }
+        wake_asleep_ = uint32_t(now_ms - asleep_since_) >= conn::DebouncedSense::kHoldMs;   // a page opened on a sleeping port waits too
+    } else {
+        asleep_run_ = wake_asleep_ = false;
+        if (stable_ps == conn::PortSense::Attached) wake_.attached();
+    }
     conn::apply_port_sense(raw_f, stable_ps);
     facts_ = raw_f;
     // The one "PD present" verdict of this attach, cached for build_items / paint_body / the tests.
@@ -2791,6 +2813,7 @@ void ConnectionPage::update(uint32_t now_ms) {
     title_badge(ctx_.stale());
     if (bg && bg->more) return;
     sense(now_ms);
+    auto_wake(now_ms);
     if (iq_asked_ && !fusb302::interrogate_running()) {
         iq_asked_ = false;
         const pd::IqStatus &iq = fusb302::interrogate_status();

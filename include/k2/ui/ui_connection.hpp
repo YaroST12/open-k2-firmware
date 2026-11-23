@@ -121,6 +121,38 @@ struct DebouncedSense {
     }
 };
 
+// Wakes a sleeping source once per sleeping episode while the Charger overview is open (the same CC cycle + survey as Refresh).
+// `asleep` = the debounced PortSense::SourceAsleep confirmed by the live facts. A wake that got no VBUS leaves the port asleep:
+// a retry needs the state to leave and come back after kRetryGapMs (a sooner return is the cycle's own blip), or the page to
+// be opened again. A manual Refresh / Reset & re-read spends the episode too (spend()).
+class AutoWake {
+public:
+    static constexpr std::uint32_t kRetryGapMs = 15000;
+    static constexpr std::uint8_t kMaxTries = 3;   // wakes in a row that never reached an attach: then only a reopened page tries again
+
+    bool step(bool asleep, bool page_open, bool blocked, std::uint32_t now_ms) {
+        if (!asleep) {
+            if (tried_) left_ = true;
+            return false;
+        }
+        if (tried_ && !(left_ && static_cast<std::uint32_t>(now_ms - at_) >= kRetryGapMs)) {
+            left_ = false;   // a return too soon is consumed: only a fresh departure re-arms
+            return false;
+        }
+        if (!page_open || blocked || tries_ >= kMaxTries) return false;
+        spend(now_ms);
+        return true;
+    }
+    void spend(std::uint32_t now_ms) { tried_ = true; left_ = false; at_ = now_ms; if (tries_ < 255) tries_++; }
+    void attached() { tries_ = 0; }   // a charger attached: the wakes worked, the cap starts over
+    void reset() { *this = {}; }
+
+private:
+    bool tried_ = false, left_ = false;
+    std::uint8_t tries_ = 0;
+    std::uint32_t at_ = 0;
+};
+
 // Projects a debounced idle PortSense back onto Facts when raw port sense has not held long enough.
 constexpr void apply_port_sense(Facts &f, PortSense stable) {
     if (classify_port_sense(f) == stable || stable == PortSense::Attached) return;

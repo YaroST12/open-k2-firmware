@@ -1341,22 +1341,12 @@ bool Ui::run_action(Action a, uint32_t now_ms, bool confirm) {
         return false;
     }
     switch (a) {
-    case Action::PdRescan:
-        pd::set_fake(0);
-        link_.clear_force();
-        // core/rescan.cpp decides: passive inline, a Get_Source_Cap on a live contract, else the CC cycle (bridged by the Rescan
-        // marker on a K2 that lives on the charger). Busy = a negotiation is in flight: nothing happened.
-        // The survey (core/survey.cpp) runs from the same press: the questions the page cannot answer from what it heard. A survey
-        // still reading owns the sink's gate, so a second press waits for it.
-        {
-            const bool reading = survey::running();
-            const rescan::Result res = reading ? rescan::Result::Busy : rescan::request();
-            const bool busy = res == rescan::Result::Busy;
-            if (!reading) survey::on_refresh(res, false);   // ports_busy() was refused above: no charger test
-            if (menu() == Menu::Connection) top_as<ConnectionPage>().update(now_ms);
-            if (busy) return false;
-        }
+    case Action::PdRescan: {
+        const bool ok = rescan_source();
+        if (menu() == Menu::Connection) top_as<ConnectionPage>().update(now_ms);
+        if (!ok) return false;
         break;
+    }
     case Action::EmarkerScan: {
         // The method follows the link: nothing supplies VBUS = inject VCONN and ask the cable; a source
         // present = listen only (it is the VCONN source and asks the cable at attach). The active Vconn
@@ -1629,6 +1619,20 @@ void Ui::refresh_action_views(uint32_t now_ms) {
     ContentViewport viewport(active_dest(), ctx_.content.w, ctx_.content.h);   // rotated layouts scale the logical content onto the panel
     if (menu() == Menu::Connection) top_as<ConnectionPage>().update(now_ms);
     else if (menu() == Menu::Emarker) top_as<EmarkerPage>().update(now_ms);
+}
+
+bool Ui::rescan_source() {
+    if (ports_busy()) return false;
+    pd::set_fake(0);
+    link_.clear_force();
+    // core/rescan.cpp decides: passive inline, a Get_Source_Cap on a live contract, else the CC cycle (bridged by the Rescan
+    // marker on a K2 that lives on the charger). Busy = a negotiation is in flight: nothing happened.
+    // The survey (core/survey.cpp) runs from the same press: the questions the page cannot answer from what it heard. A survey
+    // still reading owns the sink's gate, so a second press waits for it.
+    const bool reading = survey::running();
+    const rescan::Result res = reading ? rescan::Result::Busy : rescan::request();
+    if (!reading) survey::on_refresh(res, false);   // ports_busy() was refused above: no charger test
+    return res != rescan::Result::Busy;
 }
 
 bool Ui::open_connection(conn::Tab tab, bool spoof, uint32_t now_ms) {

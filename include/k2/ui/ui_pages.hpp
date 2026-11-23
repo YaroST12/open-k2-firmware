@@ -982,6 +982,7 @@ public:
     void say(const char *text, uint32_t now_ms, uint32_t ms = 4000) { set_op(text, now_ms, ms); }
 private:
     void sense(uint32_t now_ms);           // topology window + facts, once per update
+    void auto_wake(uint32_t now_ms);       // Refresh's wake + read, by itself, for a source asleep on the Charger overview
     void build_items();
     void enter_overview(conn::Tab t);
     void enter_actions();
@@ -1024,6 +1025,10 @@ private:
     uint32_t reset_armed_until_ = 0;       // 2-press confirm window for inline Reset & re-read
     bool actions_gap_cleared_ = false;     // gap below RowList at kPlaceListY cleared once per Actions entry
     conn::DebouncedSense port_sense_;      // 600 ms debounced idle port-sense classifier
+    conn::AutoWake wake_;                  // the once-per-episode wake of a sleeping source on the Charger overview
+    bool wake_asleep_ = false;             // SourceAsleep held 600 ms, confirmed by the facts of this tick
+    bool asleep_run_ = false;              // the asleep verdict is running since asleep_since_
+    uint32_t asleep_since_ = 0;
     StrBuf<40> status_txt_;                // last status string (for tests / toast mirror)
     bool em_read_pending_ = false;         // Read e-marker started a passive listen window from Actions
     bool id_asked_ = false;                // Identify started from this page: its progress shows in the status bar
