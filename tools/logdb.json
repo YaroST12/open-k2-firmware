@@ -769,6 +769,7 @@
   "772": "[LIM] t=%u off: %s\n",
   "773": "[LIM] t=%u %s\n",
   "774": "[SURVEY] auto read: pd20=%d epr=%d planned=%u\n",
-  "775": "[SURVEY] auto read stopped (%s)\n"
+  "775": "[SURVEY] auto read stopped (%s)\n",
+  "776": "[UI] source asleep: waking it from the Charger overview\n"
  }
 }

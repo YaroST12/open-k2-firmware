@@ -1214,6 +1214,23 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
     survey); no VBUS dip in the black box. The twin-rail chrome paints no bottom bar: the progress and the summary show as a
     toast (`Reading charger n/m`, then `Read: ...`), the rows show the words (`Asking...`, `Not asked`); the
     `Not asked: Reset & re-read` hint lives in the (unpainted) status line only.
+  - **Wake a sleeping charger by itself on the Charger overview** (2026-11-23, branch `k2/wake-page`, **built, not verified on
+    hardware**): seen with the K2 on the PC (HID) and a PD charger on the top port after a K2 reboot: Rp on the line, VBUS
+    held off (standby signature), no Rd of ours (Wake sleeping port OFF), so no contract and no auto read; the Charger tab
+    read `Ready / Not asked` until Reset & re-read. Now, with the Charger tab of the overview open and the debounced
+    `PortSense::SourceAsleep` confirmed by the facts of that tick, and held 600 ms, the page runs Refresh's path once (`Ui::rescan_source()`:
+    the CC cycle plus the survey hook; toast `Waking charger`); the woken attach is a new session, so the auto read runs
+    once on it (`Reading charger n/m`). Only on that tab and view, never while `Ui::auto_read_block()` holds (inline, tool,
+    spoof, Ra mode), not in Actions / Spec / other tabs. No loop: a wake that gets no VBUS is not retried until the port
+    state leaves asleep and returns at least 15 s after the try (a return sooner is the cycle's own blip, swallowed), or the
+    page is opened again (3 wakes in a row without a charger attaching, then only a reopened page); a manual Refresh / Reset & re-read takes the episode too. Global idle behaviour and the Wake
+    sleeping port default are unchanged. Pure `conn::AutoWake` (`test_ui_connection`), page glue
+    `ConnectionPage::auto_wake` (`test_ui_connection_page`). Validate on hardware: the setup above, reboot the K2, open
+    the Charger overview: `Waking charger` then `Reading charger n/m`, one wake and one read, vendor shown; a charger that
+    stays dark gets one try (no repeated cycles in the log: one `source asleep: waking it` line per episode); a load behind
+    the K2 or a charger test blocks it. Open: a real replug within 15 s of the try is swallowed (reopen the page); a sub-page pop re-arms the wake (`enter()`);
+    the CC cycle blocks inside one paint tick (as Refresh does); a refused rescan stays silent and spends the episode;
+    the single-read after the woken attach is by reading only (no automated test); skipped while the direct-plug line trial is live.
 
 - **Ripple: calibrate PA1, then show it** (the capture works; its scale is unknown).
   - Seen on hardware (2026-11-09, HID power only, no charger, `runs/2026-11-09-ripple/`): `k2_remote ripple` returns

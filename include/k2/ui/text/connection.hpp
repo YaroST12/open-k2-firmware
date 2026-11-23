@@ -67,6 +67,8 @@ inline constexpr const char *kReadingCharger = "Reading charger ";   // + "n/m" 
 inline constexpr const char *kFooters[] = {kSourceUnread, kCableUnread, kSinkUnread, kArmedBar, kHoldActions, kHoldInfo};
 static_assert(all_fit(kFooters, 8, 27 * 8), "a Who's attached footer is over 27 characters");
 static_assert(std::char_traits<char>::length(kReadingCharger) + 5 <= 27, "\"Reading charger nn/nn\" fits the status line");
+inline constexpr const char *kWakingCharger = "Waking charger";   // the Charger overview woke a sleeping source by itself (toast, 24 cells)
+static_assert(std::char_traits<char>::length(kWakingCharger) <= 24, "the wake toast fits the op buffer");
 
 // ---- 3-slice Overview & Actions copy (width-checked against RowList / 208 px slice canvas) --------------------------
 inline constexpr int kActionLabelMaxPx = 128;   // 16 cells of S16 beside a right-side tail/pill

@@ -183,6 +183,9 @@ public:
     // scan may interrupt charging, so it needs `confirm` (remote --confirm) or a second OK within
     // kConfirmWindowMs on the device. Rescan is passive inline and never needs one.
     bool run_action(Action a, uint32_t now_ms, bool confirm = false);
+    // Refresh's wake without the repaint (the Charger overview calls it from its own update): the rescan plus the survey hook.
+    // False = refused (a charger test owns the ports) or busy (a negotiation or a survey in flight).
+    bool rescan_source();
     static constexpr uint32_t kConfirmWindowMs = 5000;
     static constexpr uint32_t kListenWindowMs = 5000;   // passive e-marker listen after a quiet sniff
 

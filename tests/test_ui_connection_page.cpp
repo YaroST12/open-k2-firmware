@@ -995,6 +995,123 @@ static void test_refresh_goes_through_the_rescan_module() {
     CHECK_EQ(g_stub.rescan_requests, 3);
 }
 
+// A source that holds VBUS off (standby signature on the open line, no Rd of ours): the Charger overview wakes it once.
+static void asleep_port(Ui &ui) {
+    g_stub.pm.vbus_mv = 0;
+    set_cc(3300, 0);
+    g_stub.open_cc_mv[0] = 2950;
+    g_stub.rescan_result = rescan::Result::Cycled;
+    (void)ui;
+}
+
+// The Who's attached overview on its Charger tab, the way the ring opens it (the page aliases open the Spec sheet).
+static uint32_t open_overview(Ui &ui, uint32_t t) {
+    ui.open_place(bench::Place::Charger, t);
+    for (int i = 0; i < 12; i++) ui.tick(t += 100);
+    while (ui.painting()) ui.tick(t += 2);
+    return t;
+}
+
+static uint32_t run_ticks(Ui &ui, uint32_t t, int n) {
+    for (int i = 0; i < n; i++) ui.tick(t += 100);
+    return t;
+}
+
+static void test_auto_wake_once_on_the_charger_overview() {
+    Ui &ui = fresh_ui();
+    asleep_port(ui);
+    uint32_t t = open_overview(ui, 20000);
+    CHECK_EQ(int(cp(ui).view()), int(ConnectionPage::View::Overview));
+    CHECK_EQ(g_stub.rescan_requests, 1);                        // the Refresh path, by itself
+    CHECK_EQ(g_stub.survey_refreshes, 1);
+    g_stub.open_cc_mv[0] = -1;                                  // our own cycle moved the line ...
+    t = run_ticks(ui, t, 10);
+    g_stub.open_cc_mv[0] = 2950;                                // ... and it fell asleep again: still the same episode
+    t = run_ticks(ui, t, 100);                                  // 10 s of a charger that stays silent: no second try
+    CHECK_EQ(g_stub.rescan_requests, 1);
+    t = run_ticks(ui, t, 60);
+    g_stub.open_cc_mv[0] = -1;                                  // a replug after the retry gap is a new episode
+    t = run_ticks(ui, t, 10);
+    g_stub.open_cc_mv[0] = 2950;
+    t = run_ticks(ui, t, 300);
+    CHECK_EQ(g_stub.rescan_requests, 2);
+}
+
+// A page opened on a sleeping port waits out the 600 ms sense hold, then says what it does.
+static void test_auto_wake_settles_then_toasts() {
+    Ui &ui = fresh_ui();
+    asleep_port(ui);
+    uint32_t t = 20000;
+    ui.open_place(bench::Place::Charger, t);
+    for (int i = 0; i < 3; i++) ui.tick(t += 100);
+    CHECK_EQ(g_stub.rescan_requests, 0);
+    for (int i = 0; i < 8 && g_stub.rescan_requests == 0; i++) ui.tick(t += 100);
+    CHECK_EQ(g_stub.rescan_requests, 1);
+    CHECK(ui.context().toast.active(t));
+    CHECK_STR(ui.context().toast.view().data(), "Waking charger");
+}
+
+// The direct-plug line fallback moves our Rd on its own: no second wake over it.
+static void test_auto_wake_waits_for_the_line_trial() {
+    Ui &ui = fresh_ui();
+    asleep_port(ui);
+    g_stub.trial_live = true;
+    g_stub.trial_line = 1;
+    uint32_t t = open_overview(ui, 20000);
+    t = run_ticks(ui, t, 30);
+    CHECK_EQ(g_stub.rescan_requests, 0);
+    g_stub.trial_live = false;
+    t = run_ticks(ui, t, 5);
+    CHECK_EQ(g_stub.rescan_requests, 1);
+}
+
+static void test_auto_wake_not_on_other_tabs_or_views() {
+    {
+        Ui &ui = fresh_ui();
+        asleep_port(ui);
+        open_and_settle(ui, kConnTabAlias + 1, 20000);          // the Cable tab's fact sheet
+        CHECK_EQ(g_stub.rescan_requests, 0);
+        open_and_settle(ui, kConnTabAlias, 22000);              // the Charger's fact sheet (Spec view)
+        CHECK_EQ(g_stub.rescan_requests, 0);
+    }
+    {
+        Ui &ui = fresh_ui();
+        asleep_port(ui);
+        g_stub.ra_on = true;                                    // blocked while the page opens, so nothing fires yet
+        uint32_t t = open_overview(ui, 20000);
+        CHECK_EQ(g_stub.rescan_requests, 0);
+        for (int i = 0; i < 4 && cp(ui).view() == ConnectionPage::View::Overview; i++) ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
+        CHECK(cp(ui).view() != ConnectionPage::View::Overview);
+        g_stub.ra_on = false;
+        run_ticks(ui, t, 20);
+        CHECK_EQ(g_stub.rescan_requests, 0);                    // Spec / Actions: no wake behind the user's back
+    }
+}
+
+static void test_auto_wake_honours_the_auto_read_block() {
+    Ui &ui = fresh_ui();
+    asleep_port(ui);
+    g_stub.ra_on = true;
+    uint32_t t = open_overview(ui, 20000);
+    t = run_ticks(ui, t, 50);
+    CHECK_EQ(g_stub.rescan_requests, 0);
+    g_stub.ra_on = false;                                       // the block clears: not tried yet, so it goes once
+    t = run_ticks(ui, t, 5);
+    CHECK_EQ(g_stub.rescan_requests, 1);
+}
+
+static void test_auto_wake_needs_the_live_facts_too() {
+    Ui &ui = fresh_ui();
+    asleep_port(ui);
+    g_stub.ra_on = true;
+    uint32_t t = open_overview(ui, 20000);
+    CHECK_EQ(g_stub.rescan_requests, 0);
+    g_stub.ra_on = false;                                       // the block clears on the tick the line is no longer asleep:
+    g_stub.pm.vbus_mv = 5000;                                   // the debounced sense still says asleep for 600 ms
+    ui.tick(t += 100);
+    CHECK_EQ(g_stub.rescan_requests, 0);
+}
+
 // The comeback of a bridged Refresh lands on Connection -> Source, whatever page the boot opened.
 static void test_the_rescan_comeback_lands_on_the_source_tab() {
     Ui &ui = fresh_ui();
@@ -3147,6 +3264,12 @@ static void test_charger_slice_revision_chip_names_the_wire_revision() {
 }
 
 int main() {
+    test_auto_wake_once_on_the_charger_overview();
+    test_auto_wake_settles_then_toasts();
+    test_auto_wake_waits_for_the_line_trial();
+    test_auto_wake_not_on_other_tabs_or_views();
+    test_auto_wake_honours_the_auto_read_block();
+    test_auto_wake_needs_the_live_facts_too();
     test_sink_tab_pd_body_shows_the_raw_vooc_note();
     test_sink_tab_no_pd_shows_the_raw_vooc_note();
     test_sink_tab_offers_identify_when_a_device_is_alone();
