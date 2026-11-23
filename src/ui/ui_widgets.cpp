@@ -11,6 +11,7 @@
 #include "k2/drivers/lcd.hpp"
 #include "k2/ui/blend.hpp"
 #include "k2/ui/ui_viewport.hpp"
+#include "k2/ui/gfx.hpp"
 #include <algorithm>
 #include <array>
 
@@ -195,8 +196,23 @@ K2_HOT void stream_mono(const Surface &s, int16_t x, int16_t y, int sz, int src,
 
 }  // namespace detail
 
+// Always a native 12x12: a landscape viewport stretches the fills around it, never the bitmap (the box is mapped once, like a marker).
 K2_HOT void draw_icon(const Surface &s, int16_t x, int16_t y, Icon icon, uint16_t fg, uint16_t bg) {
-    detail::stream_mono(s, x, y, kIconSize, kIconSize, kIconBits[static_cast<int>(icon)], kIconSize - 1, fg, bg);
+    const Rect m = gfx_native_rect(s, x, y, kIconSize, kIconSize);
+    if (m.w != kIconSize || m.h != kIconSize) return;
+    ContentViewport::Pause unscaled;
+    uint16_t band_y = static_cast<uint16_t>(m.y), band_h = kIconSize;
+    if (!lcd::clip_to_band(band_y, band_h)) return;
+    const int r0 = band_y - m.y;
+    const uint16_t *rows = kIconBits[static_cast<int>(icon)];
+    uint16_t line[kIconSize];
+    lcd::stream_begin(static_cast<uint16_t>(m.x), band_y, static_cast<uint16_t>(m.x + kIconSize - 1),
+                      static_cast<uint16_t>(band_y + band_h - 1));
+    for (int r = r0; r < r0 + band_h; r++) {
+        for (int c = 0; c < kIconSize; c++) line[c] = (rows[r] >> (kIconSize - 1 - c)) & 1 ? fg : bg;
+        lcd::stream_pixels({line, static_cast<std::size_t>(kIconSize)});
+    }
+    lcd::stream_end();
 }
 
 namespace { bool g_footer_error; }
