@@ -91,7 +91,7 @@ static void test_cable_makers() {
     CHECK_EQ(weak, true);
     CHECK_STR(vendor_name(0x2B1D).c_str(), "LINTES");
     CHECK_STR(vendor_name(0x2BE2).c_str(), "ECT");
-    CHECK_STR(vendor_name(0x0DBF).c_str(), "JPC");
+    CHECK_STR(vendor_name(0x0DBF).c_str(), "JESS");
     CHECK_STR(vendor_name(0x0766).c_str(), "JPC");
     CHECK_STR(vendor_name(0x062E).c_str(), "JPC");
     CHECK_STR(vendor_name(0x2E25).c_str(), "GOLDCABLE");

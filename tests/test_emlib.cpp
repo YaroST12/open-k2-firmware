@@ -53,7 +53,7 @@ static void test_name() {
     CHECK_STR(name(0x8087, 3 | (2u << 5)).c_str(), "INTEL 100W");
     CHECK_STR(name(0x2B89, 1 | (2u << 5)).c_str(), "UGREEN 100W");
     CHECK_STR(name(0x1C7B, 0).c_str(), "LUXSHARE 60W");
-    CHECK_STR(name(0x2B01, 0).c_str(), "CUKTECH 60W");
+    CHECK_STR(name(0x2B01, 0).c_str(), "ZIMI 60W");
     CHECK_STR(name(0x05AC, 0, 2).c_str(), "APPLE 60W-2");
     CHECK_STR(name(0x05AC, 0, 13).c_str(), "APPLE 60W-13");
     // an unlisted VID (0x7FF0: not on the USB-IF list) keeps the hex form with the speed, so two unknown makers still differ

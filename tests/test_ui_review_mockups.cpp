@@ -52,7 +52,7 @@ static void fixture() {
     for (int i = 0; i < 7; i++) g_stub.caps.pdos[i] = mix[i];
     g_stub.cc = 1;
     g_stub.em.valid = true; g_stub.em.max_voltage_v = 20; g_stub.em.max_current_a = 5; g_stub.em.max_power_w = 100;
-    g_stub.em.vendor_str = "CUKTECH"; g_stub.em.vid = 0x2B01;
+    g_stub.em.vendor_str = "ZIMI"; g_stub.em.vid = 0x2B01;   // pd.cpp: vendor_name(vid)
     g_stub.contract.valid = true; g_stub.contract.ready = true; g_stub.contract.pos = 5;
     g_stub.contract.mv = 20000; g_stub.contract.op_ma = g_stub.contract.max_ma = 3000;
 }

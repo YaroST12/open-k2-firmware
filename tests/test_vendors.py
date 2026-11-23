@@ -48,7 +48,8 @@ class Table(unittest.TestCase):
         by = {r.vid: r for r in self.rows}
         self.assertEqual(by[0x2CA1].name, "Veetone")
         self.assertTrue(by[0x2CA1].weak)
-        self.assertEqual({by[v].name for v in (0x0DBF, 0x0766, 0x062E)}, {"JPC"})   # one company, three VIDs, one name
+        self.assertEqual({by[v].name for v in (0x0766, 0x062E)}, {"JPC"})   # both registrants carry JPC
+        self.assertEqual(by[0x0DBF].name, "Jess")                          # "Jess-Link International" does not
         self.assertEqual(by[0x3271].cat, "psu")
         self.assertFalse(by[0x2943].weak)
 
@@ -92,24 +93,64 @@ class Pack(unittest.TestCase):
         for bad in ("a" * 17, "", " lead", "trail ", "two  spaces", "a&b", "a+b", "caf\xe9"):
             with self.assertRaises(ValueError, msg=repr(bad)):
                 gen_vendors.check_rows([R(0x1111, bad, "brand", "x", "")])
-        gen_vendors.check_rows([R(0x1111, "Sixteen Chars Ok", "brand", "x", "")])   # exactly 16, mixed case
+        gen_vendors.check_rows([R(0x1111, "Sixteen Chars Ok", "brand", "Sixteen Chars Ok", "")])   # exactly 16, mixed case
 
     def test_the_pool_fits_the_skip_index(self):
         self.assertLess(gen_vendors.pool_bits(gen_vendors.load(gen_vendors.CSV)), 1 << 16)   # kSkip is uint16
 
 
+class Registrant(unittest.TestCase):
+    """A name is a shortening of its USB-IF registrant, never a brand, parent or subsidiary (user decision 2026-11-23)."""
+
+    def test_shortenings_and_acronyms_pass(self):
+        for name, reg in (("Zimi", "Zimi Corporation"), ("FTDI", "Future Technology Devices International Limited"),
+                          ("MSI", "Micro-Star International Co. Ltd."), ("STMicro", "STMicroelectronics"),
+                          ("YC Cable", "Y.C. Cable U.S.A. Inc"), ("MornStar", "Morning Star Digital Connector Co. Ltd."),
+                          ("Shinko", "Dong Guan Shinko Wire Co. Ltd."), ("E.U Conn", "E.U CONNECTOR(M) SDN BHD."),
+                          ("ECT", "Electric Connector Technology Co. Ltd."), ("Qinheng", "Nanjing Qinheng Microelectronics Co. Ltd.")):
+            self.assertTrue(gen_vendors.derives(name, reg), (name, reg))
+
+    def test_swaps_fail(self):
+        for name, reg in (("CUKTECH", "Zimi Corporation"), ("WCH", "Nanjing Qinheng Microelectronics Co. Ltd."),
+                          ("JPC", "Jess-Link International"), ("Xiaomi", "Zimi Corporation"),
+                          ("Cable Zimi", "Zimi Corporation Cable"),   # words out of the registrant's order
+                          ("Zimix", "Zimi Corporation")):
+            self.assertFalse(gen_vendors.derives(name, reg), (name, reg))
+
+    def test_generation_refuses_a_swap(self):
+        with self.assertRaises(ValueError):
+            gen_vendors.check_rows([gen_vendors.Row(0x2B01, "CUKTECH", "shared", "Zimi Corporation", "")])
+
+    def test_exceptions_are_few_and_exact(self):
+        self.assertLessEqual(len(gen_vendors.SHORTHAND), 4)
+        R = gen_vendors.Row
+        for (vid, name, reg) in gen_vendors.SHORTHAND:
+            gen_vendors.check_rows([R(vid, name, "cable", reg, "")])
+            with self.assertRaises(ValueError):   # keyed on the registrant too: an edited registrant needs a new look
+                gen_vendors.check_rows([R(vid, name, "cable", reg + " Holdings", "")])
+
+    def test_zimi_vid_reads_zimi(self):
+        by = {r.vid: r for r in gen_vendors.load(gen_vendors.CSV)}
+        self.assertEqual(by[0x2B01].name, "Zimi")
+
+
 class Verify(unittest.TestCase):
-    TXT = "Anker Innovations Limited      10522\nAcme, Inc.   99\nnoise line\n"
+    TXT = "Anker Innovations Limited      10522\nAcme, Inc.   99\nnoise line\nLite\u2010On Corp.    1226\n"
 
     def test_parse(self):
-        self.assertEqual(gen_vendors.parse_usbif(self.TXT), {10522: ["Anker Innovations Limited"], 99: ["Acme, Inc."]})
+        self.assertEqual(gen_vendors.parse_usbif(self.TXT), {10522: ["Anker Innovations Limited"], 99: ["Acme, Inc."],
+                                                            1226: ["Lite-On Corp."]})   # the PDF's U+2010 hyphen folded
+
+    def test_verify_flags_a_swap(self):
+        R = gen_vendors.Row
+        self.assertEqual(len(gen_vendors.verify([R(10522, "Brand", "brand", "Anker Innovations Limited", "")], self.TXT)), 1)
 
     def test_verify_flags_wrong_and_missing(self):
         R = gen_vendors.Row
         ok = R(10522, "Anker", "brand", "Anker Innovations Limited", "")
         self.assertEqual(gen_vendors.verify([ok], self.TXT), [])
-        self.assertEqual(len(gen_vendors.verify([R(10522, "X", "brand", "Someone Else", "")], self.TXT)), 1)
-        self.assertEqual(len(gen_vendors.verify([R(5, "X", "brand", "Gone", "")], self.TXT)), 1)
+        self.assertEqual(len(gen_vendors.verify([R(10522, "SE", "brand", "Someone Else", "")], self.TXT)), 1)
+        self.assertEqual(len(gen_vendors.verify([R(5, "Gone", "brand", "Gone", "")], self.TXT)), 1)
         self.assertEqual(gen_vendors.verify([R(99, "Acme", "brand", "Acme Inc.", "")], self.TXT), [])   # commas dropped in the csv
 
 
