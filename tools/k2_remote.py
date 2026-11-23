@@ -580,7 +580,7 @@ SESSION_WAIT_KIND = ["unknown", "no-source", "charger-waiting", "dual-role-port"
 SESSION_PD_NONE_WHY = ["none", "sink-silent-source-offered", "source-never-offered"]
 SESSION_TABS = ["source", "cable", "sink"]
 SESSION_HOME_WINDOWS = ["10s", "60s", "10m"]
-SESSION_FLAGS = ["hold_card", "rotation_notice", "em_scanning", "em_listening", "em_quiet", "id_no_device", "ring_view"]
+SESSION_FLAGS = ["hold_card", "rotation_notice", "em_scanning", "em_listening", "em_quiet", "id_no_device", "ring_view", "shell_toast"]
 SESSION_LEN = 31
 MENU_NAMES = PAGES[ROTATION_PAGES:]                       # Menu order: the stack holds Menu indices
 

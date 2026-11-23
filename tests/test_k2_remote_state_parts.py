@@ -94,6 +94,12 @@ class SessionDecode(unittest.TestCase):
         s = kr.decode_session(bytes(p))
         self.assertEqual({k for k, v in s["flags"].items() if v}, {"ring_view"})
 
+    def test_shell_toast_flag(self):
+        p = bytearray(SESSION)
+        p[30] = 0x80                               # ShellToast only (bit 7)
+        s = kr.decode_session(bytes(p))
+        self.assertEqual({k for k, v in s["flags"].items() if v}, {"shell_toast"})
+
     def test_sentinels_become_null(self):
         p = bytearray(SESSION)
         p[20:22] = b"\xFF\xFF"                  # open CC unknown

@@ -997,7 +997,7 @@ var K2Proto = (function () {
   var SESSION_PD_NONE_WHY = ["none", "sink-silent-source-offered", "source-never-offered"];
   var SESSION_TABS = ["source", "cable", "sink"];
   var SESSION_HOME_WINDOWS = ["10s", "60s", "10m"];
-  var SESSION_FLAGS = ["hold_card", "rotation_notice", "em_scanning", "em_listening", "em_quiet", "id_no_device", "ring_view"];
+  var SESSION_FLAGS = ["hold_card", "rotation_notice", "em_scanning", "em_listening", "em_quiet", "id_no_device", "ring_view", "shell_toast"];
   function decodeSession(p) {
     need(p, SESSION_LEN, "state session");
     var v = dv(p), stack = [], i, flags = {};
