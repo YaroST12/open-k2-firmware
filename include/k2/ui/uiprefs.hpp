@@ -18,8 +18,9 @@
 // both ways): bit0..1 manual rotation 0..3 (x 90 deg), bit2 manual (0 = automatic, the default), bit3 rotate
 // buttons (Settings > Rotate buttons, default off), bit4 wake sleeping port (Settings > Wake sleeping port, default
 // off: the idle K2 presents no Rd), bit5..6 the Home hero (Long Back on Home: 0 W, the default; 1 V; 2 A; 3 reads
-// as W); bit7 is unused and ignored. The rotation value only counts when bit2 is set. 0 = today's defaults: automatic
-// orientation, keys as printed, no idle Rd, the W hero.
+// as W); bit7 Settings > Huawei/Samsung tests (1 = FCP, SCP and AFC shown in the charger test; stored shown so every older
+// file and the default read hidden; older firmware ignores it). The rotation value only counts when bit2 is set. 0 = today's
+// defaults: automatic orientation, keys as printed, no idle Rd, the W hero, the three legacy units hidden.
 // Missing or damaged = defaults (QC off, screenshot on, smoothing Medium, orientation automatic; bit1 is stored
 // inverted so an old record keeps screenshots on). The record was a raw flash page (0x080E6800) before
 // littlefs; stored() imports it once.
@@ -50,19 +51,23 @@ struct Prefs {
     std::uint8_t home_hero = 0;        // Home's hero quantity (home::qty_from): 0 W, 1 V, 2 A
     std::uint8_t ct_level = 0;         // Settings > Test level: the charger test's default level (charger_test::Level; 0 Medium)
     std::uint8_t long_back = 0;        // Settings > Long Back: the ring::Pos long Back jumps to (0 Home)
+    bool legacy_units = false;         // Settings > Huawei/Samsung tests: FCP, SCP and AFC in the charger test (off = hidden)
     bool operator==(const Prefs&) const = default;
 };
 
 // This boot's switch, read by the remote, the web server and the capture module without touching
 // the file system. main() loads it from stored(); the Settings page updates it with set().
 inline bool screenshot_enabled = true;
+// Huawei/Samsung units shown in the charger test. Defaults to shown so the host UI tests see today's pages; main() sets it
+// from the prefs, where the default is hidden.
+inline bool legacy_units_shown = true;
 
 constexpr std::array<std::uint8_t, 8> encode(Prefs p) {
     const std::uint8_t f = static_cast<std::uint8_t>((p.qc_after_pd ? 1 : 0) | (p.screenshot ? 0 : 2));
     const std::uint8_t s = static_cast<std::uint8_t>((p.smoothing == smoothing::kDefault ? 0 : 1 + static_cast<unsigned>(p.smoothing)) |
                                                  ((p.ct_level < 3 ? p.ct_level : 0) << 6));
     const std::uint8_t o = static_cast<std::uint8_t>((p.rotation & 3) | (p.rotation_manual ? 4 : 0) | (p.rotate_buttons ? 8 : 0) | (p.idle_wake ? 16 : 0) |
-                                                 ((p.home_hero < 3 ? p.home_hero : 0) << 5));
+                                                 ((p.home_hero < 3 ? p.home_hero : 0) << 5) | (p.legacy_units ? 128 : 0));
     return {kMagic[0], kMagic[1], kMagic[2], kMagic[3], f, static_cast<std::uint8_t>(~f), s, o};
 }
 
@@ -83,7 +88,7 @@ constexpr Prefs decode(std::span<const std::uint8_t> r) {
     return {(r[4] & 1) != 0, (r[4] & 2) == 0, sm, (r[7] & 4) != 0, static_cast<std::uint8_t>(r[7] & 3), (r[7] & 8) != 0, (r[7] & 16) != 0,
             static_cast<std::uint8_t>(((r[7] >> 5) & 3) == 3 ? 0 : (r[7] >> 5) & 3),
             static_cast<std::uint8_t>((r[6] >> 6) == 3 ? 0 : r[6] >> 6),
-            static_cast<std::uint8_t>(r.size() == 9 && r[8] < ring::kCount ? r[8] : 0)};
+            static_cast<std::uint8_t>(r.size() == 9 && r[8] < ring::kCount ? r[8] : 0), (r[7] & 128) != 0};
 }
 
 inline Prefs load(fs::Fs& f) {
