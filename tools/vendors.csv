@@ -124,7 +124,7 @@ vid,name,cat,usbif,why
 0x2A8D,Keysight,tool,Keysight Technologies Inc.,bench instruments
 0x2ACD,Silergy,chip,Silergy Corp.,power chips
 0x2AE5,Fairphone,oem,Fairphone B.V.,phones
-0x2B01,ZMI,shared,Zimi Corporation,bench banks and chargers; CUKTECH and ZMI use it
+0x2B01,CUKTECH,shared,Zimi Corporation,CUKTECH (Zimi's product brand) and ZMI banks/chargers
 0x2B89,UGREEN,brand,Ugreen Group Limited,chargers/cables/docks
 0x2BD0,mophie,brand,mophie LLC,banks/chargers
 0x2BD5,CblMatters,brand,Cable Matters Inc.,Cable Matters: cables/docks

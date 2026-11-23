@@ -122,7 +122,7 @@ var K2Vendors = {
   0x2A8D: "Keysight",
   0x2ACD: "Silergy",
   0x2AE5: "Fairphone",
-  0x2B01: "ZMI",
+  0x2B01: "CUKTECH",
   0x2B89: "UGREEN",
   0x2BD0: "mophie",
   0x2BD5: "CblMatters",

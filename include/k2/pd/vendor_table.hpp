@@ -32,7 +32,7 @@ inline constexpr std::uint16_t kVid[kCount] = {
 };
 inline constexpr std::uint16_t kSkip[21] = {
     0, 51, 119, 178, 233, 295, 362, 416, 468, 519, 579, 635, 690, 758, 818, 880,
-    944, 1000, 1061, 1133, 1185,
+    948, 1004, 1065, 1137, 1189,
 };
 inline constexpr std::uint8_t kWeak[21] = {
     0x6E, 0xA7, 0x1E, 0xCC, 0xDB, 0x17, 0x70, 0x80, 0x86, 0x49, 0xD1, 0x6E, 0x07, 0x44, 0xA4, 0x62,
@@ -161,7 +161,7 @@ inline constexpr char kPool[] =
     "Keysight\0"
     "Silergy\0"
     "Fairphone\0"
-    "ZMI\0"
+    "CUKTECH\0"
     "UGREEN\0"
     "mophie\0"
     "CblMatters\0"

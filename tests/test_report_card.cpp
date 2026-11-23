@@ -757,7 +757,7 @@ static void test_weak_vendor_yields_to_the_manufacturer() {
     CHECK_STR(auto_name(0x2E87, "UGREEN Group", 65).c_str(), "UGREEN Group 65W");   // a controller VID with the brand's text
     CHECK_STR(auto_name(0x2E87, "", 65).c_str(), "Injoinic 65W");                   // no text: the chip maker's name
     CHECK_STR(auto_name(0x2B01, "CUKTECH", 100).c_str(), "CUKTECH 100W");
-    CHECK_STR(auto_name(0x2B01, "", 100).c_str(), "ZMI 100W");
+    CHECK_STR(auto_name(0x2B01, "", 100).c_str(), "CUKTECH 100W");
     CHECK_STR(auto_name(0x291A, "Someone Else", 100).c_str(), "Anker 100W");        // a brand's VID is not overruled
     CHECK_STR(auto_name(0x291A, "", 100).c_str(), "Anker 100W");
     CHECK_STR(auto_name(0x2E87, "///", 65).c_str(), "Injoinic 65W");                // a manufacturer with no usable character
