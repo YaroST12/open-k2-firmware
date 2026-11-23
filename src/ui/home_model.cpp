@@ -175,7 +175,7 @@ void format_limit(ProtoText &out, ProtoKind kind, uint32_t watts) {
     std::string_view v = out.value.view();
     if (v.size() + suffix.view().size() > static_cast<std::size_t>(kProtoChars)) {
         const std::size_t volt = v.find('V');   // every PD value names its voltage first
-        if (volt != std::string_view::npos) v = v.substr(0, volt + 1);
+        if (volt != std::string_view::npos) v = std::string_view(v.data(), volt + 1);   // not substr: it can throw
     }
     StrBuf<20> joined;
     joined.put(v).put(suffix.view());

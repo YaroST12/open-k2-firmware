@@ -70,7 +70,9 @@ std::size_t lim_picks(std::span<const Pdo> pdos, std::span<LimPick> out) {
         if (p.type != PdoType::Fixed || n >= std::size(c)) continue;
         c[n++] = {whole_w(std::uint32_t(p.max_mv) * p.max_ma), p.max_mv, p.max_ma};
     }
-    std::stable_sort(c, c + n, [](const LimPick& a, const LimPick& b) { return a.mw < b.mw; });
+    // Insertion sort, stable: std::stable_sort allocates (new/delete + the unwinder, +15 KB).
+    for (std::size_t i = 1; i < n; ++i)
+        for (std::size_t j = i; j > 0 && c[j].mw < c[j - 1].mw; --j) std::swap(c[j], c[j - 1]);
     std::size_t k = 0;
     for (std::size_t i = 0; i < n && k < out.size(); ++i) {
         if (c[i].mw < kLimMinMw || c[i].mw > kLimMaxMw || c[i].mw >= best) continue;
