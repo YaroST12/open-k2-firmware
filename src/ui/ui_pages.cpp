@@ -2616,12 +2616,12 @@ void ToolsPage::show(View v) {
         for (int i = 0; s.state != pd::LimState::Off && i < npicks_; i++)
             if (picks_[i].mw == s.limit_mw) pick_ = i + 1;
         title_ = text::tools::kLimName;
-        confirm_until_ = 0;
+        drop_confirm();
         if (npicks_ == 0)
             ctx_.toast.show(FooterTone::Info, held::shown_caps().valid ? text::tools::kLimToastNoLower : text::tools::kLimToastNoOffers, ctx_.now);
     } else {
         title_ = "Tools";
-        confirm_until_ = 0;
+        drop_confirm();
     }
     if (!ctx_.blank) pg::clear_body(ctx_.content, kit::kBelowBar);
     title_bar();
@@ -2694,6 +2694,7 @@ void ToolsPage::limit_row(int index, bool focused, kit::RowSpec &out) const {
     text_.clear();
     text_.put_u32(pd::lim_watts(p.mw)).put_char('W');
     out.text = text_.view();
+    if (held::showing_held()) out.text_color = kStale;   // the gone charger's offers: grey, the frozen-value rule
     char t[12];
     col2_.clear();
     col2_.put(std::string_view{t, static_cast<std::size_t>(home::fmt_level(t, p.mv))}).put_char('V');
@@ -2757,7 +2758,7 @@ void ToolsPage::limit_edge() {
 }
 
 void ToolsPage::update(uint32_t) {
-    title_badge(view_ == View::PickLimit && held::showing_held());   // offers of a charger that is gone: LAST
+    title_badge(false);
     limit_edge();
     if (view_ == View::PickLimit) {
         build_picks();
@@ -2768,6 +2769,11 @@ void ToolsPage::update(uint32_t) {
     ctx_.rows.set_count(count());
     ctx_.rows.select(cur());
     ctx_.rows.draw(ctx_.now, ctx_.budget);
+}
+
+void ToolsPage::drop_confirm() {
+    if (confirm_until_ != 0 && ctx_.toast.view() == text::tools::kLimToastConfirm) ctx_.toast.clear();
+    confirm_until_ = 0;
 }
 
 void ToolsPage::ask_confirm(uint32_t key) {
@@ -2784,7 +2790,7 @@ bool ToolsPage::pick_limit() {
     constexpr uint32_t kResetKey = 0xFFFFFFFFu;
     if (reset_row_ && pick_ == 1) {
         const bool confirmed = confirmed_for(kResetKey);
-        confirm_until_ = 0;
+        drop_confirm();
         switch (ctx_.ui->link_reset(confirmed, ctx_.now)) {
         case Ui::LinkResetResult::Cycled: ctx_.toast.show(FooterTone::Info, tx::kLimToastRescan, ctx_.now, 2500); break;
         case Ui::LinkResetResult::HardReset: ctx_.toast.show(FooterTone::Info, tx::kLimToastResetting, ctx_.now, 2500); break;
@@ -2800,7 +2806,7 @@ bool ToolsPage::pick_limit() {
     const uint32_t mw = pick_ > 0 && pick_ <= npicks_ ? picks_[pick_ - 1].mw : 0;
     if (armed && s.limit_mw == mw) return false;   // already on it: arming again would restart the negotiation
     const bool confirmed = confirmed_for(mw);
-    confirm_until_ = 0;
+    drop_confirm();
     switch (ctx_.ui->pd_limit_set(mw, confirmed, ctx_.now)) {
     case Ui::LimitSet::Done: break;
     case Ui::LimitSet::DoneReset: ctx_.toast.show(FooterTone::Info, tx::kLimToastResetting, ctx_.now, 2500); break;
@@ -2816,7 +2822,7 @@ bool ToolsPage::on_event(Event e) {
     if (e.press != Press::Short) return false;
     if (e.button == Button::Plus || e.button == Button::Minus) {
         cur() = std::clamp(cur() + (e.button == Button::Plus ? 1 : -1), 0, count() - 1);
-        confirm_until_ = 0;   // a moved selection is another question
+        drop_confirm();   // a moved selection is another question
         update(ctx_.now);
         return true;
     }

@@ -1419,6 +1419,7 @@ private:
     void limit_edge();
     bool confirmed_for(uint32_t key) const { return confirm_until_ != 0 && confirm_key_ == key && int32_t(confirm_until_ - ctx_.now) > 0; }
     void ask_confirm(uint32_t key);
+    void drop_confirm();   // the window ends: its "OK again" toast goes with it
     int &sel_;
     View view_ = View::List;
     int pick_ = 0;

@@ -378,7 +378,7 @@ pd::LimRefusal Ui::pd_limit_arm(uint32_t limit_mw, bool seed) const {
 }
 
 bool Ui::pd_limit_link_live() const {
-    return link_reset_inline() && (fusb302::far_sink_seen() || fusb302::contract().valid);
+    return link_reset_inline() && fusb302::far_sink_seen();   // certain evidence only: a Request from a sink behind the K2
 }
 
 Ui::LimitSet Ui::pd_limit_set(uint32_t limit_mw, bool confirmed, uint32_t now_ms) {
@@ -407,6 +407,8 @@ Ui::LimitSet Ui::pd_limit_set(uint32_t limit_mw, bool confirmed, uint32_t now_ms
         case LinkResetResult::SelfPowered:   // the K2 lives on this link: arm from what the sniffer holds, the sink must re-ask
         case LinkResetResult::NoLink: res = LimitSet::NoReset; break;
         }
+    } else if (link_reset_inline() && (fusb302::contract().valid || (ctx_.pm_online && ctx_.vbus_fast_mv > pd::kVSafe5MaxMv))) {
+        res = LimitSet::NoReset;   // a contract joined mid-way, no Request heard: nothing to seed from, the sink must re-ask
     }
     if (off) {
         fusb302::limit_disarm();

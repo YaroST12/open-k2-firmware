@@ -2149,6 +2149,12 @@ static void set_caps_65w() {
 }
 
 // Tools on its last row (the PD limit row), the picker not opened.
+static int panel_px(uint16_t c) {
+    int n = 0;
+    for (int i = 0; i < 240 * 240; i++) n += g_panel[i] == c;
+    return n;
+}
+
 static uint32_t open_limit_row(Ui &ui, uint32_t t) {
     g_stub.lim = {}; g_stub.lim_refusal = pd::LimRefusal::None; g_stub.lim_arms = g_stub.lim_offs = 0; g_stub.lim_arm_mw = 0;
     ui.context().toast.clear();
@@ -2167,6 +2173,7 @@ static void test_pd_limit_picker() {
     CHECK_STR(label(ui, Button::Ok), "Pick");
     press(ui, Button::Ok, ButtonEvent::Short, t += 10);
     CHECK_EQ(ui.list_state().count, 4);                      // Off, 15 W, 27 W, 45 W
+    settle(ui, t);
     CHECK_STR(label(ui, Button::Ok), "Select");
     CHECK_EQ(ui.context().toast.active(t + 20), false);
     // 27 W (9V3A): the second level.
@@ -2340,6 +2347,7 @@ static void test_pd_limit_confirm_window() {
     press(ui, Button::Plus, ButtonEvent::Short, t += 10);
     press(ui, Button::Ok, ButtonEvent::Short, t += 10);     // 15 W asked
     press(ui, Button::Plus, ButtonEvent::Short, t += 10);   // moved: another question
+    CHECK_EQ(ui.context().toast.view().empty(), true);      // and its toast went with the window
     press(ui, Button::Minus, ButtonEvent::Short, t += 10);
     press(ui, Button::Ok, ButtonEvent::Short, t += 10);
     CHECK_EQ(g_stub.hard_resets, 0);
@@ -2352,16 +2360,24 @@ static void test_pd_limit_confirm_window() {
     press(ui, Button::Plus, ButtonEvent::Short, t += 10);
     press(ui, Button::Ok, ButtonEvent::Short, t += 10);
     CHECK_EQ(g_stub.hard_resets, 0);
+    // the link stops being live between the two presses: the arm goes through silently, the old question is not left on screen
+    CHECK_STR(ui.context().toast.view().data(), "OK again: resets link");
+    idle_link();
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);
+    CHECK_EQ(g_stub.lim_arms, 1);
+    CHECK_EQ(ui.context().toast.view().empty(), true);
     idle_link();
 }
 
 static void test_pd_limit_no_live_contract_no_reset() {
-    for (int scene = 0; scene < 3; scene++) {
+    for (int scene = 0; scene < 5; scene++) {
         Ui &ui = fresh_ui();
         set_caps_65w();
         uint32_t t = open_limit_row(ui, 20000);
         idle_link();
         g_stub.hard_resets = 0;
+        if (scene == 3) { g_stub.contract.valid = true; g_stub.contract.ready = true; g_stub.pm.vbus_mv = 9000; }   // a contract at 9 V, no Request heard
+        if (scene == 4) { g_stub.inl = true; g_stub.contract.valid = true; g_stub.contract.ready = true; g_stub.pm.vbus_mv = 9000; }   // inline, a contract the K2 joined mid-way: no Request heard
         if (scene == 1) g_stub.inl = true;       // a charger only, the K2 inline with nobody asking: no Request, no contract
         if (scene == 2) g_stub.far_sink = true;  // not inline: a stale latch is no live link
         press(ui, Button::Ok, ButtonEvent::Short, t += 10);
@@ -2370,7 +2386,13 @@ static void test_pd_limit_no_live_contract_no_reset() {
         CHECK_EQ(g_stub.lim_arms, 1);
         CHECK_EQ(g_stub.hard_resets, 0);
         CHECK_EQ(g_stub.lim_arm_seeded, true);
+        if (scene >= 3) {   // joined mid-contract, no Request heard: armed without a reset, and the toast says so
+            CHECK_STR(ui.context().toast.view().data(), "No reset: replug to apply");
+        } else {
+            CHECK_EQ(ui.context().toast.view().empty(), true);      // no confirm was ever asked
+        }
         idle_link();
+        g_stub.pm.vbus_mv = 0;
     }
 }
 
@@ -2413,11 +2435,18 @@ static void test_pd_limit_picker_offers_held_and_reset_row() {
     set_caps_65w();
     g_stub.caps.raw_header = 0x1181; g_stub.caps.rx_count++;
     for (uint32_t i = 0; i < 40; i++) held::poll(30000 + i * 100, true);   // the K2 keeps the list it saw (settled)
+    uint32_t t = open_limit_row(ui, 34100);                  // the picker on live offers: the grey baseline (the rail's own stale ink)
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);
+    settle(ui, t);
+    const int live_grey = panel_px(kStale);
+    press(ui, Button::Back, ButtonEvent::Short, t += 10);
     g_stub.caps = {};                                        // ... and the live one is gone
-    uint32_t t = open_limit_row(ui, 34100);
+    t = open_limit_row(ui, t + 100);
     CHECK_EQ(held::showing_held(), true);
     press(ui, Button::Ok, ButtonEvent::Short, t += 10);
     CHECK_EQ(ui.list_state().count, 4);                      // Off, 15, 27, 45 W from the held list
+    settle(ui, t);
+    CHECK_EQ(panel_px(kStale) > live_grey + 40, true);     // the offer rows are grey: they are the gone charger's
     press(ui, Button::Back, ButtonEvent::Short, t += 10);
     held::reset();
     Ui &u2 = fresh_ui();
@@ -2482,6 +2511,18 @@ static void test_pd_limit_renders() {
         t = settle(u2, t);
         dump_panel("picker_reset_row", rot);
         idle_link();
+        held::reset();
+        Ui &u3 = fresh_ui();
+        u3.set_rotation(uint8_t(rot), 19000);
+        set_caps_65w();
+        g_stub.caps.raw_header = 0x1181; g_stub.caps.rx_count++;
+        for (uint32_t i = 0; i < 40; i++) held::poll(30000 + i * 100, true);
+        g_stub.caps = {};
+        t = open_limit_row(u3, 34100);
+        press(u3, Button::Ok, ButtonEvent::Short, t += 10);
+        t = settle(u3, t);
+        dump_panel("picker_held", rot);
+        held::reset();
     }
 }
 
