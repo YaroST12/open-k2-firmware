@@ -46,6 +46,10 @@ Text protocol(const charger_test::Step&);
 Text params(const charger_test::Step&, const charger_test::Step* prev = nullptr);
 // protocol + ' ' + params ("PPS 20V 5A"), or the bare protocol when there are no params.
 Text label(const charger_test::Step&, const charger_test::Step* prev = nullptr);
+// The Running header's name inside the PD spec stage, from the engine's live point: "PPS 8.02V", "AVS 21V", "PD 9V", "EPR 28V",
+// "Hard Reset", "PD spec" (no level yet). Volts only, at most kSpecCells cells.
+inline constexpr unsigned kSpecCells = 10;
+Text spec_label(const charger_test::SpecPoint&);
 // The current the label shows, in mA (0 = none; a Xiaomi mode shows watts instead).
 unsigned amps_ma(const charger_test::Step&);
 // The power level a Xiaomi mode row is named by: the volts it asks times the current it asks, rounded to whole watts (11 V 5 A ->

@@ -257,6 +257,16 @@ public:
     }
 #endif
     std::uint8_t families() const { return mask_; }
+    // The level the run is asking for now (pos = its PDO position, mv = the level), or the reset families; for the charger test page.
+    struct Point { enum class Kind : std::uint8_t { None, Fixed, Pps, Avs, Reset } kind = Kind::None; std::uint8_t pos = 0; std::uint16_t mv = 0; };
+    Point point() const {
+        if (!running()) return {};
+        if (fam_ == Family::HardReset || fam_ == Family::Detach) return {Point::Kind::Reset, 0, 0};
+        if (!tgt_pos_ || tgt_pos_ > env_->caps().num_pdos) return {};
+        const pd::Pdo& d = pdo(tgt_pos_);
+        return {d.type == pd::PdoType::Fixed ? Point::Kind::Fixed : d.type == pd::PdoType::Avs ? Point::Kind::Avs : Point::Kind::Pps,
+                tgt_pos_, static_cast<std::uint16_t>(level_mv(tgt_pos_, tgt_mv_))};
+    }
 
 private:
     enum class Ph : std::uint8_t {

@@ -251,7 +251,37 @@ static void test_a_sweep_row_names_the_range_it_sweeps() {
     CHECK_STR(stl::label(avs).c_str(), "AVS 9V");
 }
 
+// Inside the PD spec stage the header names the engine's point (hardware 2026-11-23: it named the next unit's first row).
+static void test_the_spec_stage_names_the_engines_point() {
+    using W = ct::SpecWhat;
+    CHECK_STR(stl::spec_label({W::Pps, 6, 8000}).c_str(), "PPS 8V");
+    CHECK_STR(stl::spec_label({W::Pps, 6, 3340}).c_str(), "PPS 3.34V");
+    CHECK_STR(stl::spec_label({W::Avs, 3, 21500}).c_str(), "AVS 21.5V");
+    CHECK_STR(stl::spec_label({W::Avs, 9, 28100}).c_str(), "AVS 28.1V");
+    CHECK_STR(stl::spec_label({W::Fixed, 2, 9000}).c_str(), "PD 9V");
+    CHECK_STR(stl::spec_label({W::Fixed, 8, 28000}).c_str(), "EPR 28V");
+    CHECK_STR(stl::spec_label({W::HardReset, 0, 0}).c_str(), "Hard Reset");
+    CHECK_STR(stl::spec_label({}).c_str(), "PD spec");
+    // every level the engine can name stays in the 16 px name cells of the left column (kSpecCells)
+    size_t longest = 0;
+    for (unsigned mv = 3300; mv <= 48000; mv += 20) {
+        for (const W w : {W::Fixed, W::Pps, W::Avs}) {
+            const stl::Text t = stl::spec_label({w, uint8_t(w == W::Avs ? 9 : 2), uint16_t(mv)});
+            longest = std::max(longest, t.len);
+            CHECK_EQ(t.len <= stl::kSpecCells, true);
+        }
+    }
+    CHECK_EQ(longest > 0, true);
+    // the step a point stands for carries the chip kind the grid matches
+    CHECK_EQ(int(ct::spec_step({W::Pps, 6, 8000}).algorithm), int(A::Pps));
+    CHECK_EQ(int(ct::spec_step({W::Avs, 3, 21000}).algorithm), int(A::SprAvs));
+    CHECK_EQ(int(ct::spec_step({W::Avs, 9, 21000}).algorithm), int(A::EprAvs));
+    CHECK_EQ(int(ct::spec_step({W::Fixed, 2, 9000}).algorithm), int(A::Pd3Fixed));
+    CHECK_EQ(int(ct::spec_step({W::HardReset, 0, 0}).mv), 0);
+}
+
 int main() {
+    test_the_spec_stage_names_the_engines_point();
     test_a_sweep_row_names_the_range_it_sweeps();
     test_the_golden_labels();
     test_every_algorithm_has_a_label_without_the_internal_name();

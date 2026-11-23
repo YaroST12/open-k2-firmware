@@ -110,6 +110,16 @@ Text params(const ct::Step& s, const ct::Step* prev) {
     return t;
 }
 
+Text spec_label(const ct::SpecPoint& p) {
+    if (p.what == ct::SpecWhat::HardReset || p.what == ct::SpecWhat::None || !p.mv) {
+        Text t;
+        Out o{t};
+        o.put(p.what == ct::SpecWhat::HardReset ? "Hard Reset" : "PD spec");
+        return t;
+    }
+    return label(ct::spec_step(p));
+}
+
 Text label(const ct::Step& s, const ct::Step* prev) {
     if (ct::is_sweep(s)) {   // the deep-sweep row names the range it sweeps, not its first point ("PPS 5-21V", "AVS 9-20V")
         Text t = protocol(s);

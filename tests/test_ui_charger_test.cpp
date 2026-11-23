@@ -4940,6 +4940,112 @@ static void test_the_running_dot_follows_the_qc2_level() {
     running_dot_follows_the_qc2_level(ct::Level::Medium);
     running_dot_follows_the_qc2_level(ct::Level::Deep);
 }
+// Does the panel show `text` in `font` at (x, y) of the content area (the cells counter_says compares, for any header text)?
+static bool header_says(const Font& font, int x, int y, std::string_view text, uint16_t color) {
+    std::array<uint16_t, LCD_WIDTH * LCD_HEIGHT> actual;
+    std::copy_n(g_panel, actual.size(), actual.begin());
+    gfx_text(kContent0, font, x, y, text, color, kBg);
+    unsigned diff = 0;
+    for (int yy = y; yy < y + font.height; ++yy)
+        for (int xx = x; xx < x + text_width(font, text); ++xx) diff += actual[yy * LCD_WIDTH + kOx + xx] != PANEL[yy * LCD_WIDTH + xx];
+    std::copy(actual.begin(), actual.end(), g_panel);
+    return diff == 0;
+}
+static uint32_t grid_hash() {
+    uint32_t h = 2166136261u;
+    for (int y = kGridTop; y < kGridBottom; ++y)
+        for (int x = 0; x < 224; ++x) h = (h ^ PANEL[y * LCD_WIDTH + x]) * 16777619u;
+    return h;
+}
+// Hardware 2026-11-23 (Baseus 140W): while the PD spec stage swept PPS / AVS the header read "QC2 5V, target 5V" and the outline sat on
+// the QC2 5 V chip, because the plan's index already stands on the next unit there. Inside the stage the header names the engine's
+// point, the outline is on that level's chip (none for a reset), the gauge target follows it, and the counter holds still.
+static void test_the_spec_stage_shows_the_engines_point_not_the_next_unit() {
+    fixture();
+    constexpr uint32_t kOffer[] = {0x0001912C, 0x0002D12C, 0x0004B12C, 0x000641F4, 0xC0DC213C, 0xC1A42164, 0xE004B000, 0x0008C1F4, 0xD230968C};
+    g_stub.caps.spec_rev = 2; g_stub.caps.epr = true;
+    g_stub.vbus_ceiling_mv = 36000; g_stub.cable_limits = {.max_mv = 50000, .max_ma = 5000, .observed = true};
+    g_stub.caps.num_pdos = 9;
+    for (unsigned i = 0; i < 9; ++i) g_stub.caps.pdos[i] = pd::decode_pdo(kOffer[i]);
+    Ui ui; ui.init(0); ui.set_rotation(0, 0); ui.tick(1000); ui.goto_page(static_cast<uint8_t>(Page::ChargerTest), 1100);
+    CHECK_EQ(ui.charger_test_set_level(uint8_t(ct::Level::Deep)), true);
+    review(ui); start_press(ui, 1300); press(ui, Button::Ok, 1400);
+    auto last_req = g_stub.requests;
+    auto tick = [&](uint32_t t) {
+        ui.tick(t);
+        if (g_stub.requests != last_req) { last_req = g_stub.requests; g_stub.sink.accept_at = t; g_stub.sink.ps_rdy_at = t + 5; }   // the sink answers each Request
+    };
+    unsigned checked = 0, bad_name = 0, bad_target = 0, bad_counter = 0, double_dots = 0, dot_on_reset = 0, no_dot = 0, same_view_new_chip = 0, levels = 0, pps_seen = 0, avs_seen = 0, band_on_reset = 0, epr_avs_seen = 0, epr_fixed_seen = 0;
+    unsigned dumped = 0;   // K2_DUMP: one PPS, one AVS and one fixed point, in the four rotations
+    uint32_t prev_hash = 0; uint64_t prev_chip = 0; int fixed_band[2] = {-1, -1}; int fixed_prev_mv = 0; unsigned band_order_bad = 0;
+    for (uint32_t now = 1500; now <= 3600000 && ui.charger_test_busy(); now += 100) {
+        tick(now);
+        const auto& r = ui.charger_test_results();
+        if (r.state() != ct::State::Spec || ui.charger_test_stage() != kRunningStage || r.steps().empty()) { prev_chip = 0; continue; }
+        const ct::SpecPoint before = r.spec_point();
+        for (int i = 0; i < 8 && ui.painting(); ++i) tick(now += 20);   // the budgeted cells settle
+        const ct::SpecPoint p = r.spec_point();
+        if (r.state() != ct::State::Spec || ui.painting() || p.what != before.what || p.pos != before.pos || p.mv != before.mv) { prev_chip = 0; continue; }
+        ++checked;
+        const bool level = p.what != ct::SpecWhat::None && p.what != ct::SpecWhat::HardReset && p.mv;
+        const auto name = step_label::spec_label(p);
+        bad_name += !header_says(kSmall, runlay::kLeftX, runlay::kPlainRun.name_y, name.view(), kText);
+        StrBuf<24> tgt;
+        if (level) { tgt.put("target "); pg::put_volts_trim(tgt, p.mv); tgt.put_char('V'); }
+        else tgt.put("             ");
+        bad_target += !header_says(kLabelFont, runlay::kLeftX, 68, tgt.view(), kDim);
+        const auto work = result_layout::run_progress(r.steps());
+        StrBuf<16> want;
+        want.put_u32(work.done).put_char('/').put_u32(work.total).put(" steps");
+        bad_counter += !counter_says(want.view());
+        const auto dots = running_dots();
+        const auto band = gauge_band();
+        double_dots += dots.size() > 1;
+        if (!level) { dot_on_reset += !dots.empty(); band_on_reset += band.first >= 0; prev_chip = 0; continue; }
+        ++levels; pps_seen += p.what == ct::SpecWhat::Pps; avs_seen += p.what == ct::SpecWhat::Avs;
+        epr_avs_seen += p.what == ct::SpecWhat::Avs && p.pos >= 8; epr_fixed_seen += p.what == ct::SpecWhat::Fixed && p.mv > 20000;
+        no_dot += dots.empty();
+        // a different level's chip is a different picture of the grid (the outline moved, or the window followed it)
+        const uint64_t chip = uint64_t(p.what) << 40 | uint64_t(p.what == ct::SpecWhat::Fixed ? p.mv : p.pos) << 8 | 1u;
+        const uint32_t h = grid_hash();
+        if (prev_chip && chip != prev_chip && h == prev_hash) ++same_view_new_chip;
+        prev_chip = chip; prev_hash = h;
+        if (p.what == ct::SpecWhat::Fixed && p.mv <= 20000) {   // the gauge window follows the level (SPR fixed levels, ascending)
+            const int slot = p.mv == 9000 ? 0 : p.mv == 20000 ? 1 : -1;
+            if (slot >= 0) fixed_band[slot] = band.first;
+            if (p.mv > fixed_prev_mv && fixed_prev_mv && band.first < 0) ++band_order_bad;
+            fixed_prev_mv = p.mv;
+        }
+        const bool epr_avs = p.what == ct::SpecWhat::Avs && p.pos >= 8, epr_fix = p.what == ct::SpecWhat::Fixed && p.mv > 20000;
+        const unsigned kind = epr_avs ? 5u : epr_fix ? 6u : unsigned(p.what);
+        if (const unsigned bit = 1u << kind; std::getenv("K2_DUMP") && !(dumped & bit) && (p.what != ct::SpecWhat::Fixed || p.mv == 9000 || epr_fix)) {
+            dumped |= bit;
+            static const char* const kName[] = {"none", "fixed", "pps", "avs", "reset", "avs_epr", "fixed_epr"};
+            for (uint8_t rot = 0; rot < 4; ++rot) {
+                ui.set_rotation(rot, now += 100); ui.tick(now += 100);
+                for (int i = 0; i < 64 && ui.painting(); ++i) ui.tick(now += 20);
+                char nm[40];
+                std::snprintf(nm, sizeof nm, "spec_stage_%s_rot%u", kName[kind], unsigned(rot));
+                dump_screen(nm);
+            }
+            ui.set_rotation(0, now += 100); ui.tick(now += 100);
+            prev_chip = 0;
+        }
+    }
+    CHECK_EQ(checked > 60, true);
+    CHECK_EQ(pps_seen > 5, true); CHECK_EQ(avs_seen > 0, true); CHECK_EQ(epr_avs_seen > 0, true); CHECK_EQ(epr_fixed_seen > 0, true);   // the stage reached the programmable levels, or the check proves nothing
+    CHECK_EQ(bad_name, 0u);
+    CHECK_EQ(bad_target, 0u);
+    CHECK_EQ(bad_counter, 0u);
+    CHECK_EQ(double_dots, 0u);
+    CHECK_EQ(dot_on_reset, 0u);
+    CHECK_EQ(band_on_reset, 0u);
+    CHECK_EQ(no_dot, 0u);
+    CHECK_EQ(same_view_new_chip, 0u);
+    CHECK_EQ(band_order_bad, 0u);
+    CHECK_EQ(fixed_band[0] >= 0 && fixed_band[1] > fixed_band[0], true);   // 9 V and 20 V read at their own places on the strip
+    std::printf("[spec-stage] %u ticks checked, %u level points (%u PPS, %u AVS, %u EPR AVS, %u EPR fixed)\n", checked, levels, pps_seen, avs_seen, epr_avs_seen, epr_fixed_seen);
+}
 // A charger that answers no handshake fails every legacy unit at its first step. Those rows stay where the plan put them, so the
 // running row still has the finished ones above it (hardware 2026-11-08, FH22: the failed rows fell to a trailing "No reply"
 // row, the running SVOOC row sat at the top of the window with only pending rows below it).
@@ -6488,6 +6594,7 @@ int main() {
     test_the_gap_line_names_the_blocked_window(); test_a_started_row_that_ends_as_a_skip_still_logs_its_gap();
     test_a_handshake_window_says_why_the_screen_is_still(); test_the_running_screen_keeps_updating_through_a_qc_handshake();
     test_failed_units_stay_above_the_running_row(); test_the_gauge_band_and_the_dot_move_in_the_same_tick(); test_the_running_dot_follows_the_qc2_level();
+    test_the_spec_stage_shows_the_engines_point_not_the_next_unit();
     test_a_manual_scroll_of_the_running_grid_holds_then_resumes();
     test_resume_self_and_bus_powered_present_no_rd();
     test_resume_host_powered_refusals();

@@ -340,6 +340,28 @@ struct Step {
     uint32_t pdo = 0;
 };
 static_assert(sizeof(Step) == 20, "Step must stay free of padding holes: kMaxSteps copies live in the Runner");
+// What the PD spec stage's engine is on, for the page only (Input::spec_pt): a level of the offer list (pos = its PDO position,
+// mv = the level asked), a Hard Reset family point, or none. The plan's index sits on the next unit in the stage, so the page
+// reads this instead of the plan there.
+enum class SpecWhat : uint8_t { None, Fixed, Pps, Avs, HardReset };
+struct SpecPoint {
+    SpecWhat what = SpecWhat::None;
+    uint8_t pos = 0;
+    uint16_t mv = 0;
+};
+// The step a level point stands for (a plan row's words and chip kind: PD / PPS / AVS / EPR). Not a plan row: nothing reads its verdict.
+constexpr Step spec_step(const SpecPoint& p) {
+    Step s;
+    s.pos = p.pos; s.mv = p.mv;
+    s.verdict = Verdict::Running;
+    switch (p.what) {
+    case SpecWhat::Pps: s.algorithm = Algorithm::Pps; break;
+    case SpecWhat::Avs: s.algorithm = p.pos >= 8 ? Algorithm::EprAvs : Algorithm::SprAvs; break;
+    case SpecWhat::Fixed: s.algorithm = p.mv > 20000 ? Algorithm::Epr : Algorithm::Pd3Fixed; break;
+    default: s.mv = 0; break;   // a reset or none: no level, no chip
+    }
+    return s;
+}
 // True while `s` is the step-walk row of its APDO and still in flight (the planner marks it with kDetailStepWalk).
 constexpr bool is_step_walk(const Step& s) {
     return s.group == Group::Pd && (kPpsAlgorithms & bit(s.algorithm)) && s.detail == kDetailStepWalk &&
@@ -425,6 +447,7 @@ struct Input {
     uint16_t svooc_last_ms = 0;   // the adapter's last edge, ms after the wake (svooc::Log::last_edge_ms)
     // The PD spec stage: the pdspec engine is still running (Env::spec_start was accepted and it has not finished).
     bool spec_running = false;
+    SpecPoint spec_pt;   // the engine's live point while spec_running (Env owner copies it each poll)
     // D+/D- are free for the ceiling stage's trigger: no owner holds them and they sit at the passive idle (the trigger's own
     // start check, svooc_trig::lines_free()). False for 500 ms after a legacy session's release (the engine's 0 V discharge).
     bool lines_free = true;
@@ -852,6 +875,8 @@ public:
     void spec_apdo_clear() { spec_apdo_ = {}; }
     void spec_apdo_restore(const specsec::Apdos& a) { spec_apdo_ = a; }   // after restore(): the journal's ranges
     size_t index() const { return index_; }
+    // The point the PD spec stage's engine is on: none outside the stage. Not a plan change (no revision bump, no journal write).
+    SpecPoint spec_point() const { return state_ == State::Spec ? spec_pt_ : SpecPoint{}; }
     std::span<const Step> steps() const { return {steps_.data(), count_}; }
     uint32_t hold_left_ms(uint32_t now) const;
     // The Xiaomi unit: the chain outcome (mi_unlock::chain_code; 0 = the chain row has not run) and the modes it unlocked (before
@@ -958,6 +983,7 @@ private:
     void poll_spec(const Input&);
     void end_spec(const Input&, specsec::End);
     bool spec_pending_ K2_BSS_INIT(false), spec_done_ K2_BSS_INIT(false), spec_stopping_ K2_BSS_INIT(false), spec_fault_ K2_BSS_INIT(false);
+    SpecPoint spec_pt_ K2_BSS_ZERO;
     uint32_t spec_ms_ K2_BSS_INIT(0), spec_stop_ms_ K2_BSS_INIT(0);
     Env& env_;
     Evidence evidence_;
