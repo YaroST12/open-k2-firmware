@@ -87,6 +87,14 @@ Everything is C++23; there are no C files left in `src/` (TinyUSB and lwIP under
 
 Open defects, newest first. A row leaves this list when its fix is merged and seen on hardware.
 
+- **Black band left over the page after a toast** (2026-11-23, v1.2.0-196, user): on Who's attached > Charger (button strip at
+  the top) the survey toasts ("Reading charger n/m", the summary) left a black band across the body. Cause: a toast that was
+  cleared or replaced by a shorter one erased its band and nothing repainted the rows under it; screenshots hide it (capture
+  repaints everything). Fixed in k2/toast-erase (3ce05955): `Ui::restore_under_toast` repaints the page, static chrome included,
+  for every page; host test `test_ui_toast_erase` (pixels, 12 pages, 4 rotations). The exact hardware sequence was not
+  reproduced on the host (the toast-end variants and the replace-with-shorter variant were). Not verified on hardware. Verify:
+  run Read charger on the Charger tab in two rotations (strip at top and bottom); no black band when the toast ends.
+
 - **PD limit pick did not apply on a live contract** (2026-11-23, Anker 100W -> K2 -> phone): a level picked with the phone
   already in a contract needed a replug. Fixed in k2/pd-limit-fixes (reset first, unseeded arm, sniffer cleared on detach), host
   tests only; the cause is not proven on hardware. Verify: arm 15 W from the picker with the phone attached, OK twice.
