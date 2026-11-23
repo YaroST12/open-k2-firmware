@@ -960,6 +960,23 @@ int shell_band_ink() {   // rows 0..30 hold both the band fill and its focus rul
     return bar > 0 && rule > 0;
 }
 
+struct ShellRect { int x0 = 999, x1 = -1, y0 = 999, y1 = -1, px = 0; };
+struct ShellRef { ShellRect rect; std::vector<uint16_t> px; const char *page; };
+// The band's rectangle: bbox of the pixels it changed, over the rows it changed nearly across (a live digit that settled
+// between the two paints differs in a few pixels of other rows).
+ShellRect shell_rect(const std::vector<uint16_t> &before, const uint16_t *after) {
+    int row[240] = {};
+    for (int i = 0; i < 240 * 240; ++i) row[i / 240] += before[i] != after[i];
+    ShellRect r;
+    for (int i = 0; i < 240 * 240; ++i) {
+        if (before[i] == after[i] || row[i / 240] < 100) continue;
+        r.x0 = std::min(r.x0, i % 240); r.x1 = std::max(r.x1, i % 240);
+        r.y0 = std::min(r.y0, i / 240); r.y1 = std::max(r.y1, i / 240);
+        ++r.px;
+    }
+    return r;
+}
+
 void test_shell_band() {
     const auto old = g_stub;
     auto holder = std::make_unique<Ui>();
@@ -972,6 +989,7 @@ void test_shell_band() {
     for (uint8_t r = 0; r < 4; ++r) {
         ui.set_rotation(r, g_walk_t += 10);
         walk_settle(ui);
+        std::vector<ShellRef> refs;
         for (unsigned b = 0; b < kWalkN; ++b) {
             walk_open(ui, b);
             ui.shell_control(g_walk_t += 10);
@@ -997,6 +1015,31 @@ void test_shell_band() {
             while (ui.painting()) ui.tick(g_walk_t);
             const int d_hide = shell_clean_diff(ui);
             if (ui.shell_toast()) { std::printf("  shell %s r%u: band still up\n", kWalkDests[b].name, unsigned(r)); ++bad; }
+            // Absolute: the band changes one rectangle only, and that rectangle is pixel-identical on every page (the same
+            // band over any ground), so no glyph of the page survives inside it.
+            const std::vector<uint16_t> down(g_panel, g_panel + 240 * 240);
+            ui.shell_control(g_walk_t += 10);
+            walk_settle(ui);
+            const ShellRect cur = shell_rect(down, g_panel);   // the page now showing is b2
+            if (cur.y1 - cur.y0 < 11 || cur.y1 - cur.y0 > 17 || cur.x1 - cur.x0 < 150) {
+                ++bad;
+                std::printf("  shell %s r%u: band rect x %d..%d y %d..%d\n", kWalkDests[b2].name, unsigned(r), cur.x0, cur.x1, cur.y0, cur.y1);
+            }
+            bool known = false;   // a page with another content rectangle (a full-width page) gets its own reference
+            for (const ShellRef &q : refs) {
+                if (q.rect.x0 != cur.x0 || q.rect.x1 != cur.x1 || q.rect.y0 != cur.y0 || q.rect.y1 != cur.y1) continue;
+                known = true;
+                for (int y = cur.y0; y <= cur.y1; ++y)
+                    for (int x = cur.x0; x <= cur.x1; ++x)
+                        if (g_panel[y * 240 + x] != q.px[y * 240 + x]) {
+                            ++bad;
+                            std::printf("  shell %s r%u: band pixel differs from %s at %d,%d\n", kWalkDests[b2].name, unsigned(r), q.page, x, y);
+                            y = cur.y1; break;
+                        }
+            }
+            if (!known) refs.push_back({cur, std::vector<uint16_t>(g_panel, g_panel + 240 * 240), kWalkDests[b2].name});
+            for (int k = 0; k < 50; ++k) ui.tick(g_walk_t += 120);
+            while (ui.painting()) ui.tick(g_walk_t);
             if (d_show || d_live || d_switch || d_hide) {
                 std::printf("  shell %s r%u: show %d live %d switch %d hide %d px differ from a clean paint\n", kWalkDests[b].name,
                             unsigned(r), d_show, d_live, d_switch, d_hide);
