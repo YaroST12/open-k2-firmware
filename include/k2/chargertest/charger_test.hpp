@@ -291,6 +291,8 @@ struct Options {
     bool pps_sweep = false;
     // The AVS deep sweep (ROADMAP "AVS deep sweep"): its own flag next to the PPS one, opt-in (off in the default run).
     bool avs_sweep = false;
+    // How finely the deep sweeps step (Settings "Sweep depth", sweep.hpp Depth). Journaled in the meta byte; Step100 = 0 on every wire.
+    ctsweep::Depth sweep_depth = ctsweep::Depth::Step100;
     // The SVOOC ceiling stage (svooc_ceiling.hpp): opt-in like the sweeps, never in a preset. On = after a detected VOOC family
     // the guarded trigger asks the adapter 1.5 / 4 / 6.3 / 10.9 A (a protocol word, no load) and the highest ask it went on
     // under is the result. UsbA (the retired USB-A waiver, kept for the wire) runs as On: the inline latch only keeps certain evidence now.
@@ -389,6 +391,10 @@ constexpr bool is_mi_mode(const Step& s) { return s.group == Group::Pd && s.hunt
 constexpr bool sweep_low(const Step& s) { return s.mv && s.mv < ctsweep::kSplitMv; }
 // The setpoints a sweep row walks: its part of the APDO's point range, capped at cap_mv (monitor ceiling, cable limit).
 ctsweep::PointRange sweep_range(const Step& s, unsigned cap_mv);
+// The row's point sequence at a depth (the phone windows need the source's list for their APDO choice).
+ctsweep::Plan sweep_plan(const Step& s, unsigned cap_mv, ctsweep::Depth d, const pd::SourceCaps& caps);
+// The preview's time per measured sweep point (Request, PS_RDY, settle, window).
+inline constexpr uint32_t kSweepPointMs = 700;
 // The UFCS mode a step samples, kept in `Step::pdo` (no UFCS row has a PDO): the planner writes it once the charger's
 // Output_Capabilities are read, and the Results chip (the mode's top current), the Detail page (the whole mode) and the journal
 // read it. Four fields in 32 bits, saturating: voltages in 100 mV (9 bits, up to 51.1 V), currents in 50 mA (7 bits, up to 6.35 A).
@@ -894,7 +900,7 @@ public:
         if (busy()) return {};
         n_sweep_rows_ = 0;
         sweep_used_ = 0;
-        sweep_first_ = sweep_n_ = 0;
+        sweep_first_ = sweep_n_ = sweep_pts_ = 0;
         return {sweep_err_.data(), sweep_err_.size()};
     }
     // The sweep row under test, live: its point range, the setpoint in flight and the last recorded point (the Running view).
@@ -902,8 +908,8 @@ public:
         ctsweep::Live l;
         if (index_ >= count_ || steps_[index_].verdict != Verdict::Running || !is_sweep(steps_[index_]) || sweep_hi_ < sweep_lo_) return l;
         l.active = true;
-        l.lo_mv = sweep_lo_; l.hi_mv = sweep_hi_; l.set_mv = sweep_mv_; l.n = sweep_n_;
-        if (sweep_n_ && sweep_first_ + sweep_n_ <= ctsweep::kMaxPoints) l.last_err = sweep_err_[sweep_first_ + sweep_n_ - 1u];
+        l.lo_mv = sweep_lo_; l.hi_mv = sweep_hi_; l.set_mv = sweep_mv_; l.n = sweep_pts_;
+        l.last_mv = sweep_prev_mv_; l.last_err = int16_t(std::clamp(int(sweep_prev_lv_) - int(sweep_prev_mv_), -32767, 32767));
         return l;
     }
 private:
@@ -1042,9 +1048,17 @@ private:
     std::array<ctsweep::RowView, ctsweep::kMaxRows> sweep_rows_ K2_BSS_ZERO;
     uint8_t n_sweep_rows_ K2_BSS_INIT(0);
     uint16_t sweep_used_ K2_BSS_INIT(0);                 // points recorded so far, all sweep rows together
-    uint16_t sweep_first_ K2_BSS_INIT(0), sweep_n_ K2_BSS_INIT(0);   // the row in flight: first slot in sweep_err_, points so far
-    uint16_t sweep_mv_ K2_BSS_INIT(0), sweep_lo_ K2_BSS_INIT(0), sweep_hi_ K2_BSS_INIT(0);   // the point whose Request is out / the row's point range
+    uint16_t sweep_first_ K2_BSS_INIT(0), sweep_n_ K2_BSS_INIT(0);   // the row in flight: first slot in sweep_err_, cells spanned so far
+    uint16_t sweep_mv_ K2_BSS_INIT(0), sweep_lo_ K2_BSS_INIT(0), sweep_hi_ K2_BSS_INIT(0);   // the Request out (a point or a step-back one) / the row's cell range
+    // The row's depth plan and the points it measured (the record holds the on-grid ones only). The fold rule runs live over every point
+    // (sweep_scan_); the first finding is stepped back from once per row (sweep_ref_), the located fold goes into the row's summary.
+    ctsweep::Plan sweep_plan_{};
+    uint16_t sweep_pts_ K2_BSS_INIT(0), sweep_prev_mv_ K2_BSS_INIT(0), sweep_prev_lv_ K2_BSS_INIT(0), sweep_resume_mv_ K2_BSS_INIT(0);
+    bool sweep_refining_ K2_BSS_INIT(false), sweep_refined_ K2_BSS_INIT(false), sweep_fed_ K2_BSS_INIT(false);   // sweep_fed_: the last move went to the spec stage
+    pd::TrackScan sweep_scan_;
+    ctsweep::Refiner sweep_ref_;
     void sweep_begin(const Step&, const Input&);   // request(): the point range from the row's PDO word, the row's record reset
+    void sweep_ask(const Input&, const Step&, unsigned mv);   // the Request of one point (or step-back point) through the gate
     void sweep_point(const Input&, const Step&);   // one granted point: record it, ask the next or finish the row
     void sweep_close(Step&);                // finish(): summarize the row's points into sweep_rows_ (and mark a fold, fold_caution)
     void fold_caution(Step& sweep, const ctsweep::Summary&);   // a fold: the sweep row and the APDO's fixed rows above it read Reason::Folded
