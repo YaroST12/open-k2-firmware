@@ -82,6 +82,9 @@ Everything is C++23; there are no C files left in `src/` (TinyUSB and lwIP under
 
 ## Current bugs
 
+- **Rail flips in the two side rotations** (2026-11-23, v1.2.0-192, user): the fixed rail order holds top/bottom, but left/right still flips. Fix the reading order for the side rails.
+- **PC-link socket icon too dim on the rail** (2026-11-23, user): brighten it for the next release.
+
 Open defects, newest first. A row leaves this list when its fix is merged and seen on hardware.
 
 - **PD limit pick did not apply on a live contract** (2026-11-23, Anker 100W -> K2 -> phone): a level picked with the phone
