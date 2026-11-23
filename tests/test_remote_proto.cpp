@@ -2909,10 +2909,10 @@ static void test_pd_limit_wire() {
     run(f, request(0x4E, 3, {2}), r);
     check_header(r, 0x4E, 3, Status::Ok, kLimitRspBytes);
     CHECK_EQ(f.pl_op, 2);
-    f.pl_state = Status::Busy; f.pl_refusal = 4;   // refused: the pd::LimRefusal is the one-byte payload
+    f.pl_state = Status::Busy; f.pl_refusal = 2;   // refused: the pd::LimRefusal is the one-byte payload
     run(f, request(0x4E, 4, {1, 0x30, 0x75, 0, 0}), r);
     check_header(r, 0x4E, 4, Status::Busy, 1);
-    check_bytes(r, kRspHeader, {4});
+    check_bytes(r, kRspHeader, {2});
     f.pl_state = Status::Ok; f.pl_refusal = 0;
     f.pl_calls = 0;
     run(f, request(0x4E, 5, {3}), r);                    // unknown op
