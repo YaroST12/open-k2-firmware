@@ -81,8 +81,8 @@ Everything is C++23; there are no C files left in `src/` (TinyUSB and lwIP under
 Open defects, newest first. A row leaves this list when its fix is merged and seen on hardware.
 
 - **Vendor database follow-ups** (2026-11-23): VID 0x0716 (this K2's own, Oxus Research on the USB-IF list) is left unlabeled;
-  0x2B01 is listed as "ZMI" while CUKTECH products report it; `kSvids` in `pd_vdm.cpp` still names 0x2E87 "Cuktech" and
-  0x2B16 "UGREEN", which do not match the USB-IF list (0x2E87 is Injoinic); `rl::vendor_oem_name` is a separate table.
+  `rl::vendor_oem_name` is a separate table. Done: cable names are "<Brand> <W>W" (c23154ac), SVID names come from the one table
+  (5f5f3f8c), 0x2B01 reads CUKTECH (USB-IF: Zimi Corporation, c245aa82).
 
 - **USB 3.2 Gen 2x1 (10 Gbps) / USB4 pass-through cold-attach failure — hardware limit, not firmware** (2026-11-22,
   AMD USB4 `0000:c5:00.3` / `Bus 005` + `Bus 006`, 5 cm cable + Samsung PSSD T7 `04e8:4001`, plus ASMedia `246x` /
