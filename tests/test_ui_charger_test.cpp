@@ -1093,6 +1093,7 @@ static bool start_cell_says(std::string_view hint) {
 // starts at the body top, the rule and the 64 px ticket follow, and no amber is painted above the ticket (the Tests row is text).
 // The idle footer is empty: "Check the other port" only repeated the fixed warning, so no toast rides on a bare Review.
 // A fresh draft sweeps every 200 mV; Review names the step beside the level when a sweep runs, and says nothing of it when none does.
+static void dump_screen(const char* name);
 static void test_review_names_the_sweep_step() {
     fixture();
     {
@@ -1115,6 +1116,14 @@ static void test_review_names_the_sweep_step() {
         ui.charger_test_set_sweep_depth(uint8_t(c.depth));
         review(ui);
         check_text_at(kSmall, review_row_y(1), c.text, kText, kBg, 68);
+        char name[40]; std::snprintf(name, sizeof name, "sweep_review_%s_rot0", c.pps || c.avs ? c.text + 7 : "none");
+        for (char* p = name; *p; ++p) if (*p == ' ') *p = '_';
+        dump_screen(name);   // K2_DUMP: the Depth value, the walk of the other three rotations below
+        for (uint8_t rot = 1; rot < 4; ++rot) {
+            ui.set_rotation(rot, 1300); settle(ui, 1300);
+            name[std::strlen(name) - 1] = char('0' + rot);
+            dump_screen(name);
+        }
     }
 }
 static void test_review_carries_the_other_port_warning() {

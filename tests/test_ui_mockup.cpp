@@ -209,6 +209,16 @@ int main() {
     render(ui, t, "settings_display");
     ui.on_button(Button::Minus, ButtonEvent::Short, t); t += 100;   // the row above Display: Long Back, with its note
     render(ui, t, "settings_longback");
+    ui.on_button(Button::Minus, ButtonEvent::Short, t); t += 100;   // Sweep depth (the 200 mV default), all four rotations
+    for (uint8_t rot = 0; rot < 4; ++rot) {
+        char nm[32];
+        ui.set_rotation(rot, t); t += 200;
+        std::snprintf(nm, sizeof nm, "settings_sweep_rot%u", unsigned(rot)); render(ui, t, nm);
+    }
+    ui.set_rotation(rot_pages(), t); t += 200;
+    ui.on_button(Button::Ok, ButtonEvent::Short, t); t += 100;
+    ui.on_button(Button::Ok, ButtonEvent::Short, t); t += 100;
+    render(ui, t, "settings_sweep_cycled");   // 200 -> 100 -> Phone: the longest value
     ui.on_button(Button::Minus, ButtonEvent::Short, t); t += 100;   // the Huawei/Samsung switch (shown here, the host default), all four rotations
     for (uint8_t rot = 0; rot < 4; ++rot) {
         char nm[32];
