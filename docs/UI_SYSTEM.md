@@ -80,6 +80,9 @@ Home > Lines > Numbers > Graph > Ripple > Link > Tools > Battery > Log > K2 > (H
 - ChargerTest: Back goes up to the Charger slice's Actions; long Back stops the run and shows the Link ring page.
 - Long Back target: `/prefs.cfg` optional 9th byte (written only when non-zero and below 10; older firmware reads a 9-byte
   file as defaults). Settings row `Long Back` cycles the ten positions; Home is the default.
+- Settings row `Huawei/Samsung` (toggle, `Icon::Brick`, between Test level and Long Back): OFF by default, hides the FCP, SCP and AFC
+  units from the charger test (presets, Custom list, plan, Results). Stored as bit 7 of the `/prefs.cfg` orientation byte (set =
+  shown, so old files read hidden); remote view flag bit 15 (set = shown).
 - Long PLUS is not used. The OK + Back 3 s reboot chord and the Back-Hold cancel are unchanged.
 - Ring vs entered is visible: the masthead (slot 0 of the opposite rail) shows the position and name (`6 LINK`, `7 TOOLS`) in the
   ring view and the page's own title (`LINK`, `CHARGER`, `CABLE`, `DEVICE`, `TOOLS`) when entered. Session flag `RingView` (bit 6)
