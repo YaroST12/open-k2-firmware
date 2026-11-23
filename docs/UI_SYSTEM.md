@@ -195,10 +195,13 @@ markers at native size (`draw_marker`).
 There is no permanent horizontal TopBar or Footer. Page names, wizard dots and live telemetry live on `OppRail`.
 
 The rail reads in one fixed order in every rotation: title (54 px), then three telemetry cells (62 px each), then the PC-link icon at
-the end of the last cell (`kOppSlotLen`, `opp_slot_rect`). "First" is first in the reading direction, so the title sits at the
-bottom of a Left rail (rotation 0) and at the start of a top, bottom or right rail; the rail never reflows. A title is at most
+the end of the last cell (`kOppSlotLen`, `opp_slot_rect`). Both side rails read bottom-up (`rail_text_dir`; the button strip
+keeps `panel_text_dir`), so the title sits at the bottom of a left or right rail and at the left end of a top or bottom rail; the
+rail never reflows. A title is at most
 4 characters (`rail::Title`, `include/k2/ui/rail_title.hpp`: consteval, a compile-time width check, unique names). Icons
-(`Icon`, 12x12) are always drawn at native pixel scale; a landscape viewport stretches fills around them, never the bitmap.
+(`Icon`, 12x12) are always drawn at native pixel scale; a landscape viewport stretches fills around them, never the bitmap. Pills
+(chips, unit badges, the toast: `draw_pill_box`), verdict marks and leader dots too: native size from their mapped origin, the
+toast centred.
 
 ### 2.3 Columns
 
