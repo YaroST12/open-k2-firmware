@@ -349,6 +349,9 @@ struct SpecPoint {
     uint8_t pos = 0;
     uint16_t mv = 0;
 };
+// A stage that is no plan row: the identity probe after the first Pd unit, the SVOOC ceiling, the PD spec stage. The page, the remote
+// and the run log name what the stage is doing instead of the plan row the index stands on.
+enum class Interlude : uint8_t { None, Probe, Ceiling, Spec };
 // The step a level point stands for (a plan row's words and chip kind: PD / PPS / AVS / EPR). Not a plan row: nothing reads its verdict.
 constexpr Step spec_step(const SpecPoint& p) {
     Step s;
@@ -875,6 +878,14 @@ public:
     void spec_apdo_clear() { spec_apdo_ = {}; }
     void spec_apdo_restore(const specsec::Apdos& a) { spec_apdo_ = a; }   // after restore(): the journal's ranges
     size_t index() const { return index_; }
+    bool probing() const { return probe_ == Probe::Closing || probe_ == Probe::Running; }   // the identity-probe window (Baseline state)
+    Interlude interlude() const {
+        return state_ == State::Spec ? Interlude::Spec : state_ == State::Ceiling ? Interlude::Ceiling : probing() ? Interlude::Probe : Interlude::None;
+    }
+    // The step the Running grid window rests on: the plan row in flight, or in an interlude the last row done (the index stands on the
+    // next unit's first row in the probe and the spec stage, on the finished row in the ceiling), and in the spec stage the last level
+    // the engine was on, so a Hard Reset point (which has no cell) leaves the window where the previous point had it.
+    Step window_step() const;
     // The point the PD spec stage's engine is on: none outside the stage. Not a plan change (no revision bump, no journal write).
     SpecPoint spec_point() const { return state_ == State::Spec ? spec_pt_ : SpecPoint{}; }
     std::span<const Step> steps() const { return {steps_.data(), count_}; }
@@ -983,7 +994,7 @@ private:
     void poll_spec(const Input&);
     void end_spec(const Input&, specsec::End);
     bool spec_pending_ K2_BSS_INIT(false), spec_done_ K2_BSS_INIT(false), spec_stopping_ K2_BSS_INIT(false), spec_fault_ K2_BSS_INIT(false);
-    SpecPoint spec_pt_ K2_BSS_ZERO;
+    SpecPoint spec_pt_ K2_BSS_ZERO, spec_hold_ K2_BSS_ZERO;   // spec_hold_: the last level point of the stage
     uint32_t spec_ms_ K2_BSS_INIT(0), spec_stop_ms_ K2_BSS_INIT(0);
     Env& env_;
     Evidence evidence_;

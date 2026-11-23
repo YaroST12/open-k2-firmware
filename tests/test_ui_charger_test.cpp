@@ -4960,6 +4960,96 @@ static uint32_t grid_hash() {
 // Hardware 2026-11-23 (Baseus 140W): while the PD spec stage swept PPS / AVS the header read "QC2 5V, target 5V" and the outline sat on
 // the QC2 5 V chip, because the plan's index already stands on the next unit there. Inside the stage the header names the engine's
 // point, the outline is on that level's chip (none for a reset), the gauge target follows it, and the counter holds still.
+static uint32_t grid_labels_hash() {   // the row labels: the window's position, with no dots or outlines
+    uint32_t h = 2166136261u;
+    for (int y = kGridTop; y < kGridBottom; ++y)
+        for (int x = 0; x < kGridCellsX; ++x) h = (h ^ PANEL[y * LCD_WIDTH + x]) * 16777619u;
+    return h;
+}
+// The SuperVOOC ceiling stage and the identity-probe window sit between two units, with the plan's index on the finished row
+// (ceiling) or the next unit's first row (probe window). The header names what the K2 is doing, under the family of the last
+// finished row, with no target, dot or gauge band.
+static void vooc_detects(int proto);
+static void test_interludes_name_their_own_activity() {
+    fixture();
+    constexpr uint32_t kOffer[] = {0x0001912C, 0x0002D12C, 0x0004B12C, 0x000641F4, 0xC0DC213C, 0xC1A42164, 0xE004B000, 0x0008C1F4, 0xD230968C};
+    g_stub.caps.spec_rev = 2; g_stub.caps.epr = true;
+    g_stub.vbus_ceiling_mv = 36000; g_stub.cable_limits = {.max_mv = 50000, .max_ma = 5000, .observed = true};
+    g_stub.caps.num_pdos = 9;
+    for (unsigned i = 0; i < 9; ++i) g_stub.caps.pdos[i] = pd::decode_pdo(kOffer[i]);
+    g_stub.svooc_n_asks = 0;   // the adapter never judges: the ceiling stage runs to its time cap, many ticks long (an instant one is a tick)
+    Ui ui; ui.init(0); ui.set_rotation(0, 0); ui.tick(1000); ui.goto_page(static_cast<uint8_t>(Page::ChargerTest), 1100);
+    CHECK_EQ(ui.charger_test_set_level(uint8_t(ct::Level::Deep)), true);
+    review(ui); start_press(ui, 1300); press(ui, Button::Ok, 1400);
+    g_stub.fc_start_hook = vooc_detects;
+    auto last_req = g_stub.requests;
+    auto tick = [&](uint32_t t) {
+        ui.tick(t);
+        if (g_stub.requests != last_req) { last_req = g_stub.requests; g_stub.sink.accept_at = t; g_stub.sink.ps_rdy_at = t + 5; }
+    };
+    const auto settle = [&](uint32_t& t) { for (int i = 0; i < 64 && ui.painting(); ++i) tick(t += 20); };
+    unsigned seen[4] = {}, bad_name = 0, bad_family = 0, bad_target = 0, bad_counter = 0, bad_dot = 0, bad_band = 0;
+    unsigned bad_window = 0, bad_rot = 0, rot_checked = 0;
+    uint32_t window_hash[4] = {};
+    // Everything one settled tick of the interlude must show.
+    const auto check = [&](ct::Interlude il) {
+        const auto& r = ui.charger_test_results();
+        const auto name = step_label::interlude_label(il, r.spec_point());
+        const int y = runlay::kPlainRun.name_y;
+        const bool name_ok = runlay::name_small(int(name.len)) ? header_says(kLabelFont, runlay::kLeftX, y + kSmall.ascent - kLabelFont.ascent, name.view(), kText)
+                                                                : header_says(kSmall, runlay::kLeftX, y, name.view(), kText);
+        const char* const fam = il == ct::Interlude::Ceiling ? "OPPO/vivo" : "         ";   // the probe is nobody's row: no family
+        const auto work = result_layout::run_progress(r.steps());
+        StrBuf<16> want;
+        want.put_u32(work.done).put_char('/').put_u32(work.total).put(" steps");
+        bad_name += !name_ok;
+        bad_family += !header_says(kLabelFont, runlay::kLeftX, 32, fam, kDim);
+        bad_target += !header_says(kLabelFont, runlay::kLeftX, 68, "             ", kDim);
+        bad_counter += !counter_says(want.view());
+        bad_dot += !running_dots().empty();
+        bad_band += gauge_band().first >= 0;
+    };
+    int last = 0;
+    for (uint32_t now = 1500; now <= 3600000 && ui.charger_test_busy(); now += 100) {
+        tick(now);
+        const auto& r = ui.charger_test_results();
+        const ct::Interlude il = r.interlude();
+        if ((il != ct::Interlude::Probe && il != ct::Interlude::Ceiling) || ui.charger_test_stage() != kRunningStage) { last = 0; continue; }
+        for (int i = 0; i < 3; ++i) tick(now += 20);   // the page paints what the runner moved to a tick or two later
+        settle(now);
+        if (r.interlude() != il || ui.painting()) continue;
+        ++seen[unsigned(il)];
+        check(il);
+        // the window holds for the whole interlude: the row labels do not move between its settled ticks
+        if (last != int(il)) window_hash[unsigned(il)] = grid_labels_hash();
+        else bad_window += grid_labels_hash() != window_hash[unsigned(il)];
+        if (last != int(il) && std::getenv("K2_DUMP")) {   // the four rotations, then the same words again after the repaint
+            for (uint8_t rot = 0; rot < 4; ++rot) {
+                ui.set_rotation(rot, now += 100); tick(now += 100);
+                settle(now);
+                char nm[40];
+                std::snprintf(nm, sizeof nm, "interlude_%s_rot%u", il == ct::Interlude::Ceiling ? "ceiling" : "probe", unsigned(rot));
+                dump_screen(nm);
+            }
+            ui.set_rotation(0, now += 100); tick(now += 100);
+            settle(now);
+            if (r.interlude() == il && !ui.painting()) { ++rot_checked; const unsigned before = bad_name + bad_family + bad_target + bad_dot; check(il); bad_rot += bad_name + bad_family + bad_target + bad_dot != before; }
+        }
+        last = int(il);
+    }
+    g_stub.fc_start_hook = nullptr;
+    CHECK_EQ(seen[unsigned(ct::Interlude::Ceiling)] > 0, true);   // both stages ran, or the checks prove nothing
+    CHECK_EQ(seen[unsigned(ct::Interlude::Probe)] > 0, true);
+    CHECK_EQ(bad_name, 0u);
+    CHECK_EQ(bad_family, 0u);
+    CHECK_EQ(bad_target, 0u);
+    CHECK_EQ(bad_counter, 0u);
+    CHECK_EQ(bad_dot, 0u);
+    CHECK_EQ(bad_band, 0u);
+    CHECK_EQ(bad_window, 0u);
+    CHECK_EQ(bad_rot, 0u);
+    (void)rot_checked;
+}
 static void test_the_spec_stage_shows_the_engines_point_not_the_next_unit() {
     fixture();
     constexpr uint32_t kOffer[] = {0x0001912C, 0x0002D12C, 0x0004B12C, 0x000641F4, 0xC0DC213C, 0xC1A42164, 0xE004B000, 0x0008C1F4, 0xD230968C};
@@ -5066,6 +5156,47 @@ static void test_the_spec_stage_shows_the_engines_point_not_the_next_unit() {
     CHECK_EQ(band_order_bad, 0u);
     CHECK_EQ(fixed_band[0] >= 0 && fixed_band[1] > fixed_band[0], true);   // 9 V and 20 V read at their own places on the strip
     std::printf("[spec-stage] %u ticks checked, %u level points (%u PPS, %u AVS, %u EPR AVS, %u EPR fixed)\n", checked, levels, pps_seen, avs_seen, epr_avs_seen, epr_fixed_seen);
+}
+// Hardware 2026-11-23: a Hard Reset point has no chip, so the grid window fell to the head of the PD row, then jumped back to the
+// level after it. The reset keeps the window where the level before it had it (Runner::window_step; the runner test has the red
+// case: this stub's only reset follows the 5 V level, which already sits on the head line). Ten offers make the PD row two lines.
+static void test_a_hard_reset_point_keeps_the_window_of_the_level_before() {
+    fixture();
+    constexpr uint32_t kOffer[] = {0x0001912C, 0x0002D12C, 0x0004B12C, 0x000641F4, 0xC0DC213C, 0xC1A42164, 0xE004B000, 0x0008C1F4, 0x000B41F4, 0xD230968C};
+    g_stub.caps.spec_rev = 2; g_stub.caps.epr = true;
+    g_stub.vbus_ceiling_mv = 36000; g_stub.cable_limits = {.max_mv = 50000, .max_ma = 5000, .observed = true};
+    g_stub.caps.num_pdos = 10;
+    for (unsigned i = 0; i < 10; ++i) g_stub.caps.pdos[i] = pd::decode_pdo(kOffer[i]);
+    Ui ui; ui.init(0); ui.set_rotation(0, 0); ui.tick(1000); ui.goto_page(static_cast<uint8_t>(Page::ChargerTest), 1100);
+    CHECK_EQ(ui.charger_test_set_level(uint8_t(ct::Level::Deep)), true);
+    review(ui); start_press(ui, 1300); press(ui, Button::Ok, 1400);
+    auto last_req = g_stub.requests;
+    auto tick = [&](uint32_t t) {
+        ui.tick(t);
+        if (g_stub.requests != last_req) { last_req = g_stub.requests; g_stub.sink.accept_at = t; g_stub.sink.ps_rdy_at = t + 5; }
+    };
+    unsigned resets = 0, jumped = 0, moved = 0;
+    uint32_t level_labels = 0;
+    for (uint32_t now = 1500; now <= 3600000 && ui.charger_test_busy(); now += 100) {
+        tick(now);
+        const auto& r = ui.charger_test_results();
+        if (r.state() != ct::State::Spec || ui.charger_test_stage() != kRunningStage) { level_labels = 0; continue; }
+        const ct::SpecPoint before = r.spec_point();
+        for (int i = 0; i < 8 && ui.painting(); ++i) tick(now += 20);
+        const ct::SpecPoint p = r.spec_point();
+        if (r.state() != ct::State::Spec || ui.painting() || p.what != before.what || p.pos != before.pos || p.mv != before.mv) { level_labels = 0; continue; }
+        const uint32_t labels = grid_labels_hash();
+        if (p.what == ct::SpecWhat::HardReset) {
+            if (level_labels) { ++resets; jumped += labels != level_labels; }
+        } else if (p.what != ct::SpecWhat::None && p.mv) {
+            moved += level_labels && labels != level_labels;
+            level_labels = labels;
+        }
+    }
+    CHECK_EQ(resets > 0, true);
+    CHECK_EQ(moved > 0, true);   // the window followed the levels, or a held window proves nothing
+    CHECK_EQ(jumped, 0u);
+    std::printf("[spec-stage] hard reset window: %u resets, %u window moves between levels\n", resets, moved);
 }
 // A charger that answers no handshake fails every legacy unit at its first step. Those rows stay where the plan put them, so the
 // running row still has the finished ones above it (hardware 2026-11-08, FH22: the failed rows fell to a trailing "No reply"
@@ -6615,6 +6746,8 @@ int main() {
     test_the_gap_line_names_the_blocked_window(); test_a_started_row_that_ends_as_a_skip_still_logs_its_gap();
     test_a_handshake_window_says_why_the_screen_is_still(); test_the_running_screen_keeps_updating_through_a_qc_handshake();
     test_failed_units_stay_above_the_running_row(); test_the_gauge_band_and_the_dot_move_in_the_same_tick(); test_the_running_dot_follows_the_qc2_level();
+    test_interludes_name_their_own_activity();
+    test_a_hard_reset_point_keeps_the_window_of_the_level_before();
     test_the_spec_stage_shows_the_engines_point_not_the_next_unit();
     test_a_manual_scroll_of_the_running_grid_holds_then_resumes();
     test_resume_self_and_bus_powered_present_no_rd();

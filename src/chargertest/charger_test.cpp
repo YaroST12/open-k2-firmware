@@ -2418,6 +2418,18 @@ void Runner::poll_ceiling(const Input& in) {
     }
     if (!in.svooc.running || in.now - ceil_stop_ms_ >= svooc_ceiling::kExitGraceMs) end_ceiling(in, ceil_end_);
 }
+Step Runner::window_step() const {
+    if (count_ == 0) return {};
+    const size_t at = std::min(index_, count_ - 1);
+    const size_t done = std::min(index_, count_);   // rows done before the index (the index sits on the next unit, or past the plan)
+    switch (interlude()) {
+    case Interlude::Spec:
+        if (spec_hold_.what != SpecWhat::None) return spec_step(spec_hold_);
+        return steps_[done ? done - 1 : 0];
+    case Interlude::Probe: return steps_[done ? done - 1 : 0];
+    default: return steps_[at];   // the ceiling's index did not move: the family row just finished
+    }
+}
 // The PD spec stage (spec_section.hpp). One stage per run, queued at START for a Deep run with a Pd unit and begun by next() when the
 // first Pd unit is over: its contract released to a settled 5 V, the charger asked who it is. NO LOAD, nothing above what the charger
 // advertises: the engine runs only its Transitions and PPS / AVS families (specsec::kFamilyMask) and takes every level from the live
@@ -2435,12 +2447,13 @@ bool Runner::begin_spec(const Input& in) {
         env_.spec_done(evidence_.spec);
         return false;
     }
-    state_ = State::Spec; spec_ms_ = in.now; spec_stopping_ = spec_fault_ = false; stable_ = false; spec_pt_ = {};
+    state_ = State::Spec; spec_ms_ = in.now; spec_stopping_ = spec_fault_ = false; stable_ = false; spec_pt_ = spec_hold_ = {};
     K2LOG("[CT] spec start\n");
     return true;
 }
 void Runner::poll_spec(const Input& in) {
     spec_pt_ = in.spec_pt;
+    if (spec_pt_.what == SpecWhat::Fixed || spec_pt_.what == SpecWhat::Pps || spec_pt_.what == SpecWhat::Avs) spec_hold_ = spec_pt_;
     if (!spec_stopping_) {
         if (!in.spec_running) { end_spec(in, specsec::End::Done); return; }
         const Reason fault = in.vbus_mv < 0 || in.cap_mv < 5000 ? Reason::NoMonitor : in.loop_lock ? Reason::Loop :

@@ -77,6 +77,7 @@ static_assert(all_fit(kFamilyNames, kSmallAdvPx, 112), "a family name is wider t
 static_assert(all_fit(kFamilyNames, kLabelAdv, runlay::kLeftW), "a family name is wider than the Running header's left column");
 constexpr const char *kSweepNames[] = {"PPS 3.3-4.9V", "PPS 3.3-20.5V", "PPS 5.5-21V", "AVS 15-28V", "AVS 15-48V"};
 static_assert(all_fit(kSweepNames, kSmallAdvPx, runlay::kSweepNameCells * runlay::kAdv16), "a sweep name is wider than its cells");
+static_assert(step_label::kInterludeCells <= runlay::kNameCellsSmall, "an interlude name is wider than the Running header's left column");
 // Tests rows (wizard step 1): 0 Depth, 1..4 the presets, 5 "Custom...", 6 "Last results" once a run exists.
 // Custom rows: 0..kFamilyCount-1 the families, then "Done" (row kFamilyCount).
 constexpr int kFamilyCount = 6, kDepthRow = 0, kPresetFirst = 1, kPresets = 4, kCustomRow = 5, kViewRow = 6;
@@ -2661,25 +2662,33 @@ int pending_chip(const result_layout::RowTokens &rt, const ct::Step &st, bool sp
 }
 // The step the Running page names. In the PD spec stage the plan's index already stands on the next unit's first row, so the page
 // reads the engine's own point there (hardware 2026-11-23: the header and the outline named QC2 5 V through a PPS / AVS sweep).
-// nullptr = no step yet.
+// The SuperVOOC ceiling stage is no step either: it keeps the family of the last finished row and carries no target. The identity
+// probe is nobody's row (the last finished one can be another family's): no step, so no family label. nullptr = no step.
 const ct::Step *shown_step(const ct::Runner &runner, ct::Step &scratch) {
     const auto &steps = runner.steps();
     if (steps.empty()) return nullptr;
-    if (runner.state() == ct::State::Spec) {
+    switch (runner.interlude()) {
+    case ct::Interlude::Spec:
         scratch = ct::spec_step(runner.spec_point());
         return &scratch;
+    case ct::Interlude::Probe: return nullptr;
+    case ct::Interlude::Ceiling:
+        scratch = runner.window_step();
+        scratch.mv = 0;
+        return &scratch;
+    case ct::Interlude::None: break;
     }
     return &steps[std::min(runner.index(), steps.size() - 1)];
 }
 // The step dot's row-relative token: the step the runner is on, Pending or Running, so the dot moves in the tick the index does.
 int running_token(const result_layout::RowTokens &rt, const result_layout::CompactRow &row, const ct::Runner &runner) {
     const auto &steps = runner.steps();
-    if (runner.state() == ct::State::Spec) {
+    if (runner.interlude() == ct::Interlude::Spec) {
         ct::Step pt;
         const ct::Step *st = shown_step(runner, pt);
         return st && result_layout::row_has(row, *st) ? pending_chip(rt, *st, true) : -1;
     }
-    if (runner.index() >= steps.size()) return -1;
+    if (runner.interlude() != ct::Interlude::None || runner.index() >= steps.size()) return -1;   // no step is under test
     const ct::Verdict v = steps[runner.index()].verdict;
     if (v != ct::Verdict::Running && v != ct::Verdict::Pending) return -1;
     if (!result_layout::row_has(row, steps[runner.index()])) return -1;   // a Xiaomi step has a row of its own
@@ -2689,9 +2698,11 @@ int running_token(const result_layout::RowTokens &rt, const result_layout::Compa
 int follow_line(const result_layout::CompactGrid &l, std::span<const result_layout::CompactLine> lines, const ct::Runner &runner) {
     const auto &steps = runner.steps();
     if (steps.empty()) return 0;
+    // An interlude holds the window on the level the previous point had (a reset has no chip; the probe and the ceiling stage
+    // sit after a finished row): a chip of any tone, never a jump to the next unit.
+    const bool spec = runner.interlude() != ct::Interlude::None;
     ct::Step pt;
-    const ct::Step &now = *shown_step(runner, pt);
-    const bool spec = runner.state() == ct::State::Spec;
+    const ct::Step &now = spec ? (pt = runner.window_step()) : *shown_step(runner, pt);
     int head = 0;
     result_layout::RowTokens rt;
     bool built = false;
@@ -3019,7 +3030,8 @@ void ChargerTestPage::paint_running(uint32_t now) {
     const bool flight = s_.runner_.quiet() && laid_;
     Budget bg{pbg, flight ? kFlightPx : (1 << 30)};
     const size_t at = steps.empty() ? 0 : std::min(s_.runner_.index(), steps.size() - 1);
-    const bool spec = s_.runner_.state() == ct::State::Spec;
+    const ct::Interlude il = s_.runner_.interlude();
+    const bool spec = il == ct::Interlude::Spec;
     ct::Step spec_pt;
     const ct::Step *st = shown_step(s_.runner_, spec_pt);
     // A deep-sweep row (one per APDO) has no single target: its strip shows the swept range as a dotted band, the setpoint as a
@@ -3065,7 +3077,8 @@ void ChargerTestPage::paint_running(uint32_t now) {
     // In the spec stage the outline follows the engine's point (what it is, then its level or position), not the plan's index.
     const ct::SpecPoint sp = s_.runner_.spec_point();
     const uint32_t at_key = spec ? mix_u32(static_cast<uint32_t>(sp.what) + 1u, sp.what == ct::SpecWhat::Fixed ? sp.mv : sp.pos) | 0x80000000u
-                                 : static_cast<uint32_t>(s_.runner_.index());
+                          : il != ct::Interlude::None ? 0x40000000u | static_cast<uint32_t>(il)
+                                                      : static_cast<uint32_t>(s_.runner_.index());
     const uint32_t key = mix_u32(mix_u32(mix_init(), s_.runner_.revision()), at_key) | 1u;
     if (key != grid_key_) {   // rebuilt only when the runner's revision or step moved, never on a plain tick
         grid_key_ = key;
@@ -3148,7 +3161,7 @@ void ChargerTestPage::paint_running(uint32_t now) {
         if (sweeping) put_line(c, kLabelFont, runlay::kSweepFamX, L.name_y + kSmall.ascent - kLabelFont.ascent, fam_name, kDim, 16, cell_sig_[2], true, false, &bg);
         else put_line(c, kLabelFont, runlay::kLeftX, 32, fam_name, kDim, runlay::kFamCells, cell_sig_[2], false, false, &bg);
         buf.clear();
-        if (spec) buf.put(step_label::spec_label(s_.runner_.spec_point()).view());
+        if (il != ct::Interlude::None) buf.put(step_label::interlude_label(il, s_.runner_.spec_point()).view());
         else if (st) buf.put(step_label::label(*st, at > 0 ? &steps[at - 1] : nullptr).view());
         // The plain name stays in the left column, kLeftGap short of the hero: a longer one drops to the 12 px font.
         const bool small = !sweeping && runlay::name_small(text_cells(buf.view()));

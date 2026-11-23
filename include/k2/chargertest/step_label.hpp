@@ -50,6 +50,10 @@ Text label(const charger_test::Step&, const charger_test::Step* prev = nullptr);
 // "Hard Reset", "PD spec" (no level yet). Volts only, at most kSpecCells cells.
 inline constexpr unsigned kSpecCells = 10;
 Text spec_label(const charger_test::SpecPoint&);
+// The Running header's name in an interlude (charger_test::Interlude): "Charger ID" (the identity probe), "SVOOC ceiling", the spec
+// stage's point (spec_label); empty for None. At most kInterludeCells cells: the 12 px name font of the left column (runlay::kNameCellsSmall).
+inline constexpr unsigned kInterludeCells = 13;
+Text interlude_label(charger_test::Interlude, const charger_test::SpecPoint&);
 // The current the label shows, in mA (0 = none; a Xiaomi mode shows watts instead).
 unsigned amps_ma(const charger_test::Step&);
 // The power level a Xiaomi mode row is named by: the volts it asks times the current it asks, rounded to whole watts (11 V 5 A ->
