@@ -4977,11 +4977,34 @@ static void test_the_spec_stage_shows_the_engines_point_not_the_next_unit() {
     };
     unsigned checked = 0, bad_name = 0, bad_target = 0, bad_counter = 0, double_dots = 0, dot_on_reset = 0, no_dot = 0, same_view_new_chip = 0, levels = 0, pps_seen = 0, avs_seen = 0, band_on_reset = 0, epr_avs_seen = 0, epr_fixed_seen = 0;
     unsigned dumped = 0;   // K2_DUMP: one PPS, one AVS and one fixed point, in the four rotations
+    bool was_spec = false; unsigned left_checked = 0, bad_left = 0;
+    auto dump_rots = [&](const char* nm0, uint32_t& t) {
+        for (uint8_t rot = 0; rot < 4; ++rot) {
+            ui.set_rotation(rot, t += 100); ui.tick(t += 100);
+            for (int i = 0; i < 64 && ui.painting(); ++i) ui.tick(t += 20);
+            char nm[40];
+            std::snprintf(nm, sizeof nm, "spec_stage_%s_rot%u", nm0, unsigned(rot));
+            dump_screen(nm);
+        }
+        ui.set_rotation(0, t += 100); ui.tick(t += 100);
+    };
     uint32_t prev_hash = 0; uint64_t prev_chip = 0; int fixed_band[2] = {-1, -1}; int fixed_prev_mv = 0; unsigned band_order_bad = 0;
     for (uint32_t now = 1500; now <= 3600000 && ui.charger_test_busy(); now += 100) {
         tick(now);
         const auto& r = ui.charger_test_results();
+        if (was_spec && r.state() != ct::State::Spec && ui.charger_test_stage() == kRunningStage && !r.steps().empty()) {
+            // the stage is over: the header and the dot read the plan's row at the index again (the next unit's first row)
+            for (int i = 0; i < 8 && ui.painting(); ++i) tick(now += 20);
+            if (r.state() != ct::State::Spec && !ui.painting()) {
+                ++left_checked;
+                const auto& st = r.steps()[std::min(r.index(), r.steps().size() - 1)];
+                bad_left += !header_says(kSmall, runlay::kLeftX, runlay::kPlainRun.name_y, step_label::label(st).view(), kText);
+                bad_left += running_dots().size() > 1;
+                was_spec = false;
+            }
+        }
         if (r.state() != ct::State::Spec || ui.charger_test_stage() != kRunningStage || r.steps().empty()) { prev_chip = 0; continue; }
+        was_spec = true;
         const ct::SpecPoint before = r.spec_point();
         for (int i = 0; i < 8 && ui.painting(); ++i) tick(now += 20);   // the budgeted cells settle
         const ct::SpecPoint p = r.spec_point();
@@ -5001,7 +5024,11 @@ static void test_the_spec_stage_shows_the_engines_point_not_the_next_unit() {
         const auto dots = running_dots();
         const auto band = gauge_band();
         double_dots += dots.size() > 1;
-        if (!level) { dot_on_reset += !dots.empty(); band_on_reset += band.first >= 0; prev_chip = 0; continue; }
+        if (!level) {
+            dot_on_reset += !dots.empty(); band_on_reset += band.first >= 0; prev_chip = 0;
+            if (std::getenv("K2_DUMP") && p.what == ct::SpecWhat::HardReset && !(dumped & 1u << 4)) { dumped |= 1u << 4; dump_screen("spec_stage_reset_rot0"); }   // this tick only: the reset is over before four rotations settle
+            continue;
+        }
         ++levels; pps_seen += p.what == ct::SpecWhat::Pps; avs_seen += p.what == ct::SpecWhat::Avs;
         epr_avs_seen += p.what == ct::SpecWhat::Avs && p.pos >= 8; epr_fixed_seen += p.what == ct::SpecWhat::Fixed && p.mv > 20000;
         no_dot += dots.empty();
@@ -5021,19 +5048,13 @@ static void test_the_spec_stage_shows_the_engines_point_not_the_next_unit() {
         if (const unsigned bit = 1u << kind; std::getenv("K2_DUMP") && !(dumped & bit) && (p.what != ct::SpecWhat::Fixed || p.mv == 9000 || epr_fix)) {
             dumped |= bit;
             static const char* const kName[] = {"none", "fixed", "pps", "avs", "reset", "avs_epr", "fixed_epr"};
-            for (uint8_t rot = 0; rot < 4; ++rot) {
-                ui.set_rotation(rot, now += 100); ui.tick(now += 100);
-                for (int i = 0; i < 64 && ui.painting(); ++i) ui.tick(now += 20);
-                char nm[40];
-                std::snprintf(nm, sizeof nm, "spec_stage_%s_rot%u", kName[kind], unsigned(rot));
-                dump_screen(nm);
-            }
-            ui.set_rotation(0, now += 100); ui.tick(now += 100);
+            dump_rots(kName[kind], now);
             prev_chip = 0;
         }
     }
     CHECK_EQ(checked > 60, true);
     CHECK_EQ(pps_seen > 5, true); CHECK_EQ(avs_seen > 0, true); CHECK_EQ(epr_avs_seen > 0, true); CHECK_EQ(epr_fixed_seen > 0, true);   // the stage reached the programmable levels, or the check proves nothing
+    CHECK_EQ(left_checked > 0, true); CHECK_EQ(bad_left, 0u);
     CHECK_EQ(bad_name, 0u);
     CHECK_EQ(bad_target, 0u);
     CHECK_EQ(bad_counter, 0u);
