@@ -231,7 +231,7 @@ void test_long_back_byte() {
     // a value past the last ring position reads as Home; every real position survives
     std::array<std::uint8_t, 9> odd = want; odd[8] = ring::kCount;
     CHECK_EQ(uiprefs::decode(odd).long_back, 0);
-    odd[8] = 200;
+    odd[8] = 0x3F;   // the top two bits are the sweep depth now
     CHECK_EQ(uiprefs::decode(odd).long_back, 0);
     for (std::uint8_t p = 0; p < ring::kCount; p++) {
         const Prefs in{.screenshot = false, .rotation_manual = true, .rotation = 1, .home_hero = 2, .ct_level = 1, .long_back = p};
@@ -249,6 +249,38 @@ void test_long_back_byte() {
     // a legacy 8-byte file loads as before
     CHECK_EQ(v.f.write_file(uiprefs::kPath, std::span<const std::uint8_t>(old)) == fs::Err::Ok, 1);
     CHECK_EQ(uiprefs::load(v.f).qc_after_pd, 1);
+}
+// Settings > Sweep depth: the top two bits of the optional 9th byte, (depth - 1) & 3, so the default (200 mV) and every older
+// file read 200 mV and add nothing to the file; the Long Back target keeps the low bits.
+void test_sweep_depth_bits() {
+    using uiprefs::Prefs;
+    CHECK_EQ(Prefs{}.sweep_depth, 1);                                  // Step200 is the default
+    CHECK_EQ(uiprefs::record_len(Prefs{}), 8u);
+    CHECK_EQ(uiprefs::record_len(Prefs{.legacy_units = true, .sweep_depth = 1}), 8u);
+    const std::array<std::uint8_t, 8> old{'K', '2', 'U', 'P', 0, 0xFF, 0, 0};
+    CHECK_EQ(uiprefs::decode(old).sweep_depth, 1);
+    const std::array<std::uint8_t, 9> backed{'K', '2', 'U', 'P', 0, 0xFF, 0, 0, 5};   // an older 9-byte file: Long Back 5
+    CHECK_EQ(uiprefs::decode(backed).sweep_depth, 1);
+    CHECK_EQ(uiprefs::decode(backed).long_back, 5);
+    for (std::uint8_t d = 0; d < 4; d++) {                              // Step100, Step200, Phone, Step20
+        for (std::uint8_t lb : {std::uint8_t{0}, std::uint8_t{9}}) {
+            Prefs in{};
+            in.sweep_depth = d;
+            in.long_back = lb;
+            CHECK_EQ(uiprefs::decode(uiprefs::encode_ext(in)) == in, 1);
+            CHECK_EQ(uiprefs::record_len(in), d == 1 && lb == 0 ? 8u : 9u);
+        }
+    }
+    Prefs p{};
+    p.sweep_depth = 3;
+    CHECK_EQ(uiprefs::encode_ext(p)[8], 2 << 6);                        // 20 mV = (3 - 1)
+    p.sweep_depth = 0;
+    CHECK_EQ(uiprefs::encode_ext(p)[8], 3 << 6);                        // 100 mV = (0 - 1) & 3
+    Vol v;
+    CHECK_EQ(uiprefs::save(v.f, p) == true, 1);
+    CHECK_EQ(uiprefs::load(v.f).sweep_depth, 0);
+    CHECK_EQ(uiprefs::save(v.f, Prefs{}) == true, 1);                   // back to the default: the 8-byte file again
+    CHECK_EQ(uiprefs::load(v.f).sweep_depth, 1);
 }
 // Settings > Huawei/Samsung tests: orientation bit 7, stored 1 = shown so every older file and the default read hidden.
 void test_legacy_units_bit() {
@@ -293,6 +325,7 @@ int main() {
     test_retired_theme_bits();
     test_ct_level_bits();
     test_long_back_byte();
+    test_sweep_depth_bits();
     test_legacy_units_bit();
     test_legacy_page_is_outside_the_volume();
     return test_report("test_uiprefs");

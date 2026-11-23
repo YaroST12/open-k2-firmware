@@ -134,6 +134,7 @@ struct RunMeta {
     bool pps_sweep = false;   // the PPS deep sweep was on (meta byte p[1] bit 1; older journals read 0 = off)
     bool avs_sweep = false;   // the AVS deep sweep was on (meta byte p[1] bit 2; older journals read 0 = off)
     charger_test::Level level = charger_test::Level::Medium;   // the run's level (meta byte p[1] bits 3..4; older journals read 0 = Medium)
+    ctsweep::Depth sweep_depth = ctsweep::Depth::Step100;      // the deep sweeps' step (p[1] bits 5..6; older journals read 0 = 100 mV, what they ran)
     std::uint8_t cable_kind = 0;
     std::uint16_t cable_seq = 0;
     // What the Ra guard read when an identity was started: 0 = not judged (no identity, or a journal written before this

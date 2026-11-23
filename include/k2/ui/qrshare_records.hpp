@@ -144,7 +144,7 @@ static_assert(kMaxCardV2 == 242 && kMaxEmkV2 == 459);
 inline constexpr std::size_t kDeepExtHead = 1 + 12;
 inline constexpr std::size_t kMiWorstBits = report_card::deep::kMiHeadBits + report_card::deep::kMiModeBits * k2::mi_unlock::kMaxModes;
 inline constexpr std::size_t kMaxCardDeepV11 =
-    (card_v2_worst_bits() + kDeepExtHead + report_card::deep::kMaxBits - kMiWorstBits - report_card::deep::kSpecRangesBits + 7) / 8;
+    (card_v2_worst_bits() + kDeepExtHead + report_card::deep::kMaxBits - kMiWorstBits - report_card::deep::kSpecRangesBits - report_card::deep::kDepthBits + 7) / 8;
 static_assert(kMaxCardDeepV11 == 653);
 inline constexpr std::size_t kMaxCardDeepV2 = 659;
 

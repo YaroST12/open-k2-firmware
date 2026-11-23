@@ -75,7 +75,8 @@ class BadCard(ValueError):
 
 
 # ---- the Deep block (format 11): include/k2/chargertest/report_card_deep.hpp, tests/test_report_card_py.py compares the name tables ----
-DEEP_MAX_BITS = 3811   # report_card::deep::kMaxBits (3638 before the format 13 ranges, 3274 without the format 12 Xiaomi section)
+DEEP_MAX_BITS = 3813   # report_card::deep::kMaxBits (3811 before the step tail, 3638 before the format 13 ranges, 3274 without the Xiaomi section)
+DEEP_DEPTHS = ((100, "100 mV"), (200, "200 mV"), (20, "Phone"), (20, "20 mV"))   # ctsweep::Depth order: the step tail's names
 VERDICTS = ["pending", "running", "pass", "fail", "skip"]   # charger_test::Verdict, the Xiaomi section's verdict field
 MI_BEFORE_LOST = 0xFFFFFFFF   # deep::kBeforeLost: the PDO before the chain is not known (the run resumed)
 DEEP_BUCKETS = 32
@@ -191,9 +192,13 @@ def decode_deep(blob, ranges=()):
         graphs.append(g)
     if graphs:
         out["graphs"] = graphs
-    if r.left() >= 8:   # format 12: the Xiaomi section is the block's tail
+    left = nbits - r.pos   # bits, not the padded bytes: the two-bit step tail must not read as 8 bits to a byte count
+    if left >= 8:   # format 12: the Xiaomi section is the block's tail
         out["xiaomi"] = _decode_mi(r)
-    if r.left() >= 8:
+        left = nbits - r.pos
+    if left == 2:   # the step tail (two bits: an older reader never takes it for the Xiaomi section); no tail = 100 mV
+        out["sweep_depth"] = DEEP_DEPTHS[r.get(2)][1]
+    if nbits - r.pos >= 8:
         raise BadCard("Deep block has trailing data")
     return out
 

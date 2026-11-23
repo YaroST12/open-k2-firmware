@@ -691,6 +691,8 @@ enum class Cmd : uint8_t {
     ChargerLevel = 0x5B,    // [level(1)] the level of the next charger run (charger_test::Level: 0 Medium, 1 Light, 2 Deep; with_level
                          // also sets both deep-sweep flags: on for Deep, off otherwise). rsp [level]. Read back in CHARGER_TEST schema 2,
                          // draft selection bits 28..29. Busy while a run is active, BadArg above 2.
+    ChargerSweepDepth = 0x5D,   // [] reads, [depth(1)] sets the PPS/AVS deep-sweep step of the next charger run (ctsweep::Depth: 0 100 mV,
+                         // 1 200 mV, 2 Phone, 3 20 mV). rsp [depth]. Busy while a run is active, BadArg from 4 up.
     MiCableAuth = 0x5C,     // Xiaomi cable-side auth config (k2/pd/emk_spoof.hpp MiAuthCfg): [0] reads, [1, on, key, trailing u32 LE, half, reply, payload]
                          // sets (on/key/half/reply/payload bounded). rsp [on, key, trailing u32 LE, half, reply, payload]. Lab-only: while a
                          // spoof is armed, an SOP' 0x27170104 is answered (reply 0: cmd 0x...105, reply 1: mirrored 0x...204) with a HMAC-SHA256
@@ -707,7 +709,7 @@ inline constexpr Cmd kCmdIds[] = {
     Cmd::CableR, Cmd::Lab, Cmd::Ufcs, Cmd::QRTest, Cmd::Store, Cmd::EmLib, Cmd::Cards, Cmd::Twin, Cmd::BlackBox, Cmd::TransCap, Cmd::ChargerTest,
     Cmd::ChargerUnits, Cmd::ChargerCable, Cmd::ChargerHunt, Cmd::ChargerSweep, Cmd::ChargerAvsSweep, Cmd::BootInfo, Cmd::Memory, Cmd::Power,
     Cmd::PdStress, Cmd::EmarkerProbe, Cmd::LoopProbe, Cmd::Diagnose, Cmd::TraceHid, Cmd::Battery, Cmd::ChargerSvoocCap,
-    Cmd::PdSpec, Cmd::ChargerLevel, Cmd::MiCableAuth, Cmd::PdLimit,
+    Cmd::PdSpec, Cmd::ChargerLevel, Cmd::MiCableAuth, Cmd::PdLimit, Cmd::ChargerSweepDepth,
 };
 
 constexpr bool cmd_ids_unique() {
@@ -1620,6 +1622,10 @@ struct ChargerSvoocCapReply {
     Status status = Status::Ok;
     ChargerSvoocCap info;
 };
+struct ChargerSweepDepthReply {
+    Status status = Status::Ok;
+    uint8_t depth = 0;
+};
 constexpr size_t kChargerSvoocCapLen = 11;
 size_t encode_charger_svooc_cap(std::span<uint8_t> out, const ChargerSvoocCap &c);
 
@@ -1648,6 +1654,7 @@ concept Backend = requires(B &b, uint8_t u8, uint16_t u16, bool on) {
     { b.charger_units(std::span<const uint8_t>{}) } -> std::same_as<Status>;   // unit order of the next run (empty = default)
     { b.charger_sweep(true) } -> std::same_as<Status>;   // the PPS deep sweep of the next run (the level sets it; this overrides)
     { b.charger_avs_sweep(true) } -> std::same_as<Status>;   // the AVS deep sweep of the next run (opt-in)
+    { b.charger_sweep_depth(static_cast<const uint8_t *>(nullptr)) } -> std::same_as<ChargerSweepDepthReply>;   // the sweep step of the next run; null = read
     { b.charger_level(u8) } -> std::same_as<Status>;         // the level of the next run (charger_test::Level; sets the sweeps)
     { b.charger_cable(static_cast<const ctcable::Choice *>(nullptr)) } -> std::same_as<ChargerCableReply>;   // null = read only
     { b.charger_svooc_cap(static_cast<const uint8_t *>(nullptr)) } -> std::same_as<ChargerSvoocCapReply>;   // the SVOOC ceiling stage; null = read only
@@ -2070,6 +2077,12 @@ template <Backend B>
         if (p.size() != 1) return reply_bad_len(f);
         if (p[0] >= charger_test::kLevelCount) return reply_bad_arg(f);
         return reply_status_or_byte(f, backend.charger_level(p[0]), p[0]);
+    case Cmd::ChargerSweepDepth: {
+        if (p.size() > 1) return reply_bad_len(f);
+        if (!p.empty() && p[0] >= ctsweep::kDepthCount) return reply_bad_arg(f);
+        const auto r = backend.charger_sweep_depth(p.empty() ? nullptr : &p[0]);
+        return reply_status_or_byte(f, r.status, r.depth);
+    }
     case Cmd::MiCableAuth:
         if (p.empty()) return reply_bad_len(f);   // p[0] below: nothing may be read before the size is known
         if (p[0] == 0 && p.size() == 1) return reply_ok(f, {backend.mi_cable_auth(p, f.span())});
@@ -2726,7 +2739,7 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
         return detail::handle_state(cmd, p, backend, f);
     case Cmd::ChargerTest: case Cmd::ChargerUnits: case Cmd::ChargerCable: case Cmd::ChargerSvoocCap:
     case Cmd::ChargerHunt: case Cmd::ChargerSweep: case Cmd::ChargerAvsSweep: case Cmd::ChargerLevel:
-    case Cmd::MiCableAuth:
+    case Cmd::ChargerSweepDepth: case Cmd::MiCableAuth:
         return detail::handle_charger(cmd, p, backend, f);
     case Cmd::IdentifyDevice: case Cmd::PdReread: case Cmd::AppleRead: case Cmd::OppoProbe: case Cmd::PdRequest:
     case Cmd::PdReset: case Cmd::PdRelease: case Cmd::Stop: case Cmd::Lease:

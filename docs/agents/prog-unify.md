@@ -145,7 +145,7 @@ User decisions: layout B, a short cover pass per covered range, EPR AVS judged i
 - **EPR AVS** (`kOptEprAvs`, `Env::epr_avs`): fed like SPR AVS; the stage judges the APDO the run reached, with the cable proof,
   under the ceiling, inside EPR mode; a step over 1 V is judged against tSrcTransReq EPR (760 ms). Sim, Baseus 140 W shape:
   38.3 -> 47.1 s. The standalone pd-spec stays SPR only; the Review estimate leaves EPR AVS out.
-- **Formats.** Journal 6 (`/jr/sa1..4.rec`), card 13 (spec form 28, 3811 bits), remote `0x0B [9, off16]` (count byte with
+- **Formats.** Journal 6 (`/jr/sa1..4.rec`), card 13 (spec form 28, 3813 bits with the 2-bit sweep-step tail), remote `0x0B [9, off16]` (count byte with
   the split bits). Older journals and cards still load; readers updated (report_card.py, k2_remote.py, charger_summary.py,
   deep.js, card.js, k2proto.js, ctgrid.js).
 

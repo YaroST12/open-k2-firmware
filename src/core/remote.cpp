@@ -304,6 +304,16 @@ size_t Remote::mi_cable_auth(std::span<const uint8_t> p, std::span<uint8_t> out)
     return 9;
 }
 
+remote::ChargerSweepDepthReply Remote::charger_sweep_depth(const uint8_t* set) {
+    remote::ChargerSweepDepthReply r;
+    if (set) {
+        if (ui_.charger_test_busy()) { r.status = remote::Status::Busy; return r; }
+        if (!ui_.charger_test_set_sweep_depth(*set)) { r.status = remote::Status::BadArg; return r; }
+    }
+    r.depth = ui_.charger_test_sweep_depth();
+    return r;
+}
+
 remote::ChargerSvoocCapReply Remote::charger_svooc_cap(const uint8_t* set) {
     remote::ChargerSvoocCapReply r;
     if (set) {

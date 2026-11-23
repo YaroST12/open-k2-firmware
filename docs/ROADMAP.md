@@ -1258,6 +1258,16 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
 
 ## Not verified on hardware
 
+- **Sweep depth** (k2/sweep-depth, 2026-11-23; host tests and renders only: runs/sweep-depth/png). Settings row `Sweep depth` (200 mV default,
+  100 mV, Phone, 20 mV) sets the charger-test PPS/AVS deep sweeps' step: Phone is 100 mV plus 20 mV points in 8.0-11.0 V and
+  14.0-19.0 V (PPS only, once per APDO on the one with the most current); 20 mV every PPS quantum; AVS stays 100 mV; the APDO top is always
+  a point. A Fold or Break is stepped back from once (100 then 20 mV points). A steady point closes after 100 ms (was a fixed 500 ms):
+  about 520 -> 120 ms a point, 180 ms with an 80 ms slew; kWalkSteadyTimeoutMs stays the ceiling. Review and the Running header name the
+  step; the Deep block of the card carries a 2-bit step tail (old cards decode as 100 mV; `sweep_depth` in report_card.py and deep.js);
+  the journal meta byte carries it; remote `charger-sweep-depth` (0x5D) and `ct_start.py --sweep-depth 100|200|phone|20`. Commits 
+  d47ba035..4ce75d9d. Validate: cycle the row; FH22 PPS 20 V fold found at 200 mV and located by the step-back; Pixel / OnePlus 15 Phone
+  windows; share and web-card decode; point time on a steady charger. Open: old byte-based card readers misread about 2 in 8 new
+  tailed cards; a sweep span under 6.4 V can have empty one-cell buckets at 200 mV (the viewer shows gaps).
 - **Huawei/Samsung switch** (k2/ct-huawei-switch; host tests and renders only). Settings row `Huawei/Samsung`, OFF by default, hides FCP, SCP and AFC from the charger test (presets, Custom, plan, step counts, Results); ON is the old behaviour; `ct_start.py --units fcp,scp,afc` (or `charger-units`) still runs them; `k2_remote charger-test view` reports `FCP/SCP/AFC shown|hidden` (view flag bit 15, set = shown; firmware older than this always reads hidden). Check on hardware: fresh K2 shows OFF and the Tests step counts drop, Results has no Huawei/Samsung rows; ON restores them; the choice survives a reboot. Open: no remote setter for Settings toggles; the preset name "Legacy only" now means QC/UFCS/OPPO/vivo while hidden.
 - **Cable place: Read e-marker opens the chip details** (k2/cable-read-merge; host tests only). The Chip details row is gone; a good read (immediate or after the passive listen) opens the chip sheet, a failed one opens it too when a cable record is held, with "Failed to read" in the footer; no record stays on Actions. Check on hardware: Cable Actions has no Chip details row; Read e-marker with a cable lands on the sheet; a failed read with a held cable lands on the sheet with the error footer; inline (listen only) does the same after the 5 s window.
 - **PD limiter** (k2/pd-limiter, built and host-tested only; `k2_remote.py pd-limit <watts>|off|status`, Cmd 0x4E). Hardware test 1

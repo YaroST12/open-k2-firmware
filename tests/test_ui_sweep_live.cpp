@@ -83,7 +83,7 @@ void fixture(bool avs, int ceiling_mv, int shape = 0) {
 }
 
 // Starts a PD-only run with the deep sweep armed (Tests -> Custom -> PD family -> the sweep's own line -> Review -> START).
-void start_sweep(Ui& ui, uint32_t& t, bool avs, uint8_t rot, int ceiling_mv, int shape = 0) {
+void start_sweep(Ui& ui, uint32_t& t, bool avs, uint8_t rot, int ceiling_mv, int shape = 0, int depth = 0) {   // the scenes below count 100 mV points
     fixture(avs, ceiling_mv, shape);
     ui.init(0); ui.set_rotation(rot, 0); ui.tick(1000); ui.goto_page(static_cast<uint8_t>(Page::ChargerTest), 1100);
     top(ui, 1200); move(ui, 5, 1200); press(ui, Button::Ok, 1200);   // Tests step: Custom...
@@ -99,6 +99,7 @@ void start_sweep(Ui& ui, uint32_t& t, bool avs, uint8_t rot, int ceiling_mv, int
     top(ui, 1200); move(ui, kFamDone, 1200); press(ui, Button::Ok, 1200);   // Done: the cable step
     press(ui, Button::Ok, 1200);                                                // keep the cable: Review
     CHECK_EQ(ui.charger_test_stage(), 4);
+    CHECK_EQ(ui.charger_test_set_sweep_depth(uint8_t(depth)), true);
     press(ui, Button::Ok, 1300); press(ui, Button::Ok, 1400);   // START, confirm
     t = 1500;
 }
@@ -346,6 +347,39 @@ int main() {
         CHECK_EQ(early.size() >= 4u && early.size() <= 6u, true); CHECK_EQ(late.size() >= 4u && late.size() <= 6u, true);   // 6 less the needle's overlap
         if (!early.empty() && !late.empty()) CHECK_EQ(late.front() > early.front() + 20, true);
         dump_panel("sweep_pps_rot0_late");
+    }
+    // The header names the step: one live frame per depth (the default 200 mV, Phone, 20 mV, 100 mV) in the four rotations, every cut
+    // fails the run (K2_DUMP: sweep_depth_<step>_rot<r>).
+    for (const int depth : {1, 2, 3, 0}) {
+        static const char* const names[] = {"100", "200", "phone", "20"};
+        Ui ui; uint32_t t;
+        start_sweep(ui, t, false, 0, 36000, 0, depth);
+        CHECK_EQ(run_to_point(ui, t, 6), true);
+        for (uint8_t rot = 0; rot < 4; ++rot) {
+            ui.set_rotation(rot, t); t += 100; ui.tick(t); settle(ui, t);
+            CHECK_EQ(ui.charger_test_results().sweep_live().active, true);
+            char name[40]; std::snprintf(name, sizeof name, "sweep_depth_%s_rot%u", names[depth], unsigned(rot));
+            dump_panel(name);
+        }
+    }
+    // The PD family's sweep line names the step in its focused-row note (every note is static_assert'd to the row's width).
+    for (const int depth : {1, 2, 3, 0}) {
+        static const char* const names[] = {"100", "200", "phone", "20"};
+        fixture(false, 36000);
+        Ui ui;
+        ui.init(0); ui.set_rotation(0, 0); ui.tick(1000); ui.goto_page(static_cast<uint8_t>(Page::ChargerTest), 1100);
+        top(ui, 1200); move(ui, 5, 1200); press(ui, Button::Ok, 1200);
+        for (int fam : {kFamHuawei, kFamSamsung, kFamOppo, kFamQc}) { top(ui, 1200); move(ui, unsigned(fam), 1200); press(ui, Button::Ok, 1200); }
+        top(ui, 1200); move(ui, kFamPd, 1200); ui.on_button(Button::Ok, ButtonEvent::Long, 1200);
+        CHECK_EQ(ui.charger_test_stage(), 1);
+        CHECK_EQ(ui.charger_test_set_sweep_depth(uint8_t(depth)), true);
+        top(ui, 1200); move(ui, 2, 1200);
+        uint32_t t = 1300;
+        for (uint8_t rot = 0; rot < 4; ++rot) {
+            ui.set_rotation(rot, t); t += 200; settle(ui, t);
+            char name[40]; std::snprintf(name, sizeof name, "sweep_note_%s_rot%u", names[depth], unsigned(rot));
+            dump_panel(name);
+        }
     }
     // A source that holds 12 V while the request climbs: the points above fall out of the band; the error hero turns red.
     check_scene(false, 12000, 100, true, "sweep_pps_rot0_out_of_band");

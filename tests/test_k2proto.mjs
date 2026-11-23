@@ -438,6 +438,7 @@ test("charger-test schema2: draft bits 28..29 are the level of the next run, not
     assert.equal(sel.configured_mask, plain.configured_mask);
   }
   assert.equal(P.CMD.CHARGER_LEVEL, 0x5B);
+  assert.equal(P.CMD.CHARGER_SWEEP_DEPTH, 0x5D);
   // run_selected bits 28..29: the level the run in hand ran at, apart from the draft's
   assert.equal(plain.run_level, "medium");
   const r = new Uint8Array(TEST_HEADER2); r[18] |= 0x10;
