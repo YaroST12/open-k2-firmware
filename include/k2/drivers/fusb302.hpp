@@ -465,6 +465,9 @@ void reread_take_over();
 // there is no Ready contract, a sink inline, the PD-silent mode, or anything else owns the wire. The answer is in
 // reread_status() (ok_mask / notsup_mask / skipped_mask) once it is no longer running.
 bool survey_wire_start(std::uint8_t mask);
+// Ends the survey's wire run now (the auto read lost the link to a load or a tool): the next message is not sent. Sends nothing,
+// touches no Rd and no contract (the survey never made any), and is safe when no run is going.
+void survey_wire_abort();
 // A Xiaomi 0x2717 auth chain is in progress (the sink holds its own Request back; so does the survey).
 bool xiaomi_chain_active();
 // Debug option for the next re-read (pd-reread --line N): the attach scan may take only CC line N (1/2); 0 = normal.

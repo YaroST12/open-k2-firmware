@@ -18,16 +18,32 @@ using pd::SvOutcome;
 constexpr std::uint32_t kEprGateMs = 500;   // how long the sink's gate may refuse EPR_Get_Source_Cap before the field is NoAnswer
 
 pd::Survey g_s;
+pd::AutoRead g_auto;
 std::uint32_t g_session = 0;      // the attach the view belongs to
 std::uint32_t g_caps_base = 0;    // caps_count() when the Refresh asked
 std::uint32_t g_act_at = 0;       // when the action in flight began
 bool g_wire_started = false;
 bool g_logged = true;
+bool g_auto_run = false;          // the run in flight is the attach's auto read (the link gate may stop it)
 
 constexpr SvField kWireFields[] = {SvField::Identity, SvField::Svids, SvField::Modes, SvField::CapsExt, SvField::MfrInfo};
 
 bool source_epr_capable(const pd::SourceCaps& c) {
     return c.valid && c.spec_rev == 2 && c.num_pdos && c.pdos[0].type == pd::PdoType::Fixed && (c.pdos[0].raw & (1u << 23));
+}
+
+// The facts of the source's caps, shared by a Refresh and the auto read.
+void fill_caps_facts(pd::SvCtx& c) {
+    const pd::SourceCaps& caps = fusb302::caps();
+    c.pd20 = caps.valid && caps.spec_rev < 2;
+    c.epr_capable = source_epr_capable(caps);
+}
+
+// The K2's own Ready contract of this attach: it sent the Request, the offers it answered are held. A passive link, a sink inline
+// and a Xiaomi chain still on its way (the sink holds its Request back) are not one yet.
+bool owns_contract() {
+    return fusb302::sink_status().state == pd::SinkState::Ready && fusb302::caps().valid && fusb302::caps_this_attach() &&
+           !fusb302::inline_mode() && !fusb302::sink_downstream() && !fusb302::xiaomi_chain_active();
 }
 
 void begin(SvAct a, std::uint32_t now) {
@@ -96,7 +112,9 @@ void on_refresh(rescan::Result r, bool charger_test) {
     const std::uint32_t now = systick::millis();
     g_s.clear();
     g_wire_started = false;
+    g_auto_run = false;
     g_session = fusb302::session();
+    g_auto.spend(g_session);   // the attach's own auto read is no longer asked for: this press is the question
     g_caps_base = fusb302::caps_count();
     const pd::SinkStatus& ss = fusb302::sink_status();
     const pd::SourceCaps& caps = fusb302::caps();
@@ -107,23 +125,53 @@ void on_refresh(rescan::Result r, bool charger_test) {
     c.contract = c.inline_sink || (r == rescan::Result::Asked && ss.state == pd::SinkState::Ready && caps.valid);
     c.charger_test = charger_test;
     c.xiaomi_chain = fusb302::xiaomi_chain_active();
-    c.pd20 = caps.valid && caps.spec_rev < 2;
-    c.epr_capable = source_epr_capable(caps);
+    fill_caps_facts(c);
     g_s.start(c, now);
     g_logged = !g_s.running() && !g_s.ran();
     K2LOG("[SURVEY] refresh r=%u contract=%d inline=%d test=%d chain=%d pd20=%d epr=%d planned=%u blocked=%u\n", unsigned(r), int(c.contract),
           int(c.inline_sink), int(c.charger_test), int(c.xiaomi_chain), int(c.pd20), int(c.epr_capable), g_s.planned(), g_s.blocked());
 }
 
-void poll(bool charger_test) {
+// The attach's auto read: a Refresh's survey without the caps question and the cable, on the contract the K2 already holds.
+void start_auto(std::uint32_t now) {
+    g_s.clear();
+    g_session = fusb302::session();
+    g_caps_base = fusb302::caps_count();
+    g_wire_started = false;
+    g_auto_run = true;
+    pd::SvCtx c;
+    c.contract = true;
+    fill_caps_facts(c);
+    g_s.start_auto(c, now);
+    g_logged = !g_s.running() && !g_s.ran();
+    K2LOG("[SURVEY] auto read: pd20=%d epr=%d planned=%u\n", int(c.pd20), int(c.epr_capable), g_s.planned());
+}
+
+void poll(bool charger_test, pd::SvWhy block) {
     const std::uint32_t now = systick::millis();
+    pd::AutoIn in;
+    in.session = fusb302::session();
+    in.contract = owns_contract();
+    in.block = block;
+    in.survey_running = g_s.running();
+    const pd::AutoAct auto_act = g_auto.step(in, now);   // before the view follows a changed session: a read cut by the link is noticed
     if (fusb302::session() != g_session) {   // a detach or a new source: what was read belongs to the old one
         if (g_s.planned() || g_s.blocked()) K2LOG("[SURVEY] attach changed: view cleared\n");
         g_s.clear();
         g_wire_started = false;
+        g_auto_run = false;
         g_session = fusb302::session();
         g_logged = true;
         return;
+    }
+    if (auto_act == pd::AutoAct::Start) {
+        start_auto(now);
+    } else if (auto_act == pd::AutoAct::Abort && g_auto_run) {   // load current, a foreign Request or a tool: stop at once
+        K2LOG("[SURVEY] auto read stopped (%s)\n", block == pd::SvWhy::Inline ? "inline" : "link in use");
+        if (g_wire_started) fusb302::survey_wire_abort();
+        g_wire_started = false;
+        g_s.block_open(block);
+        g_logged = false;
     }
     if (g_s.running()) {
         if (charger_test) {   // never over a charger test: end the run, keep what was read

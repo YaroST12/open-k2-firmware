@@ -71,6 +71,21 @@ void Survey::start(const SvCtx& ctx, std::uint32_t now) {
     settle_running();
 }
 
+void Survey::start_auto(const SvCtx& ctx, std::uint32_t now) {
+    start(ctx, now);
+    if (!started_) return;
+    if (e_[unsigned(SvField::Caps)].state == SvState::Pending) e_[unsigned(SvField::Caps)].state = SvState::Got;   // held, not asked
+    if (e_[unsigned(SvField::Cable)].state == SvState::Pending) e_[unsigned(SvField::Cable)] = {};
+    settle_running();
+}
+
+void Survey::block_open(SvWhy why) {
+    for (SvEntry& e : e_)
+        if (e.state == SvState::Pending) e = {SvState::Blocked, why};
+    act_ = SvAct::None;
+    settle_running();
+}
+
 unsigned Survey::count(SvState s) const {
     unsigned n = 0;
     for (const SvEntry& e : e_) n += e.state == s;
@@ -140,6 +155,39 @@ SvAct Survey::poll(std::uint32_t now, bool sink_quiet, bool line_idle) {
     if (std::int32_t(now - not_before_) < 0) return SvAct::None;              // paced
     act_ = next_action();
     return act_;
+}
+
+void AutoRead::new_session(std::uint32_t session, bool lost, std::uint32_t now) {
+    session_ = session;
+    seen_ = true;
+    ready_ = spent_ = active_ = false;
+    if (lost) { lost_ = true; lost_at_ = now; }
+}
+
+void AutoRead::spend(std::uint32_t session) {
+    if (!seen_ || session != session_) new_session(session, false, 0);
+    spent_ = true;
+}
+
+AutoAct AutoRead::step(const AutoIn& in, std::uint32_t now) {
+    if (!seen_ || in.session != session_) new_session(in.session, active_ && in.survey_running, now);
+    if (active_) {
+        if (in.block != SvWhy::None) { active_ = false; return AutoAct::Abort; }
+        if (!in.survey_running) active_ = false;
+        return AutoAct::None;
+    }
+    if (spent_) return AutoAct::None;
+    if (!in.contract) { ready_ = false; return AutoAct::None; }   // not ours (yet): a later Ready may still be
+    if (!ready_) { ready_ = true; ready_at_ = now; }
+    if (in.block != SvWhy::None || in.survey_running) { spent_ = true; return AutoAct::None; }
+    if (std::int32_t(now - ready_at_) < std::int32_t(kAutoSettleMs)) return AutoAct::None;
+    spent_ = true;
+    if (lost_) {
+        lost_ = false;
+        if (std::int32_t(now - lost_at_) < std::int32_t(kAutoLostMs)) return AutoAct::None;
+    }
+    active_ = true;
+    return AutoAct::Start;
 }
 
 }  // namespace k2::pd

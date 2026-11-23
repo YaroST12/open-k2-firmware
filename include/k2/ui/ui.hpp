@@ -406,6 +406,9 @@ public:
     bool twin_live_busy() const;
     // ports_busy() plus the wire's other owners (a listen window, an FC session or sniff): the gate for a feature that forges traffic.
     bool port_owner_busy() const;
+    // The attach's auto read gate (core/survey.cpp): Inline = the inline latch (a downstream sink or load); ChargerTest = a tool,
+    // a spoof, the Ra mode or any other owner holds the link; None = free to ask.
+    pd::SvWhy auto_read_block() const;
     // PD limiter arm through the remote's path (same gate, same refusals); the limit is RAM only.
     // `seed` false: the sniffer's contract is not taken (a link reset was asked for).
     pd::LimRefusal pd_limit_arm(uint32_t limit_mw, bool seed = true) const;

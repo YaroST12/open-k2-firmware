@@ -56,15 +56,17 @@ inline constexpr const char *kNoPdUnansweredL = "PD offers went unanswered";  //
 inline constexpr const char *kNoPdLines[] = {kNoPdNeverL, kNoPdUnansweredL};
 static_assert(all_fit(kNoPdLines, 8, kLinePx), "a no-PD line is wider than 26 cells");
 
-// ---- footers (at most 27 characters, facts, no key names) -----------------------------------------------------------
-inline constexpr const char *kSourceUnread = "Source caps not read yet";   // a field of the open tab was never asked
+// ---- footers (at most 27 characters, facts, no key names; the Source hint names an action, not a key) -----------------------------------------------------------
+inline constexpr const char *kSourceUnread = "Not asked: Reset & re-read";   // the attach's auto read did not run (a tool, inline or passive link)
 inline constexpr const char *kCableUnread = "Cable not fully read yet";
 inline constexpr const char *kSinkUnread = "Sink caps not read yet";
 inline constexpr const char *kArmedBar = "Armed, replug to apply";
 inline constexpr const char *kHoldActions = "Hold Back for Actions";
 inline constexpr const char *kHoldInfo = "Hold Back for Info";
+inline constexpr const char *kReadingCharger = "Reading charger ";   // + "n/m" while a survey runs (the survey only asks the charger)
 inline constexpr const char *kFooters[] = {kSourceUnread, kCableUnread, kSinkUnread, kArmedBar, kHoldActions, kHoldInfo};
 static_assert(all_fit(kFooters, 8, 27 * 8), "a Who's attached footer is over 27 characters");
+static_assert(std::char_traits<char>::length(kReadingCharger) + 5 <= 27, "\"Reading charger nn/nn\" fits the status line");
 
 // ---- 3-slice Overview & Actions copy (width-checked against RowList / 208 px slice canvas) --------------------------
 inline constexpr int kActionLabelMaxPx = 128;   // 16 cells of S16 beside a right-side tail/pill

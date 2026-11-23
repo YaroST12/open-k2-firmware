@@ -833,7 +833,7 @@ Captures persist: `bbstore` (pure layout) and `bbpersist` (writer) keep them LZ4
 - **Screen form**: `k2::pd::diag::screen` (`diag_screen.hpp`) cuts the report to the panel: a RowList label of at most 16 characters, a time tail of at most 6 (`7:01`, `1h05m`, `123h`), a note of at most 31 characters (font 12), a footer verdict of at most 27 (`Link OK, power short`), and the Home word of at most 16 (`Power short`). The budgets are static_asserted against the kit geometry and host-tested with worst-case numbers for every finding code.
 - **Tools > PD diagnosis** (`ui_diagnosis`, Menu::Diagnosis): one kit RowList, the findings in rank order with a verdict cell (Fail red, Warn amber, Info none), the healthy lines with the pass cell, then the data-lane row with the USB icon and no verdict. The focused row opens its note; the footer is the verdict in the worst finding's tone (green only for a healthy link that had the power it needed). A finished session wears LAST; before any session one row waits for PD.
 - **Home row 1** (`home::format_diag`): `Diag <word>` while a PD session is live or stale, red for a Fail, amber for a Warn, dim otherwise (never green), grey when stale; an event finding (`screen::is_event`) names the row for 10 s only (`home::DiagDwell`), a condition stays; a session without PD and the idle screen keep the measured lines (D+/D- live, CC1/CC2 at rest). The USB link speed left Home (its detection is parked).
-- **Who's attached, Source tab**: the footer shows the verdict of an open session in its tone (after an action message and a running survey's progress, before the Refresh hint).
+- **Who's attached, Source tab**: the footer shows the verdict of an open session in its tone (after an action message and a running survey's progress "Reading charger n/m", before the "Not asked: Reset & re-read" hint).
 - **Remote**: Cmd 0x72 DIAGNOSE (`k2/pd/diag_wire.hpp`): op 0 status (16 B), op 1 a text line in chunks, op 2 a finding with its evidence numbers and code name; `k2_remote.py diagnose [--json]`. CDC shell: `diag`. Offline: `pd_trace.py diagnose FILE [--twin JSON] [--power power.jsonl] [--json]` runs the same C++ as `host-build/bbdiag`.
 - **RAM**: about 1.4 KB of .bss (the analyser, the cached report and the twin hint).
 
@@ -999,8 +999,9 @@ Not yet implemented: on-device rename (no text editor; rename over the remote).
 ## Remote control, screenshots and the UI model
 
 The Connection page (`ui_connection_page.cpp`; pure row model `include/k2/ui/ui_connection.hpp`; tab and match
-arithmetic `k2::pdtabs`) shows the Source, Cable and Sink tabs. It is passive: it transmits only from an action
-(Refresh, Read cable, Identify), never while merely open. The D+/D- scanner (`fc_scan`) is the SCAN entry of the
+arithmetic `k2::pdtabs`) shows the Source, Cable and Sink tabs. It transmits only from an action
+(Refresh, Read cable, Identify) and, once per attach, the auto read of the charger (`pd::AutoRead`, `core/survey.cpp`: the
+survey's Wire and EPR steps over the contract the K2 holds; `Ui::auto_read_block()` and the inline latch stop it at once). The D+/D- scanner (`fc_scan`) is the SCAN entry of the
 Trigger submenu: it calls `fctrig::scan_start(confirmed, false)` after the confirmation, probes
 FCP/SCP/AFC/QC2/QC3/VOOC/QC3+, resets between protocols, and rechecks link, monitor, source presence and
 voltage-ceiling guards throughout the scan, including reset waits. It never overrides the link guard or starts by

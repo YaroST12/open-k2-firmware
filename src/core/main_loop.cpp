@@ -239,7 +239,7 @@ constexpr uint32_t kEraseQuietMs = 1000;
     mark(Stage::Rescan);
     k2::rescan::poll();                     // a Refresh's Get_Source_Cap: the answer, or the CC cycle when the source stays silent
     mark(Stage::Survey);
-    k2::survey::poll(c.ui.charger_test_busy());   // the rest of the Refresh's survey, one message at a time (nothing runs before a Refresh)
+    k2::survey::poll(c.ui.charger_test_busy(), c.ui.auto_read_block());   // the Refresh's or the attach's auto survey, one message at a time
     k2::held::poll();                       // keeps the charger's offers for the Charger tab
     if (c.rescan_landing_due && !k2::rdcomeback::pending()) {   // a Refresh's CC cycle took the K2 down: back on Connection -> Source
         c.rescan_landing_due = false;

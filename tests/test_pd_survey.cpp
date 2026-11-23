@@ -2,7 +2,8 @@
 // Copyright (C) 2026 Yaraslau Furman
 // Host tests for the Connection page's survey (k2/pd/pd_survey.hpp): the ordered plan of one Refresh, the gating (inline sink,
 // charger test, Xiaomi chain, PD 2.0, no EPR bit), the status mapping (answered, Not_Supported / Reject, silence), and the two
-// promises the page makes: nothing active before Refresh, and nothing sent while the sink is not Ready.
+// promises the page makes: nothing active before Refresh except the attach's auto read (once, only on a contract of the K2's own),
+// and nothing sent while the sink is not Ready.
 #include "k2/pd/pd_survey.hpp"
 #include "test_util.h"
 
@@ -292,6 +293,173 @@ void test_wire_outcome_maps_the_reread_masks() {
     CHECK_EQ(int(wire_outcome(rs, SvField::Cable)), int(SvOutcome::Silent));
 }
 
+
+// ---- the auto read: once per attach, only on a contract the K2 owns, only while nothing else holds the link ----------------
+
+constexpr std::uint32_t kT0 = 5000;
+
+AutoIn owned(std::uint32_t session, bool running = false) {
+    AutoIn i;
+    i.session = session;
+    i.contract = true;
+    i.survey_running = running;
+    return i;
+}
+
+// Steps the decision every 10 ms from `now` for `ms`, returns the first non-None act (None when none came).
+AutoAct drive(AutoRead &a, const AutoIn &in, std::uint32_t &now, std::uint32_t ms) {
+    for (std::uint32_t t = 0; t < ms; t += 10, now += 10) {
+        const AutoAct r = a.step(in, now);
+        if (r != AutoAct::None) return r;
+    }
+    return AutoAct::None;
+}
+
+void test_auto_starts_once_on_an_owned_contract_after_the_settle() {
+    AutoRead a;
+    std::uint32_t now = kT0;
+    const AutoIn in = owned(1);
+    CHECK_EQ(int(drive(a, in, now, kAutoSettleMs - 20)), int(AutoAct::None));   // the charger's own follow-up traffic settles first
+    CHECK_EQ(int(drive(a, in, now, 200)), int(AutoAct::Start));
+    AutoIn run = owned(1, true);
+    CHECK_EQ(int(drive(a, run, now, 3000)), int(AutoAct::None));                // still reading: nothing new
+    CHECK_EQ(int(drive(a, owned(1), now, 60000)), int(AutoAct::None));          // finished: never again on this attach
+}
+
+void test_auto_never_runs_without_a_contract_of_our_own() {
+    AutoRead a;
+    std::uint32_t now = kT0;
+    AutoIn passive = owned(1);
+    passive.contract = false;   // sniffed only (PAS / inline): no Request of ours
+    CHECK_EQ(int(drive(a, passive, now, 30000)), int(AutoAct::None));
+    // The contract shows up later on the same attach: it asks then.
+    CHECK_EQ(int(drive(a, owned(1), now, 3000)), int(AutoAct::Start));
+}
+
+void test_auto_never_runs_inline_or_beside_a_tool() {
+    for (SvWhy w : {SvWhy::Inline, SvWhy::ChargerTest}) {
+        AutoRead a;
+        std::uint32_t now = kT0;
+        AutoIn in = owned(1);
+        in.block = w;
+        CHECK_EQ(int(drive(a, in, now, 5000)), int(AutoAct::None));
+        // The block clears later on the same attach: this attach was spent, the K2 does not ask over a user's tool afterwards.
+        CHECK_EQ(int(drive(a, owned(1), now, 20000)), int(AutoAct::None));
+        CHECK_EQ(int(drive(a, owned(2), now, 3000)), int(AutoAct::Start));   // the next attach is free again
+    }
+}
+
+void test_auto_aborts_at_once_when_the_link_stops_being_ours() {
+    AutoRead a;
+    std::uint32_t now = kT0;
+    CHECK_EQ(int(drive(a, owned(1), now, 3000)), int(AutoAct::Start));
+    AutoIn run = owned(1, true);
+    CHECK_EQ(int(drive(a, run, now, 500)), int(AutoAct::None));
+    run.block = SvWhy::Inline;   // load current or a foreign Request
+    CHECK_EQ(int(a.step(run, now)), int(AutoAct::Abort));
+    now += 10;
+    CHECK_EQ(int(a.step(run, now)), int(AutoAct::None));   // one Abort, no restart on the same attach
+    CHECK_EQ(int(drive(a, owned(1), now, 20000)), int(AutoAct::None));
+}
+
+void test_auto_abort_keeps_answers_and_blocks_the_rest_inline() {
+    Survey s;
+    SvCtx c = kOpen;
+    s.start_auto(c, 1000);
+    CHECK_EQ(int(st(s, SvField::Caps)), int(SvState::Got));      // the caps are the ones the K2 holds
+    CHECK_EQ(int(st(s, SvField::Cable)), int(SvState::NotAsked));  // the cable is left alone
+    CHECK_EQ(int(s.poll(1300, true, true)), int(SvAct::Wire));
+    s.set(SvField::Identity, SvOutcome::Answered);
+    s.set(SvField::Svids, SvOutcome::Refused);
+    s.block_open(SvWhy::Inline);
+    CHECK_EQ(int(st(s, SvField::Identity)), int(SvState::Got));
+    CHECK_EQ(int(st(s, SvField::Svids)), int(SvState::NotSupported));
+    for (SvField f : {SvField::Modes, SvField::CapsExt, SvField::MfrInfo, SvField::EprList}) {
+        CHECK_EQ(int(st(s, f)), int(SvState::Blocked));
+        CHECK_EQ(int(why(s, f)), int(SvWhy::Inline));
+    }
+    CHECK_EQ(int(st(s, SvField::Cable)), int(SvState::NotAsked));
+    CHECK_EQ(s.running() ? 1 : 0, 0);
+    CHECK_EQ(int(s.poll(9000, true, true)), int(SvAct::None));   // nothing more is handed out
+    CHECK_EQ(int(s.wire_mask()), int(kRereadIdentity | kRereadSvids));
+}
+
+void test_auto_plan_asks_only_what_the_source_can_answer() {
+    Survey s;
+    SvCtx c = kOpen;
+    c.epr_capable = false;
+    s.start_auto(c, 1000);
+    CHECK_EQ(int(s.wire_mask()), int(kRereadIdentity | kRereadSvids | kRereadModes | kRereadCapsExt | kRereadMfrInfo));
+    CHECK_EQ(int(st(s, SvField::EprList)), int(SvState::Blocked));
+    CHECK_EQ(s.planned(), 6u);     // caps (held) + the five wire fields
+    CHECK_EQ(s.resolved(), 1u);
+    Survey p;
+    c.pd20 = true;
+    p.start_auto(c, 1000);
+    CHECK_EQ(int(p.wire_mask()), int(kRereadIdentity | kRereadSvids | kRereadModes));   // no extended messages in PD 2.0
+    CHECK_EQ(p.planned(), 4u);
+    Survey e;
+    e.start_auto(kOpen, 1000);
+    CHECK_EQ(e.planned(), 7u);     // plus the EPR list on an EPR-capable source
+    // Never a Cable action, never a Caps action: nothing for the glue to send but the wire and the EPR gate.
+    std::uint32_t now = 1000;
+    SvAct seen[4];
+    int n = 0;
+    for (int guard = 0; guard < 400 && e.running(); guard++) {
+        const SvAct x = e.poll(now, true, true);
+        now += 10;
+        if (x == SvAct::None) continue;
+        seen[n++] = x;
+        if (x == SvAct::Wire) for (SvField f : {SvField::Identity, SvField::Svids, SvField::Modes, SvField::CapsExt, SvField::MfrInfo}) e.set(f, SvOutcome::Answered);
+        if (x == SvAct::Epr) e.set(SvField::EprList, SvOutcome::Answered);
+        e.finish(now);
+    }
+    CHECK_EQ(n, 2);
+    CHECK_EQ(int(seen[0]), int(SvAct::Wire));
+    CHECK_EQ(int(seen[1]), int(SvAct::Epr));
+}
+
+void test_auto_runs_again_on_a_reattach() {
+    AutoRead a;
+    std::uint32_t now = kT0;
+    CHECK_EQ(int(drive(a, owned(1), now, 3000)), int(AutoAct::Start));
+    CHECK_EQ(int(drive(a, owned(1), now, 3000)), int(AutoAct::None));
+    AutoIn gone;   // the detach: a session of its own, no contract
+    gone.session = 2;
+    CHECK_EQ(int(drive(a, gone, now, 3000)), int(AutoAct::None));
+    CHECK_EQ(int(drive(a, owned(3), now, 3000)), int(AutoAct::Start));
+}
+
+void test_auto_does_not_loop_on_a_charger_that_resets_on_the_questions() {
+    AutoRead a;
+    std::uint32_t now = kT0;
+    CHECK_EQ(int(drive(a, owned(1), now, 3000)), int(AutoAct::Start));
+    CHECK_EQ(int(drive(a, owned(1, true), now, 500)), int(AutoAct::None));
+    AutoIn gone;   // the link went away while the read was in flight
+    gone.session = 2;
+    gone.survey_running = true;
+    CHECK_EQ(int(a.step(gone, now)), int(AutoAct::None));
+    now += 400;   // the charger comes straight back
+    CHECK_EQ(int(drive(a, owned(3), now, 4000)), int(AutoAct::None));   // skipped once: no read-reset-read loop
+    // A later, deliberate attach (well after the loss) asks again.
+    now += kAutoLostMs;
+    CHECK_EQ(int(drive(a, owned(4), now, 3000)), int(AutoAct::Start));
+}
+
+void test_a_manual_refresh_takes_the_attach() {
+    AutoRead a;
+    std::uint32_t now = kT0;
+    CHECK_EQ(int(drive(a, owned(1), now, 300)), int(AutoAct::None));
+    a.spend(1);   // Reset & re-read ran its own survey
+    CHECK_EQ(int(drive(a, owned(1), now, 20000)), int(AutoAct::None));
+    AutoRead b;
+    CHECK_EQ(int(drive(b, owned(1, true), now, 5000)), int(AutoAct::None));   // a survey already reading is never asked over
+    AutoRead c;   // a spend that names a session the decision has not seen yet
+    c.spend(7);
+    CHECK_EQ(int(drive(c, owned(7), now, 20000)), int(AutoAct::None));
+    CHECK_EQ(int(drive(c, owned(8), now, 3000)), int(AutoAct::Start));
+}
+
 }  // namespace
 
 int main() {
@@ -312,5 +480,14 @@ int main() {
     test_clear_forgets_the_source_view();
     test_abandon_ends_the_run_and_keeps_the_answers();
     test_wire_outcome_maps_the_reread_masks();
+    test_auto_starts_once_on_an_owned_contract_after_the_settle();
+    test_auto_never_runs_without_a_contract_of_our_own();
+    test_auto_never_runs_inline_or_beside_a_tool();
+    test_auto_aborts_at_once_when_the_link_stops_being_ours();
+    test_auto_abort_keeps_answers_and_blocks_the_rest_inline();
+    test_auto_plan_asks_only_what_the_source_can_answer();
+    test_auto_runs_again_on_a_reattach();
+    test_auto_does_not_loop_on_a_charger_that_resets_on_the_questions();
+    test_a_manual_refresh_takes_the_attach();
     return test_report("test_pd_survey");
 }

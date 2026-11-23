@@ -767,6 +767,8 @@
   "770": "[LIM] forged pos %u PDO 0x%08X\n",
   "771": "[LIM] t=%u sink Request pos %u RDO 0x%08X: %u mW (limit %u mW)\n",
   "772": "[LIM] t=%u off: %s\n",
-  "773": "[LIM] t=%u %s\n"
+  "773": "[LIM] t=%u %s\n",
+  "774": "[SURVEY] auto read: pd20=%d epr=%d planned=%u\n",
+  "775": "[SURVEY] auto read stopped (%s)\n"
  }
 }

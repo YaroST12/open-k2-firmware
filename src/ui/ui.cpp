@@ -14,6 +14,7 @@
 #include "k2/fastcharge/svooc_trig.hpp"
 #include "k2/drivers/fusb302.hpp"
 #include "k2/drivers/lcd.hpp"
+#include "k2/pd/emk_spoof.hpp"
 #include "k2/pd/link.hpp"
 #include "k2/pd/pd_emarker_plan.hpp"
 #include "k2/pd/pd_source.hpp"
@@ -369,6 +370,14 @@ void Ui::set_page(Page p, uint32_t now_ms) {
 bool Ui::port_owner_busy() const {
     return ports_busy() || fusb302::listen_active() || fctrig::status().state != fc::State::Idle || fctrig::scan_running() ||
            fctrig::ufcs_exiting() || fctrig::svooc_running() || dpsniff::armed();
+}
+
+pd::SvWhy Ui::auto_read_block() const {
+    if (link_reset_inline()) return pd::SvWhy::Inline;
+    if (port_owner_busy() || busy_why() != BusyWhy::None || fusb302::busy_why() != pd::BusyWhy::None || emk_spoof::active() ||
+        fusb302::ra_active())
+        return pd::SvWhy::ChargerTest;
+    return pd::SvWhy::None;
 }
 
 pd::LimRefusal Ui::pd_limit_arm(uint32_t limit_mw, bool seed) const {

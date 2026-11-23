@@ -843,6 +843,10 @@ is a real choice, the options are listed and none is marked.
 
 ### 7.3 Who's attached (Source, Cable, Sink)
 
+The attach's auto read (the charger's identity, modes and extended caps, once per attach, only on the K2's own contract) shows as
+a toast `Reading charger n/m`, then `Read: 4 got, 1 unsupported`, while the rows move from `Asking...` to the answer. A row
+nothing asked reads `Not asked`; an aborted read leaves `Inline: blocked` / `Charger test` on the rest.
+
 Renders: `mock_pd_source.png`, `mock_pd_sink.png`, `mock_pd_cable.png`, `mock_pd_cable_no_chip.png`,
 `mock_pd_cable_not_probed.png`, `mock_pd_cable_chip_silent.png`.
 

@@ -188,7 +188,7 @@ static void test_status_diag_verdict() {
     running.start(pd::SvCtx{.contract = true, .inline_sink = false, .charger_test = false, .xiaomi_chain = false,
                             .pd20 = false, .epr_capable = true}, 1000);
     in.sv = &running;
-    status_text(in, s); CHECK_STR(s.c_str(), "Reading 0/8");
+    status_text(in, s); CHECK_STR(s.c_str(), "Reading charger 0/8");
     in.sv = nullptr;
     in.op = "Live sink: OK again";
     status_text(in, s); CHECK_STR(s.c_str(), "Live sink: OK again");
@@ -487,7 +487,7 @@ static void test_status_survey() {
     in.tab = Tab::Source; in.f = facts(false, true, true);
     pd::Survey sv;
     in.sv = &sv;
-    status_text(in, s); CHECK_STR(s.c_str(), "Source caps not read yet");   // nothing asked yet: the fact, per tab
+    status_text(in, s); CHECK_STR(s.c_str(), "Not asked: Reset & re-read");   // nothing asked yet (no auto read ran): the hint, per tab
     in.tab = Tab::Cable;
     status_text(in, s); CHECK_STR(s.c_str(), "Cable not fully read yet");
     in.tab = Tab::Sink; in.f = facts(true, true, true);
@@ -498,11 +498,11 @@ static void test_status_survey() {
 
     sv.start(kLive, 1000);                                                  // running: progress, resolved / planned
     CHECK_EQ(int(sv.planned()), 8);
-    status_text(in, s); CHECK_STR(s.c_str(), "Reading 0/8");
+    status_text(in, s); CHECK_STR(s.c_str(), "Reading charger 0/8");
     sv.poll(1000, true, true);
     sv.set(pd::SvField::Caps, pd::SvOutcome::Answered);
     sv.finish(1010);
-    status_text(in, s); CHECK_STR(s.c_str(), "Reading 1/8");
+    status_text(in, s); CHECK_STR(s.c_str(), "Reading charger 1/8");
     in.op = "Rescanning...";
     status_text(in, s); CHECK_STR(s.c_str(), "Rescanning...");              // an action message still wins
     in.op = "";

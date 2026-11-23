@@ -981,6 +981,10 @@ bool survey_wire_start(std::uint8_t mask) {
     return true;
 }
 
+void survey_wire_abort() {
+    if (reread_running()) reread().abort();   // drops a queued, unsent message; one already on the wire is not recalled
+}
+
 void set_force_line(std::uint8_t line) {
     g_force_cc = line <= 2 ? line : 0;
     K2LOG("[PD] CC scan forced line %u\n", unsigned(g_force_cc));
