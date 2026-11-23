@@ -246,9 +246,7 @@ void toast_pill(const Surface &s, FooterTone tone, std::string_view text, bool e
         if (px > 0) gfx_fill(s, 0, py, px, kToastH, kBg);
         if (s.w - px - pw > 0) gfx_fill(s, static_cast<int16_t>(px + pw), py, static_cast<int16_t>(s.w - px - pw), kToastH, kBg);
     }
-    draw_frame(s, px, py, pw, kToastH, 1, border);
-    draw_label_box(s, static_cast<int16_t>(px + 1), static_cast<int16_t>(py + 1),
-                   static_cast<int16_t>(pw - 2), static_cast<int16_t>(kToastH - 2), fitted, ink, fill);
+    draw_pill_box(s, px, py, pw, kToastH, fitted, ink, fill, border, kBg);
 }
 }  // namespace
 

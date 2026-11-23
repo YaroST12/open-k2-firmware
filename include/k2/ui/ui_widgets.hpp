@@ -73,9 +73,13 @@ constexpr int mark_cell(const Font &f) { return mark_size(f) + 4; }   // 2 px le
 int draw_marked_text(const Surface &s, const Font &f, int16_t x, int16_t y, std::string_view text, uint16_t fg, uint16_t bg);
 int marked_width(const Font &f, std::string_view text);
 
-// Shared single-pass S12 label-in-box painter (chips, LAST badge).
+// Shared single-pass S12 label-in-box painter, every pixel once. Unstretched surfaces only: draw_pill_box handles a stretch.
 void draw_label_box(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, std::string_view text,
                     uint16_t fg, uint16_t bg);
+// A pill: the font 12 word centred in a w x h box of `fill`, ringed by a 1 px `frame` unless it equals the fill. Native size in
+// every rotation (ContentViewport::native_box): under a stretch `ground` takes the rest of the mapped box.
+void draw_pill_box(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, std::string_view text, uint16_t ink,
+                   uint16_t fill, uint16_t frame, uint16_t ground);
 
 // w x h sparkline of `w` samples (oldest first, each 0..h-1): bg box, three rule lines, a fill
 // under the trace in `tint`, and a one-pixel trace in `color`.

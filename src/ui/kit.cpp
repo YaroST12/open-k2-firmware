@@ -325,17 +325,16 @@ void draw_leader(const Surface &s, int16_t x0, int16_t x1, int16_t y) {
         gfx_fill(s, static_cast<int16_t>(x), y, kLeaderDot, kLeaderDot, kInk3);
 }
 
-int draw_chip(const Surface &s, int16_t x, int16_t y, std::string_view text, uint16_t fill, uint16_t ink, int16_t min_w) {
+int draw_chip(const Surface &s, int16_t x, int16_t y, std::string_view text, uint16_t fill, uint16_t ink, int16_t min_w,
+              uint16_t ground) {
     const int16_t w = std::max<int16_t>(static_cast<int16_t>(badge_text_bounds(kLabelFont, text).w + 8), min_w);
-    draw_label_box(s, x, y, w, kChipH, text, ink, fill);
+    draw_pill_box(s, x, y, w, kChipH, text, ink, fill, fill, ground);
     return w;
 }
 
 int draw_chip_frame(const Surface &s, int16_t x, int16_t y, std::string_view text, uint16_t frame, uint16_t ink, uint16_t bg) {
     const int16_t w = static_cast<int16_t>(badge_text_bounds(kLabelFont, text).w + 8);
-    draw_frame(s, x, y, w, kChipH, 1, frame);
-    draw_label_box(s, static_cast<int16_t>(x + 1), static_cast<int16_t>(y + 1), static_cast<int16_t>(w - 2),
-                   static_cast<int16_t>(kChipH - 2), text, ink, bg);
+    draw_pill_box(s, x, y, w, kChipH, text, ink, bg, frame, bg);
     return w;
 }
 

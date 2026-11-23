@@ -1551,7 +1551,53 @@ static void test_rail_link_icon_upright() {
             }
 }
 
+// A chip (solid or outlined) is its native w x 14 box in every rotation, all four edges whole: a landscape viewport squeezes
+// 240 rows into 208, so a stretched 1 px edge could map to no row at all. Every y over a full squeeze period is tried.
+// A short chip painted over a long one (the caller's ground first, the chip as its hole) leaves nothing of the long one.
+static void test_chip_native_in_every_rotation() {
+    const Rect dests[4] = {{16, 0, 208, 240}, {0, 16, 240, 208}, {0, 0, 208, 240}, {0, 16, 240, 208}};   // rotations 0..3
+    const Surface s{0, 0, 208, 240};
+    constexpr uint16_t kFrame = 0xF800, kFill = 0x07E0, kShort = 0x001F, kInkC = 0xFFFF, kGround = 0x2222;
+    // The bounding box of colour c; true when it is exactly w x h and its four edges are all c.
+    const auto whole_box = [](uint16_t c, int w, int h) {
+        int l = 240, r = -1, t = 240, b = -1;
+        for (int y = 0; y < 240; y++)
+            for (int x = 0; x < 240; x++)
+                if (px(x, y) == c) { l = std::min(l, x); r = std::max(r, x); t = std::min(t, y); b = std::max(b, y); }
+        if (r < 0 || r - l + 1 != w || b - t + 1 != h) return false;
+        for (int x = l; x <= r; x++) if (px(x, t) != c || px(x, b) != c) return false;
+        for (int y = t; y <= b; y++) if (px(l, y) != c || px(r, y) != c) return false;
+        return true;
+    };
+    for (int r = 0; r < 4; ++r)
+        for (int16_t y = 60; y < 76; ++y) {
+            ContentViewport viewport(dests[r], 208, 240);
+            std::fill(std::begin(g_panel), std::end(g_panel), kBase);
+            const int wf = kit::draw_chip_frame(s, 20, y, "EPR", kFrame, kInkC, kBg);
+            const bool frame_ok = whole_box(kFrame, wf, kit::kChipH);
+            std::fill(std::begin(g_panel), std::end(g_panel), kBase);
+            const int ws = kit::draw_chip(s, 20, y, "PD3.x", kFill, kInkC);
+            const bool solid_ok = whole_box(kFill, ws, kit::kChipH);
+            if (!frame_ok || !solid_ok) std::printf("  rotation %d y %d: outline %d solid %d\n", r, y, frame_ok, solid_ok);
+            CHECK_EQ(frame_ok, true);
+            CHECK_EQ(solid_ok, true);
+            std::fill(std::begin(g_panel), std::end(g_panel), kBase);
+            const kit::Box band{0, static_cast<int16_t>(y - 6), 208, 26};
+            gfx_fill(s, band.x, band.y, band.w, band.h, kGround);
+            kit::draw_chip(s, 20, y, "PD3.x 100W", kFill, kInkC);
+            const int16_t sw = static_cast<int16_t>(badge_text_bounds(kLabelFont, "PD").w + 8);
+            const kit::Box hole{20, y, sw, kit::kChipH};
+            kit::fill_except(s, band, &hole, 1, kGround);
+            kit::draw_chip(s, 20, y, "PD", kShort, kInkC);
+            int left = 0;
+            for (int i = 0; i < 240 * 240; i++) left += g_panel[i] == kFill;
+            if (left) std::printf("  rotation %d y %d: %d px of the long chip left\n", r, y, left);
+            CHECK_EQ(left, 0);
+        }
+}
+
 int main() {
+    test_chip_native_in_every_rotation();
     test_rail_link_icon_upright();
     test_rail_link_cell_fits();
     test_draw_key_slot_arrows();

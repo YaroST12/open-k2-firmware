@@ -294,10 +294,12 @@ void kv_ground_row(const Surface &s, const KvLayout &l, const char *label, int i
 constexpr int16_t kLeaderPitch = 6, kLeaderDot = 2, kLeaderGap = 8;
 void draw_leader(const Surface &s, int16_t x0, int16_t x1, int16_t y);
 
-// Fieldbook chip: a square kChipH px block in `fill` with a font 12 word in `ink`, 4 px padding (at least `min_w` wide, the word
+// Fieldbook chip (draw_pill_box: native size in every rotation, `ground` beside it under a stretch): a square kChipH px block in
+// `fill` with a font 12 word in `ink`, 4 px padding (at least `min_w` wide, the word
 // centred). Every pixel once: the ground goes round the word's box. Returns the width. A tag (D+, CC1, PD) or a verdict word.
 constexpr int16_t kChipH = 14;
-int draw_chip(const Surface &s, int16_t x, int16_t y, std::string_view text, uint16_t fill, uint16_t ink, int16_t min_w = 0);
+int draw_chip(const Surface &s, int16_t x, int16_t y, std::string_view text, uint16_t fill, uint16_t ink, int16_t min_w = 0,
+              uint16_t ground = kBg);
 // The outline chip (PPS, OFF, no EPR): a 1 px `frame` round the word on `bg`, the same box as draw_chip. Returns the width.
 int draw_chip_frame(const Surface &s, int16_t x, int16_t y, std::string_view text, uint16_t frame, uint16_t ink, uint16_t bg);
 constexpr int chip_w(std::string_view text) { return static_cast<int>(text.size()) * 6 + 8; }   // font 12: 6 px a cell

@@ -60,28 +60,40 @@ int draw_marked_text(const Surface &s, const Font &f, int16_t x, int16_t y, std:
 
 void draw_label_box(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, std::string_view text,
                     uint16_t fg, uint16_t bg) {
-    const TextBounds tb = badge_text_bounds(kLabelFont, text);
-    if (ContentViewport::scaled()) {
+    const TextOrigin p = center_in_box({x, y, w, h}, badge_text_bounds(kLabelFont, text));
+    const int x1 = x + w, y1 = y + h;
+    const int ax0 = std::max<int>(x, p.x), ax1 = std::min<int>(x1, p.x + text_width(kLabelFont, text));
+    const int ay0 = std::max<int>(y, p.y), ay1 = std::min<int>(y1, p.y + kLabelFont.height);
+    if (ax0 >= ax1 || ay0 >= ay1) {
         gfx_fill(s, x, y, w, h, bg);
-        const Rect mb = ContentViewport::mapped_rect(
-            {static_cast<int16_t>(s.x + x), static_cast<int16_t>(s.y + y), w, h});
-        const TextOrigin p = center_in_box(mb, tb);
-        ContentViewport::Pause unscaled;
-        gfx_text({0, 0, kScreenW, kScreenW}, kLabelFont, p.x, p.y, text, fg, bg);
     } else {
-        const TextOrigin p = center_in_box({x, y, w, h}, tb);
-        const int x1 = x + w, y1 = y + h;
-        const int ax0 = std::max<int>(x, p.x), ax1 = std::min<int>(x1, p.x + text_width(kLabelFont, text));
-        const int ay0 = std::max<int>(y, p.y), ay1 = std::min<int>(y1, p.y + kLabelFont.height);
-        if (ax0 >= ax1 || ay0 >= ay1) {
-            gfx_fill(s, x, y, w, h, bg);
-        } else {
-            if (ay0 > y) gfx_fill(s, x, y, w, static_cast<int16_t>(ay0 - y), bg);
-            if (ay1 < y1) gfx_fill(s, x, static_cast<int16_t>(ay1), w, static_cast<int16_t>(y1 - ay1), bg);
-            if (ax0 > x) gfx_fill(s, x, static_cast<int16_t>(ay0), static_cast<int16_t>(ax0 - x), static_cast<int16_t>(ay1 - ay0), bg);
-            if (ax1 < x1) gfx_fill(s, static_cast<int16_t>(ax1), static_cast<int16_t>(ay0), static_cast<int16_t>(x1 - ax1), static_cast<int16_t>(ay1 - ay0), bg);
-        }
-        gfx_text(s, kLabelFont, p.x, p.y, text, fg, bg);
+        if (ay0 > y) gfx_fill(s, x, y, w, static_cast<int16_t>(ay0 - y), bg);
+        if (ay1 < y1) gfx_fill(s, x, static_cast<int16_t>(ay1), w, static_cast<int16_t>(y1 - ay1), bg);
+        if (ax0 > x) gfx_fill(s, x, static_cast<int16_t>(ay0), static_cast<int16_t>(ax0 - x), static_cast<int16_t>(ay1 - ay0), bg);
+        if (ax1 < x1) gfx_fill(s, static_cast<int16_t>(ax1), static_cast<int16_t>(ay0), static_cast<int16_t>(x1 - ax1), static_cast<int16_t>(ay1 - ay0), bg);
+    }
+    gfx_text(s, kLabelFont, p.x, p.y, text, fg, bg);
+}
+
+void draw_pill_box(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, std::string_view text, uint16_t ink,
+                   uint16_t fill, uint16_t frame, uint16_t ground) {
+    if (ContentViewport::scaled()) {
+        const Rect src{static_cast<int16_t>(s.x + x), static_cast<int16_t>(s.y + y), w, h};
+        const Rect m = ContentViewport::mapped_rect(src), n = ContentViewport::native_box(src);
+        ContentViewport::Pause unscaled;
+        const Surface panel{0, 0, kScreenW, kScreenH};
+        // the mapped box's columns either side of the native pill (a stretch widens it; the squeeze makes it shorter)
+        if (n.x > m.x) gfx_fill(panel, m.x, m.y, static_cast<int16_t>(n.x - m.x), m.h, ground);
+        if (m.x + m.w > n.x + w) gfx_fill(panel, static_cast<int16_t>(n.x + w), m.y, static_cast<int16_t>(m.x + m.w - n.x - w), m.h, ground);
+        draw_pill_box(panel, n.x, n.y, w, h, text, ink, fill, frame, ground);
+        return;
+    }
+    if (frame != fill) {
+        draw_frame(s, x, y, w, h, 1, frame);
+        draw_label_box(s, static_cast<int16_t>(x + 1), static_cast<int16_t>(y + 1), static_cast<int16_t>(w - 2),
+                       static_cast<int16_t>(h - 2), text, ink, fill);
+    } else {
+        draw_label_box(s, x, y, w, h, text, ink, fill);
     }
 }
 

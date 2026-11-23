@@ -19,6 +19,9 @@ public:
     // so partial Field redraws land at exactly the same advance as a whole-field draw.
     static Rect native_rect(Rect source, int cell_offset = 0);
     static Rect mapped_rect(Rect source);
+    // The source box at its native size, centred on its mapped box and kept inside the content: where a pill or a mark goes
+    // under a stretch, so its 1 px edges survive (a squeeze drops 2 rows in 15). The source box itself without a stretch.
+    static Rect native_box(Rect source);
     // True while fills and glyphs go through a stretch: a glyph keeps its native size, so it no longer fills the box that
     // the page measured for it, and a caller that leaves such a box open to save bus time must paint it instead.
     static bool stretched();

@@ -60,14 +60,13 @@ static void test_native_menu_fonts() {
         const int pill_w = text_w + 16;
         const int pill_x = (logical.w - pill_w) / 2;
         Rect inner;
-        {
+        {   // the pill keeps its native size, centred on its mapped box; the label centres inside its 1 px frame
             ContentViewport viewport(box);
-            inner = ContentViewport::mapped_rect({
-                static_cast<int16_t>(pill_x + 1),
-                static_cast<int16_t>(logical.h - kToastH - kToastMarginBottom + 1),
-                static_cast<int16_t>(pill_w - 2),
-                static_cast<int16_t>(kToastH - 2),
-            });
+            const Rect pill = ContentViewport::native_box({static_cast<int16_t>(pill_x),
+                                                           static_cast<int16_t>(logical.h - kToastH - kToastMarginBottom),
+                                                           static_cast<int16_t>(pill_w), kToastH});
+            inner = {static_cast<int16_t>(pill.x + 1), static_cast<int16_t>(pill.y + 1), static_cast<int16_t>(pill_w - 2),
+                     static_cast<int16_t>(kToastH - 2)};
         }
         const TextOrigin origin = center_in_box(inner, badge_text_bounds(kLabelFont, "Identify"));
         for (int row = 0; row < kLabelFont.height; ++row) {
