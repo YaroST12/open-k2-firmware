@@ -1472,7 +1472,9 @@ void test_reread_on_an_empty_port_ends_and_releases_rd() {
     const AttachState boot{g_reg[0x02], g_reg[0x03]};
     CHECK_EQ(fusb302::reread_start(pd::kRereadDefault), true);
     CHECK_EQ(sw0_rd() != 0, true);
+    CHECK_EQ(fusb302::rd_for_run_on(), true);                // the Charger overview reads this as "our own wake": no replug edge
     settle_ms(120000);
+    CHECK_EQ(fusb302::rd_for_run_on(), false);
     CHECK_EQ(int(fusb302::reread_status().state) != int(pd::RereadState::Running), true);
     CHECK_EQ(sw0_rd(), boot.sw0 & 3u);
     CHECK_EQ(usb_has("[REREAD] attach released"), true);

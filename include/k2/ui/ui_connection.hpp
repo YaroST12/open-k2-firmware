@@ -127,7 +127,8 @@ struct DebouncedSense {
 // dual-role toggle are candidates: our Rd makes a DRP bank source, which is the intent. It carries no CC-level test on purpose: a bank that idles dark (CC1 ~0, CC2 1.55 V) reads like the empty
 // port's own bias net (CC2 1.64-1.71 V), so only the wake itself tells them apart. The standby signature is one case of it.
 constexpr bool wake_candidate(const Facts &f) {
-    if (f.sink_seen || (!f.wake_port_off && f.idle_rd_held)) return false;
+    // Wake sleeping port on: its idle hold owns a standby line, also in the hold's 600 ms re-read gap (line 0 there).
+    if (f.sink_seen || (!f.wake_port_off && (f.idle_rd_held || f.open_cc_mv >= 0))) return false;
     if (f.vbus_mv < 0 || f.vbus_mv >= raguard::kVbusAttachedMv) return false;
     const PortSense ps = classify_port_sense(f);
     return ps == PortSense::NoCharger || ps == PortSense::SourceAsleep || ps == PortSense::ChargerWaiting ||

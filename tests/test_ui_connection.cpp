@@ -913,6 +913,7 @@ static void test_wake_candidate() {
     f = bank; f.vbus_mv = raguard::kVbusAttachedMv - 1; CHECK_EQ(wake_candidate(f), true);
     f = bank; f.wake_port_off = false; CHECK_EQ(wake_candidate(f), true);         // Wake sleeping port on, but no hold covers this port
     f.idle_rd_held = true;             CHECK_EQ(wake_candidate(f), false);        // its idle Rd hold is already waking it
+    f.idle_rd_held = false; f.open_cc_mv = 2950; CHECK_EQ(wake_candidate(f), false);   // a standby line: the hold's own (its 600 ms re-read gap too)
     f = bank; f.cross = raguard::CrossKind::Crossed; CHECK_EQ(wake_candidate(f), false);   // two parties on the lines
     f = bank; f.cross = raguard::CrossKind::Hint;    CHECK_EQ(wake_candidate(f), false);
     f = bank; f.wait = raguard::WaitKind::ChargerWaiting; CHECK_EQ(wake_candidate(f), true);    // Rp at standby level, VBUS off (Xiaomi idle)
