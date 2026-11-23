@@ -62,7 +62,7 @@ constexpr const char* depth_name(Depth d) {
 inline constexpr int16_t kHole = INT16_MIN;     // an unmeasured cell of the point record
 inline constexpr unsigned kFineMv = 20;         // the PPS Request quantum
 inline constexpr unsigned kWinCount = 2;
-inline constexpr unsigned kWinMv[kWinCount][2] = {{8000, 11000}, {14000, 19000}};   // the phone windows, [lo, hi] setpoints
+inline constexpr unsigned kWinMv[kWinCount][2] = {{6800, 11000}, {14000, 19000}};   // the phone windows, [lo, hi] setpoints
 // A depth's step at a setpoint (wins = bit per kWin window this APDO sweeps finely).
 constexpr unsigned depth_step(Depth d, Kind k, unsigned wins, unsigned mv) {
     if (d == Depth::Step200) return 200;

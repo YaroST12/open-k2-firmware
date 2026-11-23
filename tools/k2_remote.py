@@ -1970,7 +1970,7 @@ def charger_level(link, level):
 
 def charger_sweep_depth(link, depth=None):
     """Read (no argument) or set the deep-sweep step of the next charger-test run: "200" (the default), "100", "phone" (100 mV
-    plus 20 mV points in the 8-11 V and 14-19 V windows on PPS; AVS stays 100 mV) or "20" (every PPS quantum; AVS 100 mV), or
+    plus 20 mV points in the 6.8-11 V and 14-19 V windows on PPS; AVS stays 100 mV) or "20" (every PPS quantum; AVS 100 mV), or
     the index. A sweep only runs where the level asks for it. Refused while a run is in progress. Returns the depth name."""
     if depth is None:
         p = link.call(CMD_CHARGER_SWEEP_DEPTH, b"").payload
@@ -5935,7 +5935,7 @@ def build_parser():
                         "medium = the default run, deep = medium + the PPS and AVS deep sweeps")
     cl.add_argument("level", choices=TEST_LEVELS)
     csd = sub.add_parser("charger-sweep-depth", help="deep-sweep step of the NEXT charger run, in mV: 200 (default), 100, phone (100 mV plus "
-                         "20 mV points in the 8-11 V and 14-19 V PPS windows), 20; no argument reads it")
+                         "20 mV points in the 6.8-11 V and 14-19 V PPS windows), 20; no argument reads it")
     csd.add_argument("depth", nargs="?", choices=SWEEP_DEPTHS)
     lt = sub.add_parser("charger-legacy-tune", help="Legacy timing knobs of the charger test, RAM only (the constants again at boot): no argument "
                         "lists them, a knob reads it, a knob and a value in ms sets it (quiet_ms 0: start the first handshake at once)")

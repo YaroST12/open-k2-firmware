@@ -4627,7 +4627,7 @@ static void test_sweep_depth_phone_runs_the_windows_at_20mv() {
     CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
     f.tick(r, 900000);
     CHECK_EQ(r.state(), ct::State::Done);
-    // one window on one APDO: the pos-6 APDO (5-11 V) carries 8-11 V, the pos-7 one (5-21 V) 14-19 V when both offer the same current
+    // one window on one APDO: the pos-6 APDO (5-11 V) carries 6.8-11 V, the pos-7 one (5-21 V) 14-19 V when both offer the same current
     const auto* rw6 = r.sweep_view().find(uint8_t(A::Pps), 6, false);
     const auto* rw7 = r.sweep_view().find(uint8_t(A::Pps), 7, false);
     CHECK_EQ(rw6 && rw7, true);

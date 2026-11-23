@@ -239,7 +239,7 @@ def parse_args(argv=None):
                          "deep: medium plus the PPS and AVS deep sweeps and the PD spec section")
     ap.add_argument("--sweep-depth", choices=kr.SWEEP_DEPTHS,
                     help="step of the PPS and AVS deep sweeps in mV: 200 (the device default), 100, phone (100 mV plus 20 mV points in "
-                         "the 8-11 V and 14-19 V PPS windows), 20 (every PPS quantum); sent before START, the device keeps it")
+                         "the 6.8-11 V and 14-19 V PPS windows), 20 (every PPS quantum); sent before START, the device keeps it")
     ap.add_argument("--path")
     sweep = ap.add_mutually_exclusive_group()
     sweep.add_argument("--sweep", action="store_true",
