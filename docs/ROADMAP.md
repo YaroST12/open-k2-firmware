@@ -168,7 +168,10 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
   target and the grid outline all read `index()`, so the QC2 badge was lit while the voltage swept. The counter was
   not wrong: 29/54 counts non-Skip rows (29 PD rows done, 25 QC2 / QC3 / UFCS rows still Pending); those 25 later skipped
   ("request failed"), so the run ended 29 pass / 42 skip of 71.
-  Fix 7d7517fc (not verified on hardware): `pdspec::Engine::point()` -> `Runner::spec_point()`; in the Spec state the page names the
+  Fix 7d7517fc, **partly verified on hardware 2026-11-23** (1.2.0-116-0d39b5c6, Baseus 140 W over a 3 A cable, Deep,
+  `runs/ct-sweep-label-hw/`): through the spec stage the header read "PD 5V", "PD 15V", "PPS 5V" (USB PD), the outline sat
+  on the PD chips and the PPS 5-21V row, the counter held at 30/55, and QC2 5V was named only after the stage. AVS, EPR
+  and Hard Reset points not seen (no AVS offered; EPR blocked by the 3 A cable). `pdspec::Engine::point()` -> `Runner::spec_point()`; in the Spec state the page names the
   engine's point ("PPS 8.02V", "AVS 21V", "PD 9V", "Hard Reset"), its target and gauge follow it, and the outline sits on the
   matching chip of the compact PD row (`test_ui_charger_test` spec-stage walk, `test_charger_test`, `test_step_label`).
   Host walk reaches SPR and EPR AVS and fixed 28 V points (every tick checked) and the first tick after the stage. Open:
