@@ -184,12 +184,14 @@ public:
     // scan may interrupt charging, so it needs `confirm` (remote --confirm) or a second OK within
     // kConfirmWindowMs on the device. Rescan is passive inline and never needs one.
     bool run_action(Action a, uint32_t now_ms, bool confirm = false);
-    // Refresh's wake without the repaint (the Charger overview calls it from its own update): the rescan plus the survey hook.
+    // The passive re-read of an attached source (Get_Source_Cap on a live contract, or a CC cycle) plus the survey hook. Only
+    // wake_source calls it, for a lit rail, a live contract, inline or a driver refusal; nothing else wakes through it.
     // False = refused (a charger test owns the ports) or busy (a negotiation or a survey in flight).
     bool rescan_source();
-    // The wake of a dark port (the Charger overview's auto wake, Refresh and Reset & re-read with no contract): with no contract, VBUS
-    // dark and the auto read free it presents Rd and reads (fusb302::reread_start, what the remote's pd-reread does: a bank asleep in
-    // DRP idle answers an Rd, not a CC cycle), else it is rescan_source. False = refused or busy.
+    // Every "wake + read" goes through here (Action::PdRescan: the page's auto wake, Refresh, Reset & re-read, Tools Reset link, the
+    // remote action 1, the Hard Reset fallback): with no contract, VBUS dark and the auto read free it presents Rd and reads
+    // (fusb302::reread_start, what the remote's pd-reread does: a bank asleep in DRP idle answers an Rd, not a CC cycle), else it is
+    // rescan_source. Never inline. False = refused or busy.
     bool wake_source();
     static constexpr uint32_t kConfirmWindowMs = 5000;
     static constexpr uint32_t kListenWindowMs = 5000;   // passive e-marker listen after a quiet sniff

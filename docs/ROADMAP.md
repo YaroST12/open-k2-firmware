@@ -1242,16 +1242,21 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
     VBUS dark with a monitor, no inline / sink evidence, `NoCharger` or `SourceAsleep` (so an empty port gets one try too: the
     empty bias net reads CC2 1.64-1.71 V, no level separates it from the bank), Wake sleeping port off, and `Ui::auto_read_block()`
     free. `Ui::wake_source()` runs it: no contract + VBUS dark + not inline = `reread_start` (Rd) + the survey hook, else
-    `rescan_source()`; the page's auto wake, Refresh and Reset &amp; re-read with no contract all use it. A K2-sent sink Hard Reset on a
+    `rescan_source()`; every "wake + read" caller takes it (`Action::PdRescan`: the page's auto wake, Refresh, Reset & re-read, Tools Reset link, the remote's `action 1`, the Hard Reset fallback); `rescan_source()` is left only for a lit rail, a live contract (Get_Source_Cap), inline and a driver refusal. A K2-sent sink Hard Reset on a
     Ready contract arms `pd::HrRecovery` (`Ui::hr_recover_poll`): VBUS still dark after 1.96 s (tPSHardReset + tSafe0V + tSrcRecover +
     tSrcTurnOn; 2.39 s out of EPR) = one `wake_source()` (a bank answers the reset by dropping VBUS and sleeping). Inline untouched.
-    Tests: `test_ui_connection` (`wake_candidate`), `test_pd_passive` (`HrRecovery`), `test_ui_connection_page` (bank, empty port, no
-    loop, ring pass, inline, HR fallback, Rd path vs rescan). Size +288 B text, +16 B bss vs e3b96127. Validate on hardware: bank on the
+    One wake per page open: once a wake worked (the rail came up after a try) `AutoWake` stays quiet until the page is reopened or Refresh
+    is pressed. The survey's auto read waits while the driver's own re-read runs (`AutoIn::reread_running`). Tests: `test_ui_connection`
+    (`wake_candidate`, `AutoWake` latch), `test_pd_passive` (`HrRecovery`), `test_pd_survey` (deferral), `test_ui_connection_page` (bank,
+    empty port, no loop, ring pass, inline, HR fallback, Rd path vs rescan, each caller), `test_fusb302_scan` (real driver: Rd after a
+    Hard Reset that took the Rp away, empty port bounded and released). Size +312 B text, +16 B bss vs e3b96127. Validate on hardware: bank on the
     top port, K2 on the PC: open the Charger overview: `Waking charger`, the bank wakes (Rd), 6 PDOs read; empty port: one toast, `NO
-    CHARGER`, no repeated Rd; Reset &amp; re-read on a K2-owned contract with the bank: Hard Reset, VBUS drops, wake within ~2 s
+    CHARGER`, no repeated Rd; Reset & re-read on a K2-owned contract with the bank: Hard Reset, VBUS drops, wake within ~2 s
     (`[UI] link reset: VBUS did not come back`), the read completes. Open: the survey's auto read may be refused while the re-read's
     own run is active (`[SURVEY] wire refused`; the re-read itself still fills the rows), the Rd made by the wake is released by the
-    re-read, ~30 s after it; DualRolePort / ChargerWaiting are not wake candidates.
+    re-read, ~30 s after it; DualRolePort / ChargerWaiting are not wake candidates; a source that keeps its Rp through the K2's Hard
+    Reset leaves the attach held, so `reread_start` refuses and the fallback is the rescan's CC cycle (it recovers by itself: the
+    recovery only fires on a dark rail); a second sleeping charger on the same page open needs Refresh.
 
 - **Ripple: calibrate PA1, then show it** (the capture works; its scale is unknown).
   - Seen on hardware (2026-11-09, HID power only, no charger, `runs/2026-11-09-ripple/`): `k2_remote ripple` returns

@@ -726,7 +726,7 @@ static_assert(cmd_ids_unique(), "two remote commands share one request id");
 // ACTION ids (k2::Action in ui_types.hpp: 1 PdRescan, 2 EmarkerScan, 3 EnergyReset, 4 FcScan, 5 FcReset, 6 Identify).
 // An action that can raise the output above 5 V or drive D+/D- needs the confirm byte on the remote path, the way the
 // screen needs Review + two released OK presses: today that is FcScan (the QC handshake walks the output up). The others
-// never raise VBUS: PdRescan is passive inline / a Get_Source_Cap / a CC cycle, EmarkerScan injects VCONN on CC (refused
+// never raise VBUS: PdRescan is passive inline / a Get_Source_Cap on a live contract / Rd presented on a dark port (a wake), EmarkerScan injects VCONN on CC (refused
 // inline), Identify is a PD message (refused inline), EnergyReset and FcReset only clear state or lower the output.
 // The dispatcher and Remote::action both ask this one function.
 constexpr uint8_t kActionFcScan = 4;
