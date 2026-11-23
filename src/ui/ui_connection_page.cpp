@@ -662,7 +662,7 @@ conn::Facts Ui::passive_facts() const {
     return f;
 }
 
-// The Charger overview wakes a dark port (conn::wake_candidate: a sleeping source, a bank, or nothing at all) once per episode, through the Refresh path:
+// The Charger overview wakes a dark port (conn::wake_candidate: a sleeping source, a bank, or nothing at all) once per page open and per replug, through the Refresh path:
 // the woken attach is a new session, so the survey's auto read runs on it once. Never while anything blocks the auto read.
 void ConnectionPage::auto_wake(uint32_t now_ms) {
     if (fusb302::line_trial().live) return;   // the direct-plug fallback is moving our Rd on this attach: its own wake, not ours
@@ -695,9 +695,10 @@ void ConnectionPage::sense(uint32_t now_ms) {
         wake_asleep_ = uint32_t(now_ms - asleep_since_) >= conn::DebouncedSense::kHoldMs;
     } else {
         asleep_run_ = wake_asleep_ = false;
-        // Only a lit rail proves a wake worked: a dark attach blip on the bias net must not re-arm the try cap.
-        if (stable_ps == conn::PortSense::Attached && raw_f.vbus_mv >= raguard::kVbusAttachedMv) wake_.attached();
     }
+    // A replug re-arms the wake; our own Rd, re-read attach and its release do not.
+    const bool own = fusb302::rd_for_run_on() || fusb302::reread_own_hold() || fusb302::line_trial().live;
+    wake_.sense(stable_ps, raw_f.vbus_mv >= raguard::kVbusAttachedMv, own, now_ms);
     conn::apply_port_sense(raw_f, stable_ps);
     facts_ = raw_f;
     // The one "PD present" verdict of this attach, cached for build_items / paint_body / the tests.

@@ -1230,6 +1230,46 @@ static void test_wake_any_charger_waiting_wakes_once() {
     CHECK_EQ(wake_asks(), 1);
 }
 
+// A real replug inside the old 15 s gap re-arms the wake: the bank is pulled (the port reads its empty bias net) and plugged back.
+static void test_wake_any_replug_rearms() {
+    Ui &ui = fresh_ui();
+    g_stub.pm_online = true;
+    g_stub.rescan_result = rescan::Result::Cycled;
+    uint32_t t = drp_ticks(ui, 12000, 15);
+    ui.open_place(bench::Place::Charger, t);
+    t = drp_ticks(ui, t, 40);                                   // the try, then 3 s of a bank that stays dark
+    CHECK_EQ(g_stub.reread_starts, 1);
+    set_cc(8, 1690);
+    t = run_ticks(ui, t, 30);                                   // pulled: 3 s of an empty port
+    CHECK_EQ(g_stub.reread_starts, 1);
+    t = drp_ticks(ui, t, 30);                                   // plugged back, 10 s after the first try
+    CHECK_EQ(g_stub.reread_starts, 2);
+    t = drp_ticks(ui, t, 200);
+    CHECK_EQ(g_stub.reread_starts, 2);                          // one try per replug
+}
+
+// The wake worked: our Rd lit the rail, the re-read's linger ended with our release and the bank dozes back into its toggle.
+// That passage through "empty" is the K2's own doing, not a replug: no second wake.
+static void test_wake_any_own_release_is_not_a_replug() {
+    Ui &ui = fresh_ui();
+    g_stub.pm_online = true;
+    g_stub.rescan_result = rescan::Result::Cycled;
+    uint32_t t = drp_ticks(ui, 12000, 15);
+    ui.open_place(bench::Place::Charger, t);
+    t = drp_ticks(ui, t, 12);
+    CHECK_EQ(g_stub.reread_starts, 1);
+    g_stub.rd_run = true;                                       // our Rd: the bank sources
+    g_stub.cc = 1; g_stub.pm.vbus_mv = 5000; set_cc(1650, 0);
+    t = run_ticks(ui, t, 50);
+    g_stub.rd_run = false; g_stub.reread_hold = true;           // the read is done, its PDO 1 contract lingers
+    t = run_ticks(ui, t, 250);
+    g_stub.reread_hold = false;                                 // released: the bank drops its rail and Rp ...
+    g_stub.cc = 0; g_stub.pm.vbus_mv = 0; set_cc(8, 1690);
+    t = run_ticks(ui, t, 15);
+    t = drp_ticks(ui, t, 600);                                  // ... and toggles again for a minute
+    CHECK_EQ(wake_asks(), 1);
+}
+
 // Wake sleeping port on, but its idle Rd hold is not on this port (it only holds a standby-signature line): the page wakes it.
 static void test_wake_any_idle_setting_without_a_hold() {
     Ui &ui = fresh_ui();
@@ -3565,6 +3605,8 @@ int main() {
     test_wake_any_dual_role_bank_wakes_once();
     test_wake_any_charger_waiting_wakes_once();
     test_wake_any_idle_setting_without_a_hold();
+    test_wake_any_replug_rearms();
+    test_wake_any_own_release_is_not_a_replug();
     test_wake_any_not_while_the_ring_passes();
     test_wake_any_dark_attach_blips_do_not_loop();
     test_sink_tab_pd_body_shows_the_raw_vooc_note();

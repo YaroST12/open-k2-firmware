@@ -802,13 +802,27 @@ static void test_debounced_port_sense() {
     CHECK_EQ(source_asleep(f), true);
 }
 
-// The Charger overview wakes a sleeping source by itself, once per sleeping episode. `asleep` is the debounced PortSense::SourceAsleep
-// confirmed by the live facts. A wake that got no VBUS is not retried: the port must leave the asleep state and come back after
-// the retry gap (a return before it is the K2's own failed cycle and is swallowed), or the page is opened again.
-static void test_auto_wake_once_per_sleeping_episode() {
+// The Charger overview wakes a dark port by itself once per page open, and once more per port change: an attach edge (the
+// port looked empty, then a device's evidence: a waiting Rp, a dual-role toggle, the standby signature or a lit rail) seen
+// outside the K2's own wake. The wake's own Rd, attach and release (and AutoWake::kSettleMs after them) move no edge.
+static constexpr PortSense kEmpty = PortSense::NoCharger, kDrp = PortSense::DualRolePort;
+
+// Ticks `sense` + `step` from t0 to t1 (100 ms) with a fixed port; returns the wakes asked.
+static int run(AutoWake &w, std::uint32_t t0, std::uint32_t t1, PortSense ps, bool lit = false, bool own = false) {
+    int n = 0;
+    for (std::uint32_t t = t0; t < t1; t += 100) {
+        w.sense(ps, lit, own, t);
+        n += w.step(ps != PortSense::Attached, true, false, t);
+    }
+    return n;
+}
+
+static void test_auto_wake_once_per_page_open() {
     AutoWake w;
-    CHECK_EQ(w.step(true, true, false, 1000), true);
-    for (std::uint32_t t = 1100; t < 120000; t += 100) CHECK_EQ(w.step(true, true, false, t), false);   // no loop on a silent port
+    CHECK_EQ(run(w, 1000, 1100, kDrp), 1);
+    CHECK_EQ(run(w, 1100, 120000, kDrp), 0);                           // no loop on a silent port
+    w.reset();                                                          // the page is opened again
+    CHECK_EQ(run(w, 130000, 131000, kDrp), 1);
 }
 
 static void test_auto_wake_needs_asleep_page_and_no_block() {
@@ -820,63 +834,66 @@ static void test_auto_wake_needs_asleep_page_and_no_block() {
     CHECK_EQ(w.step(true, true, false, 1400), false);
 }
 
-static void test_auto_wake_own_failed_cycle_is_swallowed() {
+// A real replug inside the old 15 s gap: the bank is pulled (the port reads empty) and plugged back (it toggles again).
+static void test_auto_wake_replug_rearms() {
     AutoWake w;
-    CHECK_EQ(w.step(true, true, false, 1000), true);
-    CHECK_EQ(w.step(false, true, false, 2000), false);   // the cycle moved the lines ...
-    for (std::uint32_t t = 3000; t < 120000; t += 100) CHECK_EQ(w.step(true, true, false, t), false);   // ... and the port fell asleep again
+    CHECK_EQ(run(w, 1000, 5000, kDrp), 1);
+    CHECK_EQ(run(w, 5000, 6500, kEmpty), 0);                           // detach
+    CHECK_EQ(run(w, 6500, 9000, kDrp), 1);                             // attach: one more try, at once
+    CHECK_EQ(run(w, 9000, 60000, kDrp), 0);
+    AutoWake e;                                                         // an empty port was tried, then a bank is plugged in
+    CHECK_EQ(run(e, 1000, 5000, kEmpty), 1);
+    CHECK_EQ(run(e, 5000, 8000, PortSense::ChargerWaiting), 1);
+    AutoWake c;                                                         // an awake charger is pulled, a dark bank goes in
+    CHECK_EQ(run(c, 1000, 3000, PortSense::Attached, true), 0);
+    CHECK_EQ(run(c, 3000, 4000, kEmpty), 1);                           // the empty port itself is tried on open
+    CHECK_EQ(run(c, 8000, 9000, kEmpty), 0);
+    CHECK_EQ(run(c, 9000, 12000, kDrp), 1);
 }
 
-static void test_auto_wake_new_episode_after_the_gap() {
+// The wake worked: our Rd lit the rail, the re-read's linger ended with our release, the bank dozed and toggles again.
+// Its passage through "empty" inside the settle window is the K2's own doing: no second try.
+static void test_auto_wake_same_episode_does_not_retry() {
     AutoWake w;
-    CHECK_EQ(w.step(true, true, false, 1000), true);
-    CHECK_EQ(w.step(false, true, false, 2000), false);
-    CHECK_EQ(w.step(true, true, false, 3000), false);                                // too soon: swallowed
-    CHECK_EQ(w.step(false, true, false, 20000), false);
-    CHECK_EQ(w.step(true, true, false, 1000 + AutoWake::kRetryGapMs - 1), false);    // back before the gap ran out
-    CHECK_EQ(w.step(false, true, false, 40000), false);
-    CHECK_EQ(w.step(true, true, false, 41000), true);                                // left and back after the gap: a real replug
-    CHECK_EQ(w.step(true, true, false, 42000), false);
+    CHECK_EQ(run(w, 1000, 1100, kDrp), 1);
+    CHECK_EQ(run(w, 1100, 2000, kDrp, false, true), 0);                // our Rd is on
+    CHECK_EQ(run(w, 2000, 32000, PortSense::Attached, true, true), 0); // the rail is up, the read and its linger run
+    CHECK_EQ(run(w, 32000, 33500, kEmpty), 0);                         // released: the bank drops its rail and Rp ...
+    CHECK_EQ(run(w, 33500, 200000, kDrp), 0);                          // ... and toggles again
+    AutoWake f;                                                         // a failed try with no own flag: the try opens the window
+    CHECK_EQ(run(f, 1000, 1100, kDrp), 1);
+    CHECK_EQ(run(f, 1100, 2000, kEmpty), 0);
+    CHECK_EQ(run(f, 2000, 60000, kDrp), 0);
 }
 
-static void test_auto_wake_gives_up_after_three_tries_without_an_attach() {
+// A dark attach on the bias net (the link flips attached with VBUS 0) says nothing about a device: no edge, so no loop.
+static void test_auto_wake_dark_attach_is_no_edge() {
     AutoWake w;
-    std::uint32_t t = 1000;
-    int fires = 0;
-    for (int i = 0; i < 6; i++) {
-        fires += w.step(true, true, false, t);
-        t += 1000;
-        w.step(false, true, false, t);
-        t += AutoWake::kRetryGapMs + 1000;
+    CHECK_EQ(run(w, 1000, 5000, kEmpty), 1);
+    for (std::uint32_t t = 5000; t < 200000; t += 4000) {
+        CHECK_EQ(run(w, t, t + 1000, PortSense::Attached, false), 0);
+        CHECK_EQ(run(w, t + 1000, t + 4000, kEmpty), 0);
     }
-    CHECK_EQ(fires, int(AutoWake::kMaxTries));            // a charger that never wakes is not cycled forever
 }
 
-// The wake's own attach is released ~30 s after its read and the bank may doze again: that dark is not a new episode, or the K2
-// would hold a bank awake for ever. A wake that worked is done for this page open; Refresh and a reopened page still go.
-static void test_auto_wake_a_wake_that_worked_is_not_repeated() {
+// A port that flips between looking empty and toggling by itself reads like replugs: kMaxTries per page open bounds it.
+static void test_auto_wake_flips_are_capped() {
     AutoWake w;
-    CHECK_EQ(w.step(true, true, false, 1000), true);
-    w.attached();                                         // the rail came up: the wake worked
-    CHECK_EQ(w.step(false, true, false, 5000), false);
-    for (std::uint32_t t = 60000; t < 400000; t += 1000) CHECK_EQ(w.step(true, true, false, t), false);   // dark again, long after the gap
-    w.reset();                                            // the page is opened again
-    CHECK_EQ(w.step(true, true, false, 500000), true);
-    AutoWake plug;
-    plug.attached();                                      // a charger that was just plugged in awake: nothing was woken, nothing is latched
-    CHECK_EQ(plug.step(true, true, false, 1000), true);
+    int n = 0;
+    for (std::uint32_t t = 1000; t < 400000; t += 10000) {
+        n += run(w, t, t + 5000, kDrp);
+        n += run(w, t + 5000, t + 10000, kEmpty);
+    }
+    CHECK_EQ(n, int(AutoWake::kMaxTries));
 }
 
-static void test_auto_wake_page_reopen_and_manual_refresh() {
-    AutoWake w;
-    CHECK_EQ(w.step(true, true, false, 1000), true);
-    CHECK_EQ(w.step(true, true, false, 1100), false);
-    w.reset();                                            // the page is opened again
-    CHECK_EQ(w.step(true, true, false, 1200), true);
+// A manual Refresh / Reset & re-read spends the page's try (and opens the settle window); a replug after it still re-arms.
+static void test_auto_wake_manual_refresh() {
     AutoWake m;
-    m.spend(500);                                         // a manual Refresh / Reset & re-read took the episode
-    CHECK_EQ(m.step(true, true, false, 600), false);
-    CHECK_EQ(m.step(true, true, false, 100000), false);
+    m.spend(500);
+    CHECK_EQ(run(m, 600, 100000, kDrp), 0);
+    CHECK_EQ(run(m, 100000, 102000, kEmpty), 0);
+    CHECK_EQ(run(m, 102000, 104000, kDrp), 1);
 }
 
 // Wake anything connected: the bank that idles dark (VBUS 0, CC1 8 mV, CC2 1.55 V) has no standby signature, and an empty port
@@ -906,13 +923,13 @@ static void test_wake_candidate() {
 
 int main() {
     test_wake_candidate();
-    test_auto_wake_once_per_sleeping_episode();
+    test_auto_wake_once_per_page_open();
     test_auto_wake_needs_asleep_page_and_no_block();
-    test_auto_wake_own_failed_cycle_is_swallowed();
-    test_auto_wake_new_episode_after_the_gap();
-    test_auto_wake_gives_up_after_three_tries_without_an_attach();
-    test_auto_wake_a_wake_that_worked_is_not_repeated();
-    test_auto_wake_page_reopen_and_manual_refresh();
+    test_auto_wake_replug_rearms();
+    test_auto_wake_same_episode_does_not_retry();
+    test_auto_wake_dark_attach_is_no_edge();
+    test_auto_wake_flips_are_capped();
+    test_auto_wake_manual_refresh();
     test_default_tab();
     test_tab_empty();
     test_topology_word();
