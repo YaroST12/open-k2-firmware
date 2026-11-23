@@ -34,7 +34,7 @@ static void test_exact() {
         "  \"id\": 3,\n"
         "  \"revision\": 2,\n"
         "  \"name\": \"Desk USB4\",\n"
-        "  \"auto_name\": \"Apple-USB4G3-240W\",\n"
+        "  \"auto_name\": \"Apple 240W\",\n"
         "  \"record\": \"" + [] {
             const emlib::Entry e = entry("x");
             static const char* hex = "0123456789ABCDEF";

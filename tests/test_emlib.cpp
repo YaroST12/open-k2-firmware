@@ -44,21 +44,29 @@ static void test_name() {
         const std::array<std::uint32_t, 5> v = {0xFF00A041, 0x18000000u | vid, 0, 0, cab};
         return std::string(emname::make(emrec::make(v, 2), ord).data());
     };
-    CHECK_STR(name(0x05AC, 4 | (2u << 5) | (3u << 9)).c_str(), "Apple-USB4G4-240W");
-    CHECK_STR(name(0x05AC, 3 | (2u << 5) | (3u << 9)).c_str(), "Apple-USB4G3-240W");
-    CHECK_STR(name(0x291A, 0).c_str(), "Anker-USB2-60W");
-    CHECK_STR(name(0x291A, 1 | (2u << 5)).c_str(), "Anker-USB3.2G1-100W");
-    CHECK_STR(name(0x291A, 2 | (2u << 5) | (2u << 9)).c_str(), "Anker-USB3.2G2-100W");   // 10:9 = 10b is deprecated: 20 V
-    CHECK_STR(name(0x8087, 3 | (2u << 5)).c_str(), "Intel-TBT3-100W");
+    // a listed brand: "<Brand> <W>W", the way a charger card is named; the speed is on the e-marker page
+    CHECK_STR(name(0x05AC, 4 | (2u << 5) | (3u << 9)).c_str(), "Apple 240W");
+    CHECK_STR(name(0x05AC, 3 | (2u << 5) | (3u << 9)).c_str(), "Apple 240W");
+    CHECK_STR(name(0x291A, 0).c_str(), "Anker 60W");
+    CHECK_STR(name(0x291A, 1 | (2u << 5)).c_str(), "Anker 100W");
+    CHECK_STR(name(0x291A, 2 | (2u << 5) | (2u << 9)).c_str(), "Anker 100W");   // 10:9 = 10b is deprecated: 20 V
+    CHECK_STR(name(0x8087, 3 | (2u << 5)).c_str(), "Intel 100W");
+    CHECK_STR(name(0x2B89, 1 | (2u << 5)).c_str(), "UGREEN 100W");
+    CHECK_STR(name(0x1C7B, 0).c_str(), "Luxshare 60W");
+    CHECK_STR(name(0x2B01, 0).c_str(), "CUKTECH 60W");
+    CHECK_STR(name(0x05AC, 0, 2).c_str(), "Apple 60W-2");
+    CHECK_STR(name(0x05AC, 0, 13).c_str(), "Apple 60W-13");
+    // an unlisted VID keeps the hex form with the speed, so two unknown makers still differ
     CHECK_STR(name(0x2B1D, 1 | (1u << 5)).c_str(), "0x2B1D-USB3.2G1-60W");
-    CHECK_STR(name(0x2B89, 1 | (2u << 5)).c_str(), "UGREEN-USB3.2G1-100W");   // brands that were "0xVVVV" before the one table
-    CHECK_STR(name(0x1C7B, 0).c_str(), "Luxshare-USB2-60W");
-    CHECK_STR(name(0x05AC, 0, 2).c_str(), "Apple-USB2-60W-2");
-    CHECK_STR(name(0x05AC, 0, 13).c_str(), "Apple-USB2-60W-13");
-    // always fits 24 characters; a long manufacturer is cut, not the version or wattage
+    CHECK_STR(name(0x2B1D, 4 | (2u << 5) | (3u << 9)).c_str(), "0x2B1D-USB4G4-240W");
+    CHECK_STR(name(0x2B1D, 0, 2).c_str(), "0x2B1D-USB2-60W-2");
+    // every produced name is a name the user could have typed (so the rename and duplicate rules apply to it)
+    for (std::uint32_t vid : {0x05ACu, 0x291Au, 0x2BD5u, 0x2B1Du})
+        for (unsigned ord : {1u, 2u, 9999u})
+            CHECK_EQ(emlib::name_valid(name(vid, 2 | (2u << 5) | (3u << 9), ord)) ? 1 : 0, 1);
     const std::string longest = name(0x2BD5, 2 | (2u << 5) | (3u << 9), 9999);   // CblMatters, the longest name
     CHECK_EQ(longest.size() <= 24, 1);
-    CHECK_EQ(longest.find("USB3.2G2-240W-9999") != std::string::npos, 1);
+    CHECK_EQ(longest.find("240W-9999") != std::string::npos, 1);
 }
 
 static void test_short_name_predicate() {

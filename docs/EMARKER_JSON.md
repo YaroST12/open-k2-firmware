@@ -11,7 +11,7 @@ generated on read by `k2::emjson::render()` (`src/pd/emjson.cpp`, host test `tes
   "id": 3,
   "revision": 2,
   "name": "Desk USB4",
-  "auto_name": "Apple-USB4G3-240W",
+  "auto_name": "Apple 240W",
   "record": "<132 hex digits>",
   "cable": {
     "vid": "0x05AC",
@@ -38,7 +38,7 @@ generated on read by `k2::emjson::render()` (`src/pd/emjson.cpp`, host test `tes
 | `id` | the cable's number in the library, 1..9999, stable through renames; the sequence the K2 has (it has no clock, so there is no timestamp) |
 | `revision` | 1 for a new cable, +1 for every rename |
 | `name` | the user's name: 1..24 characters from `[A-Za-z0-9 -_.]`; defaults to `auto_name` (with `-2`, `-3` on a collision). It is also the file name. |
-| `auto_name` | `<maker>-<USB version>-<watts>` computed from the record (`k2/pd/emname.hpp`): maker by VID (hex when unlisted), `USB2`, `USB3.2G1`, `USB3.2G2`, `USB4G3`, `USB4G4` or `TBT3`, `60W`/`100W`/`240W` |
+| `auto_name` | `<brand> <watts>` computed from the record (`k2/pd/emname.hpp`): brand by VID, `60W`/`100W`/`240W`; an unlisted VID gives `0xVVVV-<USB version>-<watts>` (`USB2`, `USB3.2G1`, `USB3.2G2`, `USB4G3`, `USB4G4`); a second cable with the same name gets `-2`, `-3` |
 | `record` | the raw 66-byte record as upper-case hex: name[20], PD spec rev, five VDOs (VDM header, ID header, cert stat, product, cable VDO 1), reserved, checksum (`include/k2/pd/emrec.hpp`). This is the source of truth; every field below is decoded from it. |
 | `cable.vid`, `vendor` | ID header bits 15:0 and the vendor name from the firmware's table (`Unknown` when not listed) |
 | `cable.pid`, `xid` | product VDO bits 31:16, cert stat VDO |

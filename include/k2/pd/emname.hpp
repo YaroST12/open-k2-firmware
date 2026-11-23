@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
-// Auto name of a saved cable: <manufacturer>-<USB/TB version>-<wattage>, e.g. "Apple-USB4-240W",
-// "Anker-USB2-60W". Pure logic over a 66-byte e-marker record (k2/pd/emrec.hpp), host-tested.
-//   manufacturer: the ID header VID through pd::vendor_find(), "0xVVVV" when the VID is not listed
-//   version:      cable VDO 1 bits 2:0: USB2, USB3.2G1, USB3.2G2, USB4G3, USB4G4; TBT3 for an Intel
-//                 (0x8087) cable of 10G or more (the record keeps no SVID list, so that is the
-//                 same Thunderbolt test the e-marker page uses)
-//   wattage:      max voltage x max current from the cable VDO, as pd::parse_emarker: 60W (3 A),
-//                 100W (5 A, 20 V) or 240W (5 A, 50 V); the deprecated 30 V / 40 V codes read as 20 V
-// The name is at most kMaxLen characters (the NUL is extra): a long manufacturer is cut, never the rest.
-// `ordinal` >= 2 appends "-2", "-3", ... for a second and later cable that would get the same name.
+// Auto name of a saved cable, the same shape as a charger card's: "<Brand> <wattage>", e.g. "Anker 100W",
+// "UGREEN 240W", when the ID header VID is listed (pd::vendor_find). An unlisted VID keeps
+// "0xVVVV-<version>-<wattage>" (version: cable VDO 1 bits 2:0: USB2, USB3.2G1, USB3.2G2, USB4G3, USB4G4), so two unknown
+// makers still differ. Pure logic over a 66-byte e-marker record (k2/pd/emrec.hpp), host-tested.
+//   wattage: max voltage x max current from the cable VDO, as pd::parse_emarker: 60W (3 A),
+//            100W (5 A, 20 V) or 240W (5 A, 50 V); the deprecated 30 V / 40 V codes read as 20 V
+// Every name is a valid user name (emlib::name_valid) of at most kMaxLen characters (the NUL is extra); a long
+// manufacturer is cut, never the rest. `ordinal` >= 2 appends "-2", "-3", ... for a second and later cable that would
+// get the same name (emlib::unique_name): a same-brand, same-wattage cable of another speed is told apart that way.
 #pragma once
 #include <array>
 #include <cstddef>
