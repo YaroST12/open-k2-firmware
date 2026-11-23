@@ -2435,11 +2435,12 @@ bool Runner::begin_spec(const Input& in) {
         env_.spec_done(evidence_.spec);
         return false;
     }
-    state_ = State::Spec; spec_ms_ = in.now; spec_stopping_ = spec_fault_ = false; stable_ = false;
+    state_ = State::Spec; spec_ms_ = in.now; spec_stopping_ = spec_fault_ = false; stable_ = false; spec_pt_ = {};
     K2LOG("[CT] spec start\n");
     return true;
 }
 void Runner::poll_spec(const Input& in) {
+    spec_pt_ = in.spec_pt;
     if (!spec_stopping_) {
         if (!in.spec_running) { end_spec(in, specsec::End::Done); return; }
         const Reason fault = in.vbus_mv < 0 || in.cap_mv < 5000 ? Reason::NoMonitor : in.loop_lock ? Reason::Loop :

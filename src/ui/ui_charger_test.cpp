@@ -266,6 +266,14 @@ charger_test::Input ChargerTestSession::input(uint32_t now) const {
     in.probe_done = fusb302::probe_status().state != pd::ProbeState::Running;
 #if K2_PDSPEC
     in.spec_running = ctx_.ui->pd_spec().running();   // the engine's own run (the stage ends when it has finished and released)
+    if (in.spec_running) {
+        const auto pt = ctx_.ui->pd_spec().engine()->point();   // for the page: the plan's index sits on the next unit in the stage
+        using K = pdspec::Engine::Point::Kind;
+        in.spec_pt = {pt.kind == K::Fixed ? ct::SpecWhat::Fixed : pt.kind == K::Pps ? ct::SpecWhat::Pps : pt.kind == K::Avs ? ct::SpecWhat::Avs :
+                      pt.kind == K::Reset ? ct::SpecWhat::HardReset : ct::SpecWhat::None, pt.pos, pt.mv};
+    } else {
+        in.spec_pt = {};
+    }
 #endif
     // D+/D- free for the ceiling stage (only the release before it waits on this).
     if (runner_.state() == ct::State::Releasing) in.lines_free = svooc_trig::lines_free();
@@ -2633,25 +2641,44 @@ bool section_break(const result_layout::CompactGrid &l, std::span<const result_l
 // The row-relative token of `rt` that the step in flight stands for: a range or sweep step, the still-pending chip of its
 // (kind, PDO slot), none when that chip is not there; any other step, the still-pending chip of its level, else the first
 // still-pending chip of the row. -1 = none.
-int pending_chip(const result_layout::RowTokens &rt, const ct::Step &st) {
+// `spec`: the step is the PD spec stage's point, whose row has long been judged: a chip of any tone matches, and a point with no chip
+// of its own (a reset) matches none.
+int pending_chip(const result_layout::RowTokens &rt, const ct::Step &st, bool spec = false) {
     const uint8_t kind = result_layout::kind_of(st.algorithm);
     int first = -1;
     for (int k = 0; k < rt.count; ++k) {
         const auto &t = rt.toks[static_cast<size_t>(k)];
-        if (!t.chip || t.glue || t.tone != Tone::Pending) continue;
+        if (!t.chip || t.glue || (!spec && t.tone != Tone::Pending)) continue;
         if (kind) {
             if (t.kind == kind && t.mv == st.pos) return k;
             continue;
         }
         if (t.kind) continue;
         if (t.mv && t.mv == st.mv) return k;
-        if (first < 0) first = k;
+        if (first < 0 && !spec) first = k;
     }
     return first;
+}
+// The step the Running page names. In the PD spec stage the plan's index already stands on the next unit's first row, so the page
+// reads the engine's own point there (hardware 2026-11-23: the header and the outline named QC2 5 V through a PPS / AVS sweep).
+// nullptr = no step yet.
+const ct::Step *shown_step(const ct::Runner &runner, ct::Step &scratch) {
+    const auto &steps = runner.steps();
+    if (steps.empty()) return nullptr;
+    if (runner.state() == ct::State::Spec) {
+        scratch = ct::spec_step(runner.spec_point());
+        return &scratch;
+    }
+    return &steps[std::min(runner.index(), steps.size() - 1)];
 }
 // The step dot's row-relative token: the step the runner is on, Pending or Running, so the dot moves in the tick the index does.
 int running_token(const result_layout::RowTokens &rt, const result_layout::CompactRow &row, const ct::Runner &runner) {
     const auto &steps = runner.steps();
+    if (runner.state() == ct::State::Spec) {
+        ct::Step pt;
+        const ct::Step *st = shown_step(runner, pt);
+        return st && result_layout::row_has(row, *st) ? pending_chip(rt, *st, true) : -1;
+    }
     if (runner.index() >= steps.size()) return -1;
     const ct::Verdict v = steps[runner.index()].verdict;
     if (v != ct::Verdict::Running && v != ct::Verdict::Pending) return -1;
@@ -2662,7 +2689,9 @@ int running_token(const result_layout::RowTokens &rt, const result_layout::Compa
 int follow_line(const result_layout::CompactGrid &l, std::span<const result_layout::CompactLine> lines, const ct::Runner &runner) {
     const auto &steps = runner.steps();
     if (steps.empty()) return 0;
-    const ct::Step &now = steps[std::min(runner.index(), steps.size() - 1)];
+    ct::Step pt;
+    const ct::Step &now = *shown_step(runner, pt);
+    const bool spec = runner.state() == ct::State::Spec;
     int head = 0;
     result_layout::RowTokens rt;
     bool built = false;
@@ -2672,7 +2701,7 @@ int follow_line(const result_layout::CompactGrid &l, std::span<const result_layo
         if (!result_layout::row_has(l.rows[r], now)) continue;
         if (!built) {
             result_layout::row_tokens(l, r, steps, runner.sweep_view(), rt);
-            tk = pending_chip(rt, now);
+            tk = pending_chip(rt, now, spec);
             built = true;
         }
         if (tk >= lines[i].first() && tk < lines[i].first() + lines[i].count()) return static_cast<int>(i);
@@ -2990,7 +3019,9 @@ void ChargerTestPage::paint_running(uint32_t now) {
     const bool flight = s_.runner_.quiet() && laid_;
     Budget bg{pbg, flight ? kFlightPx : (1 << 30)};
     const size_t at = steps.empty() ? 0 : std::min(s_.runner_.index(), steps.size() - 1);
-    const ct::Step *st = steps.empty() ? nullptr : &steps[at];
+    const bool spec = s_.runner_.state() == ct::State::Spec;
+    ct::Step spec_pt;
+    const ct::Step *st = shown_step(s_.runner_, spec_pt);
     // A deep-sweep row (one per APDO) has no single target: its strip shows the swept range as a dotted band, the setpoint as a
     // marker that moves point by point, and the needle; the hero reads to the mV with the setpoint and error under it. Every other
     // row keeps the pass band. The two rows stack the view differently (RunLayout): a switch lays the body out again.
@@ -3005,7 +3036,8 @@ void ChargerTestPage::paint_running(uint32_t now) {
         laid_ = true;
     }
     const int32_t vbus = ctx_.pm_online ? ctx_.pm.vbus_mv : -1;
-    const int32_t target = st ? st->mv : 0;
+    // The spec stage's points move 20 mV at a time: the band follows them to 0.1 V, so the strip is not redrawn for each one.
+    const int32_t target = st ? (spec ? (st->mv + 50) / 100 * 100 : st->mv) : 0;
     const int32_t full = gauge_full_mv(steps, sweeping ? live.hi_mv : 0);
     const int32_t vbus_g = std::max<int32_t>(vbus, 0);
     // 1. the gauge strip, once per target (a new step, or the sweep range): the whole strip, the needle drawn at the live reading
@@ -3030,7 +3062,11 @@ void ChargerTestPage::paint_running(uint32_t now) {
     }
     // 1b. the step outline, in the same tick as the gauge band: the layout follows the runner now, and the grid moves the
     // outline from the cell that was under test to the one that is (two cell rims, never gated). The rows repaint at item 6.
-    const uint32_t key = mix_u32(mix_u32(mix_init(), s_.runner_.revision()), static_cast<uint32_t>(s_.runner_.index())) | 1u;
+    // In the spec stage the outline follows the engine's point (what it is, then its level or position), not the plan's index.
+    const ct::SpecPoint sp = s_.runner_.spec_point();
+    const uint32_t at_key = spec ? mix_u32(static_cast<uint32_t>(sp.what) + 1u, sp.what == ct::SpecWhat::Fixed ? sp.mv : sp.pos) | 0x80000000u
+                                 : static_cast<uint32_t>(s_.runner_.index());
+    const uint32_t key = mix_u32(mix_u32(mix_init(), s_.runner_.revision()), at_key) | 1u;
     if (key != grid_key_) {   // rebuilt only when the runner's revision or step moved, never on a plain tick
         grid_key_ = key;
         build_grid(true);
@@ -3112,7 +3148,8 @@ void ChargerTestPage::paint_running(uint32_t now) {
         if (sweeping) put_line(c, kLabelFont, runlay::kSweepFamX, L.name_y + kSmall.ascent - kLabelFont.ascent, fam_name, kDim, 16, cell_sig_[2], true, false, &bg);
         else put_line(c, kLabelFont, runlay::kLeftX, 32, fam_name, kDim, runlay::kFamCells, cell_sig_[2], false, false, &bg);
         buf.clear();
-        if (st) buf.put(step_label::label(*st, at > 0 ? &steps[at - 1] : nullptr).view());
+        if (spec) buf.put(step_label::spec_label(s_.runner_.spec_point()).view());
+        else if (st) buf.put(step_label::label(*st, at > 0 ? &steps[at - 1] : nullptr).view());
         // The plain name stays in the left column, kLeftGap short of the hero: a longer one drops to the 12 px font.
         const bool small = !sweeping && runlay::name_small(text_cells(buf.view()));
         if (small != name_small_) {   // the other font leaves rows of the old glyphs behind: blank the cell, repaint the name

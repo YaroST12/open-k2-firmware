@@ -426,6 +426,7 @@ struct Fake final : ct::Env {
     int spec_starts = 0, spec_stops = 0, spec_collects = 0, spec_level_mv = 20000, detach_vbus = -1, pd_at_spec_start = 0, pd_at_spec_end = 0;
     uint32_t spec_run_ms = 20000, spec_exit_ms = 500, spec_t0 = 0, spec_stop_t = 0, spec_started_at = 0;
     specsec::Result spec_result;
+    ct::SpecPoint spec_pt;   // what the scripted engine says it is on (Input::spec_pt) while it runs
     uint8_t spec_start() override {
         ++spec_starts; spec_started_at = in.now; pd_at_spec_start = pd_requests;
         if (!spec_engine) return 255;
@@ -462,9 +463,11 @@ struct Fake final : ct::Env {
             spec_on = false; in.spec_running = false; pd_at_spec_end = pd_requests;
             in.vbus_mv = spec_leave_hot ? spec_level_mv : 5000;
             if (!spec_leave_hot) in.pd.mv = 5000;
+            in.spec_pt = {};
             return;
         }
         in.spec_running = true;
+        in.spec_pt = spec_pt;
         if (!spec_stop_t) in.vbus_mv = spec_level_mv;
     }
     // Journal hooks: what the UI Env does, so a test can cut the run anywhere and reboot into the journal.
@@ -8962,6 +8965,36 @@ static void test_spec_stage_runs_once_in_a_deep_pd_unit() {
     CHECK_EQ(f.detach_vbus, 5000);               // the unit's detach comes at 5 V
     for (const auto& s : r.steps()) CHECK_EQ(s.verdict == ct::Verdict::Pending || s.verdict == ct::Verdict::Running, false);
 }
+// Hardware 2026-11-23: inside the stage the page named the next unit's first row (QC2 5 V), because the plan's index already sits
+// there. The Runner now says what the engine is on (Input::spec_pt), inside the stage only; no row and no counter moves with it.
+static void test_spec_stage_names_the_engines_point() {
+    Fake f; f.caps = level_caps(); f.spec_engine = true; f.spec_run_ms = 0; f.spec_result = spec_cells();
+    ct::Runner r(f);
+    const auto o = ct::with_level(with_units(ct::kDefaultAlgorithms, {ct::Unit::Pd, ct::Unit::Qc2}), ct::Level::Deep);
+    CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+    CHECK_EQ(int(r.spec_point().what), int(ct::SpecWhat::None));
+    f.spec_pt = {ct::SpecWhat::Pps, 6, 8000};   // set before the stage so a stale point of an earlier stage cannot pass
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Spec; }, 400000), true);
+    f.tick(r, 100);
+    CHECK_EQ(int(r.spec_point().what), int(ct::SpecWhat::Pps));
+    CHECK_EQ(int(r.spec_point().pos), 6); CHECK_EQ(int(r.spec_point().mv), 8000);
+    const auto work = result_layout::run_progress(r.steps());
+    const auto rev = r.revision();
+    f.spec_pt = {ct::SpecWhat::Avs, 9, 21000};
+    f.tick(r, 100);
+    CHECK_EQ(int(r.spec_point().what), int(ct::SpecWhat::Avs));
+    CHECK_EQ(int(r.spec_point().pos), 9); CHECK_EQ(int(r.spec_point().mv), 21000);
+    f.spec_pt = {ct::SpecWhat::HardReset, 0, 0};
+    f.tick(r, 100);
+    CHECK_EQ(int(r.spec_point().what), int(ct::SpecWhat::HardReset));
+    const auto after = result_layout::run_progress(r.steps());
+    CHECK_EQ(after.done, work.done); CHECK_EQ(after.total, work.total);   // the work counter holds still in the stage
+    CHECK_EQ(r.revision(), rev);                                          // a point is not a plan change: no journal write, no grid rebuild
+    f.spec_pt = {};
+    f.spec_run_ms = 1;
+    CHECK_EQ(run_until(f, r, [&] { return r.state() != ct::State::Spec; }, 60000), true);
+    CHECK_EQ(int(r.spec_point().what), int(ct::SpecWhat::None));          // outside the stage there is none
+}
 // The stage is Deep only, and needs a build with the engine: Light and Medium never start it, a build without the engine (the
 // Env's default answer) records nothing and shows no section.
 static void test_spec_stage_is_deep_only() {
@@ -9479,7 +9512,7 @@ int main() {
     test_epr_spoof_identity_tests_epr_and_avs(); test_epr_capable_list_never_gives_epr_rows_not_offered(); test_epr_spoof_identity_at_light_makes_no_requests();
     test_a_resumed_light_run_stays_light();
     test_the_page_names_the_run_level();
-    test_spec_stage_runs_once_in_a_deep_pd_unit(); test_spec_stage_is_deep_only(); test_spec_refusal_is_recorded_and_the_run_goes_on(); test_spec_cancel_ends_in_order();
+    test_spec_stage_runs_once_in_a_deep_pd_unit(); test_spec_stage_names_the_engines_point(); test_spec_stage_is_deep_only(); test_spec_refusal_is_recorded_and_the_run_goes_on(); test_spec_cancel_ends_in_order();
     test_spec_leaves_the_source_at_5v_before_the_detach(); test_spec_watchdog_bounds_a_stuck_engine(); test_spec_runner_guard_stops_the_engine();
     test_spec_resumed_run_never_repeats_the_stage(); test_spec_preview_counts_the_stage();
     test_deep_run_feeds_its_moves_to_the_spec_section(); test_deep_run_feeds_its_epr_avs_moves(); test_feeding_the_spec_section_changes_no_verdict(); test_no_spec_feed_without_a_stage();
