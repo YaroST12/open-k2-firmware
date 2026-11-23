@@ -89,8 +89,8 @@ Everything is C++23; there are no C files left in `src/` (TinyUSB and lwIP under
   0 and 2, the rail title at the bottom, cells reading upward.
 - **Pills squeezed in landscape** (2026-11-23, user): chips (Charger tab hero PD3.x/EPR/PPS, Lines tags, verdict chips), the
   Numbers V/A/W badges and the toast lost rows and edges in rotations 1 and 3. Fixed in k2/ui-native (69cb1bc8, ce87a3e4,
-  d6d8f348): `draw_pill_box` draws every pill at native size from its mapped origin (the toast centred, hanging from its band
-  top); one `erase_toast` wipes the band and the margin the native pill hangs into. Host tests `test_kit`, `test_ui_rotation`,
+  d6d8f348, 48b14a4a): `draw_pill_box` draws every pill at native size from its mapped origin (the toast centred, hanging from its band
+  top); `erase_toast` and `kit::erase_chips` wipe the rows a native pill hangs below its mapped box. Host tests `test_kit`, `test_ui_rotation`,
   `test_ui_memory`, `test_ui_charger_test`. Not verified on hardware. Verify: rotations 1 and 3, chips and badges with four
   whole edges, a toast that clears without a red line under it (Memory page at low space).
 - **LOG stamp cross glitched** (2026-11-23, user): the 16 px cross sampled to 12 px on one side only. Fixed in k2/ui-native
@@ -99,7 +99,8 @@ Everything is C++23; there are no C files left in `src/` (TinyUSB and lwIP under
 - **Lines alignment** (2026-11-23, audit): VREF ended one cell short (the two-byte degree sign counted as two cells), the bars
   ended at x198 against the values' x202, and landscape leader dots came out 2 or 3 px wide. Fixed in k2/ui-native (12474667,
   82312fcb, 9156320a). Not verified on hardware. Open: in rotations 1 and 3 a right-aligned field starts at its mapped origin at
-  native width, so values end about 15 px short of the stretched bars (kit-wide; needs fill_except holes to know the alignment).
+  native width, so values end about 15 px short of the stretched bars (217 against 232; kit-wide). Route: shift a right-aligned
+  field's logical origin as the RowList tail does (`tail_origin`, kit_hot.cpp), so the ground holes stay consistent.
 - **Battery rows mixed icons** (2026-11-23, user): the settings rows, Saved runs and Share had no marker. Fixed in k2/ui-native
   (5ff1c12e): Plug, Meter, Clock, Report, Phone. Host test `test_ui_battery`. Not verified on hardware.
 - **PC-link socket icon too dim on the rail** (2026-11-23, user): brighten it for the next release.
