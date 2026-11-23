@@ -872,8 +872,8 @@ var K2Proto = (function () {
         if (!(runMask & (1 << code))) throw new FrameError("charger-test row was not selected");
         if (code >= 14 && code <= 18 && (verdict !== 4 || why !== (code < 16 ? 4 : 20)))
           throw new FrameError("unavailable charger-test algorithm must SKIP");
-        if (code < 2 && verdict !== 4 && wire !== code + 1)
-          throw new FrameError("charger-test row contradicts negotiated wire revision");
+        if (code < 2 && (verdict === 2 || verdict === 3) && wire !== code + 1)   // warn, as k2_remote.py: one odd row must not lose the read
+          console.warn("charger-test row contradicts negotiated wire revision");
         protocol = code === 0 ? "pd2-fixed" : code === 1 ? "pd3x-fixed" :
                    code === 2 ? (flags & 2 ? "epr-avs" : "epr-fixed") : TEST_ALGORITHMS[code];
         if (code >= 11 && code <= 13) protocol += "-5v-handshake";
