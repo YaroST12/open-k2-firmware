@@ -64,10 +64,9 @@ void fill_except(const Surface &s, Box r, const Box *holes, int n, uint16_t colo
 // The key rail's slot `slot` (0..3 along the edge) on its surface `s` (the whole slot): Up / Dn are drawn triangles, OK an
 // inverted cap with its verb (orange while a confirm is armed), BACK a dim word (red `Stop` while a run is in flight), on the
 // bg2 rail. `column` = a side rail (the text runs along it in `dir`); `down` = the key is held (the slot flashes in the cap
-// colour). Every pixel of the slot is written once. `link` != None: the PC-link icon in the slot's outer corner (slot 0 or 3,
-// turned with the text), the label centred in what is left (label_zone_link).
+// colour). Every pixel of the slot is written once.
 void draw_key_slot(const Surface &s, PanelEdge edge, TextDir dir, unsigned slot, const SlotLabel &lab, bool is_ok, bool down,
-                   bool active = true, pclink::State link = pclink::State::None);
+                   bool active = true);
 
 // ---- Opposite Telemetry Rail (Option B: 16 x 240 opposite edge) --------------------------------------------------------
 enum class OppTelemetry : uint8_t {
@@ -84,7 +83,10 @@ struct OppRailSpec {
     OppTelemetry telemetry = OppTelemetry::Vaw;
 };
 
+constexpr int kLinkIconPx = kIconSize;   // the PC-link icon's box (a rail cell reserves kLinkIconPx + 2 px for it)
+
 struct OppCell {
+    pclink::State link = pclink::State::None;   // the PC-link icon at the cell's far end (the rail's last cell only)
     int16_t len = 60;
     bool masthead = false;
     bool active = true;
@@ -97,7 +99,9 @@ struct OppCell {
     uint8_t dot_cur = 0;
 };
 
-// Draws one slot (0..3) of the Opposite Telemetry Rail on its own surface `s` (single-pass via fill_except).
+// Draws one slot (0..3) of the Opposite Telemetry Rail on its own surface `s` (single-pass via fill_except). A cell with a
+// `link` keeps kLinkIconPx + 2 px of its far end for the icon (turned with the text on a side rail); its text centres in the
+// rest and drops the tag's trailing space before it would drop the value.
 void draw_opp_slot(const Surface &s, PanelEdge opp_edge, TextDir dir, unsigned slot, const OppCell &cell);
 
 // A text line of a ground: its origin, font, text and ink (the bg is the ground's).

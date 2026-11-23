@@ -143,10 +143,10 @@ struct ProtoText {
     StrBuf<20> value;
 };
 void format_proto(const ProtoInfo &p, ProtoText &out);
-// The protocol row's value is at most this many characters (it ends before the elapsed time).
-inline constexpr int kProtoChars = 16;
+// The protocol row's value is at most this many characters (it ends before the elapsed time and the PC-link icon after it).
+inline constexpr int kProtoChars = 14;
 // An armed PD limit follows a PD contract's value: "9V3A lim27W". PD kinds only. When the whole would pass kProtoChars the
-// trailing current or power part goes first ("3.3-21V lim100W"), so the limit always shows.
+// trailing current or power part goes first ("3.3-21V lim100W" -> "3.3-21 lim100W"), so the limit always shows.
 void format_limit(ProtoText &out, ProtoKind kind, uint32_t watts);
 // Row 2 when VBUS is dark (Mode::Idle): surfaces the waiting classifier without changing Mode::Stale.
 void format_idle_wait(raguard::WaitKind wait, ProtoText &out);

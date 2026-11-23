@@ -69,6 +69,39 @@ static void test_warn_mask() {
     CHECK_EQ(warn_hit(11, 10), 0);
 }
 
+static void test_link_item() {
+    int line = 0, sand = 0;
+    for (int y = 0; y < kLinkBox; y++)
+        for (int x = 0; x < kLinkBox; x++) {
+            line += link_hit(3, x, y) == 1;
+            sand += link_hit(3, x, y) == 2;
+            CHECK_EQ(link_hit(1, x, y) != 2 && link_hit(2, x, y) != 2, true);   // only the hourglass has sand
+            CHECK_EQ(link_hit(0, x, y), 0);                                     // None draws nothing
+        }
+    CHECK_EQ(line > 8 && sand > 2, true);
+    CHECK_EQ(link_hit(2, -1, 0), 0);
+    CHECK_EQ(link_hit(2, kLinkBox, 0), 0);
+    // An item composes the glass and the sand in their own inks, inside its 12 x 12 box only.
+    const Item it[] = {link(20, 10, 3, 0x1111, 0x2222)};
+    Cell c;
+    c.bg = 0x0ABC;
+    c.items = it;
+    uint16_t row[kW];
+    int glass = 0, fillc = 0, other = 0;
+    for (int y = 8; y < 24; y++) {
+        compose_row(c, y, 0, kW - 1, row);
+        for (int x = 0; x < kW; x++) {
+            const bool inside = x >= 20 && x < 20 + kLinkBox && y >= 10 && y < 10 + kLinkBox;
+            if (!inside) { other += row[x] != 0x0ABC; continue; }
+            glass += row[x] == 0x1111;
+            fillc += row[x] == 0x2222;
+        }
+    }
+    CHECK_EQ(glass, line);
+    CHECK_EQ(fillc, sand);
+    CHECK_EQ(other, 0);
+}
+
 static void test_sweep_cursor_and_load() {
     Sweep s;
     CHECK_EQ(s.step(7), 0);
@@ -358,6 +391,7 @@ int main() {
     test_text_blends_against_the_sweep();
     test_items_layer_in_order();
     test_arrow_and_warn_items();
+    test_link_item();
     test_paint_streams_the_composed_rows();
     test_ledger_sweep_and_narrow_cell();
     test_digit_field_changed_range();

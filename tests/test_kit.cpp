@@ -1474,7 +1474,48 @@ static void test_option_c_active_states() {
     CHECK_EQ(px(16 + 100, kit::kBodyY + 5), kBg2);
 }
 
+// The rail's last cell with the PC-link icon: the widest last-cell text ("D+ 3.30V") in the narrowest lens still renders whole
+// (as many ink pixels as in a roomy cell) on every edge and text direction, and the hourglass sand shows in the cell.
+static void test_rail_link_cell_fits() {
+    auto count = [](uint16_t col) {
+        int n = 0;
+        for (int i = 0; i < 240 * 240; ++i) n += g_panel[i] == col;
+        return n;
+    };
+    const PanelEdge edges[4] = {PanelEdge::Left, PanelEdge::Top, PanelEdge::Right, PanelEdge::Bottom};
+    for (const PanelEdge e : edges)
+        for (const TextDir dir : {TextDir::Cw, TextDir::Ccw})
+            for (const int16_t len : {int16_t{58}, int16_t{62}}) {   // the last cell: 58 beside a wide masthead, else 62
+                const bool col = panel_is_column(e);
+                const Surface tight = col ? Surface{0, 0, 16, len} : Surface{0, 0, len, 16};
+                const Surface roomy = col ? Surface{0, 0, 16, 160} : Surface{0, 0, 160, 16};
+                kit::OppCell c{};
+                c.len = len;
+                c.tag = "D+ ";
+                c.value = "3.30V";
+                lcd::fill(kBase);
+                kit::draw_opp_slot(roomy, e, dir, 3, c);
+                const int want_val = count(kInk), want_tag = count(kDim);
+                CHECK_EQ(want_val > 5 && want_tag > 2, true);
+                c.link = pclink::State::Power;   // glass in kInk3: the text inks stay countable
+                lcd::fill(kBase);
+                kit::draw_opp_slot(tight, e, dir, 3, c);
+                CHECK_EQ(count(kInk), want_val);
+                CHECK_EQ(count(kDim), want_tag);
+                c.link = pclink::State::Shell;
+                lcd::fill(kBase);
+                kit::draw_opp_slot(tight, e, dir, 3, c);
+                CHECK_EQ(count(kFocus) > 2, true);   // the sand
+                // Nothing leaves the cell's own surface.
+                int stray = 0;
+                for (int y = 0; y < 240; ++y)
+                    for (int x = 0; x < 240; ++x) stray += g_panel[y * 240 + x] != kBase && (x >= tight.w || y >= tight.h);
+                CHECK_EQ(stray, 0);
+            }
+}
+
 int main() {
+    test_rail_link_cell_fits();
     test_draw_key_slot_arrows();
     test_option_c_active_states();
     test_col2_and_pill();

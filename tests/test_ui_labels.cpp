@@ -72,31 +72,6 @@ static void test_label_zone() {
     CHECK_EQ(label_zone(6, 1).max_chars, 0);
 }
 
-// The PC-link icon takes the Back slot's outer corner: its box and the label zone never overlap, and "Back"/"Stop"/"Home"
-// (4 chars) still fit beside it in both Back positions (slot 0 on the Right/Top edges, slot 3 on Left/Bottom).
-static void test_link_corner() {
-    for (const unsigned slot : {0u, 3u}) {
-        const int len = static_cast<int>(kSlotLenPx[slot]);
-        const LabelZone z = label_zone_link(len, slot);
-        const int ic0 = link_icon_origin(len, slot), ic1 = ic0 + kLinkIconPx;
-        CHECK_EQ(ic0 >= 0 && ic1 <= len, 1);
-        CHECK_EQ(z.start + z.len <= ic0 || z.start >= ic1, 1);                  // disjoint along the slot
-        CHECK_EQ(z.start >= (slot > 0 ? kDividerPx : 0) + kSlotPadPx, 1);
-        CHECK_EQ(z.start + z.len <= len - kSlotPadPx, 1);
-        CHECK_EQ(z.max_chars >= 4, 1);
-        CHECK_EQ(z.max_chars <= label_zone(len, slot).max_chars, 1);
-    }
-    char buf[24];
-    for (const char *w : {"Back", "Stop", "Home"})
-        for (const unsigned slot : {0u, 3u}) {
-            const SlotLabel l{w, "", ""};
-            CHECK_EQ(label_text(buf, l, label_zone_link(static_cast<int>(kSlotLenPx[slot]), slot).max_chars), 4);
-        }
-    // A long hint that no longer fits drops to the short word (never a cut word): Back/Delete -> Back in slot 3.
-    const SlotLabel del{"Back", "Delete", "Del"};
-    CHECK_EQ(label_text(buf, del, label_zone_link(static_cast<int>(kSlotLenPx[3]), 3).max_chars), 4);
-}
-
 static void test_fit_in_slot() {
     // Slots tile the edge, and every label of every state fits its zone at the panel font's advance
     // with the full words (no abbreviation fallback is needed).
@@ -223,7 +198,6 @@ int main() {
     test_label_text();
     test_nav_labels();
     test_label_zone();
-    test_link_corner();
     test_fit_in_slot();
     return test_report("test_ui_labels");
 }

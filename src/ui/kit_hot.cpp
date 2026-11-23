@@ -124,7 +124,7 @@ K2_HOT static void paint_link_icon(const Surface &s, Box b, PanelEdge edge, Text
 }
 
 K2_HOT void draw_key_slot(const Surface &s, PanelEdge edge, TextDir dir, unsigned slot, const SlotLabel &lab, bool is_ok, bool down,
-                         bool active, pclink::State link) {
+                         bool active) {
     if (s.w <= 0 || s.h <= 0) return;
     {
         uint16_t by = static_cast<uint16_t>(s.y), bh = static_cast<uint16_t>(s.h);
@@ -154,8 +154,7 @@ K2_HOT void draw_key_slot(const Surface &s, PanelEdge edge, TextDir dir, unsigne
     }
     char text[24];
     const int along = column ? body.h : body.w;
-    const bool corner = link != pclink::State::None && (slot == 0 || slot == 3);
-    const LabelZone zone = corner ? label_zone_link(along, slot) : label_zone(along, slot);
+    const LabelZone zone = label_zone(along, slot);
     const std::string_view shrt = lab.shrt;
     const bool armed = is_ok && shrt == "Confirm";
     const int tri = !down && (shrt == kUp || shrt == kDn) ? (shrt == kUp ? 1 : -1) : 0;
@@ -168,7 +167,7 @@ K2_HOT void draw_key_slot(const Surface &s, PanelEdge edge, TextDir dir, unsigne
     const uint16_t idle_fg = active ? kOnFocusDim : kInk2;
     const uint16_t fg = down ? kOnCap : cap ? (active ? (armed ? kSpotInk : kOnCap) : kAccent)
                       : lab.dim ? kInk3 : shrt == "Stop" ? kError : idle_fg;
-    Box holes[3];
+    Box holes[2];
     int nh = 0;
     int16_t tx = 0, ty = 0;
     const int16_t fh = static_cast<int16_t>(kLabelFont.height);
@@ -194,19 +193,7 @@ K2_HOT void draw_key_slot(const Surface &s, PanelEdge edge, TextDir dir, unsigne
                          : Box{static_cast<int16_t>(cx - 4), static_cast<int16_t>(body.y + (body.h - 5) / 2), 9, 5};
         holes[nh++] = tri_box;
     }
-    Box link_box{};
-    if (corner) {
-        const int16_t oa = static_cast<int16_t>(link_icon_origin(along, slot));
-        const int16_t ac = static_cast<int16_t>((column ? body.x + (body.w - kLinkIconPx) / 2 : body.y + (body.h - kLinkIconPx) / 2));
-        link_box = column ? Box{ac, oa, kLinkIconPx, kLinkIconPx} : Box{oa, ac, kLinkIconPx, kLinkIconPx};
-        holes[nh++] = link_box;
-    }
     fill_except(s, body, holes, nh, ground);
-    if (corner) {
-        const bool dim = link == pclink::State::Power;   // power only: quiet, like the idle labels
-        const uint16_t ink = down ? kOnCap : active ? (dim ? kOnFocusDim : kOnFocus) : (dim ? kInk3 : kInk);
-        paint_link_icon(s, link_box, edge, dir, link, ground, ink, kAccent);
-    }
     if (cap) {
         const Box t{tx, ty, column ? fh : tw, column ? tw : fh};
         const Box &cb = holes[0];
@@ -290,20 +277,28 @@ K2_HOT void draw_opp_slot(const Surface &s, PanelEdge opp_edge, TextDir dir, uns
     const uint8_t dots = cell.dot_count > 5 ? 5 : cell.dot_count;
     const int spot_w = cell.spot ? 5 : 0;
     const int dots_w = dots > 0 ? static_cast<int>(dots) * 5 : 0;
-    const int avail = std::max<int>(along - 4 - spot_w - dots_w, 0);
-    const int tag_w_raw = text_width(kLabelFont, cell.tag);
-    std::string_view tag_v = (tag_w_raw > 0 && tag_w_raw + 12 <= avail) ? cell.tag : std::string_view{};
+    // A link cell keeps the icon at its far end (1 px gap before it, 1 px after); the text centres in the rest, with 2 px of
+    // padding instead of 4 (a "D+ 3.30V" cell in the narrowest slot still fits whole).
+    const bool linked = cell.link != pclink::State::None && !cell.masthead;
+    const int zone = linked ? along - (kLinkIconPx + 2) : along;
+    const int avail = std::max<int>(zone - (linked ? 2 : 4) - spot_w - dots_w, 0);
+    std::string_view tag_src = cell.tag;
+    if (linked && !tag_src.empty() && tag_src.back() == ' ' &&
+        text_width(kLabelFont, tag_src) + text_width(kLabelFont, cell.value) > avail)
+        tag_src.remove_suffix(1);   // "D+ 3.30V" -> "D+3.30V": the separator goes before the value is cut
+    const int tag_w_raw = text_width(kLabelFont, tag_src);
+    std::string_view tag_v = (tag_w_raw > 0 && tag_w_raw + 12 <= avail) ? tag_src : std::string_view{};
     const int tag_w = text_width(kLabelFont, tag_v);
     char vbuf[kFitBuf];
     const std::string_view val_v = cell.value.empty() ? std::string_view{} : fit_text(kLabelFont, cell.value, std::max<int>(avail - tag_w, 6), vbuf);
     const int val_w = text_width(kLabelFont, val_v);
     const int total = spot_w + tag_w + val_w + dots_w;
-    const int16_t a0 = static_cast<int16_t>((along - total) / 2);
+    const int16_t a0 = static_cast<int16_t>((zone - total) / 2);
 
     // Precompute element boxes for single-pass fill_except (zero overdraw).
     Box holes[6];
     int nh = 0;
-    Box spot_box{}, tag_box{}, val_box{}, dot_box[5]{};
+    Box spot_box{}, tag_box{}, val_box{}, dot_box[5]{}, link_box{};
     const int16_t tx = opp_edge == PanelEdge::Left ? 1 : 3;
     const int16_t ty = opp_edge == PanelEdge::Top ? 1 : 3;
 
@@ -381,7 +376,14 @@ K2_HOT void draw_opp_slot(const Surface &s, PanelEdge opp_edge, TextDir dir, uns
         }
     }
 
+    if (linked) {
+        const int16_t oa = static_cast<int16_t>(along - 1 - kLinkIconPx);
+        const int16_t ac = static_cast<int16_t>((vertical ? body.x + (body.w - kLinkIconPx) / 2 : body.y + (body.h - kLinkIconPx) / 2));
+        link_box = vertical ? Box{ac, oa, kLinkIconPx, kLinkIconPx} : Box{oa, ac, kLinkIconPx, kLinkIconPx};
+        holes[nh++] = link_box;
+    }
     fill_except(s, body, holes, nh, bg);
+    if (linked) paint_link_icon(s, link_box, opp_edge, dir, cell.link, bg, cell.link == pclink::State::Power ? kInk3 : kInk, kFocus);
     if (cell.spot) gfx_fill(s, spot_box.x, spot_box.y, spot_box.w, spot_box.h, cell.spot);
     if (tag_w > 0) {
         if (vertical) gfx_text_rot(s, kLabelFont, tag_box.x, tag_box.y, tag_v, cell.tag_color, bg, dir);

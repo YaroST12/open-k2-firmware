@@ -479,13 +479,13 @@ static void test_protocol_limit_suffix() {
     CHECK_STR(t.value.c_str(), "9V3A lim27W");
     t = fmt({.kind = ProtoKind::PdFixed, .mv = 20000, .ma = 3250});
     format_limit(t, ProtoKind::PdFixed, 100);
-    CHECK_STR(t.value.c_str(), "20V3.25A lim100W");   // exactly the room
+    CHECK_STR(t.value.c_str(), "20V lim100W");        // the current is dropped to make room
     t = fmt({.kind = ProtoKind::Pps, .lo_mv = 3300, .hi_mv = 21000, .ma = 5000});
     format_limit(t, ProtoKind::Pps, 100);
-    CHECK_STR(t.value.c_str(), "3.3-21V lim100W");     // the current is dropped to make room
+    CHECK_STR(t.value.c_str(), "3.3-21 lim100W");      // the current and then the unit go, never the limit
     t = fmt({.kind = ProtoKind::Pps, .lo_mv = 5000, .hi_mv = 11000, .ma = 3000});
     format_limit(t, ProtoKind::Pps, 27);
-    CHECK_STR(t.value.c_str(), "5-11V 3A lim27W");
+    CHECK_STR(t.value.c_str(), "5-11V lim27W");
     t = fmt({.kind = ProtoKind::Avs, .lo_mv = 15000, .hi_mv = 28000, .mw = 140000});
     format_limit(t, ProtoKind::Avs, 100);
     CHECK_STR(t.value.c_str(), "15-28V lim100W");

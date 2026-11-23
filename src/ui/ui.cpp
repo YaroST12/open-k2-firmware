@@ -835,7 +835,7 @@ void fmt_opp_adc_v(StrBuf<12> &out, const std::optional<adc::Reading> &r, int32_
     out.put_fixed(mv, 2).put_char('V');
 }
 
-OppCells build_opp_cells(const UiContext &ctx, const kit::OppRailSpec &spec, bool active) {
+OppCells build_opp_cells(const UiContext &ctx, const kit::OppRailSpec &spec, bool active, pclink::State link) {
     OppCells oc{};
     if (spec.title.size() > 9) K2_TRUNC_NOTE_HERE(trunc::Kind::Cut, spec.title, 0);   // the masthead cell holds 9 characters
     // Slot 0: uppercase MastheadCell
@@ -850,6 +850,7 @@ OppCells build_opp_cells(const UiContext &ctx, const kit::OppRailSpec &spec, boo
                              wide0 ? int16_t(59) : int16_t(62),
                              wide0 ? int16_t(58) : int16_t(62)};
     for (int i = 0; i < 4; i++) oc.c[i].len = lens[i];
+    oc.c[3].link = link;   // the PC-link icon ends the rail, after the readout
     oc.c[0].masthead = true;
     oc.c[0].active = active;
     oc.c[0].value = oc.txt[0].view();
@@ -957,7 +958,7 @@ uint32_t opp_cell_sig(PanelEdge opp_edge, int16_t pos, const kit::OppCell &c) {
                    (static_cast<uint32_t>(c.dot_count) << 25) | (static_cast<uint32_t>(c.dot_cur) << 28) |
                    (static_cast<uint32_t>(c.active) << 31));
     h = mix_u32(h, static_cast<uint32_t>(c.spot) | (static_cast<uint32_t>(c.value_color) << 16));
-    h = mix_u32(h, c.tag_color);
+    h = mix_u32(h, c.tag_color | (static_cast<uint32_t>(c.link) << 16));
     h = mix(h, c.tag);
     h = mix(h, c.value);
     return h | 1u;
@@ -968,7 +969,7 @@ void Ui::draw_opp_slot(unsigned slot) {
     if (slot > 3 || !uses_opp_rail()) return;
     ContentViewport::Pause unscaled_rail;
     const PanelEdge opp_edge = opposite_edge(orient_.edge);
-    const OppCells oc = build_opp_cells(ctx_, opp_spec(), !ring_view_);
+    const OppCells oc = build_opp_cells(ctx_, opp_spec(), !ring_view_, pc_state_);
     int16_t pos = 0;
     for (unsigned i = 0; i < slot; i++) pos = static_cast<int16_t>(pos + oc.c[i].len);
     const Rect &r = layout_.opp_rail;
@@ -988,7 +989,7 @@ void Ui::sync_opp_rail() {
     if (!uses_opp_rail()) return;
     ContentViewport::Pause unscaled_rail;
     const PanelEdge opp_edge = opposite_edge(orient_.edge);
-    const OppCells oc = build_opp_cells(ctx_, opp_spec(), !ring_view_);
+    const OppCells oc = build_opp_cells(ctx_, opp_spec(), !ring_view_, pc_state_);
     int16_t pos = 0;
     const Rect &r = layout_.opp_rail;
     for (unsigned i = 0; i < 4; i++) {

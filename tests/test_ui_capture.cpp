@@ -940,11 +940,18 @@ void test_repaint_opaque() {
 }
 }  // namespace
 
-// The PC-link icon in the Back slot's corner over every walk page, in the four rotations: none, power (aux rail up), host
-// (mounted) and shell (hourglass) each equal a clean paint of the same state, differ from each other, and leave None whole again.
+// The PC-link icon (the last cell of the opposite telemetry rail; Home's info row 1 where there is no rail) over every walk
+// page, in the four rotations: none, power (aux rail up), host (mounted) and shell (hourglass) each equal a clean paint of
+// the same state, differ from each other, and leave None whole again.
 namespace {
-// strip_only: the Diag pages print live counters that move between two paints; only the key strip is compared there.
-int link_clean_diff(Ui &ui, unsigned rot, bool strip_only) {
+// Is panel pixel index i on the opposite telemetry rail's 16 px band (the edge opposite the key strip)?
+bool in_opp_band(unsigned rot, int i) {
+    const int x = i % 240, y = i / 240;
+    return rot == 0 ? x < 16 : rot == 1 ? y >= 224 : rot == 2 ? x >= 224 : y < 16;
+}
+
+// band_only: the Diag pages print live counters that move between two paints; only the rail band is compared there.
+int link_clean_diff(Ui &ui, unsigned rot, bool band_only) {
     const std::vector<uint16_t> got(g_panel, g_panel + 240 * 240);
     k2::lcd::fill(kBg);
     ui.repaint(g_walk_t);
@@ -952,8 +959,7 @@ int link_clean_diff(Ui &ui, unsigned rot, bool strip_only) {
     int diff = 0;
     for (size_t i = 0; i < got.size(); ++i) {
         const int x = int(i) % 240, y = int(i) / 240;
-        const bool strip = rot == 0 ? x >= 224 : rot == 1 ? y < 16 : rot == 2 ? x < 16 : y >= 224;
-        if (strip || !strip_only) diff += got[i] != g_panel[i];
+        if (in_opp_band(rot, int(i)) || !band_only) diff += got[i] != g_panel[i];
     }
     return diff;
 }
@@ -994,16 +1000,12 @@ void test_pc_link_icon() {
         ui.set_rotation(r, g_walk_t += 10);
         walk_settle(ui);
         if (!(ui.session().flags & k2::kSessionRingView)) { std::printf("  link ring r%u: not the ring view\n", unsigned(r)); ++bad; }
-        for (const bool held : {false, true}) {
-            ui.set_pressed(Button::Back, held, g_walk_t += 10);
-            for (int st = 0; st < 4; ++st) {
-                link_drive(ui, st);
-                const int d = link_clean_diff(ui, r, true);
-                if (d) { std::printf("  link ring r%u held %d st%d: %d px differ from a clean paint\n", unsigned(r), int(held), st, d); ++bad; }
-                link_dump(r, "ring", st, held ? "_held" : "");
-            }
+        for (int st = 0; st < 4; ++st) {
+            link_drive(ui, st);
+            const int d = link_clean_diff(ui, r, ui.uses_opp_rail());
+            if (d) { std::printf("  link ring r%u st%d: %d px differ from a clean paint\n", unsigned(r), st, d); ++bad; }
+            link_dump(r, "ring", st, "");
         }
-        ui.set_pressed(Button::Back, false, g_walk_t += 10);
         link_drive(ui, 0);
     }
     for (uint8_t r = 0; r < 4; ++r) {
@@ -1016,11 +1018,9 @@ void test_pc_link_icon() {
             for (int k = 0; k < 4; ++k) ui.tick(g_walk_t += 120);
             walk_settle(ui);
             std::vector<uint16_t> shot[4];
-            const auto in_strip = [r](int i) {   // rotation 0..3 = Right, Top, Left, Bottom edge: a 16 px band
-                const int x = i % 240, y = i / 240;
-                return r == 0 ? x >= 224 : r == 1 ? y < 16 : r == 2 ? x < 16 : y >= 224;
-            };
             const State want[4] = {State::None, State::Power, State::Host, State::Shell};
+            const bool rail = ui.uses_opp_rail();                  // the icon rides on the rail, or in Home's info row 1
+            const bool home = std::strcmp(kWalkDests[b].name, "Home") == 0;
             for (int st = 0; st < 4; ++st) {
                 link_drive(ui, st);   // 12 ticks: a page samples the USB rows on its own beat
                 if (ui.pc_link() != want[st]) {
@@ -1029,13 +1029,16 @@ void test_pc_link_icon() {
                 }
                 shot[st].assign(g_panel, g_panel + 240 * 240);
                 const int d = link_clean_diff(ui, r, live_page);
-                if (std::strcmp(kWalkDests[b].name, "Home") == 0 || std::strcmp(kWalkDests[b].name, "Lines") == 0) link_dump(r, kWalkDests[b].name, st, "");
+                if (home || std::strcmp(kWalkDests[b].name, "Lines") == 0) link_dump(r, kWalkDests[b].name, st, "");
                 if (d) { std::printf("  link %s r%u st%d: %d px differ from a clean paint\n", kWalkDests[b].name, unsigned(r), st, d); ++bad; }
             }
-            // Each state paints something the one before did not, in the key strip (the page above it may move on its own).
-            for (int st = 1; st < 4; ++st) {
-                const int d = [&] { int n = 0; for (size_t i = 0; i < shot[st].size(); ++i) n += in_strip(int(i)) && shot[st][i] != shot[st - 1][i]; return n; }();
-                if (d < 12 || d > 16 * 70) { std::printf("  link %s r%u: state %d vs %d changed %d px\n", kWalkDests[b].name, unsigned(r), st, st - 1, d); ++bad; }
+            // Each state paints something the one before did not: in the rail band (the page beside it may move on its own), or
+            // on Home anywhere. A page with no rail and no Home info row (hides_strip) shows no icon.
+            // Home's sweep moves between two shots, so only its portrait rotations (info row 1 at the bottom / top) are counted.
+            for (int st = 1; st < 4 && (rail || (home && (r & 1) == 0)); ++st) {
+                const auto in_home_info = [r](int i) { const int x = i % 240, y = i / 240; return r == 0 ? (x < 224 && y >= 196) : (x >= 16 && y < 44); };
+                const int d = [&] { int n = 0; for (size_t i = 0; i < shot[st].size(); ++i) n += (rail ? in_opp_band(r, int(i)) : in_home_info(int(i))) && shot[st][i] != shot[st - 1][i]; return n; }();
+                if (d < 12 || d > (rail ? 16 * 70 : 44 * 224)) { std::printf("  link %s r%u: state %d vs %d changed %d px\n", kWalkDests[b].name, unsigned(r), st, st - 1, d); ++bad; }
             }
             // Unplugged: the icon is gone and the strip is whole again.
             { k2::adc::Reading rd; rd.aux_mv = 0; g_stub.adc = rd; }   // an unknown reading would keep the last verdict

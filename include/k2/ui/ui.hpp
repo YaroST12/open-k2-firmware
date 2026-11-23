@@ -454,6 +454,8 @@ public:
     // A control command from the shell (Remote::shell_control_seen): the PC-link icon turns to the hourglass, and stays for a run the shell started.
     void shell_control(uint32_t now_ms) { shell_.control(now_ms); }
     pclink::State pc_link() const { return pc_state_; }
+    // Whether the page shows the opposite telemetry rail (where the PC-link icon rides); Home at its root has none.
+    bool uses_opp_rail() const { return !current().hides_strip() && (depth_ > 0 || page_ != Page::Home); }
     // The remote `stop` (the lease expiry and the shell `stop` land there too): ends a charger test, a twin proof and a PD Stress run.
     // The run releases the source to 5 V itself on the next poll; a PD Stress run waiting to resume after a reboot is dropped.
     void cancel_runs();
@@ -507,7 +509,6 @@ private:
     void paint_incoming(uint32_t now_ms, uint32_t t0, bool blank);
     // Full repaint of the current page after a real lcd::fill (init, rotation change), where the screen is already blank.
     void redraw(uint32_t now_ms);
-    bool uses_opp_rail() const { return !current().hides_strip() && (depth_ > 0 || page_ != Page::Home); }
     const PageIf &current() const { return *pages_.at(depth_); }
     Rect active_dest() const { return uses_opp_rail() ? layout_.twin_content : layout_.content; }
     void sync_surface();

@@ -167,15 +167,13 @@ K2_HOT void Ui::draw_slot(unsigned slot) {
     if (r.w <= 0 || r.h <= 0) return;
 
     kit::draw_key_slot(surface_of(r), orient_.edge, panel_text_dir(orient_.edge), slot, lab,
-                       action == Button::Ok, down, !ring_view_, action == Button::Back ? pc_state_ : pclink::State::None);
+                       action == Button::Ok, down, !ring_view_);
 }
 
 // What the current page shows in this slot: its pool id (the pool holds each distinct text once), offset so it is never 0.
 K2_HOT uint32_t Ui::slot_sig(unsigned slot) {
     const Button physical = slot_button(orient_, slot);
-    const Button action = oriented_button(physical, orient_.rotation, rotate_buttons_);
-    const uint32_t link = action == Button::Back ? static_cast<uint32_t>(pc_state_) << 10 : 0u;   // the corner icon
-    return 0x100u | (ring_view_ ? 0u : 0x200u) | link | strip_now()[action];
+    return 0x100u | (ring_view_ ? 0u : 0x200u) | strip_now()[oriented_button(physical, orient_.rotation, rotate_buttons_)];
 }
 
 K2_HOT void Ui::repaint(uint32_t now_ms) {
@@ -397,7 +395,7 @@ K2_HOT UiAction Ui::tick(uint32_t now_ms) {
     const bool batt_run = battery::hw::service().rec().active();
     if (batt_dot_ && !batt_run && !hold_shown_ && menu() != Menu::Share && menu() != Menu::QrTest) repaint(now_ms);
     batt_dot_ = batt_run;
-    shell_.tick(now_ms, run_busy());   // the shell's hourglass clock; the slot repaints through slot_sig on a state change
+    shell_.tick(now_ms, run_busy());   // the shell's hourglass clock; the rail cell and Home's info row repaint on a state change
     pc_state_ = pc_.update({ctx_.analog ? static_cast<int32_t>(ctx_.analog->aux_mv) : -1, usb::host_active(), shell_.shown()});
     if (ctx_.trig_armed && now_ms >= trig_until_) ctx_.trig_armed = false;
 
