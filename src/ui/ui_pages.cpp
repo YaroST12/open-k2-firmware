@@ -875,6 +875,7 @@ constexpr const char *kLnTag[4] = {"D+", "D-", "CC1", "CC2"};
 constexpr int32_t kLnFaintMv = 100;                         // a line under 0.1 V reads as nothing on it
 // Three receipt rows (Rp, D+/D-, VREF): key font 16 at x 6, dot leader, 12-char value right-aligned to x 202.
 constexpr kit::KvLayout kLnKv{154, 26, 6, nullptr, nullptr, static_cast<int16_t>(202 - 12 * 8), 12, Align::Right};
+static_assert(kLnBarX + kLinesBarW == 202, "the bars end on the receipt values' right edge");
 constexpr const char *kLnReceiptLabels[3] = {"Rp", "D+/D-", "VREF"};
 
 int16_t tick_x(int32_t mv) { return static_cast<int16_t>(kLnBarX + lines_tick_px(mv)); }
