@@ -415,7 +415,9 @@ const pd::IqStatus& interrogate_status();   // the latest run's, kept until the 
 
 // PD limiter (k2/pd/pd_limiter.hpp): inline, the sink is sent the charger's own Source_Capabilities clamped to `limit_mw`, spoken
 // as the source (the second inline transmitter, never beside an interrogation or another owner). RAM only. `outside`: another
-// owner busy, as the caller knows it; the driver adds the CC, the inline latch and its own engines. Returns the refusal (None = armed).
+// owner busy, as the caller knows it; the driver adds its own engines. Returns the refusal (None = armed). Armed with nothing
+// attached it waits, and it survives a detach and a replug; it acts on a far sink's Request (far_sink_seen), not on the inline
+// latch. A contract already on the wire when armed is limited at once.
 // Latency: the list goes out once PS_RDY has been seen and the line has been quiet for kLimQuietMs, so the sink draws at the
 // charger's real contract for that long; the clamp lands with its next Request, never before.
 pd::LimRefusal limit_arm(std::uint32_t limit_mw, const pd::LimFacts& outside);

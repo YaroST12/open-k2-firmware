@@ -1367,15 +1367,11 @@ K2_HOT void active_tick() {
             sent = true;
         }
     }
-    if (g_lim_on) {   // the limiter's forged list: only inline, and only when nothing else sent this tick
-        if (!inline_now()) {
-            lim().on_detach();   // the latch dropped: nobody left to forge for
-        } else {
-            lim().tick(now);
-            if (!sent && lim().take_tx(m, now)) {
-                transmit(m);   // both PHYs GoodCRC it and collide: the result means nothing, the sink's next Request is the proof
-                sent = true;
-            }
+    if (g_lim_on) {   // the limiter's forged list: only for a far sink's Request seen this attach, and when nothing else sent
+        lim().tick(now);
+        if (!sent && far_sink_seen() && lim().take_tx(m, now)) {
+            transmit(m);   // both PHYs GoodCRC it and collide: the result means nothing, the sink's next Request is the proof
+            sent = true;
         }
     }
     trace_sink();

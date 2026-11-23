@@ -1111,15 +1111,14 @@ static std::uint32_t g_lim_logged_rdo = 0;
 
 pd::LimRefusal limit_arm(std::uint32_t limit_mw, const pd::LimFacts& outside) {
     pd::LimFacts f = outside;
-    f.cc = g_active_cc != 0;
-    f.inline_link = inline_now();
     f.busy = f.busy || engines_busy() || iq_running();
     const pd::LimRefusal r = pd::lim_gate(f, limit_mw);
     if (r != pd::LimRefusal::None) {
         K2LOG("[LIM] refused: %s\n", pd::lim_refusal_name(r));
         return r;
     }
-    lim().arm(limit_mw, systick::millis());
+    // A far sink's Request on this attach means the always-fed sniffer holds its contract: limit it now, no replug.
+    lim().arm(limit_mw, systick::millis(), far_sink_seen() ? &iq().watch() : nullptr);
     g_lim_on = true;
     g_lim_logged = pd::LimState::Armed;
     g_lim_logged_inj = 0;

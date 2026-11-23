@@ -4529,6 +4529,7 @@ void test_inline_interrogation_spoof_answers_only_inside_the_charger_query_windo
 void test_inline_interrogation_never_answers_a_device_vconn_swap();
 void test_inline_interrogation_spoof_answers_the_devices_cable_query();
 void test_inline_pd_limiter_injects_the_clamped_list_and_sees_the_sink_obey();
+void test_pd_limiter_waits_through_a_replug_and_acts_on_a_far_request();
 void test_stress_soft_reset_goes_out_and_keeps_rd_when_the_source_answers();
 void test_stress_soft_reset_to_a_silent_source_asks_for_the_caps_with_rd_kept();
 void test_a_request_is_answered_in_the_service_pass_that_reads_it();
@@ -5675,6 +5676,7 @@ int main() {
     test_inline_interrogation_never_answers_a_device_vconn_swap();
     test_inline_interrogation_spoof_answers_the_devices_cable_query();
     test_inline_pd_limiter_injects_the_clamped_list_and_sees_the_sink_obey();
+    test_pd_limiter_waits_through_a_replug_and_acts_on_a_far_request();
     test_stress_soft_reset_goes_out_and_keeps_rd_when_the_source_answers();   // each ends with a detach
     test_stress_soft_reset_to_a_silent_source_asks_for_the_caps_with_rd_kept();
     test_a_request_is_answered_in_the_service_pass_that_reads_it();   // ends with a detach
@@ -5962,13 +5964,10 @@ std::vector<std::uint32_t> tx_objects(std::size_t n) {
 
 // Charger -> K2 -> sink at 15 V 3 A (45 W), limit 30 W: once PS_RDY has gone by and the line is quiet the K2 speaks as the source,
 // same two objects, the 15 V one at 2 A, with the id after the charger's next one. The sink's next Request inside the limit is
-// proof; the log says so. Refused without the inline latch or outside 5..100 W; a charger detach ends it.
+// proof; the log says so. Refused outside 5..100 W; a charger detach only makes it wait.
 void test_inline_pd_limiter_injects_the_clamped_list_and_sees_the_sink_obey() {
     attach_inline();
     pd::LimFacts f;
-    fusb302::set_inline(false);
-    CHECK_EQ(int(fusb302::limit_arm(30000, f)), int(pd::LimRefusal::NotInline));
-    fusb302::set_inline(true);
     CHECK_EQ(int(fusb302::limit_arm(1000, f)), int(pd::LimRefusal::BadLimit));
     f.busy = true;
     CHECK_EQ(int(fusb302::limit_arm(30000, f)), int(pd::LimRefusal::Busy));
@@ -6011,11 +6010,97 @@ void test_inline_pd_limiter_injects_the_clamped_list_and_sees_the_sink_obey() {
     CHECK_EQ(fusb302::limit_armed(), false);
     CHECK_EQ(int(fusb302::limit_status().why), int(pd::LimWhy::User));
     CHECK_EQ(usb_has("off: turned off"), true);
-    // armed again, a detach disarms it
+    // armed again, a detach only makes it wait: the limit stays, the state goes back to Armed
     CHECK_EQ(int(fusb302::limit_arm(30000, f)), int(pd::LimRefusal::None));
     end_inline_case();
+    CHECK_EQ(fusb302::limit_armed(), true);
+    CHECK_EQ(int(fusb302::limit_status().state), int(pd::LimState::Armed));
+    CHECK_EQ(fusb302::limit_status().limit_mw, 30000u);
+    fusb302::limit_disarm();
+    service_ms(3);
     CHECK_EQ(fusb302::limit_armed(), false);
-    CHECK_EQ(int(fusb302::limit_status().why), int(pd::LimWhy::Detached));
+}
+
+// The contract of a far sink as the wire showed it in hardware test 1 (caps retried three times, the sink's Request, Accept,
+// PS_RDY sent twice), pushed with no inline latch: the Request alone proves the sink behind the K2.
+static void push_far_contract(std::uint8_t id0) {
+    for (std::uint8_t k = 0; k < 3; k++) push_frame(0xE0, hdr(1, 2, true, std::uint8_t(id0 + k)), {0x0A01912Cu, 0x0004B12Cu});
+    push_frame(0xE0, hdr(2, 1, false, 0), {0x2204B12Cu});                    // position 2: 15 V 3 A
+    push_frame(0xE0, hdr(3, 0, true, std::uint8_t(id0 + 3)), {});
+    push_frame(0xE0, hdr(6, 0, true, std::uint8_t(id0 + 4)), {});
+    push_frame(0xE0, hdr(6, 0, true, std::uint8_t(id0 + 5)), {});
+}
+
+// Hardware test 1 (2026-11-23): armed, then a link reset; the replugged attach had no inline latch but the sink's Request was on
+// the wire. The limiter must still be armed after the detach, act on the far Request alone, and (armed on an attach that already
+// holds the contract) limit it at once. Nothing attached is no refusal either.
+void test_pd_limiter_waits_through_a_replug_and_acts_on_a_far_request() {
+    pd::LimFacts f;
+    // nothing attached: armed, waiting
+    fusb302::set_inline(false);
+    reset_world();
+    fusb302::init();
+    attach_on_cc1();                                                         // a detach rebases the far-sink counter, as in the field
+    g_reg[0x40] = 0x00;
+    for (int i = 0; i < 40; i++) { g_ms += 20; fusb302::poll(); fusb302::service(); }
+    CHECK_EQ(fusb302::active_cc(), 0);
+    CHECK_EQ(int(fusb302::limit_arm(10000, f)), int(pd::LimRefusal::None));
+    CHECK_EQ(int(fusb302::limit_status().state), int(pd::LimState::Armed));
+    // a passive attach (no inline latch), the far sink's contract: forged from the wire alone
+    attach_on_cc1();
+    CHECK_EQ(fusb302::inline_mode(), false);
+    g_log.clear(); g_usb.clear();
+    push_far_contract(0);
+    service_ms(2);
+    CHECK_EQ(tx_headers().size(), 0u);
+    for (int i = 0; i < 100 && tx_headers().empty(); i++) { g_ms += 1; fusb302::service(); }
+    std::vector<unsigned> h = tx_headers();
+    CHECK_EQ(h.size(), 1u);
+    CHECK_EQ(h.empty() ? 0u : h[0] & 0x1F, 1u);                              // Source_Capabilities
+    CHECK_EQ(h.empty() ? 0u : (h[0] >> 9) & 7, 7u);                          // the charger's newest is 5 (the second PS_RDY): 5 + 2
+    const std::vector<std::uint32_t> o = tx_objects(0);
+    CHECK_EQ(o.size(), 2u);
+    CHECK_EQ(o.size() < 2 ? 0u : o[1], 0x0004B042u);                         // 15 V 3 A -> 10 W / 15 V = 0.66 A
+    CHECK_EQ(int(fusb302::limit_status().state), int(pd::LimState::Injected));
+    CHECK_EQ(usb_has("forged list 1"), true);
+    // the replug: the line goes quiet, a detach; the limit waits, injections count on
+    g_reg[0x40] = 0x00;
+    for (int i = 0; i < 40; i++) { g_ms += 20; fusb302::poll(); fusb302::service(); }
+    CHECK_EQ(fusb302::limit_armed(), true);
+    CHECK_EQ(int(fusb302::limit_status().state), int(pd::LimState::Armed));
+    CHECK_EQ(usb_has("off: detached"), false);
+    // the new attach, again with no latch: forged again
+    attach_on_cc1();
+    g_log.clear(); g_usb.clear();
+    push_far_contract(0);
+    for (int i = 0; i < 100 && tx_headers().empty(); i++) { g_ms += 10; fusb302::service(); }
+    CHECK_EQ(tx_headers().size(), 1u);
+    CHECK_EQ(int(fusb302::limit_status().injections), 2);
+    fusb302::limit_disarm();
+    service_ms(3);
+
+    // armed on an attach that already holds the contract: limited at once, no replug
+    g_reg[0x40] = 0x00;
+    for (int i = 0; i < 40; i++) { g_ms += 20; fusb302::poll(); fusb302::service(); }
+    attach_on_cc1();
+    g_log.clear(); g_usb.clear();
+    push_frame(0xE0, hdr(1, 2, true, 0), {0x0A01912Cu, 0x0004B12Cu});
+    push_frame(0xE0, hdr(2, 1, false, 0), {0x2204B12Cu});
+    push_frame(0xE0, hdr(3, 0, true, 1), {});
+    push_frame(0xE0, hdr(6, 0, true, 2), {});
+    service_ms(30);
+    CHECK_EQ(tx_headers().size(), 0u);                                       // not armed: nothing sent
+    CHECK_EQ(int(fusb302::limit_arm(10000, f)), int(pd::LimRefusal::None));
+    CHECK_EQ(int(fusb302::limit_status().state), int(pd::LimState::Pending));
+    CHECK_EQ(fusb302::limit_status().req_pos, 2);
+    for (int i = 0; i < 100 && tx_headers().empty(); i++) { g_ms += 1; fusb302::service(); }
+    h = tx_headers();
+    CHECK_EQ(h.size(), 1u);
+    CHECK_EQ(h.empty() ? 0u : (h[0] >> 9) & 7, 4u);                          // the charger's next id is 3: ours is the one after
+    CHECK_EQ(int(fusb302::limit_status().state), int(pd::LimState::Injected));
+    fusb302::limit_disarm();
+    service_ms(3);
+    end_inline_case();
 }
 
 // ---- PD Stress Soft_Reset on a live contract (ROADMAP "PD Stress softreset unplugs the charger", Xiaomi 20K bank, 2026-11-12) ----
