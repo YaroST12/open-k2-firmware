@@ -174,9 +174,12 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
   and Hard Reset points not seen (no AVS offered; EPR blocked by the 3 A cable). `pdspec::Engine::point()` -> `Runner::spec_point()`; in the Spec state the page names the
   engine's point ("PPS 8.02V", "AVS 21V", "PD 9V", "Hard Reset"), its target and gauge follow it, and the outline sits on the
   matching chip of the compact PD row (`test_ui_charger_test` spec-stage walk, `test_charger_test`, `test_step_label`).
-  Host walk reaches SPR and EPR AVS and fixed 28 V points (every tick checked) and the first tick after the stage. Open:
-  ceiling-stage points and the identity-probe window before the stage still name the next unit; the remote / web `index()`
-  readers show the next unit during the stage; a Hard Reset point leaves the window on the PD row's head.
+  Host walk reaches SPR and EPR AVS and fixed 28 V points (every tick checked) and the first tick after the stage.
+  Follow-ups (host only, not verified on hardware): f2601bf1 names the SVOOC ceiling stage ("SVOOC ceiling") and the
+  identity-probe window ("Charger ID") instead of the next unit, and a Hard Reset point keeps the grid window where the
+  previous point had it; 1ed2c4a9 adds `0x0B` req `[10]` (now: interlude, spec point, name) that `k2_remote --json
+  charger-test status/view` and the web page attach as `now` (an older firmware omits it); the web grid shows no running
+  dot while a stage runs. runev Resume/Suspend/RowStart still record the row index.
 
 - **PPS Deep range label disagrees with the range being tested** (2026-11-21, user hardware report). The UI displays a
   `5V-21V` PPS range while the engine is visibly stepping through a `3.3V-5V` range (check APDO min/max formatting vs
