@@ -470,7 +470,56 @@ static void test_diag_dwell() {
     std::printf("stress fixture: %s after the dwell (mask 0x%x)\n", d.value.c_str(), unsigned(sm));
 }
 
+// The armed PD limit follows the contract on the protocol row ("PD 9V3A lim27W"); the value never passes kProtoChars,
+// the trailing current or power part goes first.
+static void test_protocol_limit_suffix() {
+    ProtoText t = fmt({.kind = ProtoKind::PdFixed, .mv = 9000, .ma = 3000});
+    format_limit(t, ProtoKind::PdFixed, 27);
+    CHECK_STR(t.tag.c_str(), "PD");
+    CHECK_STR(t.value.c_str(), "9V3A lim27W");
+    t = fmt({.kind = ProtoKind::PdFixed, .mv = 20000, .ma = 3250});
+    format_limit(t, ProtoKind::PdFixed, 100);
+    CHECK_STR(t.value.c_str(), "20V3.25A lim100W");   // exactly the room
+    t = fmt({.kind = ProtoKind::Pps, .lo_mv = 3300, .hi_mv = 21000, .ma = 5000});
+    format_limit(t, ProtoKind::Pps, 100);
+    CHECK_STR(t.value.c_str(), "3.3-21V lim100W");     // the current is dropped to make room
+    t = fmt({.kind = ProtoKind::Pps, .lo_mv = 5000, .hi_mv = 11000, .ma = 3000});
+    format_limit(t, ProtoKind::Pps, 27);
+    CHECK_STR(t.value.c_str(), "5-11V 3A lim27W");
+    t = fmt({.kind = ProtoKind::Avs, .lo_mv = 15000, .hi_mv = 28000, .mw = 140000});
+    format_limit(t, ProtoKind::Avs, 100);
+    CHECK_STR(t.value.c_str(), "15-28V lim100W");
+    t = fmt({.kind = ProtoKind::PdFixed, .mv = 9250, .ma = 3250});
+    format_limit(t, ProtoKind::PdFixed, 100);
+    CHECK_STR(t.value.c_str(), "9.25V lim100W");       // a fixed level with odd numbers loses its current too
+    // Other protocols and no limit: untouched.
+    t = fmt({.kind = ProtoKind::Qc3, .lo_mv = 3600, .hi_mv = 12000});
+    format_limit(t, ProtoKind::Qc3, 27);
+    CHECK_STR(t.value.c_str(), "3.6-12V");
+    t = fmt({.kind = ProtoKind::PdFixed, .mv = 9000, .ma = 3000});
+    format_limit(t, ProtoKind::PdFixed, 0);
+    CHECK_STR(t.value.c_str(), "9V3A");
+    // Every limit-capable kind, widest contracts and limits: never over the row.
+    const ProtoInfo wide[] = {
+        {.kind = ProtoKind::PdFixed, .mv = 20500, .ma = 3250},
+        {.kind = ProtoKind::PdEpr, .mv = 48000, .ma = 5000},
+        {.kind = ProtoKind::Pps, .lo_mv = 3300, .hi_mv = 21000, .ma = 5000},
+        {.kind = ProtoKind::Pps, .lo_mv = 5000, .hi_mv = 21000, .ma = 3250},
+        {.kind = ProtoKind::Avs, .lo_mv = 15000, .hi_mv = 48000, .mw = 240000},
+        {.kind = ProtoKind::Avs, .lo_mv = 12600, .hi_mv = 12600, .mw = 140000},
+    };
+    for (const ProtoInfo &p : wide) {
+        for (uint32_t w : {5u, 27u, 100u}) {
+            t = fmt(p);
+            format_limit(t, p.kind, w);
+            CHECK_EQ(t.value.view().size() <= static_cast<size_t>(kProtoChars), true);
+            CHECK_EQ(t.value.view().find("lim") != std::string_view::npos, true);
+        }
+    }
+}
+
 int main() {
+    test_protocol_limit_suffix();
     test_alarm_thresholds();
     test_limit_bar();
     test_layout();

@@ -978,7 +978,26 @@ static void test_battery_card_on_home() {
     g_stub.ext = {};
 }
 
+// An armed PD limit follows the contract on the protocol row ("PD 20V3A lim27W"), and leaves with the limit.
+static void test_limit_suffix_on_the_protocol_row() {
+    Ui &ui = home_ui();
+    live_pd(false, 20010, 1520);
+    g_stub.lim = {};
+    run(ui, 40);
+    const int plain = ink_logical(ui, 52, 201, 128, 16, kText);
+    CHECK_TRUE(plain > 0);
+    g_stub.lim.state = pd::LimState::Armed; g_stub.lim.limit_mw = 27000;
+    run(ui, 10);
+    dump("2c", "lim_armed");
+    CHECK_TRUE(ink_logical(ui, 52, 201, 128, 16, kText) > plain + 40);   // "lim27W" added
+    CHECK_EQ(ink_logical(ui, 180, 201, 16, 16, kText), 0);              // and the elapsed time column stays clear
+    g_stub.lim.state = pd::LimState::Off;
+    run(ui, 10);
+    CHECK_EQ(ink_logical(ui, 52, 201, 128, 16, kText), plain);
+}
+
 int main() {
+    test_limit_suffix_on_the_protocol_row();
     test_contract_text();
     test_cable_and_cc_text();
     test_offer_text();

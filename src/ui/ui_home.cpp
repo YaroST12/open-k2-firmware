@@ -59,6 +59,7 @@ constexpr int16_t kRowTop[2] = {kInfoRow1Top, kInfoRow2Top};
 static_assert(pd::diag::screen::kLabelChars <= static_cast<std::size_t>(kDiagChars), "the diagnosis word runs into the elapsed time");
 static_assert(hm::kInfoValX + kDiagChars * static_cast<int>(kSmallAdvPx) <= kElX, "the diagnosis word overlaps the elapsed time");
 static_assert(hm::kInfoValX + 15 * static_cast<int>(kSmallAdvPx) <= kElX, "idle wait text overlaps elapsed time");
+static_assert(hm::kInfoValX + hm::kProtoChars * static_cast<int>(kSmallAdvPx) <= kElX, "the protocol value overlaps the elapsed time");
 static_assert(hm::kInfoTagX + hm::kDiagTag.size() * kSmallAdvPx <= static_cast<unsigned>(hm::kInfoValX), "the Diag tag runs into its value");
 
 // Repaint zones of the info cell (logical, inclusive). A zone is wider and lower than its fields on purpose: a glyph
@@ -836,6 +837,10 @@ void HomePage::paint_info(const Frame &f) {
     if (m == hm::Mode::NoMeter) pt.value.put(starting ? "Power meter starting" : "Power meter not found");
     else if (m == hm::Mode::Idle) hm::format_idle_wait(ctx_.ui->link().wait_kind(), pt);
     else hm::format_proto(f.proto, pt);
+    if (m == hm::Mode::Live) {
+        const pd::LimStatus &ls = fusb302::limit_status();
+        if (ls.state != pd::LimState::Off) hm::format_limit(pt, f.proto.kind, pd::lim_watts(ls.limit_mw));
+    }
     const bool known = (live || stale) && f.proto.kind != hm::ProtoKind::None;
     const uint16_t tcol = known ? kDim : kFaint;
     uint16_t vcol = m == hm::Mode::NoMeter ? (starting ? kDim : kError)
