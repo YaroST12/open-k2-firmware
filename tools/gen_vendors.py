@@ -201,6 +201,8 @@ def verify(rows, text):
             errs.append("%04X %s: not on the USB-IF list" % (r.vid, r.name))
         elif r.usbif not in [x.replace(",", "") for x in names]:
             errs.append("%04X %s: the list says %r, the csv says %r" % (r.vid, r.name, names, r.usbif))
+        elif not derives(r.name, r.usbif) and (r.vid, r.name, r.usbif) not in SHORTHAND:
+            errs.append("%04X %s: not a shortening of the registrant %r" % (r.vid, r.name, r.usbif))
     return errs
 
 

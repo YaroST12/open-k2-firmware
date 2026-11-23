@@ -141,12 +141,16 @@ class Verify(unittest.TestCase):
         self.assertEqual(gen_vendors.parse_usbif(self.TXT), {10522: ["Anker Innovations Limited"], 99: ["Acme, Inc."],
                                                             1226: ["Lite-On Corp."]})   # the PDF's U+2010 hyphen folded
 
+    def test_verify_flags_a_swap(self):
+        R = gen_vendors.Row
+        self.assertEqual(len(gen_vendors.verify([R(10522, "Brand", "brand", "Anker Innovations Limited", "")], self.TXT)), 1)
+
     def test_verify_flags_wrong_and_missing(self):
         R = gen_vendors.Row
         ok = R(10522, "Anker", "brand", "Anker Innovations Limited", "")
         self.assertEqual(gen_vendors.verify([ok], self.TXT), [])
-        self.assertEqual(len(gen_vendors.verify([R(10522, "X", "brand", "Someone Else", "")], self.TXT)), 1)
-        self.assertEqual(len(gen_vendors.verify([R(5, "X", "brand", "Gone", "")], self.TXT)), 1)
+        self.assertEqual(len(gen_vendors.verify([R(10522, "SE", "brand", "Someone Else", "")], self.TXT)), 1)
+        self.assertEqual(len(gen_vendors.verify([R(5, "Gone", "brand", "Gone", "")], self.TXT)), 1)
         self.assertEqual(gen_vendors.verify([R(99, "Acme", "brand", "Acme Inc.", "")], self.TXT), [])   # commas dropped in the csv
 
 
