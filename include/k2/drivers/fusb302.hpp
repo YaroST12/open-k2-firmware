@@ -420,7 +420,8 @@ const pd::IqStatus& interrogate_status();   // the latest run's, kept until the 
 // latch. A contract already on the wire when armed is limited at once.
 // Latency: the list goes out once PS_RDY has been seen and the line has been quiet for kLimQuietMs, so the sink draws at the
 // charger's real contract for that long; the clamp lands with its next Request, never before.
-pd::LimRefusal limit_arm(std::uint32_t limit_mw, const pd::LimFacts& outside);
+// `seed` false: do not take the sniffer's contract (a link reset was just asked for: it is about to end).
+pd::LimRefusal limit_arm(std::uint32_t limit_mw, const pd::LimFacts& outside, bool seed = true);
 void limit_disarm();
 bool limit_armed();
 const pd::LimStatus& limit_status();   // kept after the stop: state off and why

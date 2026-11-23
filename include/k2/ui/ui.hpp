@@ -395,7 +395,14 @@ public:
     // ports_busy() plus the wire's other owners (a listen window, an FC session or sniff): the gate for a feature that forges traffic.
     bool port_owner_busy() const;
     // PD limiter arm through the remote's path (same gate, same refusals); the limit is RAM only.
-    pd::LimRefusal pd_limit_arm(uint32_t limit_mw) const;
+    // `seed` false: the sniffer's contract is not taken (a link reset was asked for).
+    pd::LimRefusal pd_limit_arm(uint32_t limit_mw, bool seed = true) const;
+    // The picker's change of limit (0 = Off). A live contract is never re-listed by an arm alone: the link is reset first
+    // (link_reset, same confirm), then the limit is armed unseeded so the charger lists again into the forged clamp. No live
+    // contract (nothing attached, a charger only): armed or cleared at once. Off is never refused.
+    enum class LimitSet : uint8_t { Done, DoneReset, NeedConfirm, NoReset, Busy, BadLimit };
+    LimitSet pd_limit_set(uint32_t limit_mw, bool confirmed, uint32_t now_ms);
+    bool pd_limit_link_live() const;   // inline with a far sink's Request or a sniffed contract
     // A loop probe run (Tools -> Loop probe) drives D+/D-, the backlight and the K2's own Rd: the ports are its until it ends.
 #if K2_LOOPPROBE
     bool loop_probe_busy() const;

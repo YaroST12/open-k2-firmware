@@ -605,6 +605,22 @@ static void test_stale_home() {
     CHECK_TRUE(ink_logical(ui, kCardX, kRowTop[1], kCardW, 58, kStale) > 10);
 }
 
+// The limit stays armed after a detach, but the stale Home row carries no "lim" suffix.
+static void test_stale_home_has_no_limit_suffix() {
+    Ui &ui = home_ui();
+    live_pd(false, 20010, 1520);
+    g_stub.lim = {};
+    run(ui, 40);
+    unplug();
+    g_stub.pm.vbus_mv = 0;
+    run(ui, 20);
+    const int plain = ink_logical(ui, 52, 201, 128, 16, kStale);
+    g_stub.lim.state = pd::LimState::Limited; g_stub.lim.limit_mw = 27000;
+    run(ui, 10);
+    CHECK_EQ(ink_logical(ui, 52, 201, 128, 16, kStale), plain);
+    CHECK_EQ(ink_logical(ui, 52, 201, 128, 16, kText), 0);
+}
+
 // Near (>= 90 %) and over (> 100 %) of the contract: the hero's W against 20 V x 5 A = 100 W in full ("94% OF 100W"),
 // the ledger's A in its short form ("94%").
 static void test_alarms() {
@@ -1014,6 +1030,7 @@ int main() {
     test_idle_home();
     test_idle_home_says_crossed();
     test_stale_home();
+    test_stale_home_has_no_limit_suffix();
     test_alarms();
     test_nometer_home();
     test_nometer_grace();

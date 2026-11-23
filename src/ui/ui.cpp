@@ -371,10 +371,55 @@ bool Ui::port_owner_busy() const {
            fctrig::ufcs_exiting() || fctrig::svooc_running() || dpsniff::armed();
 }
 
-pd::LimRefusal Ui::pd_limit_arm(uint32_t limit_mw) const {
+pd::LimRefusal Ui::pd_limit_arm(uint32_t limit_mw, bool seed) const {
     pd::LimFacts f;
     f.busy = port_owner_busy();
-    return fusb302::limit_arm(limit_mw, f);
+    return fusb302::limit_arm(limit_mw, f, seed);
+}
+
+bool Ui::pd_limit_link_live() const {
+    return link_reset_inline() && fusb302::far_sink_seen();   // certain evidence only: a Request from a sink behind the K2
+}
+
+Ui::LimitSet Ui::pd_limit_set(uint32_t limit_mw, bool confirmed, uint32_t now_ms) {
+    const bool off = limit_mw == 0;
+    if (off && !fusb302::limit_armed()) return LimitSet::Done;
+    if (!off) {   // the gate before the reset: a refused limit never costs a link reset
+        pd::LimFacts f;
+        f.busy = port_owner_busy();
+        switch (pd::lim_gate(f, limit_mw)) {
+        case pd::LimRefusal::None: break;
+        case pd::LimRefusal::BadLimit: return LimitSet::BadLimit;
+        case pd::LimRefusal::Busy: return LimitSet::Busy;
+        }
+    }
+    bool seed = true;
+    LimitSet res = LimitSet::Done;
+    if (pd_limit_link_live()) {
+        switch (link_reset(confirmed, now_ms)) {
+        case LinkResetResult::HardReset:
+        case LinkResetResult::Cycled: seed = false; res = LimitSet::DoneReset; break;   // the contract the sniffer holds is ending
+        case LinkResetResult::NeedConfirm: return LimitSet::NeedConfirm;
+        case LinkResetResult::Busy:
+            if (!off) return LimitSet::Busy;
+            res = LimitSet::NoReset;
+            break;
+        case LinkResetResult::SelfPowered:   // the K2 lives on this link: arm from what the sniffer holds, the sink must re-ask
+        case LinkResetResult::NoLink: res = LimitSet::NoReset; break;
+        }
+    } else if (link_reset_inline() && (fusb302::contract().valid || (ctx_.pm_online && ctx_.vbus_fast_mv > pd::kVSafe5MaxMv))) {
+        res = LimitSet::NoReset;   // a contract joined mid-way, no Request heard: nothing to seed from, the sink must re-ask
+    }
+    if (off) {
+        fusb302::limit_disarm();
+        return res;
+    }
+    switch (pd_limit_arm(limit_mw, seed)) {
+    case pd::LimRefusal::None: return res;
+    case pd::LimRefusal::BadLimit: return LimitSet::BadLimit;
+    case pd::LimRefusal::Busy: return LimitSet::Busy;
+    }
+    return LimitSet::Busy;
 }
 
 bool Ui::twin_live_busy() const {

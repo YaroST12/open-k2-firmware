@@ -159,6 +159,16 @@ void Limiter::stop(LimWhy why) {
     st_.why = why;
 }
 
+void Limiter::on_detach() {
+    if (!armed()) return;   // an off limiter's last status stays as the stop left it
+    restart();
+    st_.req_pos = 0;
+    st_.req_rdo = 0;
+    st_.req_mw = 0;
+    st_.forged_n = 0;
+    st_.forged.fill(0);
+}
+
 void Limiter::restart() {
     if (!armed()) return;
     watch_.reset();

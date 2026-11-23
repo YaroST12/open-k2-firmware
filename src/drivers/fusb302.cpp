@@ -1459,6 +1459,7 @@ void detach_reset(std::uint8_t status0) {
     g_vconn_applied = false;
     g_vconn.reset(pd::VconnWhy::Abort);
     if (iq_running()) iq().abort(pd::IqWhy::Detached, systick::millis());   // nobody left to ask or to reset
+    if (g_iq_inited) iq().on_hard_reset(systick::millis());   // the sniffed list and contract were the old link's: no seed from them
     if (g_lim_on) lim().on_detach();
     // No SW_RES, on a plain or a pinned boot alike: it restores the chip's power-on SWITCHES0 (0x03, Rd on both
     // lines) until the next write - through the closed CC switches a pinned boot's source would see the Debug

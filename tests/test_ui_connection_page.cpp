@@ -2851,6 +2851,24 @@ static void unplug_charger(Ui &ui, uint32_t &t) {
     settle(ui, t);
 }
 
+// The limit stays armed across a detach, but its LIM chip is per-attach: the stale Charger slice shows LAST, no amber.
+static void test_stale_charger_slice_drops_lim_chip() {
+    Ui &ui = fresh_ui();
+    uint32_t t = 90000;
+    inline_pd_scene(ui, t);
+    g_stub.lim = {};
+    g_stub.lim.state = pd::LimState::Limited; g_stub.lim.limit_mw = 100000;
+    for (int i = 0; i < 6; i++) ui.tick(t += 100);
+    settle(ui, t);
+    CHECK_EQ(cp(ui).overview_mode(), true);
+    CHECK(slice_ink(0).amber > 0);                       // live: the LIM chip
+    unplug_charger(ui, t);
+    CHECK_EQ(g_stub.lim.state, pd::LimState::Limited);   // the limit itself is untouched
+    const SliceInk k = slice_ink(0);
+    CHECK(k.last > 0);
+    CHECK_EQ(k.amber, 0);
+}
+
 // A detach ends the session: the held offers and cable stay readable but grey, a LAST pill, no amber and no green.
 static void test_overview_slices_go_stale_on_detach() {
     Ui &ui = fresh_ui();
@@ -3061,5 +3079,6 @@ int main() {
     test_sink_slice_goes_stale_when_the_sink_leaves();
     test_charger_slice_revision_chip_names_the_wire_revision();
     test_charger_slice_lim_chip_while_armed();
+    test_stale_charger_slice_drops_lim_chip();
     return test_report("test_ui_connection_page");
 }

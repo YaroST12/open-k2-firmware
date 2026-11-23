@@ -59,8 +59,21 @@ inline constexpr const char *kLimToastChargerResets = "Limit off: charger resets
 inline constexpr const char *kLimToastSinkResets = "Limit off: sink resets";
 inline constexpr const char *kLimToastSinkIgnores = "Limit off: sink ignores it";
 inline constexpr const char *kLimToastEpr = "Limit off: EPR contract";
+// A live contract is reset before a new limit (or Off): the same two-press window as Reset & re-read on LINK.
+inline constexpr const char *kLimToastConfirm = "OK again: resets link";
+inline constexpr const char *kLimToastResetting = "Resetting link...";
+inline constexpr const char *kLimToastRescan = "Rescanning...";
+inline constexpr const char *kLimToastNoReset = "No reset: replug to apply";
+inline constexpr const char *kLimToastSelfPowered = "Power K2 via USB port";
+inline constexpr const char *kLimToastRetry = "Busy, retry";
+inline constexpr const char *kLimToastNoLink = "No active link";
+inline constexpr const char *kLimRowReset = "Reset link";                       // the picker's row when no offers are known
+inline constexpr const char *kLimNoteReset = "reads the charger's offers";
 inline constexpr const char *kLimToasts[] = {kLimToastNoOffers, kLimToastNoLower, kLimToastBadLimit, kLimToastBusy, kLimToastRate,
-                                             kLimToastChargerResets, kLimToastSinkResets, kLimToastSinkIgnores, kLimToastEpr};
+                                             kLimToastChargerResets, kLimToastSinkResets, kLimToastSinkIgnores, kLimToastEpr,
+                                             kLimToastConfirm, kLimToastResetting, kLimToastRescan, kLimToastNoReset,
+                                             kLimToastSelfPowered, kLimToastRetry, kLimToastNoLink};
+static_assert(fits_px(kLabelAdv, kLimNoteReset, kit::kNoteMaxPx), "the reset row note is wider than its line");
 static_assert(all_fit(kLimToasts, kLabelAdv, kToastTextPx), "a PD limit result is wider than the toast");
 
 }  // namespace k2::text::tools
