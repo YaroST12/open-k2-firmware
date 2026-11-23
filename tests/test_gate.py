@@ -604,6 +604,20 @@ class PerfStep(unittest.TestCase):
         self.seed(seeded_baseline())
         self.assertIn("no device", self.check("v", lambda: "err: unknown command (help)\r\n"))
 
+    def test_skip_when_the_build_has_no_selftest_hint_to_build_it(self):
+        self.seed(seeded_baseline())
+        calls = []
+        def runner():
+            calls.append(1)
+            return "err: selftest not available\r\n"
+        reason = self.check("v", runner)
+        self.assertNotIn("no device", reason)
+        self.assertIn("K2_SELFTEST=1", reason)
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(any("SKIPPED" in l and "K2_SELFTEST=1" in l for l in self.log))
+        self.assertTrue(pg.finished("err: selftest not available\r\n"))     # the serial read stops at once, not after 15 s
+        self.assertFalse(pg.finished("math selftest (arch=m4f):\r\n"))
+
     def test_skip_when_unseeded_and_the_device_is_left_alone(self):
         self.seed(pg.UNSEEDED)
         def runner():

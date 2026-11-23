@@ -42,6 +42,9 @@ BASELINE_RUNS = 5
 PCT = 2.0                 # default tolerance: PCT % of the baseline value ...
 MIN_CYCLES = 50           # ... or this many cycles, whichever is larger
 SERIAL_TIMEOUT_S = 15.0
+# The shell's answer from an image built without K2_SELFTEST=1 (shell.hpp Backend::selftest default).
+NOT_AVAILABLE = "selftest not available"
+NOT_BUILT = "the selftest is not built into this image (K2_SELFTEST=0): build with K2_SELFTEST=1, flash, then make perf-check"
 
 HEADER_RE = re.compile(r"^math selftest \((?P<kv>[^)]*)\):\s*$", re.M)
 CHECK_RE = re.compile(r"^\s*\[(?P<st>PASS|FAIL|SKIP)\]\s+(?P<name>\w+)"
@@ -78,6 +81,12 @@ def parse_selftest(text):
         res["summary"] = {"status": s.group("st"), "passed": int(s.group("p")), "total": int(s.group("t")),
                           "skipped": int(s.group("s") or 0), "total_cyc": int(s.group("cyc"))}
     return res
+
+
+def finished(text):
+    """A `selftest` reply is complete at its summary line, or at the shell's refusal."""
+    text = text.replace("\r", "")
+    return bool(SUMMARY_RE.search(text)) or NOT_AVAILABLE in text
 
 
 def merge_runs(runs):
@@ -226,7 +235,7 @@ def run_selftest(port=PORT, timeout=SERIAL_TIMEOUT_S):
         while time.monotonic() - t0 < timeout:
             if select.select([fd], [], [], 0.2)[0]:
                 out += os.read(fd, 4096)
-                if SUMMARY_RE.search(out.decode(errors="replace").replace("\r", "")):
+                if finished(out.decode(errors="replace")):
                     break
         return out.decode(errors="replace")
     finally:
@@ -245,6 +254,8 @@ def probe_device(port=PORT, runner=None):
     except PerfError as e:
         return None, str(e)
     r = parse_selftest(text)
+    if r["fw"] is None and NOT_AVAILABLE in text:
+        return None, NOT_BUILT
     if r["fw"] is None:
         return None, "the shell answered without a selftest header (an older firmware, or no K2)"
     return r, text
@@ -301,8 +312,9 @@ def perf_check(built_version=None, baseline_path=BASELINE, say=print, runner=Non
         with lock():
             first, info = probe_device(runner=runner)
             if first is None:
-                say(f"  SKIPPED (no device: {info})")
-                return f"no device: {info}"
+                reason = info if info == NOT_BUILT else f"no device: {info}"
+                say(f"  SKIPPED ({reason})")
+                return reason
             reason = decide(baseline, built_version, first["fw"])
             if reason:
                 say(f"  SKIPPED ({reason})")

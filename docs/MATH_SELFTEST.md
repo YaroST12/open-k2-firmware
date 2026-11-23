@@ -5,6 +5,7 @@ On-device correctness check and DWT cycle benchmark of the hot paths: conversion
 - Implementation: [`include/k2/core/math_selftest.hpp`](../include/k2/core/math_selftest.hpp), [`src/core/math_selftest.cpp`](../src/core/math_selftest.cpp)
 - Shell wiring: [`include/k2/core/shell.hpp`](../include/k2/core/shell.hpp), [`src/core/shell.cpp`](../src/core/shell.cpp), [`src/core/shell_hw.cpp`](../src/core/shell_hw.cpp)
 - Host tests: [`tests/test_math_selftest.cpp`](../tests/test_math_selftest.cpp)
+- **Build switch**: the selftest is linked only with `K2_SELFTEST=1` (Makefile, default 0; -16208 B text). A default image answers `err: selftest not available` and the perf gate reports SKIPPED. Pre-release flow: `make gate K2_SELFTEST=1` -> flash -> `make perf-check`. The host tests always compile it.
 
 ## Design
 
@@ -113,7 +114,7 @@ The same `src/core/math_selftest.cpp` compiles on three trees, so one suite comp
 
 ### Perf gate
 
-`make gate` ends with a `perf` step that guards against swings in the per-check cycle counts of the default build. It never flashes. It runs only when a K2 answers on `/dev/ttyACM0` (override with `K2_PORT`) and its `fw=` equals the version of the image the gate just built; otherwise the step prints `SKIPPED (reason)` and the gate summary repeats it under `*** SKIPPED`. Skip reasons: `unseeded` (no baseline yet), `no device`, `version mismatch`, `device busy` (another tool holds `/tmp/k2-device.lock`).
+`make gate` ends with a `perf` step that guards against swings in the per-check cycle counts of the default build. It never flashes. It runs only when a K2 answers on `/dev/ttyACM0` (override with `K2_PORT`) and its `fw=` equals the version of the image the gate just built; otherwise the step prints `SKIPPED (reason)` and the gate summary repeats it under `*** SKIPPED`. Skip reasons: `unseeded` (no baseline yet), `no device`, `version mismatch`, `device busy` (another tool holds `/tmp/k2-device.lock`), `not built into this image` (the K2 runs a default build: build with `K2_SELFTEST=1`).
 
 - **Baseline**: `tools/perf_baseline.json`, per check the minimum `cyc` over the baseline runs, its `zw`, and an optional `tol` (twice the run-to-run spread when that exceeds the default). Default tolerance: the larger of 2 % and 50 cycles.
 - **Measure**: 3 runs under the device lock, per-check minimum, compared with the baseline.

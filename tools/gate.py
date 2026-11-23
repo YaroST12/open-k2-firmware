@@ -21,7 +21,8 @@
  11 perf    the on-device `selftest` (3 runs, per-check minimum cycles) against tools/perf_baseline.json, on the build
             that is ON the K2 now (the gate runs before a flash and never flashes): fails on a FAIL line, a zw 1 -> 0,
             or a check slower than baseline + tolerance; SKIPPED (never failed, repeated after "GATE PASSED") when no
-            K2 answers, the K2 runs another build than the one just built, or the baseline is unseeded.
+            K2 answers, the K2 runs another build than the one just built, the baseline is unseeded, or the image has no
+            selftest (default build; pre-release: `make gate K2_SELFTEST=1`).
             `make perf-check` (`gate.py --perf-only`) runs just this step after a flash; `make perf-baseline`
             (`gate.py --perf-baseline`) re-takes the baseline (5 runs); see tools/perf_gate.py, docs/MATH_SELFTEST.md
 

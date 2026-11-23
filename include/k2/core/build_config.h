@@ -75,6 +75,10 @@
  *                0 = none of it (the default: saves the 1920 B strip buffer and ~3 KB Flash). Remote answers UnknownCmd
  *                    and screenshot_enabled() returns false. The host tests pass -DK2_SCREENSHOT=1 explicitly;
  *                    `make K2_SCREENSHOT=1` builds screenshot capture back in. */
+/* K2_SELFTEST  1 = the on-device math selftest (src/core/math_selftest.cpp, docs/MATH_SELFTEST.md) is linked: the shell `selftest`
+ *                  command, the cycle benchmark behind `make perf-check`, the link.ld placement canaries.
+ *              0 = none of it (the default: 12 KB flash, pre-release builds only): the shell answers "selftest not available" and the
+ *                  perf gate reports SKIPPED. The host tests pass -DK2_SELFTEST=1; `make K2_SELFTEST=1` builds it in. */
 #ifndef K2_BUILD_CONFIG_H_
 #define K2_BUILD_CONFIG_H_
 
@@ -127,6 +131,10 @@
 
 #ifndef K2_SCREENSHOT
 #define K2_SCREENSHOT 0
+#endif
+
+#ifndef K2_SELFTEST
+#define K2_SELFTEST 0
 #endif
 
 /* K2_HOST_REPORT  1 = the loop probe's Host report prototype (docs/LOOP_PROBE.md): src/loopprobe/host_report_hw.cpp, the
