@@ -1522,7 +1522,37 @@ static void test_rail_link_cell_fits() {
             }
 }
 
+// The link icon is upright for the reader on every rail edge and text direction (it never turns with the rail's text):
+// the 12x12 window in the dump is the mask row for row.
+static void test_rail_link_icon_upright() {
+    const PanelEdge edges[4] = {PanelEdge::Left, PanelEdge::Top, PanelEdge::Right, PanelEdge::Bottom};
+    struct Case { pclink::State st; Icon icon; uint16_t ink; };
+    const Case cases[2] = {{pclink::State::Power, Icon::Socket, kInk3}, {pclink::State::Host, Icon::Monitor, kInk}};
+    for (const PanelEdge e : edges)
+        for (const TextDir dir : {TextDir::Cw, TextDir::Ccw})
+            for (const Case &k : cases) {
+                const bool col = panel_is_column(e);
+                const Surface s = col ? Surface{0, 0, 16, 62} : Surface{0, 0, 62, 16};
+                kit::OppCell c{};
+                c.link = k.st;
+                lcd::fill(kBase);
+                kit::draw_opp_slot(s, e, dir, 3, c);
+                int found = 0;
+                for (int y0 = 0; y0 + kIconSize <= s.h; ++y0)
+                    for (int x0 = 0; x0 + kIconSize <= s.w; ++x0) {
+                        bool same = true;
+                        for (int y = 0; y < kIconSize && same; ++y)
+                            for (int x = 0; x < kIconSize; ++x)
+                                if ((g_panel[(y0 + y) * 240 + x0 + x] == k.ink) != bool(kIconBits[static_cast<int>(k.icon)][y] >> (kIconSize - 1 - x) & 1)) { same = false; break; }
+                        found += same;
+                    }
+                if (found != 1) std::printf("  link icon %d edge %d dir %d: %d upright matches\n", static_cast<int>(k.icon), static_cast<int>(e), static_cast<int>(dir), found);
+                CHECK_EQ(found, 1);
+            }
+}
+
 int main() {
+    test_rail_link_icon_upright();
     test_rail_link_cell_fits();
     test_draw_key_slot_arrows();
     test_option_c_active_states();

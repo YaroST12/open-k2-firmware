@@ -94,9 +94,9 @@ K2_HOT void fill_except(const Surface &s, Box r, const Box *holes, int n, uint16
     }
 }
 
-// The PC-link icon in its box, turned with the strip's text: one window write. Glass + Sand is the two-colour hourglass.
-K2_HOT static void paint_link_icon(const Surface &s, Box b, PanelEdge edge, TextDir dir, pclink::State st, uint16_t ground,
-                                   uint16_t ink, uint16_t sand) {
+// The PC-link icon in its box, upright on every edge (never turned with the text): one window write. Glass + Sand is the
+// two-colour hourglass.
+K2_HOT static void paint_link_icon(const Surface &s, Box b, pclink::State st, uint16_t ground, uint16_t ink, uint16_t sand) {
     constexpr int kN = kIconSize;
     if (!k2::detail::fits(s, b.x, b.y, kN, kN)) return;
     int r0 = 0, r1 = kN;
@@ -104,19 +104,13 @@ K2_HOT static void paint_link_icon(const Surface &s, Box b, PanelEdge edge, Text
     const uint16_t *shape = kIconBits[static_cast<int>(st == pclink::State::Power ? Icon::Socket
                                                        : st == pclink::State::Host ? Icon::Monitor : Icon::Glass)];
     const uint16_t *fill = kIconBits[static_cast<int>(Icon::Sand)];
-    const bool column = panel_is_column(edge), ccw = dir == TextDir::Ccw;
     uint16_t line[kN];
     lcd::stream_begin(static_cast<uint16_t>(s.x + b.x), static_cast<uint16_t>(s.y + b.y + r0),
                       static_cast<uint16_t>(s.x + b.x + kN - 1), static_cast<uint16_t>(s.y + b.y + r1 - 1));
     for (int r = r0; r < r1; r++) {
         for (int c = 0; c < kN; c++) {
-            int sx = c, sy = r;   // the upright mask pixel behind this box pixel
-            if (column) {
-                sx = ccw ? kN - 1 - r : r;
-                sy = ccw ? c : kN - 1 - c;
-            }
-            const int sh = kN - 1 - sx;
-            line[c] = (st == pclink::State::Shell && (fill[sy] >> sh & 1)) ? sand : (shape[sy] >> sh & 1) ? ink : ground;
+            const int sh = kN - 1 - c;
+            line[c] = (st == pclink::State::Shell && (fill[r] >> sh & 1)) ? sand : (shape[r] >> sh & 1) ? ink : ground;
         }
         lcd::stream_pixels({line, static_cast<std::size_t>(kN)});
     }
@@ -339,7 +333,7 @@ K2_HOT void draw_opp_slot(const Surface &s, PanelEdge opp_edge, TextDir dir, uns
         holes[nh++] = link_box;
     }
     fill_except(s, body, holes, nh, bg);
-    if (linked) paint_link_icon(s, link_box, opp_edge, dir, cell.link, bg, cell.link == pclink::State::Power ? kInk3 : kInk, kFocus);
+    if (linked) paint_link_icon(s, link_box, cell.link, bg, cell.link == pclink::State::Power ? kInk3 : kInk, kFocus);
     if (cell.spot) gfx_fill(s, spot_box.x, spot_box.y, spot_box.w, spot_box.h, cell.spot);
     if (tag_w > 0) {
         if (vertical) gfx_text_rot(s, kLabelFont, tag_box.x, tag_box.y, tag_v, cell.tag_color, bg, dir);
