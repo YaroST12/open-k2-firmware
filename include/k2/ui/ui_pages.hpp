@@ -34,6 +34,7 @@
 #include "k2/drivers/adc.hpp"
 #include "k2/drivers/usbcfg.hpp"
 #include "k2/chargertest/charger_journal.hpp"
+#include "k2/pd/pd_limiter.hpp"
 #include "k2/pd/transcap.hpp"
 #include "k2/fastcharge/ai_recog.hpp"
 #include "k2/pd/cable_r.hpp"
@@ -1403,9 +1404,27 @@ public:
     void invalidate() override { ctx_.rows.invalidate(); }
     ListState list_state() const { return ctx_.rows.state(); }
     int selected() const { return sel_; }
+    // The last row is the PD limiter: OK opens its picker (Off, then the levels below the charger's best).
+    enum class View : uint8_t { List, PickLimit };   // zero = List
+    View view() const { return view_; }
 private:
     static void row_fn(void *ctx, int index, bool focused, kit::RowSpec &out);
+    void show(View v);
+    void build_picks();
+    int rows() const;
+    int count() const { return view_ == View::PickLimit ? 1 + int(npicks_) : rows(); }
+    int &cur() { return view_ == View::PickLimit ? pick_ : sel_; }
+    void limit_row(int index, bool focused, kit::RowSpec &out) const;
+    void pick_limit();
+    void limit_edge();
     int &sel_;
+    View view_ = View::List;
+    int pick_ = 0;
+    uint8_t npicks_ = 0;
+    pd::LimState seen_ = pd::LimState::Off;   // for the one-shot give-up result
+    pd::LimPick picks_[pd::kLimMaxPicks];
+    mutable StrBuf<8> text_, tail_;   // a row's strings live for one row_fn call
+    mutable StrBuf<24> note_, col2_;
 };
 
 // The QR scan-test screen (remote Cmd::QrTest op 1; the model is k2/ui/ui_qrtest.hpp): ONE full-screen QR over the

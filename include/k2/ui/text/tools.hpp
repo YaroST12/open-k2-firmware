@@ -42,4 +42,25 @@ inline constexpr const char *kSomeReadyTail = " tools ready";
 inline constexpr const char *kFooters[] = {kLoadAttached, kLiveSink, kNoPd, kNoPm, kAllReady, "14 of 14 tools ready"};
 static_assert(all_fit(kFooters, kSmallAdvPx, 27 * kSmallAdvPx), "a Tools footer is over 27 characters");
 
+// PD limit: the last Tools row, its picker and their results (docs/UI_SYSTEM.md 7.4). A note is at most 29 cells; a toast 30.
+inline constexpr const char *kLimName = "PD limit", *kLimOff = "Off";
+inline constexpr const char *kLimNoteOff = "hides offers above a limit";   // the row with no limit set
+inline constexpr const char *kLimNoteNone = "no limit, every offer shown";   // the picker's Off
+inline constexpr const char *kLimNoteAbove = "hides offers above ";         // then "100W"
+inline constexpr const char *kLimNotes[] = {kLimNoteOff, kLimNoteNone};
+static_assert(all_fit(kLimNotes, kLabelAdv, kit::kNoteMaxPx), "a PD limit note is wider than its line");
+static_assert(fits_px(kLabelAdv, kLimNoteAbove, kit::kNoteMaxPx - 4 * static_cast<int>(kLabelAdv)), "the PD limit note plus 100W is over its line");
+inline constexpr const char *kLimToastNoOffers = "No charger offers yet";
+inline constexpr const char *kLimToastNoLower = "Nothing lower to pick";
+inline constexpr const char *kLimToastBadLimit = "Limit out of range";
+inline constexpr const char *kLimToastBusy = "Port in use: stop it first";
+inline constexpr const char *kLimToastRate = "Limit off: too many retries";
+inline constexpr const char *kLimToastChargerResets = "Limit off: charger resets";
+inline constexpr const char *kLimToastSinkResets = "Limit off: sink resets";
+inline constexpr const char *kLimToastSinkIgnores = "Limit off: sink ignores it";
+inline constexpr const char *kLimToastEpr = "Limit off: EPR contract";
+inline constexpr const char *kLimToasts[] = {kLimToastNoOffers, kLimToastNoLower, kLimToastBadLimit, kLimToastBusy, kLimToastRate,
+                                             kLimToastChargerResets, kLimToastSinkResets, kLimToastSinkIgnores, kLimToastEpr};
+static_assert(all_fit(kLimToasts, kLabelAdv, kToastTextPx), "a PD limit result is wider than the toast");
+
 }  // namespace k2::text::tools

@@ -2139,6 +2139,147 @@ static void test_memory_page_scrub() {
     ui.pop_menu(30090);
 }
 
+// --- PD limit row and picker on Tools ---
+static void set_caps_65w() {
+    g_stub.caps = {};
+    g_stub.caps.valid = true; g_stub.caps.num_pdos = 4; g_stub.caps.spec_rev = 2;
+    const pd::Pdo p[4] = {{pd::PdoType::Fixed, 0, 5000, 5000, 3000, 15000}, {pd::PdoType::Fixed, 0, 9000, 9000, 3000, 27000},
+                          {pd::PdoType::Fixed, 0, 15000, 15000, 3000, 45000}, {pd::PdoType::Fixed, 0, 20000, 20000, 3250, 65000}};
+    for (int i = 0; i < 4; i++) g_stub.caps.pdos[i] = p[i];
+}
+
+// Tools on its last row (the PD limit row), the picker not opened.
+static uint32_t open_limit_row(Ui &ui, uint32_t t) {
+    g_stub.lim = {}; g_stub.lim_refusal = pd::LimRefusal::None; g_stub.lim_arms = g_stub.lim_offs = 0; g_stub.lim_arm_mw = 0;
+    ui.context().toast.clear();
+    ui.context().keep.tools_sel = 0;
+    ui.goto_page(kMenuPageBase + static_cast<uint8_t>(Menu::Tools), t);
+    ui.tick(t + 2);
+    for (int i = 0; i < bench::tools().n + 2; i++) press(ui, Button::Plus, ButtonEvent::Short, t + 5);
+    return settle(ui, t + 10);
+}
+
+static void test_pd_limit_picker() {
+    Ui &ui = fresh_ui();
+    set_caps_65w();
+    uint32_t t = open_limit_row(ui, 20000);
+    CHECK_EQ(ui.list_state().count, bench::tools().n + 1);   // the limit row is one more row, no tool slot
+    CHECK_STR(label(ui, Button::Ok), "Pick");
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);
+    CHECK_EQ(ui.list_state().count, 4);                      // Off, 15 W, 27 W, 45 W
+    CHECK_STR(label(ui, Button::Ok), "Select");
+    CHECK_EQ(ui.context().toast.active(t + 20), false);
+    // 27 W (9V3A): the second level.
+    press(ui, Button::Plus, ButtonEvent::Short, t += 10);
+    press(ui, Button::Plus, ButtonEvent::Short, t += 10);
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);
+    CHECK_EQ(g_stub.lim_arms, 1);
+    CHECK_EQ(int(g_stub.lim_arm_mw), 27000);
+    CHECK_EQ(ui.list_state().count, bench::tools().n + 1);   // back on the list
+    // Picking the level already in force does not restart it.
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);
+    CHECK_EQ(ui.list_state().count, 4);
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);
+    CHECK_EQ(g_stub.lim_arms, 1);
+    // Off disarms.
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);
+    press(ui, Button::Minus, ButtonEvent::Short, t += 10);
+    press(ui, Button::Minus, ButtonEvent::Short, t += 10);
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);
+    CHECK_EQ(g_stub.lim_offs, 1);
+    CHECK_EQ(int(g_stub.lim.state), int(pd::LimState::Off));
+}
+
+static void test_pd_limit_100w_levels() {
+    Ui &ui = fresh_ui();
+    fill_pdos(4);   // 5V3A 9V3A 15V3A 20V5A
+    uint32_t t = open_limit_row(ui, 20000);
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);
+    CHECK_EQ(ui.list_state().count, 4);
+    for (int i = 0; i < 3; i++) press(ui, Button::Plus, ButtonEvent::Short, t += 10);
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);
+    CHECK_EQ(int(g_stub.lim_arm_mw), 45000);
+}
+
+static void test_pd_limit_back_stays_on_tools() {
+    Ui &ui = fresh_ui();
+    set_caps_65w();
+    uint32_t t = open_limit_row(ui, 20000);
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);
+    const uint8_t depth = ui.menu_depth();
+    press(ui, Button::Back, ButtonEvent::Short, t += 10);
+    CHECK_EQ(int(ui.menu_depth()), int(depth));              // the picker closed, the page did not
+    CHECK_EQ(ui.list_state().count, bench::tools().n + 1);
+    CHECK_EQ(g_stub.lim_arms, 0);
+    CHECK_EQ(ui.menu() == Menu::Tools, 1);
+}
+
+static void test_pd_limit_refusals_toast() {
+    Ui &ui = fresh_ui();
+    set_caps_65w();
+    uint32_t t = open_limit_row(ui, 20000);
+    g_stub.lim_refusal = pd::LimRefusal::Busy;
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);
+    press(ui, Button::Plus, ButtonEvent::Short, t += 10);
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);
+    CHECK_STR(ui.context().toast.view().data(), "Port in use: stop it first");
+    CHECK_EQ(int(ui.context().toast.tone), int(k2::FooterTone::Caution));
+    CHECK_EQ(int(g_stub.lim.state), int(pd::LimState::Off));
+    ui.context().toast.clear();
+    g_stub.lim_refusal = pd::LimRefusal::BadLimit;
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);
+    press(ui, Button::Plus, ButtonEvent::Short, t += 10);
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);
+    CHECK_STR(ui.context().toast.view().data(), "Limit out of range");
+    CHECK_EQ(int(ui.context().toast.tone), int(k2::FooterTone::Error));
+}
+
+static void test_pd_limit_no_offers() {
+    Ui &ui = fresh_ui();
+    g_stub.caps = {};
+    uint32_t t = open_limit_row(ui, 20000);
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);
+    CHECK_EQ(ui.list_state().count, 1);                      // Off alone
+    CHECK_STR(ui.context().toast.view().data(), "No charger offers yet");
+    press(ui, Button::Back, ButtonEvent::Short, t += 10);
+    ui.context().toast.clear();
+    g_stub.caps.valid = true; g_stub.caps.num_pdos = 1;      // a lone 5 V offer has nothing below it
+    g_stub.caps.pdos[0] = {pd::PdoType::Fixed, 0, 5000, 5000, 3000, 15000};
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);
+    CHECK_EQ(ui.list_state().count, 1);
+    CHECK_STR(ui.context().toast.view().data(), "Nothing lower to pick");
+}
+
+static void test_pd_limit_give_up_toast_once() {
+    Ui &ui = fresh_ui();
+    set_caps_65w();
+    uint32_t t = open_limit_row(ui, 20000);
+    g_stub.lim.state = pd::LimState::Armed; g_stub.lim.limit_mw = 27000;
+    ui.goto_page(static_cast<uint8_t>(Page::Lines), t += 100);
+    ui.goto_page(kMenuPageBase + static_cast<uint8_t>(Menu::Tools), t += 100);
+    t = settle(ui, t);
+    g_stub.lim.state = pd::LimState::Off; g_stub.lim.why = pd::LimWhy::ChargerResets;
+    ui.tick(t += 200);
+    t = settle(ui, t);
+    CHECK_STR(ui.context().toast.view().data(), "Limit off: charger resets");
+    CHECK_EQ(int(ui.context().toast.tone), int(k2::FooterTone::Caution));
+    ui.context().toast.clear();
+    ui.tick(t += 200);
+    t = settle(ui, t);
+    CHECK_EQ(ui.context().toast.view().size(), size_t(0));   // once
+    // A user's off or a detach says nothing.
+    for (pd::LimWhy w : {pd::LimWhy::User, pd::LimWhy::Detached}) {
+        g_stub.lim.state = pd::LimState::Armed; g_stub.lim.why = pd::LimWhy::None;
+        ui.goto_page(static_cast<uint8_t>(Page::Lines), t += 100);
+        ui.goto_page(kMenuPageBase + static_cast<uint8_t>(Menu::Tools), t += 100);
+        t = settle(ui, t);
+        g_stub.lim.state = pd::LimState::Off; g_stub.lim.why = w;
+        ui.tick(t += 200);
+        t = settle(ui, t);
+        CHECK_EQ(ui.context().toast.view().size(), size_t(0));
+    }
+}
+
 int main() {
     test_over_load_above_5v_needs_confirm();
     test_usb_link_footer_icon_tone();
@@ -2169,6 +2310,12 @@ int main() {
     test_every_label_fits_its_slot();
     test_ai_rows_on_lines();
     test_tools_hub();
+    test_pd_limit_picker();
+    test_pd_limit_100w_levels();
+    test_pd_limit_back_stays_on_tools();
+    test_pd_limit_refusals_toast();
+    test_pd_limit_no_offers();
+    test_pd_limit_give_up_toast_once();
     test_submenu_is_modal();
     test_trigger_submenu();
     test_trigger_inline_override();
