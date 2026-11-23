@@ -2,7 +2,8 @@
 // Copyright (C) 2026 Yaraslau Furman
 // Host tests for the Connection page's survey (k2/pd/pd_survey.hpp): the ordered plan of one Refresh, the gating (inline sink,
 // charger test, Xiaomi chain, PD 2.0, no EPR bit), the status mapping (answered, Not_Supported / Reject, silence), and the two
-// promises the page makes: nothing active before Refresh, and nothing sent while the sink is not Ready.
+// promises the page makes: nothing active before Refresh except the attach's auto read (once, only on a contract of the K2's own),
+// and nothing sent while the sink is not Ready.
 #include "k2/pd/pd_survey.hpp"
 #include "test_util.h"
 

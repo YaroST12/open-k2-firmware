@@ -1304,6 +1304,44 @@ static void test_source_tab_no_pd_never_offered_all_rotations() {
     ui.set_rotation(0, t += 100);
 }
 
+// The attach's auto read as the Source tab shows it, in four rotations: the hint before it, the progress while it runs, the
+// summary after it, and the rows an abort blocked. Panels go to K2_DUMP (k2_autoread_<state>_rot<N>.panel); the trunc log fails on a cut.
+static void test_auto_read_states_all_rotations() {
+    Ui &ui = fresh_ui();
+    uint32_t t = 20000;
+    attach_charger(ui, t);
+    show(ui, 0, t);
+    settle(ui, t);
+    for (int r = 0; r < 4; r++) {
+        ui.set_rotation(r, t += 100);
+        char name[64];
+        g_stub.survey = {};
+        settle(ui, t);
+        std::snprintf(name, sizeof name, "k2_autoread_hint_rot%d", r);
+        dump_panel(name);
+        g_stub.survey.start_auto(kSurveyCtx, t);
+        settle(ui, t);
+        std::snprintf(name, sizeof name, "k2_autoread_running_rot%d", r);
+        dump_panel(name);
+        CHECK(std::string(cp(ui).status_line()).rfind("Reading charger ", 0) == 0);
+        g_stub.survey.abandon();
+        settle(ui, t);
+        std::snprintf(name, sizeof name, "k2_autoread_done_rot%d", r);
+        dump_panel(name);
+        g_stub.survey = {};
+        g_stub.survey.start_auto(kSurveyCtx, t);
+        g_stub.survey.block_open(pd::SvWhy::Inline);
+        settle(ui, t);
+        std::snprintf(name, sizeof name, "k2_autoread_blocked_rot%d", r);
+        dump_panel(name);
+    }
+    ui.set_rotation(0, t += 100);
+    g_stub.survey = {};
+#ifdef K2_TRUNC_LOG
+    CHECK_EQ(k2::trunc::failures(), 0);
+#endif
+}
+
 // The widest table name (ANALOG DEVICES, 14) on the charger and the sink, and a 16-capital cable maker string, every tab in all
 // four rotations: panels go to K2_DUMP (k2_vendor16_t<tab>_rot<N>.panel) and the trunc log fails on any cut.
 static void test_widest_vendor_all_rotations() {
@@ -3117,6 +3155,7 @@ int main() {
     test_survey_refresh_item_starts_it();
     test_survey_status_line();
     test_auto_read_gate();
+    test_auto_read_states_all_rotations();
     test_survey_details_rows_follow_the_survey();
     test_refresh_goes_through_the_rescan_module();
     test_the_rescan_comeback_lands_on_the_source_tab();
