@@ -168,6 +168,20 @@ void format_proto(const ProtoInfo &p, ProtoText &out) {
     }
 }
 
+void format_limit(ProtoText &out, ProtoKind kind, uint32_t watts) {
+    if (watts == 0 || (kind != ProtoKind::PdFixed && kind != ProtoKind::PdEpr && kind != ProtoKind::Pps && kind != ProtoKind::Avs)) return;
+    StrBuf<10> suffix;
+    suffix.put(" lim").put_u32(watts).put_char('W');
+    std::string_view v = out.value.view();
+    if (v.size() + suffix.view().size() > static_cast<std::size_t>(kProtoChars)) {
+        const std::size_t volt = v.find('V');   // every PD value names its voltage first
+        if (volt != std::string_view::npos) v = std::string_view(v.data(), volt + 1);   // not substr: it can throw
+    }
+    StrBuf<20> joined;
+    joined.put(v).put(suffix.view());
+    out.value = joined;
+}
+
 void format_idle_wait(raguard::WaitKind wait, ProtoText &out) {
     out.tag.clear();
     out.value.clear();

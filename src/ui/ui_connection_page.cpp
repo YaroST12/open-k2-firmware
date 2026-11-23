@@ -1945,6 +1945,12 @@ void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
                                            pd::PdVerdict verdict, pd::PdNoneWhy none_why) {
     sl.tag = text::conn::kSliceTagCharger;
     const MatchResult &r = *d.r;
+    // First, so the 3-chip cap never drops it: the user's PD limit hides offers (a chip that explains a short list).
+    if (const pd::LimStatus &ls = fusb302::limit_status(); ls.state != pd::LimState::Off) {
+        StrBuf<10> lim;
+        lim.put("LIM ").put_u32(pd::lim_watts(ls.limit_mw)).put_char('W');
+        sl.add_chip(lim.view(), SliceSpec::Warn);
+    }
     if (r.caps_seen) {
         const pd::SourceCaps &caps = *d.caps;
         uint32_t best_mw = 0, best_mv = 0, best_ma = 0;
@@ -2883,6 +2889,10 @@ void ConnectionPage::update(uint32_t now_ms) {
     c = mix_u32(c, uint32_t(cc1_));
     c = mix_u32(c, uint32_t(cc2_));
     c = mix_u32(c, uint32_t(vbus_));   // the Type-C row's VBUS (100 mV steps)
+    if (view_ == View::Overview) {   // the Charger slice's LIM chip
+        const pd::LimStatus &ls = fusb302::limit_status();
+        c = mix_u32(c, ls.state != pd::LimState::Off ? ls.limit_mw + 1u : 0u);
+    }
     if (view_ == View::Overview && (!shown_caps.valid || !ct.valid || fusb302::self_powered())) {
         c = mix_u32(c, uint32_t(ibus_));
         c = mix_u32(c, uint32_t(ctx_.ui->link_reset_inline()));

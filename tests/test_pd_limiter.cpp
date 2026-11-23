@@ -556,5 +556,85 @@ int main() {
         CHECK_STR(lim_why_name(LimWhy::ChargerResets), "the charger resets");
         CHECK_STR(lim_why_name(LimWhy::SinkResets), "the sink resets");
     }
+    // ---- the picker's list: whole-watt levels of the charger's own fixed offers below its best ----
+    {
+        auto fx = [](unsigned mv, unsigned ma) {
+            Pdo p;
+            p.type = PdoType::Fixed;
+            p.max_mv = std::uint16_t(mv);
+            p.max_ma = std::uint16_t(ma);
+            p.max_mw = mv * ma / 1000;
+            return p;
+        };
+        auto pp = [](unsigned max_mv, unsigned min_mv, unsigned ma) {
+            Pdo p;
+            p.type = PdoType::Pps;
+            p.min_mv = std::uint16_t(min_mv);
+            p.max_mv = std::uint16_t(max_mv);
+            p.max_ma = std::uint16_t(ma);
+            p.max_mw = max_mv * ma / 1000;
+            return p;
+        };
+        LimPick out[kLimMaxPicks];
+        // 65 W: 5 V 3 A, 9 V 3 A, 15 V 3 A, 20 V 3.25 A -> three levels, the top one is the charger's own max
+        {
+            const Pdo l[] = {fx(5000, 3000), fx(9000, 3000), fx(15000, 3000), fx(20000, 3250)};
+            CHECK_EQ(lim_picks(l, out), 3u);
+            CHECK_EQ(out[0].mw, 15000u);
+            CHECK_EQ(out[0].mv, 5000u);
+            CHECK_EQ(out[0].ma, 3000u);
+            CHECK_EQ(out[1].mw, 27000u);
+            CHECK_EQ(out[2].mw, 45000u);
+            CHECK_EQ(out[2].mv, 15000u);
+        }
+        // 100 W: the 100 W object is the max and PPS adds no level
+        {
+            const Pdo l[] = {fx(5000, 3000), fx(9000, 3000), fx(12000, 3000), fx(15000, 3000), fx(20000, 5000), pp(11000, 3300, 5000)};
+            CHECK_EQ(lim_picks(l, out), 4u);
+            CHECK_EQ(out[0].mw, 15000u);
+            CHECK_EQ(out[1].mw, 27000u);
+            CHECK_EQ(out[2].mw, 36000u);
+            CHECK_EQ(out[3].mw, 45000u);
+        }
+        // equal powers collapse to the first (lowest voltage); a fraction rounds the level up to the whole watt
+        {
+            const Pdo l[] = {fx(5000, 3000), fx(9000, 3000), fx(12000, 2250), fx(20000, 2220), fx(20000, 5000)};
+            CHECK_EQ(lim_picks(l, out), 3u);
+            CHECK_EQ(out[1].mw, 27000u);
+            CHECK_EQ(out[1].mv, 9000u);
+            CHECK_EQ(out[2].mw, 45000u);   // 20 V x 2.22 A = 44.4 W
+        }
+        // below the arming floor or above its ceiling: dropped, never clamped (EPR objects, a 5 V 0.5 A source)
+        {
+            const Pdo l[] = {fx(5000, 500), fx(9000, 3000), fx(20000, 5000), fx(28000, 5000), fx(36000, 5000)};
+            CHECK_EQ(lim_picks(l, out), 2u);
+            CHECK_EQ(out[0].mw, 27000u);
+            CHECK_EQ(out[1].mw, 100000u);   // the arming ceiling is inclusive; the EPR objects above it are dropped
+        }
+        // a lone 5 V offer, an empty list, a list of PPS only, a battery object: nothing to pick
+        {
+            const Pdo one[] = {fx(5000, 3000)};
+            CHECK_EQ(lim_picks(one, out), 0u);
+            CHECK_EQ(lim_picks(std::span<const Pdo>{}, out), 0u);
+            const Pdo only_pps[] = {pp(11000, 3300, 5000)};
+            CHECK_EQ(lim_picks(only_pps, out), 0u);
+            Pdo bat;
+            bat.type = PdoType::Battery;
+            bat.max_mw = 60000;
+            const Pdo b[] = {fx(5000, 3000), bat};
+            CHECK_EQ(lim_picks(b, out), 1u);   // 15 W is below the 60 W battery object
+        }
+        // the output never overruns: a short span takes the lowest levels
+        {
+            const Pdo l[] = {fx(5000, 3000), fx(9000, 3000), fx(12000, 3000), fx(15000, 3000), fx(20000, 5000)};
+            LimPick two[2];
+            CHECK_EQ(lim_picks(l, two), 2u);
+            CHECK_EQ(two[1].mw, 27000u);
+        }
+        // whole watts of a limit, as every label prints them: a remote-set odd value floors
+        CHECK_EQ(lim_watts(27000), 27u);
+        CHECK_EQ(lim_watts(27500), 27u);
+        CHECK_EQ(lim_watts(100000), 100u);
+    }
     return test_report("test_pd_limiter");
 }

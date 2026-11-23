@@ -503,6 +503,38 @@ int main() {
         render(gone, tg, "ring05_link_last");
     }
 
+    // The PD limit (docs/UI_SYSTEM.md 5.4, 6.5, 7.4, 7.9): the Tools row armed, the picker for a 100 W and a 65 W charger,
+    // the LINK chip and the Home protocol suffix. Frames: pdlimit_*.
+    {
+        fixture();
+        g_stub.lim.state = pd::LimState::Armed; g_stub.lim.limit_mw = 27000;
+        static Ui pl;
+        pl.init(0);
+        pl.configure_rotation(false, rot_pages());
+        uint32_t tp = 1000;
+        const auto key = [&](Button b, ButtonEvent e = ButtonEvent::Short) { pl.on_button(b, e, tp += 100); };
+        pl.goto_page(uint8_t(Page::Home), tp); render(pl, tp, "pdlimit_home");
+        pl.goto_page(uint8_t(Page::Lines), tp + 100);
+        pl.goto_page(kMenuPageBase + static_cast<uint8_t>(Menu::Tools), tp + 100);
+        for (int i = 0; i < bench::tools().n + 2; i++) key(Button::Plus);
+        render(pl, tp, "pdlimit_tools_armed");
+        key(Button::Ok); render(pl, tp, "pdlimit_picker_100w");
+        key(Button::Back);
+        g_stub.caps.num_pdos = 4;
+        g_stub.caps.pdos[3] = {pd::PdoType::Fixed, 0, 20000, 20000, 3250, 65000};
+        pl.goto_page(uint8_t(Page::Lines), tp + 100);
+        pl.goto_page(kMenuPageBase + static_cast<uint8_t>(Menu::Tools), tp + 100);
+        for (int i = 0; i < bench::tools().n + 2; i++) key(Button::Plus);
+        key(Button::Ok); render(pl, tp, "pdlimit_picker_65w");
+        pl.goto_page(uint8_t(Page::Home), tp + 100);
+        pl.on_button(Button::Back, ButtonEvent::Short, tp += 100);
+        for (int i = 0; i < int(ring::Pos::Link); ++i) key(Button::Plus);
+        key(Button::Ok);
+        for (int i = 0; i < 3; i++) pl.tick(tp += 100);
+        render(pl, tp, "pdlimit_link_chip");
+        g_stub.lim = {};
+    }
+
     printf("mockups dumped\n");
     return 0;
 }

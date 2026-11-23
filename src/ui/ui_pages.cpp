@@ -2596,21 +2596,111 @@ Icon tool_row_icon(const bench::Act &a) {
 }
 }  // namespace
 
+int ToolsPage::rows() const { return bench::tools().n + 1; }   // the tools, then the PD limiter
+
 void ToolsPage::enter() {
-    const int n = bench::tools().n;
-    sel_ = n > 0 ? std::clamp(sel_, 0, n - 1) : 0;
+    view_ = View::List;
+    title_ = "Tools";
+    sel_ = std::clamp(sel_, 0, rows() - 1);
+    seen_ = fusb302::limit_status().state;   // a give-up while elsewhere shows on the Charger slice, not as a late result
+}
+
+// A view change repaints the body: the row count and the title differ between the list and the picker.
+void ToolsPage::show(View v) {
+    view_ = v;
+    if (v == View::PickLimit) {
+        build_picks();
+        const pd::LimStatus &s = fusb302::limit_status();
+        pick_ = 0;   // Off, or the level in force
+        for (int i = 0; s.state != pd::LimState::Off && i < npicks_; i++)
+            if (picks_[i].mw == s.limit_mw) pick_ = i + 1;
+        title_ = text::tools::kLimName;
+        if (npicks_ == 0)
+            ctx_.toast.show(FooterTone::Info, pd::active_caps().valid ? text::tools::kLimToastNoLower : text::tools::kLimToastNoOffers, ctx_.now);
+    } else {
+        title_ = "Tools";
+    }
+    if (!ctx_.blank) pg::clear_body(ctx_.content, kit::kBelowBar);
+    title_bar();
+    ctx_.rows.set_count(count());
+    ctx_.rows.select(cur());
+    invalidate();
+    update(ctx_.now);
+}
+
+// The charger's own list, read live: a new one reshapes the picker (its rows repaint by signature).
+void ToolsPage::build_picks() {
+    const pd::SourceCaps &c = pd::active_caps();
+    const std::size_t n = std::min<std::size_t>(c.num_pdos, c.pdos.size());
+    npicks_ = c.valid ? static_cast<uint8_t>(pd::lim_picks({c.pdos.data(), n}, picks_)) : 0;
 }
 
 void ToolsPage::draw_static() {
     title_bar();
     ctx_.rows.init(ctx_.content, kit::kBodyY, &ToolsPage::row_fn, this);
-    ctx_.rows.set_count(bench::tools().n);
-    ctx_.rows.select(sel_);
+    ctx_.rows.set_count(count());
+    ctx_.rows.select(cur());
+}
+
+// The list's PD limit row (tail: the level in force or Off) and the picker's rows (Off, then "27W" with the offer that sets it).
+void ToolsPage::limit_row(int index, bool focused, kit::RowSpec &out) const {
+    namespace tx = text::tools;
+    const pd::LimStatus &s = fusb302::limit_status();
+    const bool armed = s.state != pd::LimState::Off;
+    if (view_ == View::List) {
+        out.marker = kit::Marker::Icon;
+        out.icon = Icon::Brick;
+        out.text = tx::kLimName;
+        tail_.clear();
+        if (armed) {
+            tail_.put_u32(pd::lim_watts(s.limit_mw)).put_char('W');
+            out.tail_color = kCaution;
+        } else {
+            tail_.put(tx::kLimOff);
+        }
+        out.tail = tail_.view();
+        if (focused) {
+            if (armed) {
+                note_.clear();
+                note_.put(tx::kLimNoteAbove).put_u32(pd::lim_watts(s.limit_mw)).put_char('W');
+                out.note = note_.view();
+            } else {
+                out.note = tx::kLimNoteOff;
+            }
+        }
+        return;
+    }
+    out.marker = kit::Marker::Radio;
+    if (index == 0) {
+        out.state = armed ? 0 : 1;
+        out.text = tx::kLimOff;
+        if (focused) out.note = tx::kLimNoteNone;
+        return;
+    }
+    const pd::LimPick &p = picks_[index - 1];
+    out.state = armed && p.mw == s.limit_mw ? 1 : 0;
+    text_.clear();
+    text_.put_u32(pd::lim_watts(p.mw)).put_char('W');
+    out.text = text_.view();
+    char t[12];
+    col2_.clear();
+    col2_.put(std::string_view{t, static_cast<std::size_t>(home::fmt_level(t, p.mv))}).put_char('V');
+    col2_.put(std::string_view{t, static_cast<std::size_t>(home::fmt_level(t, p.ma))}).put_char('A');
+    out.col2 = col2_.view();
+    if (focused) {
+        note_.clear();
+        note_.put(tx::kLimNoteAbove).put_u32(pd::lim_watts(p.mw)).put_char('W');
+        out.note = note_.view();
+    }
 }
 
 void ToolsPage::row_fn(void *ctx, int index, bool focused, kit::RowSpec &out) {
     auto *self = static_cast<ToolsPage *>(ctx);
     const bench::Acts b = bench::tools();
+    if (self->view_ == View::PickLimit || index == b.n) {
+        self->limit_row(index, focused, out);
+        return;
+    }
     if (index < 0 || index >= b.n) return;
     const bench::Act &a = b.a[index];
     out.marker = kit::Marker::Icon;
@@ -2635,26 +2725,78 @@ void ToolsPage::row_fn(void *ctx, int index, bool focused, kit::RowSpec &out) {
     }
 }
 
+// The limiter ended on its own (it gave up): say why once, if this page is on screen. A user's off or a detach says nothing.
+void ToolsPage::limit_edge() {
+    namespace tx = text::tools;
+    const pd::LimStatus &s = fusb302::limit_status();
+    if (seen_ != pd::LimState::Off && s.state == pd::LimState::Off) {
+        const char *m = nullptr;
+        switch (s.why) {
+        case pd::LimWhy::Rate: m = tx::kLimToastRate; break;
+        case pd::LimWhy::ChargerResets: m = tx::kLimToastChargerResets; break;
+        case pd::LimWhy::SinkResets: m = tx::kLimToastSinkResets; break;
+        case pd::LimWhy::SinkIgnores: m = tx::kLimToastSinkIgnores; break;
+        case pd::LimWhy::Epr: m = tx::kLimToastEpr; break;
+        default: break;
+        }
+        if (m) ctx_.toast.show(FooterTone::Caution, m, ctx_.now);
+    }
+    seen_ = s.state;
+}
+
 void ToolsPage::update(uint32_t) {
     title_badge(false);
-    const int n = bench::tools().n;
-    if (n > 0 && sel_ >= n) sel_ = n - 1;
-    ctx_.rows.set_count(n);
-    ctx_.rows.select(sel_);
+    limit_edge();
+    if (view_ == View::PickLimit) {
+        build_picks();
+        pick_ = std::min(pick_, int(npicks_));
+    } else {
+        sel_ = std::min(sel_, rows() - 1);
+    }
+    ctx_.rows.set_count(count());
+    ctx_.rows.select(cur());
     ctx_.rows.draw(ctx_.now, ctx_.budget);
+}
+
+// OK on a level arms it at once through the remote's path; a refusal is the result, the row keeps what was in force.
+void ToolsPage::pick_limit() {
+    namespace tx = text::tools;
+    const pd::LimStatus &s = fusb302::limit_status();
+    const bool armed = s.state != pd::LimState::Off;
+    if (pick_ <= 0 || pick_ > npicks_) {
+        if (armed) fusb302::limit_disarm();
+        return;
+    }
+    const uint32_t mw = picks_[pick_ - 1].mw;
+    if (armed && s.limit_mw == mw) return;   // already on it: arming again would restart the negotiation
+    switch (ctx_.ui->pd_limit_arm(mw)) {
+    case pd::LimRefusal::None: break;
+    case pd::LimRefusal::BadLimit: ctx_.toast.show(FooterTone::Error, tx::kLimToastBadLimit, ctx_.now); break;
+    case pd::LimRefusal::Busy: ctx_.toast.show(FooterTone::Caution, tx::kLimToastBusy, ctx_.now); break;
+    }
 }
 
 bool ToolsPage::on_event(Event e) {
     if (e.press != Press::Short) return false;
-    const bench::Acts b = bench::tools();
-    if (b.n <= 0) return false;
     if (e.button == Button::Plus || e.button == Button::Minus) {
-        sel_ = std::clamp(sel_ + (e.button == Button::Plus ? 1 : -1), 0, b.n - 1);
+        cur() = std::clamp(cur() + (e.button == Button::Plus ? 1 : -1), 0, count() - 1);
         update(ctx_.now);
         return true;
     }
     if (e.button == Button::Ok) {
-        open_bench_act(*ctx_.ui, b.a[sel_], ctx_.now);
+        const bench::Acts b = bench::tools();
+        if (view_ == View::PickLimit) {
+            pick_limit();
+            show(View::List);
+        } else if (sel_ >= b.n) {
+            show(View::PickLimit);
+        } else {
+            open_bench_act(*ctx_.ui, b.a[sel_], ctx_.now);
+        }
+        return true;
+    }
+    if (e.button == Button::Back && view_ == View::PickLimit) {   // out of the picker, not out of the page
+        show(View::List);
         return true;
     }
     return false;
@@ -2662,10 +2804,11 @@ bool ToolsPage::on_event(Event e) {
 
 Strip ToolsPage::labels() const {
     Strip l = list_strip(base_labels());
-    const int n = bench::tools().n;
-    if (sel_ == 0) l[Button::Minus] = sl::UpDim;
-    if (sel_ >= n - 1) l[Button::Plus] = sl::DnDim;
-    l[Button::Ok] = sl::Open;
+    const int at = view_ == View::PickLimit ? pick_ : sel_;
+    const int n = view_ == View::PickLimit ? 1 + int(npicks_) : rows();
+    if (at == 0) l[Button::Minus] = sl::UpDim;
+    if (at >= n - 1) l[Button::Plus] = sl::DnDim;
+    l[Button::Ok] = view_ == View::PickLimit ? sl::Select : sel_ >= bench::tools().n ? sl::Pick : sl::Open;
     return l;
 }
 

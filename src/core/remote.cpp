@@ -638,20 +638,11 @@ remote::AppleReadResult Remote::apple_read(uint8_t op) {
     return r;
 }
 
-// The remote's half of the "may this feature use the wire" gate: a port owner (charger test, PD Stress, PD Spec, a twin run, a
-// loop probe, a listen window, an FC session or sniff). The driver adds its own engines and the CC / inline checks.
-static bool port_owner_busy(Ui &ui) {
-    return ui.ports_busy() || fusb302::listen_active() || fctrig::status().state != fc::State::Idle ||
-           fctrig::scan_running() || fctrig::ufcs_exiting() || fctrig::svooc_running() || dpsniff::armed();
-}
-
 // PD limiter: arm / off / status. RAM only; the refusal is the pd::LimRefusal, BadArg for the limit, Busy for the rest.
 remote::LimitView Remote::pd_limit(uint8_t op, uint32_t limit_mw) {
     remote::LimitView v;
     if (op == remote::kLimitArm) {
-        pd::LimFacts f;
-        f.busy = port_owner_busy(ui_);
-        const pd::LimRefusal why = fusb302::limit_arm(limit_mw, f);
+        const pd::LimRefusal why = ui_.pd_limit_arm(limit_mw);
         if (why != pd::LimRefusal::None) {
             v.status = why == pd::LimRefusal::BadLimit ? remote::Status::BadArg : remote::Status::Busy;
             v.refusal = static_cast<uint8_t>(why);
@@ -669,7 +660,7 @@ remote::LimitView Remote::pd_limit(uint8_t op, uint32_t limit_mw) {
 // the driver adds the rest.
 static pd::oppo::Facts oppo_facts(Ui &ui) {
     pd::oppo::Facts f;
-    f.ports_busy = port_owner_busy(ui);
+    f.ports_busy = ui.port_owner_busy();
     f.inline_mode = ui.link().inline_mode();
     return f;
 }

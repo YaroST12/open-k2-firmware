@@ -60,6 +60,28 @@ LimRefusal lim_gate(const LimFacts& f, std::uint32_t limit_mw) {
     return f.busy ? LimRefusal::Busy : LimRefusal::None;
 }
 
+std::size_t lim_picks(std::span<const Pdo> pdos, std::span<LimPick> out) {
+    auto whole_w = [](std::uint32_t uw) { return (uw + 999999) / 1000000 * 1000u; };   // microwatts -> mW, up to the whole watt
+    std::uint32_t best = 0;
+    LimPick c[kMaxPdos];
+    std::size_t n = 0;
+    for (const Pdo& p : pdos) {
+        best = std::max(best, whole_w(p.max_mw * 1000));
+        if (p.type != PdoType::Fixed || n >= std::size(c)) continue;
+        c[n++] = {whole_w(std::uint32_t(p.max_mv) * p.max_ma), p.max_mv, p.max_ma};
+    }
+    // Insertion sort, stable: std::stable_sort allocates (new/delete + the unwinder, +15 KB).
+    for (std::size_t i = 1; i < n; ++i)
+        for (std::size_t j = i; j > 0 && c[j].mw < c[j - 1].mw; --j) std::swap(c[j], c[j - 1]);
+    std::size_t k = 0;
+    for (std::size_t i = 0; i < n && k < out.size(); ++i) {
+        if (c[i].mw < kLimMinMw || c[i].mw > kLimMaxMw || c[i].mw >= best) continue;
+        if (k && out[k - 1].mw == c[i].mw) continue;
+        out[k++] = c[i];
+    }
+    return k;
+}
+
 std::uint32_t request_mw(std::uint32_t rdo, std::span<const std::uint32_t> pdos) {
     const unsigned pos = rdo >> 28;
     if (pos < 1 || pos > pdos.size()) return 0;

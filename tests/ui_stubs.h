@@ -66,6 +66,12 @@ struct StubState {
     const char* journal_load_owner = nullptr;
     bool journal_load_in_arena = false;
     k2::pd::SourceCaps caps{};
+    // PD limiter (fusb302::limit_*): what limit_status() reports, the refusal the next arm gets, and the calls seen.
+    k2::pd::LimStatus lim{};
+    k2::pd::LimRefusal lim_refusal = k2::pd::LimRefusal::None;
+    uint32_t lim_arm_mw = 0;
+    int lim_arms = 0, lim_offs = 0;
+    bool listen_on = false;                // fusb302::listen_active()
     k2::pd::Emarker em{};
     k2::cable_full::Full cable_full{};     // what fusb302::cable_extra() returns (the Cable tab's SVID / mode rows)
     int full_scans = 0;                    // cable_scan_full() calls (each also counts in `scans`)

@@ -413,6 +413,10 @@ Markers (`kit::Marker`):
 
 Every marker state rewrites its whole 12 x 12 box.
 
+A pick list can be derived from live data: the Tools PD limit picker (7.4) builds its rows from the charger's offers
+(`pd::lim_picks`, a pure function over the PDO list), one `Radio` row per level with the PDO in the second column. The
+rows live in a page-owned table; `row_fn` is stateless, so a changed list repaints through the row signature.
+
 States of a row:
 
 | state | look |
@@ -803,6 +807,8 @@ Protocol rows (InfoBlock, Home): a fixed level has no space, a range has one spa
   page in four rotations.
 - External data (saved names, vendor strings) goes through `fit_data`: counted, not failed.
 - The fix is to reword, or to let the focused row open its second line. Never a smaller font.
+- Runtime numbers in a fixed lane need a worst case that fits: the PD limit toasts (`kLimToasts`) are asserted against the
+  toast width, the note "hides offers above 100W" against `kNoteMaxPx`, and the Home suffix (7.9) against its 16-char lane.
 
 ## 7 Page audit
 
@@ -851,6 +857,21 @@ Renders: `mock_pd_source.png`, `mock_pd_sink.png`, `mock_pd_cable.png`, `mock_pd
 Superseded by the ring and the place pages (0.2, 0.3); the hub list below no longer exists.
 
 Renders: `mock_tools.png`, `mock_tools_end.png`.
+
+**PD limit row** (last row of the page, no tool slot, `ToolsPage::limit_row`): name "PD limit", tail the armed value
+(`27W`, amber) or `Off` (dim). The focused row's note reads "hides offers above 27W" (armed) or "hides offers above a limit".
+OK opens a pick-one picker (`ToolsPage::View::PickLimit`, `Radio` rows, strip Pick / Select): `Off`, then one row per
+distinct power level of the charger's real offer list below its maximum (fixed PDOs, V x I, clamped to 5..100 W; at most
+7 rows), the second column the PDO (`5V3A`). A 65 W charger offering 5V3A, 9V3A, 15V3A, 20V3.25A gives Off, 15W 5V3A, 27W 9V3A, 45W 15V3A.
+OK picks and applies at once through `Ui::pd_limit_arm`, the path of the remote command (`Cmd::PdLimit`), and returns to the
+list; Back returns to the list without a change. A refusal or an empty list is a toast (`No charger offers yet`,
+`Port in use: stop it first`, ...). When the limiter gives up (rate, charger or sink resets, sink ignores it, EPR) the
+Tools page shows "Limit off: <why>" once, if visible. Renders: `runs/pd-limit-ui/png0/mock_pdlimit_tools_armed.png`,
+`mock_pdlimit_picker_100w.png`, `mock_pdlimit_picker_65w.png`.
+
+While armed the LINK page marks it on the CHARGER slice: an amber chip `LIM 27W` (`SliceSpec::Warn`, first chip), gone
+when the limiter is off or gave up (`mock_pdlimit_link_chip.png`). The connection page mixes the limit into its cheap
+signature, so arming repaints once and nothing repaints per tick.
 
 | diverges | proposal |
 |---|---|
@@ -912,6 +933,11 @@ walk-by screen with its own grid.
 |---|---|
 | The diagnosis word is red text on black (`Power short`). The reference marks a failure with a fill | Option A: keep (a word plus a colour). Option B: tint the row `kErrorT` like an Error footer |
 | Nothing else | The InfoBlock rows already use the kit and the protocol row formats |
+
+**Protocol row with a PD limit armed.** A live PD contract gets the suffix ` lim<W>W` (`hm::format_limit`): `PD 9V3A lim27W`,
+`PD 20V3.25A lim100W`. The value lane is 16 chars (`hm::kProtoChars`, x52 to the elapsed time at x180, asserted in
+`ui_home.cpp`). If value + suffix would pass 16, the value is cut after its voltage (`3.3-21V lim100W`, `5-11V lim27W`), so the
+suffix always fits and the limit is always visible. Other protocols, idle and stale rows carry no suffix. Render: `mock_pdlimit_home.png`.
 
 ### 7.10 Settings, USB Link, Autorotate
 

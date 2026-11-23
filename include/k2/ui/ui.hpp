@@ -51,6 +51,8 @@
 #include "k2/drivers/power_monitor.hpp"
 #include "k2/ui/orientation.hpp"
 
+namespace k2::pd { enum class LimRefusal : std::uint8_t; }
+
 namespace k2 {
 
 // Page update period: Ui::tick() runs the current page's sample()+update() at most this often.
@@ -390,6 +392,10 @@ public:
         return charger_test_busy() || fc_release_.busy() || twin_live_busy() || pdstress_active() || pdspec_active() || loop_probe_busy();
     }
     bool twin_live_busy() const;
+    // ports_busy() plus the wire's other owners (a listen window, an FC session or sniff): the gate for a feature that forges traffic.
+    bool port_owner_busy() const;
+    // PD limiter arm through the remote's path (same gate, same refusals); the limit is RAM only.
+    pd::LimRefusal pd_limit_arm(uint32_t limit_mw) const;
     // A loop probe run (Tools -> Loop probe) drives D+/D-, the backlight and the K2's own Rd: the ports are its until it ends.
 #if K2_LOOPPROBE
     bool loop_probe_busy() const;

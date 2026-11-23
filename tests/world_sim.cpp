@@ -1205,7 +1205,12 @@ namespace fctrig { void service_ufcs() {} void service_hs() {} }
 #endif
 namespace fault { void trigger(std::uint8_t) {} }
 namespace fastcharge { unsigned init() { return 0; } unsigned log_idle() { return 0; } void poll() {} }
-namespace dpsniff { void poll(std::uint32_t, std::int32_t) {} }
+namespace dpsniff {
+void poll(std::uint32_t, std::int32_t) {}
+#ifndef K2_WORLD_SVOOC   // that world's own dpsniff stand-ins define it
+bool armed() { return false; }
+#endif
+}
 namespace boottrace { void flush_log() {} void poll() {} }   // poll: the self-power bring-up's (src/core/boot_pd.cpp)
 namespace bootscreen { void draw_live(std::uint32_t) {} }
 namespace bootinfo { bool boot_key_held() { return false; } }
