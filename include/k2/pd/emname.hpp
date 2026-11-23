@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Yaraslau Furman
 // Auto name of a saved cable: <manufacturer>-<USB/TB version>-<wattage>, e.g. "Apple-USB4-240W",
 // "Anker-USB2-60W". Pure logic over a 66-byte e-marker record (k2/pd/emrec.hpp), host-tested.
-//   manufacturer: the ID header VID through pd::vendor_name(), "0xVVVV" when the VID is not listed
+//   manufacturer: the ID header VID through pd::vendor_find(), "0xVVVV" when the VID is not listed
 //   version:      cable VDO 1 bits 2:0: USB2, USB3.2G1, USB3.2G2, USB4G3, USB4G4; TBT3 for an Intel
 //                 (0x8087) cable of 10G or more (the record keeps no SVID list, so that is the
 //                 same Thunderbolt test the e-marker page uses)

@@ -111,7 +111,11 @@ void decode_source_caps(SourceCaps& caps, std::uint16_t header, std::span<const 
 // Parse `num_do` VDOs (little endian) from `body`.
 Emarker parse_emarker(std::span<const std::uint8_t> body, unsigned num_do);
 
-// Name of a cable/chip vendor by USB VID; "Unknown" when not listed.
+// Name of a vendor by USB VID (tools/vendors.csv): nullptr when not listed. `weak` is set for chip makers, cable makers and
+// VIDs shared by two brands, whose name says who made a part, not whose product it is.
+const char* vendor_find(std::uint16_t vid, bool* weak = nullptr);
+
+// vendor_find() or "Unknown".
 const char* vendor_name(std::uint16_t vid);
 
 // Name of a control message type (header bits 4:0); "OTHER" when not listed.

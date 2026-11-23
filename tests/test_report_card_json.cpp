@@ -59,7 +59,7 @@ static void test_probe_identity_fields_render() {
     // QC4+ shows the span-only "via PPS ..." form; QC5 falls back to the VID + span form because pd_ma is 0.
     c.id.vid = 0x05C6; c.id.pdp_w = 140; c.name_auto = true;
     n = rc::render_json(c, buf);
-    CHECK_EQ(std::string(buf.data(), n).find("\"pid\":4660,\"pdp_w\":140,\"name_auto\":true,\"qc\":\"QC5\",\"runs\":2") != std::string::npos, true);
+    CHECK_EQ(std::string(buf.data(), n).find("\"pid\":4660,\"brand\":\"Qualcomm\",\"pdp_w\":140,\"name_auto\":true,\"qc\":\"QC5\",\"runs\":2") != std::string::npos, true);
     c.id.pdp_w = 45;
     n = rc::render_json(c, buf);
     // sample() ranges have ma = 0: span-only justification, no current shown

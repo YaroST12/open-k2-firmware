@@ -45,8 +45,10 @@ std::array<char, kMaxLen + 1> make(const emrec::Record& rec, unsigned ordinal) {
     const pd::Emarker em = pd::parse_emarker(raw, 5);
 
     char mfg[16];
-    std::string_view vendor = pd::vendor_name(vid);
-    if (vendor == "Unknown") {
+    std::string_view vendor;
+    if (const char* b = pd::vendor_find(vid)) {
+        vendor = b;
+    } else {
         const char hex[] = "0123456789ABCDEF";
         mfg[0] = '0'; mfg[1] = 'x';
         for (int k = 0; k < 4; k++) mfg[2 + k] = hex[(vid >> (12 - 4 * k)) & 0xF];

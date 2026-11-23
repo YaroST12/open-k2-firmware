@@ -46,15 +46,17 @@ static void test_name() {
     };
     CHECK_STR(name(0x05AC, 4 | (2u << 5) | (3u << 9)).c_str(), "Apple-USB4G4-240W");
     CHECK_STR(name(0x05AC, 3 | (2u << 5) | (3u << 9)).c_str(), "Apple-USB4G3-240W");
-    CHECK_STR(name(0x1037, 0).c_str(), "Anker-USB2-60W");
-    CHECK_STR(name(0x1037, 1 | (2u << 5)).c_str(), "Anker-USB3.2G1-100W");
-    CHECK_STR(name(0x1037, 2 | (2u << 5) | (2u << 9)).c_str(), "Anker-USB3.2G2-100W");   // 10:9 = 10b is deprecated: 20 V
+    CHECK_STR(name(0x291A, 0).c_str(), "Anker-USB2-60W");
+    CHECK_STR(name(0x291A, 1 | (2u << 5)).c_str(), "Anker-USB3.2G1-100W");
+    CHECK_STR(name(0x291A, 2 | (2u << 5) | (2u << 9)).c_str(), "Anker-USB3.2G2-100W");   // 10:9 = 10b is deprecated: 20 V
     CHECK_STR(name(0x8087, 3 | (2u << 5)).c_str(), "Intel-TBT3-100W");
     CHECK_STR(name(0x2B1D, 1 | (1u << 5)).c_str(), "0x2B1D-USB3.2G1-60W");
+    CHECK_STR(name(0x2B89, 1 | (2u << 5)).c_str(), "UGREEN-USB3.2G1-100W");   // brands that were "0xVVVV" before the one table
+    CHECK_STR(name(0x1C7B, 0).c_str(), "Luxshare-USB2-60W");
     CHECK_STR(name(0x05AC, 0, 2).c_str(), "Apple-USB2-60W-2");
     CHECK_STR(name(0x05AC, 0, 13).c_str(), "Apple-USB2-60W-13");
     // always fits 24 characters; a long manufacturer is cut, not the version or wattage
-    const std::string longest = name(0x31CA, 2 | (2u << 5) | (3u << 9), 9999);   // Leadtrend
+    const std::string longest = name(0x2BD5, 2 | (2u << 5) | (3u << 9), 9999);   // CblMatters, the longest name
     CHECK_EQ(longest.size() <= 24, 1);
     CHECK_EQ(longest.find("USB3.2G2-240W-9999") != std::string::npos, 1);
 }

@@ -2,6 +2,8 @@
 // Copyright (C) 2026 Yaraslau Furman
 #include "k2/chargertest/report_card.hpp"
 
+#include "k2/pd/pd.hpp"
+
 namespace k2::report_card {
 
 [[gnu::noinline]] Card::Card() = default;
@@ -280,32 +282,25 @@ void set_name(Card& c, std::string_view n) {
     c.name[k] = 0;
 }
 
-const char* brand(uint16_t vid) {
-    struct Ent { uint16_t vid; const char* name; };
-    static constexpr Ent kBrands[] = {
-        {0x05AC, "Apple"}, {kSamsungVid, "Samsung"}, {0x18D1, "Google"}, {0x2717, "Xiaomi"}, {0x12D1, "Huawei"},
-        {0x17EF, "Lenovo"}, {0x413C, "Dell"}, {0x03F0, "HP"}, {0x2A70, "OnePlus"}, {0x22D9, "OPPO"},
-        {0x0B05, "ASUS"}, {0x050D, "Belkin"}, {0x22B8, "Motorola"}, {0x19D2, "ZTE"}, {0x291A, "Anker"},
-    };
-    for (const auto& e : kBrands) if (e.vid == vid) return e.name;
-    return nullptr;
-}
-
 size_t auto_name(char* out, uint16_t vid, std::string_view mfr, uint8_t pdp_w) {
     if (vid == 0xFFFF) vid = 0;
     char base[kNameMax + 1] = {};
     size_t n = 0;
-    if (const char* b = brand(vid)) {
-        n = std::strlen(b);
-        std::memcpy(base, b, n);
-    } else {
+    bool weak = false;
+    const char* b = pd::vendor_find(vid, &weak);
+    if (!b || weak) {   // a chip or cable maker's name yields to the charger's own manufacturer text
         for (char c : mfr) {
             if (n >= kNameMax) break;
             const bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.';
             if (ok || (c == ' ' && n > 0)) base[n++] = c;
         }
         while (n && base[n - 1] == ' ') base[--n] = 0;
-        if (n == 0 && vid) {
+    }
+    if (n == 0) {
+        if (b) {
+            n = std::strlen(b);
+            std::memcpy(base, b, n);
+        } else if (vid) {
             static constexpr char hx[] = "0123456789ABCDEF";
             std::memcpy(base, "VID ", 4);
             for (unsigned i = 0; i < 4; ++i) base[4 + i] = hx[(vid >> (12 - 4 * i)) & 15];

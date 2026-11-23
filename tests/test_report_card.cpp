@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "k2/chargertest/report_card.hpp"
+#include "k2/pd/pd.hpp"
 #include "test_util.h"
 
 using namespace k2;
@@ -739,20 +740,27 @@ static std::string auto_name(uint16_t vid, const char* mfr, uint8_t pdp) {
     return out;
 }
 
-static void test_brand_table() {
-    CHECK_STR(rc::brand(0x05AC), "Apple");
-    CHECK_STR(rc::brand(0x04E8), "Samsung");
-    CHECK_STR(rc::brand(0x2717), "Xiaomi");
-    CHECK_STR(rc::brand(0x291A), "Anker");
-    CHECK_STR(rc::brand(0x19D2), "ZTE");
-    // Honor 0x339B, vivo 0x2D95 and Zimi/CUKTECH 0x2B01 are not in the usb.ids list, so they stay out of the table.
-    CHECK_EQ(rc::brand(0x339B) == nullptr, 1);
-    CHECK_EQ(rc::brand(0x2D95) == nullptr, 1);
-    CHECK_EQ(rc::brand(0x2B01) == nullptr, 1);
-    CHECK_EQ(rc::brand(0x0000) == nullptr, 1);
-    CHECK_EQ(rc::brand(0x1234) == nullptr, 1);
-    // Every brand is a valid card name on its own (and leaves room for " 240W").
-    for (unsigned v = 0; v < 0x10000; ++v) if (const char* b = rc::brand(uint16_t(v))) CHECK_EQ(rc::valid_name(b) && std::strlen(b) <= rc::kNameMax - 5, 1);
+// The card name's brand is pd::vendor_find (tools/vendors.csv): one table for cards, cables and the PD page.
+static void test_brand_from_the_vendor_table() {
+    CHECK_STR(auto_name(0x05AC, "", 0).c_str(), "Apple");
+    CHECK_STR(auto_name(0x04E8, "", 0).c_str(), "Samsung");
+    CHECK_STR(auto_name(0x291A, "", 0).c_str(), "Anker");   // not Hynetek: 0x2E99 is
+    CHECK_STR(auto_name(0x2B89, "", 240).c_str(), "UGREEN 240W");
+    CHECK_STR(auto_name(0x339B, "", 100).c_str(), "Honor 100W");
+    // A name that fits a card with " 240W" after it, for every listed vendor.
+    for (unsigned v = 0; v < 0x10000; ++v)
+        if (const char* b = k2::pd::vendor_find(uint16_t(v))) CHECK_EQ(rc::valid_name(b) && std::strlen(b) <= rc::kNameMax - 5, 1);
+}
+
+// Chip, cable and shared-VID names say who made a part: a charger that also gives its own manufacturer is named by that.
+static void test_weak_vendor_yields_to_the_manufacturer() {
+    CHECK_STR(auto_name(0x2E87, "UGREEN Group", 65).c_str(), "UGREEN Group 65W");   // a controller VID with the brand's text
+    CHECK_STR(auto_name(0x2E87, "", 65).c_str(), "Injoinic 65W");                   // no text: the chip maker's name
+    CHECK_STR(auto_name(0x2B01, "CUKTECH", 100).c_str(), "CUKTECH 100W");
+    CHECK_STR(auto_name(0x2B01, "", 100).c_str(), "ZMI 100W");
+    CHECK_STR(auto_name(0x291A, "Someone Else", 100).c_str(), "Anker 100W");        // a brand's VID is not overruled
+    CHECK_STR(auto_name(0x291A, "", 100).c_str(), "Anker 100W");
+    CHECK_STR(auto_name(0x2E87, "///", 65).c_str(), "Injoinic 65W");                // a manufacturer with no usable character
 }
 
 static void test_auto_name_rules() {
@@ -1307,7 +1315,8 @@ int main() {
     test_handover_fields();
     test_codec_roundtrip_and_size();
     test_name_rules();
-    test_brand_table();
+    test_brand_from_the_vendor_table();
+    test_weak_vendor_yields_to_the_manufacturer();
     test_auto_name_rules();
     test_codec_identity_fields_and_old_formats();
     test_v8_rebalanced_roundtrip();
