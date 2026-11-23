@@ -983,6 +983,8 @@ static void test_live_request_repaints_only_its_rows() {
 static void test_refresh_goes_through_the_rescan_module() {
     Ui &ui = fresh_ui();
     ui.goto_page(kMenuPageBase + uint8_t(Menu::Connection), 20000);
+    g_stub.pm_online = true; g_stub.pm.vbus_mv = 9000; g_stub.pm_fast_set = true; g_stub.pm_fast_mv = 9000;   // a charger that is up: no Rd wake
+    for (int i = 0; i < 3; i++) ui.tick(20010 + 20u * i);
     g_stub.rescan_result = rescan::Result::Asked;
     CHECK_EQ(ui.run_action(Action::PdRescan, 20100), true);
     CHECK_EQ(g_stub.rescan_requests, 1);
@@ -1026,24 +1028,27 @@ static uint32_t run_ticks(Ui &ui, uint32_t t, int n) {
     return t;
 }
 
+// One wake ask, whichever path made it: a dark port with no contract presents Rd (reread_start), anything else is the Refresh's rescan.
+static int wake_asks() { return g_stub.rescan_requests + g_stub.reread_starts; }
+
 static void test_auto_wake_once_on_the_charger_overview() {
     Ui &ui = fresh_ui();
     asleep_port(ui);
     uint32_t t = open_overview(ui, 20000);
     CHECK_EQ(int(cp(ui).view()), int(ConnectionPage::View::Overview));
-    CHECK_EQ(g_stub.rescan_requests, 1);                        // the Refresh path, by itself
+    CHECK_EQ(wake_asks(), 1);                        // the Refresh path, by itself
     CHECK_EQ(g_stub.survey_refreshes, 1);
     g_stub.pm.vbus_mv = 5000;                                   // our own cycle lit the rail for a blip ...
     t = run_ticks(ui, t, 10);
     g_stub.pm.vbus_mv = 0;                                      // ... and it fell asleep again: still the same episode
     t = run_ticks(ui, t, 100);                                  // 10 s of a charger that stays silent: no second try
-    CHECK_EQ(g_stub.rescan_requests, 1);
+    CHECK_EQ(wake_asks(), 1);
     t = run_ticks(ui, t, 60);
     g_stub.pm.vbus_mv = 5000;                                   // a replug after the retry gap is a new episode
     t = run_ticks(ui, t, 10);
     g_stub.pm.vbus_mv = 0;
     t = run_ticks(ui, t, 300);
-    CHECK_EQ(g_stub.rescan_requests, 2);
+    CHECK_EQ(wake_asks(), 2);
 }
 
 // A page opened on a sleeping port waits out the 600 ms sense hold, then says what it does.
@@ -1053,9 +1058,9 @@ static void test_auto_wake_settles_then_toasts() {
     uint32_t t = 20000;
     ui.open_place(bench::Place::Charger, t);
     for (int i = 0; i < 3; i++) ui.tick(t += 100);
-    CHECK_EQ(g_stub.rescan_requests, 0);
-    for (int i = 0; i < 8 && g_stub.rescan_requests == 0; i++) ui.tick(t += 100);
-    CHECK_EQ(g_stub.rescan_requests, 1);
+    CHECK_EQ(wake_asks(), 0);
+    for (int i = 0; i < 8 && wake_asks() == 0; i++) ui.tick(t += 100);
+    CHECK_EQ(wake_asks(), 1);
     CHECK(ui.context().toast.active(t));
     CHECK_STR(ui.context().toast.view().data(), "Waking charger");
 }
@@ -1068,10 +1073,10 @@ static void test_auto_wake_waits_for_the_line_trial() {
     g_stub.trial_line = 1;
     uint32_t t = open_overview(ui, 20000);
     t = run_ticks(ui, t, 30);
-    CHECK_EQ(g_stub.rescan_requests, 0);
+    CHECK_EQ(wake_asks(), 0);
     g_stub.trial_live = false;
     t = run_ticks(ui, t, 5);
-    CHECK_EQ(g_stub.rescan_requests, 1);
+    CHECK_EQ(wake_asks(), 1);
 }
 
 static void test_auto_wake_not_on_other_tabs_or_views() {
@@ -1079,21 +1084,21 @@ static void test_auto_wake_not_on_other_tabs_or_views() {
         Ui &ui = fresh_ui();
         asleep_port(ui);
         open_and_settle(ui, kConnTabAlias + 1, 20000);          // the Cable tab's fact sheet
-        CHECK_EQ(g_stub.rescan_requests, 0);
+        CHECK_EQ(wake_asks(), 0);
         open_and_settle(ui, kConnTabAlias, 22000);              // the Charger's fact sheet (Spec view)
-        CHECK_EQ(g_stub.rescan_requests, 0);
+        CHECK_EQ(wake_asks(), 0);
     }
     {
         Ui &ui = fresh_ui();
         asleep_port(ui);
         g_stub.ra_on = true;                                    // blocked while the page opens, so nothing fires yet
         uint32_t t = open_overview(ui, 20000);
-        CHECK_EQ(g_stub.rescan_requests, 0);
+        CHECK_EQ(wake_asks(), 0);
         for (int i = 0; i < 4 && cp(ui).view() == ConnectionPage::View::Overview; i++) ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
         CHECK(cp(ui).view() != ConnectionPage::View::Overview);
         g_stub.ra_on = false;
         run_ticks(ui, t, 20);
-        CHECK_EQ(g_stub.rescan_requests, 0);                    // Spec / Actions: no wake behind the user's back
+        CHECK_EQ(wake_asks(), 0);                    // Spec / Actions: no wake behind the user's back
     }
 }
 
@@ -1103,10 +1108,10 @@ static void test_auto_wake_honours_the_auto_read_block() {
     g_stub.ra_on = true;
     uint32_t t = open_overview(ui, 20000);
     t = run_ticks(ui, t, 50);
-    CHECK_EQ(g_stub.rescan_requests, 0);
+    CHECK_EQ(wake_asks(), 0);
     g_stub.ra_on = false;                                       // the block clears: not tried yet, so it goes once
     t = run_ticks(ui, t, 5);
-    CHECK_EQ(g_stub.rescan_requests, 1);
+    CHECK_EQ(wake_asks(), 1);
 }
 
 static void test_auto_wake_needs_the_live_facts_too() {
@@ -1114,11 +1119,11 @@ static void test_auto_wake_needs_the_live_facts_too() {
     asleep_port(ui);
     g_stub.ra_on = true;
     uint32_t t = open_overview(ui, 20000);
-    CHECK_EQ(g_stub.rescan_requests, 0);
+    CHECK_EQ(wake_asks(), 0);
     g_stub.ra_on = false;                                       // the block clears on the tick the line is no longer asleep:
     g_stub.pm.vbus_mv = 5000;                                   // the debounced sense still says asleep for 600 ms
     ui.tick(t += 100);
-    CHECK_EQ(g_stub.rescan_requests, 0);
+    CHECK_EQ(wake_asks(), 0);
 }
 
 // Wake anything connected: a dark port with no inline / sink evidence gets one wake per episode, whatever its CC lines read.
@@ -1126,11 +1131,11 @@ static void test_wake_any_bank_idle_port_wakes_once() {
     Ui &ui = fresh_ui();
     bank_port(ui);
     uint32_t t = open_overview(ui, 20000);
-    CHECK_EQ(g_stub.rescan_requests, 1);
+    CHECK_EQ(wake_asks(), 1);
     CHECK_EQ(g_stub.survey_refreshes, 1);
     CHECK_STR(ui.context().toast.view().data(), "Waking charger");
     t = run_ticks(ui, t, 300);                                  // 30 s of a bank that stays silent: no second try, no loop
-    CHECK_EQ(g_stub.rescan_requests, 1);
+    CHECK_EQ(wake_asks(), 1);
     CHECK_EQ(int(conn::classify_port_sense(cp(ui).facts())), int(conn::PortSense::NoCharger));   // the fallback view is unchanged
     CHECK_EQ(int(cp(ui).view()), int(ConnectionPage::View::Overview));
 }
@@ -1142,7 +1147,7 @@ static void test_wake_any_empty_port_one_attempt() {
     set_cc(8, 1690);
     uint32_t t = open_overview(ui, 20000);
     t = run_ticks(ui, t, 200);
-    CHECK_EQ(g_stub.rescan_requests, 1);
+    CHECK_EQ(wake_asks(), 1);
 }
 
 static void test_wake_any_never_inline_or_blocked() {
@@ -1152,7 +1157,7 @@ static void test_wake_any_never_inline_or_blocked() {
         g_stub.rescan_result = rescan::Result::Cycled;
         uint32_t t = open_overview(ui, 20500);
         run_ticks(ui, t, 50);
-        CHECK_EQ(g_stub.rescan_requests, 0);
+        CHECK_EQ(wake_asks(), 0);
     }
     {
         Ui &ui = fresh_ui();
@@ -1160,7 +1165,7 @@ static void test_wake_any_never_inline_or_blocked() {
         g_stub.ra_on = true;                                    // a tool owns the port
         uint32_t t = open_overview(ui, 20000);
         run_ticks(ui, t, 50);
-        CHECK_EQ(g_stub.rescan_requests, 0);
+        CHECK_EQ(wake_asks(), 0);
     }
     {
         Ui &ui = fresh_ui();
@@ -1168,7 +1173,7 @@ static void test_wake_any_never_inline_or_blocked() {
         g_stub.sink_seen.valid = true;                          // a sink's Sink_Capabilities was decoded on CC
         uint32_t t = open_overview(ui, 20000);
         run_ticks(ui, t, 50);
-        CHECK_EQ(g_stub.rescan_requests, 0);
+        CHECK_EQ(wake_asks(), 0);
     }
     {
         Ui &ui = fresh_ui();
@@ -1176,7 +1181,7 @@ static void test_wake_any_never_inline_or_blocked() {
         g_stub.idle_wake = true;                                // Wake sleeping port is already holding an Rd
         uint32_t t = open_overview(ui, 20000);
         run_ticks(ui, t, 50);
-        CHECK_EQ(g_stub.rescan_requests, 0);
+        CHECK_EQ(wake_asks(), 0);
     }
 }
 
@@ -1190,7 +1195,7 @@ static void test_wake_any_not_while_the_ring_passes() {
     for (int i = 0; i < 5; i++) ui.on_button(Button::Plus, ButtonEvent::Short, t += 20);
     CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Link));
     run_ticks(ui, t, 50);
-    CHECK_EQ(g_stub.rescan_requests, 0);
+    CHECK_EQ(wake_asks(), 0);
 }
 
 // A dark attach blip on the empty port's bias net (the link flips attached with VBUS still 0) is not a charger: the three-try
@@ -1205,7 +1210,135 @@ static void test_wake_any_dark_attach_blips_do_not_loop() {
         g_stub.cc = 0;                                          // ... and drops it again
         t = run_ticks(ui, t, 160);                              // past the 15 s retry gap each round
     }
-    CHECK(g_stub.rescan_requests <= int(conn::AutoWake::kMaxTries));
+    CHECK(wake_asks() <= int(conn::AutoWake::kMaxTries));
+}
+
+// Reset & re-read on a K2-owned contract sends a sink Hard Reset; a bank that answers it by going to sleep never brings VBUS back, so
+// one PdRescan (the wake path) follows after the recover window. A source that returns, or an inline link, is left alone.
+static Ui &ready_contract_ui(uint32_t &t) {
+    Ui &ui = fresh_ui();
+    g_stub.pm_online = true; g_stub.cc = 1; g_stub.pm.vbus_mv = 9000;
+    g_stub.pm_fast_set = true; g_stub.pm_fast_mv = 9000;
+    g_stub.self_powered = false;
+    g_stub.sink.state = pd::SinkState::Ready;
+    g_stub.sink.mv = 9000;
+    t = 90000;
+    for (int i = 0; i < 4; i++) ui.tick(t += 100);
+    return ui;
+}
+static void hr_set_vbus(int mv) { g_stub.pm.vbus_mv = mv; g_stub.pm_fast_mv = mv; }
+
+static void test_link_reset_sleeping_source_falls_back_to_one_wake() {
+    uint32_t t;
+    Ui &ui = ready_contract_ui(t);
+    CHECK_EQ(int(ui.link_reset(false, t += 50)), int(Ui::LinkResetResult::HardReset));
+    CHECK_EQ(g_stub.hard_resets, 1);
+    CHECK_EQ(wake_asks(), 0);
+    hr_set_vbus(0);                                             // the bank drops VBUS and goes to sleep
+    g_stub.sink.state = pd::SinkState::Idle;
+    t = run_ticks(ui, t, 15);                                   // 1.5 s: still inside tPSHardReset + tSafe0V + tSrcRecover + tSrcTurnOn
+    CHECK_EQ(wake_asks(), 0);
+    t = run_ticks(ui, t, 10);                                   // past the window
+    CHECK_EQ(wake_asks(), 1);
+    CHECK_EQ(g_stub.reread_starts, 1);                          // the Rd-presenting path: a CC cycle never woke this bank
+    CHECK_EQ(g_stub.rescan_requests, 0);
+    t = run_ticks(ui, t, 200);
+    CHECK_EQ(wake_asks(), 1);                        // once
+}
+
+static void test_link_reset_returning_source_no_fallback() {
+    uint32_t t;
+    Ui &ui = ready_contract_ui(t);
+    CHECK_EQ(int(ui.link_reset(false, t += 50)), int(Ui::LinkResetResult::HardReset));
+    hr_set_vbus(0);
+    t = run_ticks(ui, t, 8);
+    hr_set_vbus(5000);                                          // a compliant charger is back after tSrcRecover
+    t = run_ticks(ui, t, 100);
+    hr_set_vbus(0);                                             // a later sag is not this reset's business
+    t = run_ticks(ui, t, 100);
+    CHECK_EQ(wake_asks(), 0);
+}
+
+static void test_link_reset_inline_never_falls_back() {
+    Ui &ui = fresh_ui();
+    uint32_t t = 92000;
+    make_inline(ui, t);
+    CHECK_EQ(ui.link_reset_inline(), true);
+    CHECK_EQ(int(ui.link_reset(false, t += 50)), int(Ui::LinkResetResult::NeedConfirm));
+    CHECK_EQ(int(ui.link_reset(true, t += 50)), int(Ui::LinkResetResult::HardReset));
+    hr_set_vbus(0);
+    t = run_ticks(ui, t, 60);
+    CHECK_EQ(wake_asks(), 0);
+}
+
+// A dark port with no contract is woken by presenting Rd (fusb302::reread_start, the remote's pd-reread), never by the CC cycle that
+// cannot wake a bank in DRP idle: the automatic wake, Refresh and Reset & re-read alike. A live contract, a lit rail or a refusal keeps
+// the rescan.
+static void test_wake_presents_rd_on_a_dark_port() {
+    {   // the automatic wake
+        Ui &ui = fresh_ui();
+        bank_port(ui);
+        const uint32_t t = open_overview(ui, 20000);
+        (void)t;
+        CHECK_EQ(g_stub.reread_starts, 1);
+        CHECK_EQ(g_stub.rescan_requests, 0);
+        CHECK_EQ(g_stub.survey_refreshes, 1);
+        CHECK(ui.context().toast.active(t));
+        CHECK_STR(ui.context().toast.view().data(), "Waking charger");
+    }
+    {   // Refresh with no contract
+        Ui &ui = fresh_ui();
+        bank_port(ui);
+        ui.goto_page(kMenuPageBase + uint8_t(Menu::Connection), 20000);
+        CHECK_EQ(ui.run_action(Action::PdRescan, 20100), true);
+        CHECK_EQ(g_stub.reread_starts, 1);
+        CHECK_EQ(g_stub.rescan_requests, 0);
+        CHECK_EQ(g_stub.survey_refreshes, 1);
+    }
+    {   // Reset & re-read with no contract: no Hard Reset, the same wake
+        Ui &ui = fresh_ui();
+        bank_port(ui);
+        ui.goto_page(kMenuPageBase + uint8_t(Menu::Connection), 20000);
+        CHECK_EQ(int(ui.link_reset(false, 20100)), int(Ui::LinkResetResult::Cycled));
+        CHECK_EQ(g_stub.hard_resets, 0);
+        CHECK_EQ(g_stub.reread_starts, 1);
+        CHECK_EQ(g_stub.rescan_requests, 0);
+    }
+    {   // the driver refuses (a run in flight): the rescan still answers the press
+        Ui &ui = fresh_ui();
+        bank_port(ui);
+        g_stub.reread_start_ok = false;
+        ui.goto_page(kMenuPageBase + uint8_t(Menu::Connection), 20000);
+        CHECK_EQ(ui.run_action(Action::PdRescan, 20100), true);
+        CHECK_EQ(g_stub.reread_starts, 1);
+        CHECK_EQ(g_stub.rescan_requests, 1);
+    }
+    {   // a lit rail (a charger that is there) and a live contract keep the rescan
+        Ui &ui = fresh_ui();
+        g_stub.pm_online = true; g_stub.pm.vbus_mv = 5000; g_stub.pm_fast_set = true; g_stub.pm_fast_mv = 5000;
+        g_stub.rescan_result = rescan::Result::Cycled;
+        ui.goto_page(kMenuPageBase + uint8_t(Menu::Connection), 20000);
+        for (int i = 0; i < 3; i++) ui.tick(20000 + 100u * (i + 1));
+        CHECK_EQ(ui.run_action(Action::PdRescan, 20400), true);
+        CHECK_EQ(g_stub.reread_starts, 0);
+        CHECK_EQ(g_stub.rescan_requests, 1);
+        g_stub.pm.vbus_mv = 0; g_stub.pm_fast_mv = 0;
+        g_stub.sink.state = pd::SinkState::Ready;   // a stale contract is still a contract: Get_Source_Cap, not Rd
+        for (int i = 0; i < 3; i++) ui.tick(20500 + 100u * i);
+        CHECK_EQ(ui.run_action(Action::PdRescan, 20900), true);
+        CHECK_EQ(g_stub.reread_starts, 0);
+        CHECK_EQ(g_stub.rescan_requests, 2);
+    }
+    {   // inline: never
+        Ui &ui = fresh_ui();
+        uint32_t t = 92000;
+        make_inline(ui, t);
+        g_stub.pm.vbus_mv = 0; g_stub.pm_fast_mv = 0; g_stub.pm_fast_set = true;
+        g_stub.rescan_result = rescan::Result::Passive;
+        CHECK_EQ(ui.link_reset_inline(), true);
+        CHECK_EQ(ui.run_action(Action::PdRescan, t + 500), true);
+        CHECK_EQ(g_stub.reread_starts, 0);
+    }
 }
 
 // The comeback of a bridged Refresh lands on Connection -> Source, whatever page the boot opened.
@@ -3366,6 +3499,10 @@ int main() {
     test_auto_wake_not_on_other_tabs_or_views();
     test_auto_wake_honours_the_auto_read_block();
     test_auto_wake_needs_the_live_facts_too();
+    test_link_reset_sleeping_source_falls_back_to_one_wake();
+    test_link_reset_returning_source_no_fallback();
+    test_link_reset_inline_never_falls_back();
+    test_wake_presents_rd_on_a_dark_port();
     test_wake_any_bank_idle_port_wakes_once();
     test_wake_any_empty_port_one_attempt();
     test_wake_any_never_inline_or_blocked();

@@ -669,7 +669,7 @@ void ConnectionPage::auto_wake(uint32_t now_ms) {
     const bool open = view_ == View::Overview && tab_ == conn::Tab::Source && !ctx_.ui->ring_view();
     if (!wake_.step(wake_asleep_, open, ctx_.ui->auto_read_block() != pd::SvWhy::None, now_ms)) return;
     K2LOG("[UI] dark port: waking it from the Charger overview\n");
-    if (ctx_.ui->rescan_source()) set_op(conn::tx::kWakingCharger, now_ms, 2500);   // a refusal stays silent: the episode is spent
+    if (ctx_.ui->wake_source()) set_op(conn::tx::kWakingCharger, now_ms, 2500);   // a refusal stays silent: the episode is spent
 }
 
 void ConnectionPage::sense(uint32_t now_ms) {

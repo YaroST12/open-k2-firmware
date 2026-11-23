@@ -219,6 +219,7 @@ K2_HOT UiAction Ui::tick(uint32_t now_ms) {
     ctx_.pm = pm.value_or(power::Metrics{});
     ctx_.pm_avg = power::read().value_or(power::Metrics{});
     ctx_.vbus_fast_mv = power::vbus_fast_mv().value_or(ctx_.pm.vbus_mv);
+    if (hr_recover_.armed()) hr_recover_poll(now_ms);
     const auto previous_release = fc_release_.state();
     if (TriggerPage *trigger = find<TriggerPage>(Menu::Trigger)) trigger->poll();   // no page, no session: leave() ended it
 #if K2_LOOPPROBE
