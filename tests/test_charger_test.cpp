@@ -9017,6 +9017,15 @@ static void test_window_holds_on_the_last_level_across_a_hard_reset_point() {
     f.spec_pt = {ct::SpecWhat::Avs, 9, 21000};
     f.tick(r, 100);
     CHECK_EQ(int(r.window_step().algorithm), int(ct::Algorithm::EprAvs)); CHECK_EQ(int(r.window_step().mv), 21000);
+    {   // the remote reads the same point and words (0x0B [10]), while its `current` is still the next unit's row
+        const auto snap = remote::charger_test_snapshot(r);
+        CHECK_EQ(int(snap.interlude), int(ct::Interlude::Spec));
+        CHECK_EQ(int(snap.spec_pt.what), int(ct::SpecWhat::Avs)); CHECK_EQ(int(snap.spec_pt.mv), 21000);
+        uint8_t b[remote::kMaxRspPayload];
+        const size_t n = remote::encode_charger_test_now(b, snap);
+        CHECK_EQ(n, remote::kChargerTestNowFixed + 7);
+        CHECK_EQ(std::string_view(reinterpret_cast<const char*>(b) + remote::kChargerTestNowFixed, 7) == "AVS 21V", true);
+    }
     f.spec_pt = {ct::SpecWhat::HardReset, 0, 0};
     f.tick(r, 100);
     CHECK_EQ(int(r.spec_point().what), int(ct::SpecWhat::HardReset));

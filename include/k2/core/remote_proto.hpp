@@ -121,6 +121,10 @@
 //                                    run_guard(1) rmdo(1: major << 4 | minor), then the footer's words (0..27 chars, the
 //                                    text the footer paints). Read-only, from RAM; rows and message are 0 / empty while the
 //                                    page is not on screen. Timers saturate at 65535.
+//                                    NOW, req 10 (one byte; BadArg on firmware without it): rsp interlude(1) what(1) pos(1)
+//                                    mv(2), then the Running header's name (0..13 chars). Inside an interlude (1 identity
+//                                    probe, 2 SVOOC ceiling, 3 PD spec stage) `current` is the next unit's row: this is the
+//                                    screen's own words and, for 3, its point (what: SpecWhat, pos, mv). 0 = a row runs.
 //                                    START, req 4 flags(1): the device's own START after its confirmation (the same code path
 //                                    as the second OK on Review: preview / preflight, the Ra guard, the identity, the Rd and
 //                                    the Waiting stage; nothing is bypassed). It opens the charger-test page on Review with the
@@ -1000,12 +1004,14 @@ struct ChargerTestSnapshot {
     uint8_t resumed = 0;   // times this run was resumed after a reboot (the wire saturates at 3)
     ctsweep::View sweep{}; // the finished sweep rows; a sweep row's wire detail byte is its recorded point count
     charger_test::Level level = charger_test::Level::Medium;   // the run in hand's level (wire: run_selected bits 28..29)
+    uint8_t interlude = 0;           // charger_test::Interlude: what the K2 does between two rows (the screen's name, not index())
+    charger_test::SpecPoint spec_pt{};   // the PD spec stage's own point (Interlude::Spec)
 };
 inline ChargerTestSnapshot charger_test_snapshot(const charger_test::Runner& r,
                                                  uint32_t configured = charger_test::kAllAlgorithms, uint8_t stage = 0, uint8_t cursor = 0) {
     return {r.run_id(), r.revision(), static_cast<uint8_t>(r.state()),
             static_cast<uint8_t>(r.reason()), static_cast<uint8_t>(r.index()), r.steps(), r.evidence(), configured, stage, cursor,
-            r.resumed(), r.sweep_view(), r.level()};
+            r.resumed(), r.sweep_view(), r.level(), static_cast<uint8_t>(r.interlude()), r.spec_point()};
 }
 constexpr uint8_t kChargerTestSchema = 1;
 constexpr size_t kChargerTestHeader = 15, kChargerTestRow = 16, kChargerTestPage = 2;
@@ -1055,6 +1061,13 @@ struct ChargerTestView {
 size_t encode_charger_test_view(std::span<uint8_t> out, const ChargerTestView&);
 // `0x0B req [4, flags]` START and `[5]` CANCEL (see the command table above).
 constexpr uint8_t kChargerTestStartReq = 4, kChargerTestCancelReq = 5;
+// `0x0B req [10]`: what the Running screen names right now. `current` (index) is the next unit's first row inside an interlude (the
+// identity probe, the SVOOC ceiling, the PD spec stage), so the reader needs the interlude's own words. rsp interlude(1)
+// (charger_test::Interlude, 0 = a row is running) what(1) (SpecWhat) pos(1) mv(2) then the name, the rest of the frame (at most
+// step_label::kInterludeCells characters; empty for 0). An older firmware answers BadArg: the reader keeps the index.
+constexpr uint8_t kChargerTestNowReq = 10;
+constexpr size_t kChargerTestNowFixed = 5;
+size_t encode_charger_test_now(std::span<uint8_t> out, const ChargerTestSnapshot&);
 // `0x0B req [6, off]`: the PD spec section of the run in hand (a Deep run on a K2_PDSPEC build), see the command table. The result's
 // wire form (specsec::to_wire, 3 + 4 x 27 bytes) in chunks: rsp run_id(4) total(1) off(1) n(1) data(n). `[7, off]` is the same
 // chunked read of the detail form (specsec::to_detail_wire, 8 x 27 bytes: limit lo/hi, count, a, b per check): two forms because total
@@ -1970,6 +1983,7 @@ template <Backend B>
             return reply_ok(f, kChargerTestStartLen);
         }
         if (p.size() == 1 && p[0] == kChargerTestCancelReq) return reply_ok_byte(f, backend.charger_test_cancel());
+        if (p.size() == 1 && p[0] == kChargerTestNowReq) return reply_ok(f, encode_charger_test_now(f.span(), backend.charger_test_results()));
         if (p.size() == 2 && (p[0] == kChargerTestSpecReq || p[0] == kChargerTestSpecDetailReq)) {
             const auto s = backend.charger_test_results();
             if (p[1] > charger_test_spec_total(s, p[0])) return reply_bad_arg(f);

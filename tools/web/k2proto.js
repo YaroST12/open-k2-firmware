@@ -343,6 +343,23 @@ var K2Proto = (function () {
              rmdo: f(13) ? (p[29] >> 4) + "." + (p[29] & 15) : null, message: message };
   }
 
+  // 0x0B req [10]: what the Running header names right now (remote_proto.cpp encode_charger_test_now): interlude, what, pos, mv(2),
+  // then the name (at most 13 characters). Inside an interlude `current` is the next unit's row; this is the screen's own point.
+  var CT_NOW_REQ = 10, CT_NOW_FIXED = 5, CT_NOW_NAME = 13;
+  var CT_INTERLUDES = ["row", "probe", "ceiling", "spec"];
+  var CT_SPEC_WHATS = ["none", "fixed", "pps", "avs", "hard-reset"];
+  function decodeChargerTestNow(p) {
+    if (p.length < CT_NOW_FIXED || p.length > CT_NOW_FIXED + CT_NOW_NAME) throw new FrameError("invalid charger-test now length");
+    if (p[0] >= CT_INTERLUDES.length || p[1] >= CT_SPEC_WHATS.length) throw new FrameError("invalid charger-test now");
+    var name = "";
+    for (var i = CT_NOW_FIXED; i < p.length; i++) {
+      if (p[i] < 0x20 || p[i] > 0x7E) throw new FrameError("charger-test now name is not text");
+      name += String.fromCharCode(p[i]);
+    }
+    return { interlude: CT_INTERLUDES[p[0]], name: name || null,
+             spec_point: p[0] === 3 ? { what: CT_SPEC_WHATS[p[1]], pos: p[2], mv: dv(p).getUint16(3, true) } : null };
+  }
+
   // 24 bytes: the power block. 38: + analog front end. 40: + MCU temperature. 49: + link flags and
   // ages (k2/pd-read). Older firmware sends the shorter forms, so every extension is optional.
   function decodeState(p) {
@@ -1964,12 +1981,25 @@ var K2Proto = (function () {
     return Uint8Array.from(blob);
   };
 
-  K2Remote.prototype.chargerTest = async function (mode) {
+  // The now of the run in hand, or null on a firmware without it (BadArg / BadLength): the index is then all there is.
+  K2Remote.prototype.chargerTestNow = async function () {
+    try { return decodeChargerTestNow((await this.link.call(CMD.CHARGER_TEST, [CT_NOW_REQ])).payload); }
+    catch (e) {
+      if (!(e instanceof RemoteError) || (e.status !== STATUS.BAD_LENGTH && e.status !== STATUS.BAD_ARG)) throw e;
+      return null;
+    }
+  };
+
+  K2Remote.prototype.chargerTest = async function (mode, opts) {
+    var wantNow = !(opts && opts.now === false);   // the start follow polls without it: only the run id and stage matter there
     if (mode === undefined) mode = "status";
     if (mode !== "status" && mode !== "results" && mode !== "view") throw new RangeError("charger-test supports status / results / view only");
     if (mode === "view") {   // the screens as data; firmware without the form answers BadArg / BadLength
-      try { return decodeChargerTestView((await this.link.call(CMD.CHARGER_TEST, [3])).payload); }
-      catch (e) {
+      try {
+        var view = decodeChargerTestView((await this.link.call(CMD.CHARGER_TEST, [3])).payload), vnow = wantNow ? await this.chargerTestNow() : null;
+        if (vnow) view.now = vnow;
+        return view;
+      } catch (e) {
         if (!(e instanceof RemoteError) || (e.status !== STATUS.BAD_LENGTH && e.status !== STATUS.BAD_ARG)) throw e;
         throw new FrameError("this firmware has no charger-test view (older than the shell-parity build)");
       }
@@ -1984,7 +2014,11 @@ var K2Proto = (function () {
     if (meta.start || meta.count) throw new FrameError("charger-test metadata contains rows");
     var out = Object.assign({}, meta);
     delete out.start; delete out.count;
-    if (mode === "status") return out;
+    if (mode === "status") {
+      var snow = wantNow ? await this.chargerTestNow() : null;   // `current` is the next row inside an interlude: the screen's own words
+      if (snow) out.now = snow;
+      return out;
+    }
     function key(p) {
       return JSON.stringify(Object.keys(p).filter(function (k) { return k !== "start" && k !== "count" && k !== "steps"; })
         .map(function (k) { return p[k]; }));
@@ -2165,7 +2199,7 @@ var K2Proto = (function () {
     }
     if (o.units !== undefined) await this.chargerUnits(o.units);
     if (o.cable) await this.chargerCable(o.cable);
-    var before = (await this.chargerTest("status")).run_id;
+    var before = (await this.chargerTest("status", { now: false })).run_id;
     var r = await this.chargerTestStart({ confirm: o.confirm, allTests: o.allTests });
     if (!r.accepted)
       return { started: false, stage: r.busy ? "busy" : "preflight", refusal: r.refusal, refusal_mv: r.refusal_mv, run_id: before };
@@ -2173,8 +2207,8 @@ var K2Proto = (function () {
     while (waited < CT_START_FOLLOW_MS) {
       await sleep(CT_START_POLL_MS);
       waited += CT_START_POLL_MS;
-      var st = await soft(function () { return self.chargerTest("status"); });
-      var view = st && st.run_id !== before ? null : await soft(function () { return self.chargerTest("view"); });
+      var st = await soft(function () { return self.chargerTest("status", { now: false }); });
+      var view = st && st.run_id !== before ? null : await soft(function () { return self.chargerTest("view", { now: false }); });
       if (o.onStep) o.onStep({ view: view, status: st, waited_ms: waited });
       var s = ctStartStep(before, st, view, moved);
       moved = s.moved;
@@ -2184,7 +2218,7 @@ var K2Proto = (function () {
         return { started: false, stage: "guard", refusal: CT_GUARD_REFUSAL, run_id: before };
       }
       if (s.outcome === "refused") {
-        var last = await soft(function () { return self.chargerTest("status"); });
+        var last = await soft(function () { return self.chargerTest("status", { now: false }); });
         return { started: false, stage: "final", refusal: (last && last.reason) || "unknown", message: view.message, run_id: before };
       }
     }
@@ -2398,7 +2432,7 @@ var K2Proto = (function () {
     packRequest: packRequest, parseResponse: parseResponse, isResponse: isResponse,
     isBootloaderFrame: isBootloaderFrame, classify: classify, logText: logText,
     directionOf: directionOf, decodePing: decodePing, decodePingHw: decodePingHw, decodeState: decodeState, decodeSession: decodeSession, decodeDiag: decodeDiag, decodeKeys: decodeKeys, decodePdo: decodePdo,
-    decodeChargerTest: decodeChargerTest, decodeChargerTestView: decodeChargerTestView, TEST_ALGORITHMS: TEST_ALGORITHMS, TEST_REASONS: TEST_REASONS, TEST_STAGES: TEST_STAGES, TEST_LEVELS: TEST_LEVELS,
+    decodeChargerTest: decodeChargerTest, decodeChargerTestView: decodeChargerTestView, decodeChargerTestNow: decodeChargerTestNow, TEST_ALGORITHMS: TEST_ALGORITHMS, TEST_REASONS: TEST_REASONS, TEST_STAGES: TEST_STAGES, TEST_LEVELS: TEST_LEVELS,
     TEST_STATES: TEST_STATES, CARD_STATES: CARD_STATES, TEST_UNITS: TEST_UNITS, TEST_UNIT_LABELS: TEST_UNIT_LABELS, TEST_DEFAULT_UNITS: TEST_DEFAULT_UNITS,
     CT_START_REQ: CT_START_REQ, CT_CANCEL_REQ: CT_CANCEL_REQ, CT_START_CONFIRM: CT_START_CONFIRM, CT_START_ALL_TESTS: CT_START_ALL_TESTS,
     CT_STOPPED: CT_STOPPED, CT_CABLE_KINDS: CT_CABLE_KINDS, CT_BUILTINS: CT_BUILTINS, CT_GUARD_REFUSAL: CT_GUARD_REFUSAL,

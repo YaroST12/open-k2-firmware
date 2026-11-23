@@ -1796,6 +1796,39 @@ def decode_charger_test_view(p):
             "message": message}
 
 
+CT_NOW_REQ, CT_NOW_FIXED, CT_NOW_NAME = 10, 5, 13   # 0x0B req [10] (kChargerTestNowReq / kChargerTestNowFixed / step_label::kInterludeCells)
+CT_INTERLUDES = ["row", "probe", "ceiling", "spec"]   # charger_test::Interlude; "row" = a plan row is running
+CT_SPEC_WHATS = ["none", "fixed", "pps", "avs", "hard-reset"]   # charger_test::SpecWhat
+
+
+def decode_charger_test_now(p):
+    """0x0B req [10]: what the Running header names right now. Inside an interlude (identity probe, SVOOC ceiling, the PD spec
+    stage) `current` is the next unit's first row, so this carries the screen's own words and, in the spec stage, its point."""
+    if not CT_NOW_FIXED <= len(p) <= CT_NOW_FIXED + CT_NOW_NAME:
+        raise FrameError("invalid charger-test now length")
+    interlude, what, pos, mv = struct.unpack_from("<BBBH", p, 0)
+    if interlude >= len(CT_INTERLUDES) or what >= len(CT_SPEC_WHATS):
+        raise FrameError("invalid charger-test now")
+    try:
+        name = p[CT_NOW_FIXED:].decode("ascii")
+    except UnicodeDecodeError:
+        raise FrameError("charger-test now name is not text") from None
+    if not name.isprintable():
+        raise FrameError("charger-test now name is not text")
+    point = {"what": CT_SPEC_WHATS[what], "pos": pos, "mv": mv} if interlude == 3 else None
+    return {"interlude": CT_INTERLUDES[interlude], "name": name or None, "spec_point": point}
+
+
+def read_charger_test_now(link):
+    """The now of the run in hand, or None on a firmware without it (BadArg / BadLength): the index is then all there is."""
+    try:
+        return decode_charger_test_now(link.call(CMD_CHARGER_TEST, bytes([CT_NOW_REQ])).payload)
+    except RemoteError as e:
+        if e.status not in (STATUS_BAD_LENGTH, STATUS_BAD_ARG):
+            raise
+        return None
+
+
 def parse_units(text):
     """'qc2,qc3,pd' -> [1, 2, 0] (charger_test::Unit values, in the order given); '' / 'default' = the firmware's default order."""
     names = [t.strip().lower() for t in text.split(",") if t.strip()]
@@ -2325,14 +2358,20 @@ def cmd_charger_test(link, a, sleep=time.sleep):
         return charger_test_cancel(link)
     if a.test_cmd == "view":   # the screens as data; firmware without the form answers BadArg / BadLength
         try:
-            return decode_charger_test_view(link.call(CMD_CHARGER_TEST, bytes([3])).payload)
+            v = decode_charger_test_view(link.call(CMD_CHARGER_TEST, bytes([3])).payload)
+            if (now := read_charger_test_now(link)) is not None:
+                v["now"] = now
+            return v
         except RemoteError as e:
             if e.status not in (STATUS_BAD_LENGTH, STATUS_BAD_ARG):
                 raise
             raise FrameError("this firmware has no charger-test view (older than the shell-parity build); "
                              "use charger-test status or a screenshot") from None
     if a.test_cmd == "status":
-        return _charger_test_export(link, a)
+        s = _charger_test_export(link, a)
+        if (now := read_charger_test_now(link)) is not None:   # `current` is the next row inside an interlude: the screen's words
+            s["now"] = now
+        return s
     # results / summary read the whole table over many pages: a revision change under the read (Busy from the firmware, or a page
     # that no longer matches) is a moving table, not a failure. Read again, a bounded number of times, then say so.
     for attempt in range(1, RESULTS_ATTEMPTS + 1):
@@ -5469,6 +5508,8 @@ def _render(name, r):
         pv, w = r["preview"], r["wait"]
         lines = [f"{r['stage']} (cursor {r['cursor']}/{r['rows']}{'' if r['on_screen'] else ', page not on screen'}): "
                  f"{r['message'] or '-'}"]
+        if r.get("now") and r["now"]["interlude"] != "row":
+            lines.append(f"  now: {r['now']['interlude']} stage, {r['now']['name']}")
         if r["confirming"]:
             lines.append(f"  START confirmation open, {r['confirm_left_ms']} ms left" + (" (announces the re-attach)" if r["confirm_reattach"] else ""))
         if w["total_ms"]:
@@ -5484,6 +5525,8 @@ def _render(name, r):
         return "\n".join(lines)
     if name == "charger-test":
         head =f"run {r['run_id']} rev {r['revision']}: {r['state']} ({r['reason']}); step {r['current']}/{r['total']}"
+        if r.get("now") and r["now"]["interlude"] != "row":
+            head += f" ({r['now']['interlude']} stage: {r['now']['name']})"
         notes = ["  PASS = negotiation / voltage hold, not power or revision conformance"]
         if r["selection"] is None:
             notes.append("  legacy schema: selection / source evidence unavailable; some entries omitted")

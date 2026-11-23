@@ -1137,7 +1137,7 @@ from RAM (`ChargerTestSession::view()`); the Review preview is refreshed there w
 uses, so it is live with no page on screen; `rows` and `message` come from the page (`ChargerTestPage::describe()`) and are 0 /
 empty while it is not on screen (`on_screen` clear). The Waiting clock (`wait_total_ms`, from `wait_total_ms()`, also the
 paint's bar) and `run_elapsed_s` read 0 outside Waiting / Running. Timers saturate at 65535. An older firmware answers
-BadArg (BadLength for a longer request), which the host reports as "no charger-test view". `k2_remote.py charger-test view`
+BadArg (BadLength for a longer request), which the host reports as "no charger-test view". A one-byte `req [10]` (the now) names what the Running header shows inside an interlude (identity probe, SVOOC ceiling, the PD spec stage), where `current` is the next unit's first row: `interlude u8, what u8, pos u8, mv u16`, then the name (0 to 13 characters, `step_label::interlude_label`); an older firmware answers BadArg and the host keeps the index. `k2_remote.py charger-test view`
 (`--json` gives `stage, cursor, rows, on_screen, confirming, confirm_left_ms, confirm_reattach, wait{elapsed_ms, total_ms,
 retry, paused}, run_elapsed_s, card_no, delta_n, delta_runs, preview{runnable, skipped, refusal, refusal_mv},
 sweep_points{pps, avs}, guard{topology, run_guard}, resume{pending, auto, gate_ready, held, behind_cable, rd}, self_supplied,

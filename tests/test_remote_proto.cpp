@@ -3170,6 +3170,45 @@ static void test_charger_test_wire() {
 // Shell parity batch 1 (red): the charger-test view, `0x0B req [3]`, one read-only reply of the wizard / run chrome the
 // screens show. The schema-2 reply is full (42 + 16 = 58), so this is a request form of its own; an old firmware answers
 // BadArg to it and the host tool reads that as "no view here".
+// 0x0B req [10]: the name the Running screen shows inside an interlude, which index() (the next unit's row) does not give.
+static void test_charger_test_now_wire() {
+    Fake f; Frame r;
+    CHECK_EQ(run(f, request(0x0B, 40, {10}), r), 1);   // a row is running: the interlude and the point are empty, no name
+    check_header(r, 0x0B, 40, Status::Ok, 5);
+    check_bytes(r, 6, {0, 0, 0, 0, 0});
+
+    using IL = k2::charger_test::Interlude;
+    using SW = k2::charger_test::SpecWhat;
+    f.test_results.interlude = uint8_t(IL::Spec); f.test_results.spec_pt = {SW::Pps, 2, 8020};
+    CHECK_EQ(run(f, request(0x0B, 41, {10}), r), 1);
+    check_header(r, 0x0B, 41, Status::Ok, 5 + 9);
+    check_bytes(r, 6, {3, uint8_t(SW::Pps), 2, 0x54, 0x1F});   // interlude what pos mv(8020)
+    const std::string_view pps = "PPS 8.02V";
+    for (size_t i = 0; i < pps.size(); ++i) CHECK_EQ(r[11 + i], uint8_t(pps[i]));
+
+    f.test_results.spec_pt = {SW::HardReset, 0, 0};
+    CHECK_EQ(run(f, request(0x0B, 42, {10}), r), 1);
+    check_header(r, 0x0B, 42, Status::Ok, 5 + 10);
+    CHECK_EQ(r[6 + 1], uint8_t(SW::HardReset));
+
+    f.test_results.interlude = uint8_t(IL::Ceiling); f.test_results.spec_pt = {};
+    CHECK_EQ(run(f, request(0x0B, 43, {10}), r), 1);
+    check_header(r, 0x0B, 43, Status::Ok, 5 + 13);
+    const std::string_view cap = "SVOOC ceiling";
+    for (size_t i = 0; i < cap.size(); ++i) CHECK_EQ(r[11 + i], uint8_t(cap[i]));
+
+    f.test_results.interlude = uint8_t(IL::Probe);
+    CHECK_EQ(run(f, request(0x0B, 44, {10}), r), 1);
+    check_header(r, 0x0B, 44, Status::Ok, 5 + 10);   // "Charger ID"
+
+    std::array<uint8_t, 8> small{};
+    CHECK_EQ(encode_charger_test_now(small, f.test_results), 0);   // nothing half-written when the name does not fit
+
+    // Only the one-byte form: the other forms of 0x0B keep their answers.
+    CHECK_EQ(run(f, request(0x0B, 45, {10, 0}), r), 1);
+    check_header(r, 0x0B, 45, Status::BadLength, 0);
+}
+
 static void test_charger_test_view_wire() {
     Fake f; Frame r;
     f.view.stage = 4; f.view.cursor = 2; f.view.rows = 1;
@@ -3952,7 +3991,7 @@ int main() {
     test_charger_avs_sweep();
     test_charger_level();
     test_charger_svooc_cap();
-    test_charger_test_wire(); test_charger_test_view_wire(); test_charger_test_spec_wire();
+    test_charger_test_wire(); test_charger_test_now_wire(); test_charger_test_view_wire(); test_charger_test_spec_wire();
 #if K2_SPECROWS
     test_charger_test_spec_rows_wire();
 #else
