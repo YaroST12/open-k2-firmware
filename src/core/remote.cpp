@@ -411,6 +411,7 @@ remote::SessionInfo Remote::session() {
     s.depth = u.depth;
     for (size_t i = 0; i < s.stack.size(); i++) s.stack[i] = u.stack[i];
     s.sub = u.sub; s.sel = u.sel; s.count = u.count; s.home_window = u.home_window; s.flags = u.flags;
+    s.pc_link = u.pc_link;
     return s;
 }
 

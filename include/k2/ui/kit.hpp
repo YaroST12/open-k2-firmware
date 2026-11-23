@@ -12,6 +12,7 @@
 #pragma once
 #include <cstdint>
 #include <string_view>
+#include "k2/core/pc_link.hpp"
 #include "k2/ui/gfx.hpp"
 #include "k2/ui/list_view.hpp"
 #include "k2/ui/ui_calc.hpp"
@@ -63,9 +64,10 @@ void fill_except(const Surface &s, Box r, const Box *holes, int n, uint16_t colo
 // The key rail's slot `slot` (0..3 along the edge) on its surface `s` (the whole slot): Up / Dn are drawn triangles, OK an
 // inverted cap with its verb (orange while a confirm is armed), BACK a dim word (red `Stop` while a run is in flight), on the
 // bg2 rail. `column` = a side rail (the text runs along it in `dir`); `down` = the key is held (the slot flashes in the cap
-// colour). Every pixel of the slot is written once.
+// colour). Every pixel of the slot is written once. `link` != None: the PC-link icon in the slot's outer corner (slot 0 or 3,
+// turned with the text), the label centred in what is left (label_zone_link).
 void draw_key_slot(const Surface &s, PanelEdge edge, TextDir dir, unsigned slot, const SlotLabel &lab, bool is_ok, bool down,
-                   bool active = true);
+                   bool active = true, pclink::State link = pclink::State::None);
 
 // ---- Opposite Telemetry Rail (Option B: 16 x 240 opposite edge) --------------------------------------------------------
 enum class OppTelemetry : uint8_t {
@@ -343,11 +345,6 @@ void kv_row(const Surface &s, const KvLayout &l, int16_t y, std::string_view key
 constexpr int16_t kAlertH = 36;
 constexpr int16_t kAlertStripeH = 6;   // the hazard stripe painted under the band (y + kAlertH .. + 5): the page's lines start below it
 void draw_alert_band(const Surface &s, int16_t y, bool error, std::string_view word);
-// ---- NoticeBand ----------------------------------------------------------------------------------------------------------
-// A slim full-width band that floats over the top of the content (the shell-access notice): kBar ground, the word centred in
-// S12, a 1 px kFocus rule under it. Info colours: it states, it never alarms. The caller owns the overlay bookkeeping.
-constexpr int16_t kNoticeH = 16;
-void draw_notice_band(const Surface &s, int16_t y, std::string_view word);
 // A warning triangle of `sz` px (the lab's glyph): solid `color`, exclamation mark in `ink`.
 void draw_warn_triangle(const Surface &s, int16_t x, int16_t y, int16_t sz, uint16_t color, uint16_t ink);
 

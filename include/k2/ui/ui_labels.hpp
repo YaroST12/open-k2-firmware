@@ -34,6 +34,22 @@ constexpr int label_origin(const LabelZone &z, unsigned chars) {
     return z.start + (z.len - static_cast<int>(chars * kLabelAdv)) / 2;
 }
 
+// The PC-link icon (kLinkIconPx square) sits kLinkBoxPx in from the screen-side end of the Back slot (slot 0 or 3 of the strip, wherever
+// Back is for the rotation); the label's zone gives up the kLinkBoxPx - kSlotPadPx it needs on that side.
+constexpr int kLinkBoxPx = 16, kLinkIconPx = 12;
+constexpr LabelZone label_zone_link(int slot_len, unsigned slot_index) {
+    LabelZone z = label_zone(slot_len, slot_index);
+    const int cut = kLinkBoxPx - kSlotPadPx;
+    if (slot_index == 0) z.start += cut;
+    z.len = z.len > cut ? z.len - cut : 0;
+    z.max_chars = z.len > 0 ? static_cast<unsigned>(z.len) / kLabelAdv : 0u;
+    return z;
+}
+// Along-slot offset of the icon box: the slot's outer end.
+constexpr int link_icon_origin(int slot_len, unsigned slot_index) {
+    return (slot_index == 0 ? 0 : slot_len - kLinkBoxPx) + (kLinkBoxPx - kLinkIconPx) / 2;
+}
+
 // Characters that fit the slot of one button, assuming the slot has a divider (the narrowest case).
 constexpr unsigned label_max_chars(Button b) {
     return label_zone(static_cast<int>(kSlotLenPx[static_cast<int>(b)]), 1).max_chars;

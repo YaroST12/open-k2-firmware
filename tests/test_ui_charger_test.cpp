@@ -6305,95 +6305,6 @@ static void test_remote_start_is_the_devices_start() {
         CHECK_EQ(ui.charger_test_busy(), false); CHECK_EQ(ui.charger_test_stage(), 4); nothing_armed_stub();
     }
 }
-// The "Shell access" band on a run the shell started: it holds through step changes and local presses, matches a clean paint all
-// along, and goes 5 s after the run ends. K2_DUMP: the Running page with the band in all four rotations.
-static void shell_run_fixture() {
-    fixture();
-    const unsigned fixed_mv[] = {5000, 9000, 12000, 15000, 20000};
-    g_stub.caps.num_pdos = 6;
-    for (unsigned i = 0; i < 5; ++i) g_stub.caps.pdos[i] = pd::decode_pdo(((fixed_mv[i] / 50) << 10) | 300);
-    g_stub.caps.pdos[5] = pd::decode_pdo(0xc0000000 | (110u << 17) | (33u << 8) | 100);
-}
-static void shell_run_start(Ui& ui, uint32_t& t) {
-    ui.shell_control(1250);
-    CHECK_EQ(ui.charger_test_start(true, 1300).result == RemoteStart::Result::Accepted, true);
-    for (t = 1300; t <= 3000 && !ui.charger_test_busy(); t += 20) ui.tick(t);
-    CHECK_EQ(ui.charger_test_busy(), true);
-    CHECK_EQ(ui.charger_test_stage(), kRunningStage);
-}
-static void test_shell_band_holds_for_the_shell_run() {
-    shell_run_fixture();
-    Ui ui; open(ui);
-    CHECK_EQ(ui.charger_test_set_units(kPdOnly), true);
-    uint32_t t;
-    shell_run_start(ui, t);
-    int steps_seen = 0, last_step = -1, checks = 0, pressed = 0;
-    const uint32_t t0 = t;
-    for (; ui.charger_test_busy() && t < 900000; t += 100) {
-        ui.tick(t);
-        CHECK_EQ(ui.shell_toast(), true);                       // past the 5 s hold, still the shell's run
-        const int step = g_stub.requests;                       // each PD request is a step change under the band
-        if (step != last_step) { last_step = step; ++steps_seen; }
-        if (t - t0 >= 6000 && pressed == 0) { press(ui, Button::Plus, t); ++pressed; ui.tick(t += 20); CHECK_EQ(ui.shell_toast(), true); }
-        if (t - t0 >= 8000 && checks < 3 && (t - t0) % 2000 < 100) {
-            ++checks;
-            for (int i = 0; i < 8; ++i) ui.tick(t += 20);
-            settle(ui, t);
-            CHECK_EQ(panel_diff_vs_forced_repaint(ui, t), 0u);
-        }
-    }
-    CHECK_EQ(t - t0 > 2 * k2::shell::kHoldMs, true);   // the run outlasted the plain hold
-    CHECK_EQ(steps_seen > 2, true);
-    CHECK_EQ(pressed, 1);
-    CHECK_EQ(ui.charger_test_busy(), false);
-    // The run is over: the band lingers 5 s from the end, then goes, leaving a clean page.
-    const uint32_t end = t;
-    for (; t < end + 4500; t += 100) { ui.tick(t); CHECK_EQ(ui.shell_toast(), true); }
-    for (; t < end + 7000; t += 100) ui.tick(t);
-    CHECK_EQ(ui.shell_toast(), false);
-    settle(ui, t);
-    CHECK_EQ(panel_diff_vs_forced_repaint(ui, t), 0u);
-}
-// What the band costs while the run goes on: the pixels of 10 s of Running ticks, with and without it (same run both times).
-static void test_shell_band_cost_on_running() {
-    unsigned px[2] = {0, 0}, raises = 0;
-    for (const bool band : {false, true}) {
-        shell_run_fixture();
-        Ui ui; open(ui);
-        CHECK_EQ(ui.charger_test_set_units(kPdOnly), true);
-        uint32_t t;
-        if (band) shell_run_start(ui, t);
-        else {
-            CHECK_EQ(ui.charger_test_start(true, 1300).result == RemoteStart::Result::Accepted, true);
-            for (t = 1300; t <= 3000 && !ui.charger_test_busy(); t += 20) ui.tick(t);
-        }
-        for (const uint32_t end = t + 3000; t < end; t += 100) ui.tick(t);
-        const unsigned p0 = g_lcd_pixels;
-        for (const uint32_t end = t + 10000; t < end; t += 100) ui.tick(t);
-        px[band] = g_lcd_pixels - p0;
-    }
-    raises = px[1] > px[0] ? (px[1] - px[0] + 1600) / 3300 : 0;
-    std::printf("running, 10 s: %u px without the band, %u px with it (about %u raises)\n", px[0], px[1], raises);
-    CHECK_EQ(raises <= 20u, true);   // at most the elapsed clock's once-a-second change plus the odd step line, never every tick (100)
-}
-static void test_shell_band_on_running_all_rotations() {
-    for (uint8_t rot = 0; rot < 4; ++rot) {
-        shell_run_fixture();
-        Ui ui; open(ui); ui.set_rotation(rot, 1050); settle(ui, 1050);
-        CHECK_EQ(ui.charger_test_set_units(kPdOnly), true);
-        uint32_t t;
-        shell_run_start(ui, t);
-        for (const uint32_t end = t + 9000; t < end; t += 100) ui.tick(t);
-        for (int i = 0; i < 8; ++i) ui.tick(t += 20);
-        settle(ui, t);
-        CHECK_EQ(ui.shell_toast(), true);
-        // Landscape keeps 3 stale pixels in the gauge (x57 y85) with or without the band; the band itself leaves none.
-        CHECK_EQ(panel_diff_vs_forced_repaint(ui, t) <= ((rot & 1) ? 3u : 0u), true);
-        char name[40];
-        std::snprintf(name, sizeof name, "shell_running_rot%u", unsigned(rot));
-        dump_screen(name);
-    }
-}
 // "Do not disturb the connection": a load behind the K2 (the inline latch) means nothing new transmits, whatever the level.
 static void inline_now() { g_stub.pm_online = true; g_stub.pm.vbus_mv = 3000; g_stub.pm.current_ma = 500; }   // a live sink on a part-way VBUS: the ticks latch the link
 static void test_inline_at_entry_touches_nothing() {
@@ -7149,7 +7060,7 @@ int main() {
     test_skip_results_and_deselection(); test_navigation_and_stop_controls();
     test_start_waits_for_the_caps();
     test_decisions_use_the_unaveraged_vbus();
-    test_remote_start_is_the_devices_start(); test_shell_band_holds_for_the_shell_run(); test_shell_band_cost_on_running(); test_shell_band_on_running_all_rotations(); test_inline_at_entry_touches_nothing(); test_start_is_refused_inline(); test_inline_latch_during_the_wait_restores_the_port();
+    test_remote_start_is_the_devices_start(); test_inline_at_entry_touches_nothing(); test_start_is_refused_inline(); test_inline_latch_during_the_wait_restores_the_port();
     test_vooc_family_results_read_watts_levels();
     test_vooc_family_silent_reads_no_answer();
     test_silent_vivo_reads_no_reply_not_a_fail();

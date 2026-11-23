@@ -940,115 +940,112 @@ void test_repaint_opaque() {
 }
 }  // namespace
 
-// The "Shell access" band over every walk page, in the four rotations: raised by a control command, kept through live ticks
-// and a page switch, gone 5 s later; each state equals a clean paint of the same state (no remnant, no hole under the band).
+// The PC-link icon in the Back slot's corner over every walk page, in the four rotations: none, power (aux rail up), host
+// (mounted) and shell (hourglass) each equal a clean paint of the same state, differ from each other, and leave None whole again.
 namespace {
-int shell_clean_diff(Ui &ui) {
+// strip_only: the Diag pages print live counters that move between two paints; only the key strip is compared there.
+int link_clean_diff(Ui &ui, unsigned rot, bool strip_only) {
     const std::vector<uint16_t> got(g_panel, g_panel + 240 * 240);
     k2::lcd::fill(kBg);
     ui.repaint(g_walk_t);
     while (ui.painting()) ui.tick(g_walk_t);
     int diff = 0;
-    for (size_t i = 0; i < got.size(); ++i) diff += got[i] != g_panel[i];
+    for (size_t i = 0; i < got.size(); ++i) {
+        const int x = int(i) % 240, y = int(i) / 240;
+        const bool strip = rot == 0 ? x >= 224 : rot == 1 ? y < 16 : rot == 2 ? x < 16 : y >= 224;
+        if (strip || !strip_only) diff += got[i] != g_panel[i];
+    }
     return diff;
 }
 
-int shell_band_ink() {   // rows 0..30 hold both the band fill and its focus rule somewhere (any rotation: the band hugs an edge)
-    int bar = 0, rule = 0;
-    for (int y = 0; y < 240; ++y)
-        for (int x = 0; x < 240; ++x) { bar += g_panel[y * 240 + x] == k2::kBar; rule += g_panel[y * 240 + x] == kFocus; }
-    return bar > 0 && rule > 0;
+// K2_DUMP=dir: the panel as it is now (tools/panel2png.py makes the renders).
+void link_dump(unsigned rot, const char *page, int st, const char *extra) {
+    const char *d = std::getenv("K2_DUMP");
+    if (!d) return;
+    static const char *kName[4] = {"none", "power", "host", "shell"};
+    char path[256];
+    std::snprintf(path, sizeof path, "%s/k2_pclink_%s%s_r%u_%s.panel", d, page, extra, rot, kName[st]);
+    if (FILE *f = std::fopen(path, "wb")) { std::fwrite(g_panel, 2, 240 * 240, f); std::fclose(f); }
 }
 
-struct ShellRect { int x0 = 999, x1 = -1, y0 = 999, y1 = -1, px = 0; };
-struct ShellRef { ShellRect rect; std::vector<uint16_t> px; const char *page; };
-// The band's rectangle: bbox of the pixels it changed, over the rows it changed nearly across (a live digit that settled
-// between the two paints differs in a few pixels of other rows).
-ShellRect shell_rect(const std::vector<uint16_t> &before, const uint16_t *after) {
-    int row[240] = {};
-    for (int i = 0; i < 240 * 240; ++i) row[i / 240] += before[i] != after[i];
-    ShellRect r;
-    for (int i = 0; i < 240 * 240; ++i) {
-        if (before[i] == after[i] || row[i / 240] < 100) continue;
-        r.x0 = std::min(r.x0, i % 240); r.x1 = std::max(r.x1, i % 240);
-        r.y0 = std::min(r.y0, i / 240); r.y1 = std::max(r.y1, i / 240);
-        ++r.px;
-    }
-    return r;
+// Sets the four link states in turn (aux rail, USB host, a shell control command).
+void link_drive(Ui &ui, int st) {
+    k2::adc::Reading rd; rd.aux_mv = st >= 1 ? 5000 : 0;
+    g_stub.adc = rd;
+    g_stub.usb_configured = st >= 2;
+    if (st == 3) ui.shell_control(g_walk_t += 10);
+    for (int k = 0; k < 12; ++k) ui.tick(g_walk_t += 120);
+    walk_settle(ui);
 }
 
-void test_shell_band() {
+void test_pc_link_icon() {
+    using k2::pclink::State;
     const auto old = g_stub;
     auto holder = std::make_unique<Ui>();
     Ui &ui = *holder;
     fill_seven();
     g_stub.pm_online = true; g_stub.pm.vbus_mv = 20030; g_stub.pm.current_ma = 1520; g_stub.pm.power_mw = 30456;
     g_stub.pm.flow = k2::power::Flow::Forward;
+    g_stub.adc.reset(); g_stub.usb_configured = false;
     ui.init(g_walk_t);
-    int bad = 0, shown_seen = 0;
+    int bad = 0;
+    // The ring view (the boot state, Back dim-grounded) and a held Back key: both grounds repaint whole in every state.
     for (uint8_t r = 0; r < 4; ++r) {
         ui.set_rotation(r, g_walk_t += 10);
         walk_settle(ui);
-        std::vector<ShellRef> refs;
+        if (!(ui.session().flags & k2::kSessionRingView)) { std::printf("  link ring r%u: not the ring view\n", unsigned(r)); ++bad; }
+        for (const bool held : {false, true}) {
+            ui.set_pressed(Button::Back, held, g_walk_t += 10);
+            for (int st = 0; st < 4; ++st) {
+                link_drive(ui, st);
+                const int d = link_clean_diff(ui, r, true);
+                if (d) { std::printf("  link ring r%u held %d st%d: %d px differ from a clean paint\n", unsigned(r), int(held), st, d); ++bad; }
+                link_dump(r, "ring", st, held ? "_held" : "");
+            }
+        }
+        ui.set_pressed(Button::Back, false, g_walk_t += 10);
+        link_drive(ui, 0);
+    }
+    for (uint8_t r = 0; r < 4; ++r) {
+        ui.set_rotation(r, g_walk_t += 10);
+        walk_settle(ui);
         for (unsigned b = 0; b < kWalkN; ++b) {
+            const bool live_page = std::strcmp(kWalkDests[b].name, "Diag") == 0 || std::strcmp(kWalkDests[b].name, "Diagnosis") == 0;
+            g_stub.adc.reset(); g_stub.usb_configured = false;
             walk_open(ui, b);
-            ui.shell_control(g_walk_t += 10);
+            for (int k = 0; k < 4; ++k) ui.tick(g_walk_t += 120);
             walk_settle(ui);
-            shown_seen += ui.shell_toast();
-            int d_show = shell_clean_diff(ui);
-            if (!ui.shell_toast() || !shell_band_ink()) { std::printf("  shell %s r%u: band not up\n", kWalkDests[b].name, unsigned(r)); ++bad; }
-            // live digits change under the band: every tick equals a clean paint
-            int d_live = 0;
-            for (int k = 0; k < 3; ++k) {
-                g_stub.pm.power_mw += 1370; g_stub.pm.vbus_mv += 3;
-                ui.shell_control(g_walk_t += 10);   // a command per tick keeps it held
-                walk_settle(ui);
-                d_live += shell_clean_diff(ui);
+            std::vector<uint16_t> shot[4];
+            const auto in_strip = [r](int i) {   // rotation 0..3 = Right, Top, Left, Bottom edge: a 16 px band
+                const int x = i % 240, y = i / 240;
+                return r == 0 ? x >= 224 : r == 1 ? y < 16 : r == 2 ? x < 16 : y >= 224;
+            };
+            const State want[4] = {State::None, State::Power, State::Host, State::Shell};
+            for (int st = 0; st < 4; ++st) {
+                link_drive(ui, st);   // 12 ticks: a page samples the USB rows on its own beat
+                if (ui.pc_link() != want[st]) {
+                    std::printf("  link %s r%u: state %d, want %d\n", kWalkDests[b].name, unsigned(r), int(ui.pc_link()), int(want[st]));
+                    ++bad;
+                }
+                shot[st].assign(g_panel, g_panel + 240 * 240);
+                const int d = link_clean_diff(ui, r, live_page);
+                if (std::strcmp(kWalkDests[b].name, "Home") == 0 || std::strcmp(kWalkDests[b].name, "Lines") == 0) link_dump(r, kWalkDests[b].name, st, "");
+                if (d) { std::printf("  link %s r%u st%d: %d px differ from a clean paint\n", kWalkDests[b].name, unsigned(r), st, d); ++bad; }
             }
-            // a page switch under the band
-            const unsigned b2 = (b + 1) % kWalkN;
-            const int d_switch = walk_switch_diff(ui, b2);
-            ui.shell_control(g_walk_t += 10);
+            // Each state paints something the one before did not, in the key strip (the page above it may move on its own).
+            for (int st = 1; st < 4; ++st) {
+                const int d = [&] { int n = 0; for (size_t i = 0; i < shot[st].size(); ++i) n += in_strip(int(i)) && shot[st][i] != shot[st - 1][i]; return n; }();
+                if (d < 12 || d > 16 * 70) { std::printf("  link %s r%u: state %d vs %d changed %d px\n", kWalkDests[b].name, unsigned(r), st, st - 1, d); ++bad; }
+            }
+            // Unplugged: the icon is gone and the strip is whole again.
+            { k2::adc::Reading rd; rd.aux_mv = 0; g_stub.adc = rd; }   // an unknown reading would keep the last verdict
+            g_stub.usb_configured = false;
+            for (int k = 0; k < 60; ++k) ui.tick(g_walk_t += 120);
             walk_settle(ui);
-            // 5 s without a command: the band goes and the page is whole again
-            for (int k = 0; k < 50; ++k) ui.tick(g_walk_t += 120);
-            while (ui.painting()) ui.tick(g_walk_t);
-            const int d_hide = shell_clean_diff(ui);
-            if (ui.shell_toast()) { std::printf("  shell %s r%u: band still up\n", kWalkDests[b].name, unsigned(r)); ++bad; }
-            // Absolute: the band changes one rectangle only, and that rectangle is pixel-identical on every page (the same
-            // band over any ground), so no glyph of the page survives inside it.
-            const std::vector<uint16_t> down(g_panel, g_panel + 240 * 240);
-            ui.shell_control(g_walk_t += 10);
-            walk_settle(ui);
-            const ShellRect cur = shell_rect(down, g_panel);   // the page now showing is b2
-            if (cur.y1 - cur.y0 < 11 || cur.y1 - cur.y0 > 17 || cur.x1 - cur.x0 < 150) {
-                ++bad;
-                std::printf("  shell %s r%u: band rect x %d..%d y %d..%d\n", kWalkDests[b2].name, unsigned(r), cur.x0, cur.x1, cur.y0, cur.y1);
-            }
-            bool known = false;   // a page with another content rectangle (a full-width page) gets its own reference
-            for (const ShellRef &q : refs) {
-                if (q.rect.x0 != cur.x0 || q.rect.x1 != cur.x1 || q.rect.y0 != cur.y0 || q.rect.y1 != cur.y1) continue;
-                known = true;
-                for (int y = cur.y0; y <= cur.y1; ++y)
-                    for (int x = cur.x0; x <= cur.x1; ++x)
-                        if (g_panel[y * 240 + x] != q.px[y * 240 + x]) {
-                            ++bad;
-                            std::printf("  shell %s r%u: band pixel differs from %s at %d,%d\n", kWalkDests[b2].name, unsigned(r), q.page, x, y);
-                            y = cur.y1; break;
-                        }
-            }
-            if (!known) refs.push_back({cur, std::vector<uint16_t>(g_panel, g_panel + 240 * 240), kWalkDests[b2].name});
-            for (int k = 0; k < 50; ++k) ui.tick(g_walk_t += 120);
-            while (ui.painting()) ui.tick(g_walk_t);
-            if (d_show || d_live || d_switch || d_hide) {
-                std::printf("  shell %s r%u: show %d live %d switch %d hide %d px differ from a clean paint\n", kWalkDests[b].name,
-                            unsigned(r), d_show, d_live, d_switch, d_hide);
-                ++bad;
-            }
+            if (ui.pc_link() != State::None || link_clean_diff(ui, r, live_page) != 0) { std::printf("  link %s r%u: not whole after unplug\n", kWalkDests[b].name, unsigned(r)); ++bad; }
         }
     }
     CHECK_EQ(bad, 0);
-    CHECK_EQ(shown_seen, 4 * static_cast<int>(kWalkN));
     ui.set_rotation(0, g_walk_t += 10);
     g_stub = old;
 }
@@ -1853,7 +1850,7 @@ int main() {
     CHECK_EQ(k2::g_missing_glyphs, 0u);
     test_switch_exact();
     test_repaint_opaque();
-    test_shell_band();
+    test_pc_link_icon();
     // Entering and leaving the ring updates both rails and muted RowList pixel-accurately against render_for_capture.
     {
         Ui ring_ui;

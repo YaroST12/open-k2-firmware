@@ -41,13 +41,14 @@
 //                                    the inline state, 0 while not inline) (54 bytes in all, see encode_state)
 //                         req [part(1)] part 0 = the reply above; any other payload: BadLength (more than
 //                                    one byte) or BadArg (unknown part), so a host can tell an old build
-//                                    part 1, 31 bytes: mah(i32) elapsed_s(u32) proto_kind(1) limit_ma(2)
+//                                    part 1, 32 bytes: mah(i32) elapsed_s(u32) proto_kind(1) limit_ma(2)
 //                                    max_mv(2) typec_ma(2) busy(1) fc_release(1) topology(1) wait_kind(1)
 //                                    pd_none_why(1) open_cc_mv(2, 0xFFFF = unknown) depth(1) stack(3, Menu
 //                                    indices, 0xFF = none) sub(1: bits 1:0 Connection tab, bit2 popup, bit3
 //                                    details) sel(1, 0xFF = none) count(1) home_window(1) flags(1: bit0 hold
 //                                    card, 1 rotation notice, 2 e-marker scanning, 3 listening, 4 quiet,
-//                                    5 identify: no device, 6 ring view, 7 shell toast: the "Shell access" band is up);
+//                                    5 identify: no device, 6 ring view) pc_link(1: 0 none, 1 power, 2 host,
+//                                    3 shell: the PC-link icon);
 //                                    enums: ui_types.hpp, home_model.hpp
 //                                    part 2, 29 bytes: fusb_id(1) pd_rx(4) usb_resets(4) usb_isrs(4)
 //                                    log_sent(4) log_dropped(4) poll_gap_max_ms(4) usb_configured(1)
@@ -1123,7 +1124,7 @@ constexpr uint8_t kLinkStale = 1 << 0, kLinkWaiting = 1 << 1, kLinkInline = 1 <<
                   kLinkNoPd = 1 << 7;       // the settled "PD present" verdict is None this attach (ROADMAP 2026-11-10, Row C)
 // GET_STATE part 1 (session): the chrome and the derived session facts the screens show (Ui::Session, field for field).
 // sel = 0xFF and count = 0 when the page has no list; open_cc_mv = 0xFFFF when there is no standby reading.
-constexpr size_t kSessionLen = 31;
+constexpr size_t kSessionLen = 32;
 struct SessionInfo {
     int32_t mah = 0;
     uint32_t elapsed_s = 0;
@@ -1134,6 +1135,7 @@ struct SessionInfo {
     uint8_t depth = 0;
     std::array<uint8_t, 3> stack{0xFF, 0xFF, 0xFF};
     uint8_t sub = 0, sel = 0xFF, count = 0, home_window = 0, flags = 0;
+    uint8_t pc_link = 0;   // pclink::State: none / power / host / shell
 };
 size_t encode_session(std::span<uint8_t> out, const SessionInfo&);
 // GET_STATE part 2 (diag): the counters the Diag page prints. poll_gap_max_ms is the longest main-loop gap since the last
@@ -1467,7 +1469,7 @@ constexpr bool wakes_screen(Cmd cmd, size_t payload_len) {
         return true;
     }
 }
-// Whether a request DRIVES the K2 rather than reads it: only those show the "Shell access" band (k2/core/shell_toast.hpp).
+// Whether a request DRIVES the K2 rather than reads it: only those make the PC-link icon show the hourglass (k2/core/shell_toast.hpp).
 // One row per command id (shell_rules_cover_all() is a static_assert, so a new id must pick a side). Ops rows: control when
 // the first payload byte is in `ops`, a request with no payload reads; ops of 32 and above count as control.
 enum class ShellKind : uint8_t { Read, Control, Ops, ChargerTest, Fc };
@@ -1498,6 +1500,7 @@ inline constexpr ShellRule kShellRules[] = {
     {Cmd::Power, ShellKind::Ops, kShellAnyOp}, {Cmd::ChargerCable, ShellKind::Ops, kShellAnyOp},
     {Cmd::ChargerSvoocCap, ShellKind::Ops, kShellAnyOp}, {Cmd::ChargerSweep, ShellKind::Ops, kShellAnyOp},
     {Cmd::ChargerAvsSweep, ShellKind::Ops, kShellAnyOp}, {Cmd::ChargerLevel, ShellKind::Ops, kShellAnyOp},
+    {Cmd::ChargerSweepDepth, ShellKind::Ops, kShellAnyOp},
     {Cmd::ChargerTest, ShellKind::ChargerTest}, {Cmd::Fc, ShellKind::Fc},
     {Cmd::CableR, ShellKind::Ops, shell_ops(kCableReset, kCablePassive, kCableKelvin)},
     {Cmd::IdentifyDevice, ShellKind::Ops, ~uint32_t{1}}, {Cmd::PdReread, ShellKind::Ops, ~uint32_t{1}},

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
-// The "Shell access" band: which remote requests drive the K2 (remote::shell_control, one table next to the dispatcher)
-// and when the band shows, holds and clears (k2/core/shell_toast.hpp). Pure logic; the paint is in test_ui_capture.
+// The PC-link icon's hourglass clock: which remote requests drive the K2 (remote::shell_control, one table next to the
+// dispatcher) and when it shows, holds and clears (k2/core/shell_toast.hpp). Pure logic; the paint is in test_ui_capture.
 #include "test_util.h"
 #include "k2/core/remote_proto.hpp"
 #include "k2/core/shell_toast.hpp"
@@ -161,8 +161,8 @@ static void test_charger_test_form() {
     }
 }
 
-// Timing. The band shows from the first control request, a run the shell started holds it, otherwise it clears 5 s after
-// the last control request; a local press is not an input here, so it can never clear a held band.
+// Timing. It shows from the first control request, a run the shell started holds it, otherwise it clears 5 s after
+// the last control request; a local press is not an input here, so it can never clear a held state.
 static void test_shows_on_first_control_and_clears_after_5s() {
     shell::Band b;
     CHECK_EQ(b.shown(), false);

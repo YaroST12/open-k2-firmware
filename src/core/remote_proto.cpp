@@ -259,6 +259,7 @@ size_t encode_session(std::span<uint8_t> out, const SessionInfo &s) {
     w.u8(s.depth);
     for (const uint8_t m : s.stack) w.u8(m);
     w.u8(s.sub); w.u8(s.sel); w.u8(s.count); w.u8(s.home_window); w.u8(s.flags);
+    w.u8(s.pc_link);
     return w.size();
 }
 

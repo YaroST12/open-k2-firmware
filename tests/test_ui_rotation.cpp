@@ -441,7 +441,8 @@ static void check_physical_slot_label(Ui &ui, uint8_t rotation, unsigned slot, B
     Surface s{box.x, box.y, box.w, box.h};
     // The reference: the kit's slot painter fed the label of `action` (the mapping under test is which action's label
     // lands in which physical slot; the painter itself is pinned in test_kit).
-    kit::draw_key_slot(s, orient.edge, panel_text_dir(orient.edge), slot, lab, action == Button::Ok, false, !ui.ring_view());
+    kit::draw_key_slot(s, orient.edge, panel_text_dir(orient.edge), slot, lab, action == Button::Ok, false, !ui.ring_view(),
+                       action == Button::Back ? ui.pc_link() : pclink::State::None);
     for (int y = box.y; y < box.y + box.h; ++y)
         CHECK_EQ(std::equal(g_panel + y * 240 + box.x, g_panel + y * 240 + box.x + box.w,
                             actual.begin() + y * 240 + box.x), true);

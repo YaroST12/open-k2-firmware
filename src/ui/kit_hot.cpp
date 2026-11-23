@@ -3,6 +3,7 @@
 // Hot-path UI kit painters placed in the zero-wait flash window (K2_HOT).
 #include "k2/ui/kit.hpp"
 #include "kit_internal.hpp"
+#include "ui_widgets_internal.hpp"
 #include "k2/core/hot.h"
 #include "k2/drivers/lcd.hpp"
 #include "k2/ui/text.hpp"
@@ -93,8 +94,37 @@ K2_HOT void fill_except(const Surface &s, Box r, const Box *holes, int n, uint16
     }
 }
 
+// The PC-link icon in its box, turned with the strip's text: one window write. Glass + Sand is the two-colour hourglass.
+K2_HOT static void paint_link_icon(const Surface &s, Box b, PanelEdge edge, TextDir dir, pclink::State st, uint16_t ground,
+                                   uint16_t ink, uint16_t sand) {
+    constexpr int kN = kIconSize;
+    if (!k2::detail::fits(s, b.x, b.y, kN, kN)) return;
+    int r0 = 0, r1 = kN;
+    if (!k2::detail::clip_box_to_band(s, b.x, b.y, kN, kN, r0, r1)) return;
+    const uint16_t *shape = kIconBits[static_cast<int>(st == pclink::State::Power ? Icon::Socket
+                                                       : st == pclink::State::Host ? Icon::Monitor : Icon::Glass)];
+    const uint16_t *fill = kIconBits[static_cast<int>(Icon::Sand)];
+    const bool column = panel_is_column(edge), ccw = dir == TextDir::Ccw;
+    uint16_t line[kN];
+    lcd::stream_begin(static_cast<uint16_t>(s.x + b.x), static_cast<uint16_t>(s.y + b.y + r0),
+                      static_cast<uint16_t>(s.x + b.x + kN - 1), static_cast<uint16_t>(s.y + b.y + r1 - 1));
+    for (int r = r0; r < r1; r++) {
+        for (int c = 0; c < kN; c++) {
+            int sx = c, sy = r;   // the upright mask pixel behind this box pixel
+            if (column) {
+                sx = ccw ? kN - 1 - r : r;
+                sy = ccw ? c : kN - 1 - c;
+            }
+            const int sh = kN - 1 - sx;
+            line[c] = (st == pclink::State::Shell && (fill[sy] >> sh & 1)) ? sand : (shape[sy] >> sh & 1) ? ink : ground;
+        }
+        lcd::stream_pixels({line, static_cast<std::size_t>(kN)});
+    }
+    lcd::stream_end();
+}
+
 K2_HOT void draw_key_slot(const Surface &s, PanelEdge edge, TextDir dir, unsigned slot, const SlotLabel &lab, bool is_ok, bool down,
-                         bool active) {
+                         bool active, pclink::State link) {
     if (s.w <= 0 || s.h <= 0) return;
     {
         uint16_t by = static_cast<uint16_t>(s.y), bh = static_cast<uint16_t>(s.h);
@@ -124,7 +154,8 @@ K2_HOT void draw_key_slot(const Surface &s, PanelEdge edge, TextDir dir, unsigne
     }
     char text[24];
     const int along = column ? body.h : body.w;
-    const LabelZone zone = label_zone(along, slot);
+    const bool corner = link != pclink::State::None && (slot == 0 || slot == 3);
+    const LabelZone zone = corner ? label_zone_link(along, slot) : label_zone(along, slot);
     const std::string_view shrt = lab.shrt;
     const bool armed = is_ok && shrt == "Confirm";
     const int tri = !down && (shrt == kUp || shrt == kDn) ? (shrt == kUp ? 1 : -1) : 0;
@@ -137,7 +168,7 @@ K2_HOT void draw_key_slot(const Surface &s, PanelEdge edge, TextDir dir, unsigne
     const uint16_t idle_fg = active ? kOnFocusDim : kInk2;
     const uint16_t fg = down ? kOnCap : cap ? (active ? (armed ? kSpotInk : kOnCap) : kAccent)
                       : lab.dim ? kInk3 : shrt == "Stop" ? kError : idle_fg;
-    Box holes[2];
+    Box holes[3];
     int nh = 0;
     int16_t tx = 0, ty = 0;
     const int16_t fh = static_cast<int16_t>(kLabelFont.height);
@@ -163,7 +194,19 @@ K2_HOT void draw_key_slot(const Surface &s, PanelEdge edge, TextDir dir, unsigne
                          : Box{static_cast<int16_t>(cx - 4), static_cast<int16_t>(body.y + (body.h - 5) / 2), 9, 5};
         holes[nh++] = tri_box;
     }
+    Box link_box{};
+    if (corner) {
+        const int16_t oa = static_cast<int16_t>(link_icon_origin(along, slot));
+        const int16_t ac = static_cast<int16_t>((column ? body.x + (body.w - kLinkIconPx) / 2 : body.y + (body.h - kLinkIconPx) / 2));
+        link_box = column ? Box{ac, oa, kLinkIconPx, kLinkIconPx} : Box{oa, ac, kLinkIconPx, kLinkIconPx};
+        holes[nh++] = link_box;
+    }
     fill_except(s, body, holes, nh, ground);
+    if (corner) {
+        const bool dim = link == pclink::State::Power;   // power only: quiet, like the idle labels
+        const uint16_t ink = down ? kOnCap : active ? (dim ? kOnFocusDim : kOnFocus) : (dim ? kInk3 : kInk);
+        paint_link_icon(s, link_box, edge, dir, link, ground, ink, kAccent);
+    }
     if (cap) {
         const Box t{tx, ty, column ? fh : tw, column ? tw : fh};
         const Box &cb = holes[0];

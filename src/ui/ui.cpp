@@ -313,17 +313,6 @@ void Ui::draw_rotation_notice(uint32_t now_ms) {
     rotation_notice_drawn_ = true;
 }
 
-// The shell-access band floats over the top of the content (a kit notice band). Slot 1 of the paint watch: pump_paint raises it
-// again only after a page paint crossed it, so a live tick that stays below the band costs nothing.
-void Ui::draw_shell_band() {
-    constexpr char kWord[] = "Shell access";
-    static_assert(fits_px(6, kWord, 208 - 8));   // S12, the narrowest content
-    paint::meter.watch_record(1);
-    kit::draw_notice_band(ctx_.content, 0, kWord);
-    paint::meter.watch_set();
-    shell_drawn_ = true;
-}
-
 void Ui::draw_toast_overlay(uint32_t now_ms) {
     if (ctx_.toast.erase_pending) {
         gfx_fill(ctx_.content, 0, static_cast<int16_t>(ctx_.content.h - kToastH - kToastMarginBottom),
@@ -587,7 +576,8 @@ Ui::Session Ui::session() {
     s.flags = static_cast<uint8_t>((hold_shown_ ? kSessionHoldCard : 0) | (rotation_notice_until_ ? kSessionRotationNotice : 0) |
                                    (ctx_.em_scanning ? kSessionEmScanning : 0) | (ctx_.em_listen_until ? kSessionEmListening : 0) |
                                    (ctx_.em_quiet ? kSessionEmQuiet : 0) | (ctx_.id_no_device ? kSessionIdNoDevice : 0) |
-                                   (ring_view_ ? kSessionRingView : 0) | (shell_.shown() ? kSessionShellToast : 0));
+                                   (ring_view_ ? kSessionRingView : 0));
+    s.pc_link = static_cast<uint8_t>(pc_state_);
     return s;
 }
 
@@ -640,8 +630,6 @@ void Ui::reset_paint_pipeline() {
     // same live page and must keep ctx_.rows's ctx_ binding and scroll offset intact.
     ctx_.rows.invalidate();
     footer_error_clear();   // a page switch or full clear: the incoming page's footer says again whether an error is showing
-    shell_drawn_ = false;   // the band is repainted at the end of the next pass
-    shell_clear_pending_ = false;
     paint_pending_ = false;
     paint_blank_ = false;
     clear_pending_ = false;
@@ -681,9 +669,7 @@ bool Ui::clear_for_incoming(uint32_t now_ms, PageIf &outgoing, bool incoming_opa
         ;
     const uint32_t content_px = static_cast<uint32_t>(ctx_.content.w) * static_cast<uint32_t>(ctx_.content.h);
     const int16_t next_w = uses_opp_rail() ? kTwinContentW : 224;
-    const bool band_up = shell_drawn_;
     reset_paint_pipeline();
-    shell_clear_pending_ = band_up && !incoming_opaque;   // the outgoing replay below does not know the band
     toast_clear_pending_ = clear_toast;
     ctx_.toast.clear();
     ctx_.toast.erase_pending = false;
@@ -1724,7 +1710,6 @@ bool Ui::capture_needs_scratch() const {
 void Ui::capture_state_begin() {
     capture_state_ = true;
     capture_toast_visible_ = ctx_.toast.drawn;
-    capture_shell_visible_ = shell_drawn_;
     capture_paint_critical_ = fctrig::paint_critical();
 }
 
@@ -1738,8 +1723,6 @@ void Ui::render_for_capture(uint32_t now_ms) {
     const Toast saved_toast = ctx_.toast;
     const bool toast_was_visible = capture_state_ ? capture_toast_visible_ : ctx_.toast.drawn;
     const bool paint_critical = capture_state_ ? capture_paint_critical_ : fctrig::paint_critical();
-    const bool saved_shell_drawn = shell_drawn_;
-    const bool shell_visible = capture_state_ ? capture_shell_visible_ : shell_.shown() && !paint_critical;
     for (int i = 0; i < 4; i++) { saved_slot[i] = slot_sig_[i]; saved_opp[i] = opp_sig_[i]; }
     ctx_.budget = nullptr;   // captures always render the complete frame atomically
     ctx_.rows.set_budget(nullptr);
@@ -1758,7 +1741,6 @@ void Ui::render_for_capture(uint32_t now_ms) {
     ctx_.rows.set_muted(ring_view_);
     current().update(now_ms);
     ctx_.blank = false;
-    if (shell_visible) draw_shell_band();   // under the battery dot, like the live pass
     draw_release_notice();
     if (hold_shown_) { hold_shown_ = false; draw_hold_card(hold_ms_); }   // the card is part of the screen
     if (!hold_shown_) {
@@ -1768,7 +1750,6 @@ void Ui::render_for_capture(uint32_t now_ms) {
     }
     for (int i = 0; i < 4; i++) { slot_sig_[i] = saved_slot[i]; opp_sig_[i] = saved_opp[i]; }
     ctx_.toast = saved_toast;
-    shell_drawn_ = saved_shell_drawn;
     ctx_.budget = saved_budget;
     ctx_.rows.set_budget(saved_budget);
 }

@@ -35,7 +35,6 @@ inline constexpr uint8_t kSessionEmListening = 1 << 3;    // the passive listen 
 inline constexpr uint8_t kSessionEmQuiet = 1 << 4;        // the last listen window heard no cable reply
 inline constexpr uint8_t kSessionIdNoDevice = 1 << 5;     // Identify was refused: nothing on CC
 inline constexpr uint8_t kSessionRingView = 1 << 6;       // the page ring has the keys (+/- move, OK enters); clear = an entered page
-inline constexpr uint8_t kSessionShellToast = 1 << 7;     // the "Shell access" band is up (a control command arrived, or the shell's run is on)
 // Ui::Session::sub: the Connection page's tab (bits 1:0, conn::Tab), its pop-up (bit 2) and its details page (bit 3).
 inline constexpr uint8_t kSubTabMask = 3, kSubPopup = 1 << 2, kSubDetails = 1 << 3;
 
