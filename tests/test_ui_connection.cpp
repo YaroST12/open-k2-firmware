@@ -850,8 +850,21 @@ static void test_auto_wake_gives_up_after_three_tries_without_an_attach() {
         t += AutoWake::kRetryGapMs + 1000;
     }
     CHECK_EQ(fires, int(AutoWake::kMaxTries));            // a charger that never wakes is not cycled forever
-    w.attached();
-    CHECK_EQ(w.step(true, true, false, t), true);         // an attach showed the wakes work: the cap starts over
+}
+
+// The wake's own attach is released ~30 s after its read and the bank may doze again: that dark is not a new episode, or the K2
+// would hold a bank awake for ever. A wake that worked is done for this page open; Refresh and a reopened page still go.
+static void test_auto_wake_a_wake_that_worked_is_not_repeated() {
+    AutoWake w;
+    CHECK_EQ(w.step(true, true, false, 1000), true);
+    w.attached();                                         // the rail came up: the wake worked
+    CHECK_EQ(w.step(false, true, false, 5000), false);
+    for (std::uint32_t t = 60000; t < 400000; t += 1000) CHECK_EQ(w.step(true, true, false, t), false);   // dark again, long after the gap
+    w.reset();                                            // the page is opened again
+    CHECK_EQ(w.step(true, true, false, 500000), true);
+    AutoWake plug;
+    plug.attached();                                      // a charger that was just plugged in awake: nothing was woken, nothing is latched
+    CHECK_EQ(plug.step(true, true, false, 1000), true);
 }
 
 static void test_auto_wake_page_reopen_and_manual_refresh() {
@@ -896,6 +909,7 @@ int main() {
     test_auto_wake_own_failed_cycle_is_swallowed();
     test_auto_wake_new_episode_after_the_gap();
     test_auto_wake_gives_up_after_three_tries_without_an_attach();
+    test_auto_wake_a_wake_that_worked_is_not_repeated();
     test_auto_wake_page_reopen_and_manual_refresh();
     test_default_tab();
     test_tab_empty();

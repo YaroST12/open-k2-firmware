@@ -1044,11 +1044,15 @@ static void test_auto_wake_once_on_the_charger_overview() {
     t = run_ticks(ui, t, 100);                                  // 10 s of a charger that stays silent: no second try
     CHECK_EQ(wake_asks(), 1);
     t = run_ticks(ui, t, 60);
-    g_stub.pm.vbus_mv = 5000;                                   // a replug after the retry gap is a new episode
+    g_stub.pm.vbus_mv = 5000;                                   // the rail came up after the try: the wake worked ...
     t = run_ticks(ui, t, 10);
-    g_stub.pm.vbus_mv = 0;
-    t = run_ticks(ui, t, 300);
-    CHECK_EQ(wake_asks(), 2);
+    g_stub.pm.vbus_mv = 0;                                      // ... and the woken attach is released ~30 s later, the port dark again
+    t = run_ticks(ui, t, 600);
+    CHECK_EQ(wake_asks(), 1);                                   // no wake / read / release loop: the page is done until reopened
+    ui.goto_page(uint8_t(Page::Home), t += 100);
+    t = open_overview(ui, t += 100);
+    t = run_ticks(ui, t, 10);
+    CHECK_EQ(wake_asks(), 2);                                   // a reopened page (or Refresh) tries again
 }
 
 // A page opened on a sleeping port waits out the 600 ms sense hold, then says what it does.
