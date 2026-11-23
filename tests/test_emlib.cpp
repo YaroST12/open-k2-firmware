@@ -26,7 +26,7 @@ struct Vol {
 };
 
 emrec::Record cable(unsigned n, std::uint32_t cab = 0x00000C43) {
-    const std::array<std::uint32_t, 5> v = {0xFF00A041, 0x18002B1Du + 0, 0, 0x40510000u + n, cab};
+    const std::array<std::uint32_t, 5> v = {0xFF00A041, 0x18007FF0u + 0, 0, 0x40510000u + n, cab};
     return emrec::make(v, 2, "x");
 }
 
@@ -56,12 +56,12 @@ static void test_name() {
     CHECK_STR(name(0x2B01, 0).c_str(), "CUKTECH 60W");
     CHECK_STR(name(0x05AC, 0, 2).c_str(), "Apple 60W-2");
     CHECK_STR(name(0x05AC, 0, 13).c_str(), "Apple 60W-13");
-    // an unlisted VID keeps the hex form with the speed, so two unknown makers still differ
-    CHECK_STR(name(0x2B1D, 1 | (1u << 5)).c_str(), "0x2B1D-USB3.2G1-60W");
-    CHECK_STR(name(0x2B1D, 4 | (2u << 5) | (3u << 9)).c_str(), "0x2B1D-USB4G4-240W");
-    CHECK_STR(name(0x2B1D, 0, 2).c_str(), "0x2B1D-USB2-60W-2");
+    // an unlisted VID (0x7FF0: not on the USB-IF list) keeps the hex form with the speed, so two unknown makers still differ
+    CHECK_STR(name(0x7FF0, 1 | (1u << 5)).c_str(), "0x7FF0-USB3.2G1-60W");
+    CHECK_STR(name(0x7FF0, 4 | (2u << 5) | (3u << 9)).c_str(), "0x7FF0-USB4G4-240W");
+    CHECK_STR(name(0x7FF0, 0, 2).c_str(), "0x7FF0-USB2-60W-2");
     // every produced name is a name the user could have typed (so the rename and duplicate rules apply to it)
-    for (std::uint32_t vid : {0x05ACu, 0x291Au, 0x2BD5u, 0x2B1Du})
+    for (std::uint32_t vid : {0x05ACu, 0x291Au, 0x2BD5u, 0x7FF0u})
         for (unsigned ord : {1u, 2u, 9999u})
             CHECK_EQ(emlib::name_valid(name(vid, 2 | (2u << 5) | (3u << 9), ord)) ? 1 : 0, 1);
     const std::string longest = name(0x2BD5, 2 | (2u << 5) | (3u << 9), 9999);   // CblMatters, the longest name
@@ -135,8 +135,8 @@ static void test_save_list_get() {
     CHECK_EQ(r.existed ? 1 : 0, 0);
     emlib::Entry e;
     CHECK_EQ(l.get(1, e) ? 1 : 0, 1);
-    CHECK_STR(e.name.data(), "0x2B1D-USB4G3-100W");
-    CHECK_STR(reinterpret_cast<const char*>(e.rec.data()), "0x2B1D-USB4G3-100W");
+    CHECK_STR(e.name.data(), "0x7FF0-USB4G3-100W");
+    CHECK_STR(reinterpret_cast<const char*>(e.rec.data()), "0x7FF0-USB4G3-100W");
     CHECK_EQ(emrec::valid(e.rec) ? 1 : 0, 1);
     CHECK_EQ(emrec::vdo(e.rec, 3), 0x40510001u);
     CHECK_EQ(l.save(cable(2)).seq, 2);
@@ -275,7 +275,7 @@ static void test_quirks_roundtrip() {
     CHECK_EQ(sz, emlib::kFileSize + emk_quirk::block_size(1));
     emlib::Entry e;
     CHECK_EQ(l.get(1, e) ? 1 : 0, 1);
-    CHECK_STR(e.name.data(), "0x2B1D-USB4G3-100W");
+    CHECK_STR(e.name.data(), "0x7FF0-USB4G3-100W");
     CHECK_EQ(emrec::vdo(e.rec, 3), 0x40510001u);
     emk_quirk::Quirks back;
     CHECK_EQ(l.get_quirks(1, back) ? 1 : 0, 1);
@@ -302,7 +302,7 @@ static void test_quirks_dedup_rename_migration() {
     CHECK_EQ(with.existed ? 1 : 0, 0);
     emlib::Entry e;
     CHECK_EQ(l.get(2, e) ? 1 : 0, 1);
-    CHECK_STR(e.name.data(), "0x2B1D-USB4G3-100W-2");
+    CHECK_STR(e.name.data(), "0x7FF0-USB4G3-100W-2");
     // the same pair again: nothing written
     v.d.reset_counters();
     const emlib::Result again = l.save(cable(1), q);
@@ -390,7 +390,7 @@ static void test_power_loss() {
             if (scenario == 2) {
                 emlib::Entry e;
                 CHECK_EQ(after.get(before[5], e) ? 1 : 0, 1);
-                CHECK_EQ(std::strcmp(e.name.data(), "renamed") == 0 || std::strncmp(e.name.data(), "0x2B1D", 6) == 0, 1);
+                CHECK_EQ(std::strcmp(e.name.data(), "renamed") == 0 || std::strncmp(e.name.data(), "0x7FF0", 6) == 0, 1);
                 CHECK_EQ(now.size(), before.size());
             }
             CHECK_EQ(now.size() <= before.size() + 1, 1);
