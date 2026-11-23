@@ -293,6 +293,7 @@ const pd::PpsAnswer& pps_answer() {
 }
 std::uint32_t caps_count() { return g_stub.caps.rx_count; }
 bool legacy_only_active() { return g_stub.legacy_active; }
+pd::BusyWhy busy_why() { return g_stub.legacy_active ? pd::BusyWhy::Legacy : pd::BusyWhy::None; }
 bool identify_start(bool confirmed) {
     if (g_stub.inl) return false;   // the real driver refuses inline even with a confirm
     g_stub.identifies++; g_stub.last_confirmed = confirmed; return g_stub.identify_ok;
@@ -365,7 +366,7 @@ bool active() { return false; }
 namespace survey {
 // The page's Refresh starts the survey and the Connection page reads its table; the real runner is core/survey.cpp.
 void on_refresh(rescan::Result r, bool) { g_stub.survey_refreshes++; g_stub.survey_last = r; }
-void poll(bool) {}
+void poll(bool, pd::SvWhy) {}
 const pd::Survey& state() { return g_stub.survey; }
 bool running() { return g_stub.survey.running(); }
 }  // namespace survey
