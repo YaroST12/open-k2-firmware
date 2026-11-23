@@ -345,6 +345,13 @@ int draw_chip(const Surface &s, int16_t x, int16_t y, std::string_view text, uin
     return w;
 }
 
+void erase_chips(const Surface &s, int16_t x, int16_t y, int16_t w, uint16_t ground) {
+    gfx_fill(s, x, y, w, kChipH, ground);
+    if (!ContentViewport::scaled() || w <= 0) return;
+    const Rect m = ContentViewport::mapped_rect({static_cast<int16_t>(s.x + x), static_cast<int16_t>(s.y + y), w, kChipH});
+    if (m.h < kChipH) gfx_fill_panel({m.x, static_cast<int16_t>(m.y + m.h), m.w, static_cast<int16_t>(kChipH - m.h)}, ground);
+}
+
 int draw_chip_frame(const Surface &s, int16_t x, int16_t y, std::string_view text, uint16_t frame, uint16_t ink, uint16_t bg) {
     const int16_t w = static_cast<int16_t>(badge_text_bounds(kLabelFont, text).w + 8);
     draw_pill_box(s, x, y, w, kChipH, text, ink, bg, frame, bg);

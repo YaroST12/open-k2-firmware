@@ -1659,6 +1659,24 @@ static void test_chip_native_in_every_rotation() {
         }
 }
 
+// A chip row that shrinks (the Lines verdict) wipes the old tail at chip height: under the squeeze the native chip hangs below
+// its mapped rows, and those rows must go too.
+static void test_chip_tail_erase() {
+    const Surface s{0, 0, 208, 240};
+    constexpr uint16_t kFill = 0x07E0, kShort = 0x001F, kInkC = 0xFFFF;
+    for (int16_t y = 120; y < 136; ++y) {   // rotations 1 and 3 share the landscape map
+            ContentViewport viewport({0, 16, 240, 208}, 208, 240);
+            std::fill(std::begin(g_panel), std::end(g_panel), kBg);
+            kit::draw_chip(s, 20, y, "PD3.x 100W", kFill, kInkC);
+            const int w = kit::draw_chip(s, 20, y, "PD", kShort, kInkC);
+            kit::erase_chips(s, static_cast<int16_t>(20 + w), y, static_cast<int16_t>(208 - 20 - w), kBg);
+            int left = 0;
+            for (int i = 0; i < 240 * 240; i++) left += g_panel[i] == kFill;
+            if (left) std::printf("  y %d: %d px of the long chip left\n", y, left);
+            CHECK_EQ(left, 0);
+    }
+}
+
 // The Diagnosis stamp's fail cell (a label-less 20 x 20 VerdictCell) draws the icon table's 12 px cross, native and whole, in
 // every rotation.
 static void test_stamp_cross_is_the_icon() {
@@ -1694,6 +1712,7 @@ static void test_stamp_cross_is_the_icon() {
 }
 
 int main() {
+    test_chip_tail_erase();
     test_leader_dots_native();
     test_field_counts_glyphs();
     test_stamp_cross_is_the_icon();

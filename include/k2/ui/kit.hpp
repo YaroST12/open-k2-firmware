@@ -302,6 +302,9 @@ int draw_chip(const Surface &s, int16_t x, int16_t y, std::string_view text, uin
               uint16_t ground = kBg);
 // The outline chip (PPS, OFF, no EPR): a 1 px `frame` round the word on `bg`, the same box as draw_chip. Returns the width.
 int draw_chip_frame(const Surface &s, int16_t x, int16_t y, std::string_view text, uint16_t frame, uint16_t ink, uint16_t bg);
+// Wipes w px of a chip row from x to `ground` (the tail a shorter row leaves), with the rows a native chip hangs below its
+// mapped box under a squeeze.
+void erase_chips(const Surface &s, int16_t x, int16_t y, int16_t w, uint16_t ground);
 constexpr int chip_w(std::string_view text) { return static_cast<int>(text.size()) * 6 + 8; }   // font 12: 6 px a cell
 // A 1 px dashed rule (the perforation under an identity block, above a place's actions): 4 px of `ink`, 2 px of `bg`, from x0
 // to x1 (exclusive), every pixel once.

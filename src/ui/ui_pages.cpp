@@ -1021,7 +1021,7 @@ bool LinesPage::paint_verdict(const std::optional<adc::Reading> &r, uint32_t now
         const ChipStyle ts = tone_chip(v.tone);
         const int16_t y = static_cast<int16_t>(kVerdictY + 2);
         auto draw_next = [&](int16_t x, std::string_view text, uint16_t fill, uint16_t ink) {
-            gfx_fill(c, x, y, 6, kit::kChipH, kBg);
+            kit::erase_chips(c, x, y, 6, kBg);
             return static_cast<int16_t>(x + 6 + kit::draw_chip(c, static_cast<int16_t>(x + 6), y, text, fill, ink));
         };
         int16_t x = draw_next(0, v.main.view(), ts.fill, ts.ink);
@@ -1030,7 +1030,7 @@ bool LinesPage::paint_verdict(const std::optional<adc::Reading> &r, uint32_t now
             const bool volts = ex.back() == 'V';
             x = draw_next(x, ex, volts ? kSpotVolt : kBg2, volts ? kSpotInk : kInk);
         }
-        if (x < c.w) gfx_fill(c, x, y, static_cast<int16_t>(c.w - x), kit::kChipH, kBg);   // a shorter row must not leave the old tail
+        if (x < c.w) kit::erase_chips(c, x, y, static_cast<int16_t>(c.w - x), kBg);   // a shorter row must not leave the old tail
         painted_ = true;
     }
     if (!pg::put_field(pv_[0], bg, rp.view(), r ? kText : kFaint)) return false;
