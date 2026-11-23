@@ -1258,7 +1258,7 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
 - **Sweep depth** (k2/sweep-depth, 2026-11-23; host tests and renders only: runs/sweep-depth/png). Settings row `Sweep depth` (200 mV default,
   100 mV, Phone, 20 mV) sets the charger-test PPS/AVS deep sweeps' step: Phone is 100 mV plus 20 mV points in 8.0-11.0 V and
   14.0-19.0 V (PPS only, once per APDO on the one with the most current); 20 mV every PPS quantum; AVS stays 100 mV; the APDO top is always
-  a point. A Fold or Break is stepped back from once (100 then 20 mV points). A steady point closes after 100 ms (was a fixed 580 ms):
+  a point. A Fold or Break is stepped back from once (100 then 20 mV points). A steady point closes after 100 ms (was a fixed 500 ms):
   about 520 -> 120 ms a point, 180 ms with an 80 ms slew; kWalkSteadyTimeoutMs stays the ceiling. Review and the Running header name the
   step; the Deep block of the card carries a 2-bit step tail (old cards decode as 100 mV; `sweep_depth` in report_card.py and deep.js);
   the journal meta byte carries it; remote `charger-sweep-depth` (0x5D) and `ct_start.py --sweep-depth 100|200|phone|20`. Commits 
