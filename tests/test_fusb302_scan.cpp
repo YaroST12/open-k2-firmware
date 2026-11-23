@@ -6105,9 +6105,9 @@ void test_pd_limiter_waits_through_a_replug_and_acts_on_a_far_request() {
     end_inline_case();
 }
 
-// Hardware test 2 (2026-11-23): the phone was already in a contract when the K2 joined and no traffic has crossed since, so the
-// sniffer holds no Request and the seed is empty; arming waits for traffic that does not come until a replug.
-// After a link reset the picker arms unseeded: the old contract is gone from the wire, so a seeded arm would act on stale state.
+// Hardware test 2 (2026-11-23): arming with the phone already in a contract. With no frame heard the seed is empty and the
+// limiter waits; a Request heard on a join with no list this attach must not seed from the previous attach's list (the sniffer
+// forgets the old link on a detach). After a link reset the picker arms unseeded: the sniffer still holds the old contract.
 void test_pd_limiter_arm_without_a_heard_list_and_unseeded() {
     pd::LimFacts f;
     attach_inline();
@@ -6116,6 +6116,24 @@ void test_pd_limiter_arm_without_a_heard_list_and_unseeded() {
     CHECK_EQ(int(fusb302::limit_arm(10000, f)), int(pd::LimRefusal::None));
     service_ms(300);
     CHECK_EQ(tx_headers().size(), 0u);                                       // nothing to clamp: the K2 stays quiet
+    CHECK_EQ(int(fusb302::limit_status().state), int(pd::LimState::Armed));
+    fusb302::limit_disarm();
+    service_ms(3);
+    // another attach: a full contract is sniffed, the charger goes, the next one is joined mid-contract (a Request, no list heard)
+    push_frame(0xE0, hdr(1, 2, true, 0), {0x0A01912Cu, 0x0004B12Cu});
+    push_frame(0xE0, hdr(2, 1, false, 0), {0x2204B12Cu});
+    push_frame(0xE0, hdr(3, 0, true, 1), {});
+    push_frame(0xE0, hdr(6, 0, true, 2), {});
+    service_ms(30);
+    end_inline_case();
+    attach_inline();
+    g_log.clear(); g_usb.clear();
+    push_frame(0xE0, hdr(2, 1, false, 0), {0x2204B12Cu});
+    push_frame(0xE0, hdr(6, 0, true, 2), {});
+    service_ms(5);
+    CHECK_EQ(int(fusb302::limit_arm(10000, f)), int(pd::LimRefusal::None));
+    service_ms(300);
+    CHECK_EQ(tx_headers().size(), 0u);                                       // the old link's list is not the new charger's
     CHECK_EQ(int(fusb302::limit_status().state), int(pd::LimState::Armed));
     fusb302::limit_disarm();
     service_ms(3);
@@ -6131,6 +6149,16 @@ void test_pd_limiter_arm_without_a_heard_list_and_unseeded() {
     CHECK_EQ(int(fusb302::limit_arm(10000, f, false)), int(pd::LimRefusal::None));
     CHECK_EQ(int(fusb302::limit_status().state), int(pd::LimState::Armed));   // seeded it would be Pending
     CHECK_EQ(fusb302::limit_status().req_pos, 0);
+    service_ms(300);
+    CHECK_EQ(tx_headers().size(), 0u);                                       // the sniffer's old contract is not acted on
+    // the renegotiation after the link reset: a fresh list, Request, Accept, PS_RDY -> one clamped injection
+    push_frame(0xE0, hdr(1, 2, true, 3), {0x0A01912Cu, 0x0004B12Cu});
+    push_frame(0xE0, hdr(2, 1, false, 0), {0x2204B12Cu});
+    push_frame(0xE0, hdr(3, 0, true, 4), {});
+    push_frame(0xE0, hdr(6, 0, true, 5), {});
+    for (int i = 0; i < 100 && tx_headers().empty(); i++) { g_ms += 1; fusb302::service(); }
+    CHECK_EQ(tx_headers().size(), 1u);
+    CHECK_EQ(int(fusb302::limit_status().state), int(pd::LimState::Injected));
     fusb302::limit_disarm();
     service_ms(3);
     end_inline_case();
