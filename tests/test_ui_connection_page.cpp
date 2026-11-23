@@ -1056,29 +1056,46 @@ static void test_survey_refresh_item_starts_it() {
     CHECK_EQ(int(g_stub.survey_last), int(rescan::Result::Asked));
 }
 
-// The status line: live survey state at rest and "Reading r/p" during an active survey run.
+// The status line: live survey state at rest and "Reading charger r/p" during an active survey run.
 static void test_survey_status_line() {
     Ui &ui = fresh_ui();
     uint32_t t = 20000;
     attach_charger(ui, t);
     show(ui, 0, t);
     settle(ui, t);
-    CHECK_STR(std::string(cp(ui).status_line()).c_str(), "Source caps not read yet");
+    CHECK_STR(std::string(cp(ui).status_line()).c_str(), "Not asked: Reset & re-read");
     show(ui, 1, t);
     show(ui, 0, t);
     g_stub.survey.start(kSurveyCtx, t);
     settle(ui, t);
     char want[40];
-    std::snprintf(want, sizeof want, "Reading %u/%u", g_stub.survey.resolved(), g_stub.survey.planned());
+    std::snprintf(want, sizeof want, "Reading charger %u/%u", g_stub.survey.resolved(), g_stub.survey.planned());
     CHECK_STR(std::string(cp(ui).status_line()).c_str(), want);
     g_stub.survey.set(pd::SvField::Caps, pd::SvOutcome::Answered);
     settle(ui, t);
-    std::snprintf(want, sizeof want, "Reading %u/%u", g_stub.survey.resolved(), g_stub.survey.planned());
+    std::snprintf(want, sizeof want, "Reading charger %u/%u", g_stub.survey.resolved(), g_stub.survey.planned());
     CHECK_STR(std::string(cp(ui).status_line()).c_str(), want);
     g_stub.survey.abandon();
     settle(ui, t);
     CHECK(g_stub.survey.ran());
     CHECK_STR(std::string(cp(ui).status_line()).c_str(), "Read: 1 got, 7 no answer");
+}
+
+// The attach's auto read asks only while nothing else holds the link: a tool, the Ra mode or a legacy handshake each block it.
+static void test_auto_read_gate() {
+    Ui &ui = fresh_ui();
+    uint32_t t = 20000;
+    attach_charger(ui, t);
+    CHECK_EQ(int(ui.auto_read_block()), int(pd::SvWhy::Inline));   // a foreign contract on the wire: not the K2's to ask
+    g_stub.sink.state = pd::SinkState::Ready;                      // the K2 sent the Request
+    CHECK_EQ(int(ui.auto_read_block()), int(pd::SvWhy::None));
+    g_stub.ra_on = true;
+    CHECK_EQ(int(ui.auto_read_block()), int(pd::SvWhy::ChargerTest));
+    g_stub.ra_on = false;
+    g_stub.legacy_active = true;
+    CHECK_EQ(int(ui.auto_read_block()), int(pd::SvWhy::ChargerTest));
+    g_stub.legacy_active = false;
+    CHECK_EQ(int(ui.auto_read_block()), int(pd::SvWhy::None));
 }
 
 // The Charger place's survey rows say what each field is and show the answers once they are in.
@@ -3099,6 +3116,7 @@ int main() {
     test_survey_nothing_active_before_refresh();
     test_survey_refresh_item_starts_it();
     test_survey_status_line();
+    test_auto_read_gate();
     test_survey_details_rows_follow_the_survey();
     test_refresh_goes_through_the_rescan_module();
     test_the_rescan_comeback_lands_on_the_source_tab();

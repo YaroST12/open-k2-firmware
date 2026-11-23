@@ -322,7 +322,7 @@ void status_text(const StatusIn &s, StrBuf<N> &out) {
     out.clear();
     if (!s.op.empty()) { out.put(s.op); return; }
     if (s.spoof_armed && s.f.charger) { out.put(tx::kArmedBar); return; }
-    if (s.sv && s.sv->running()) { out.put("Reading ").put_u32(s.sv->resolved()).put_char('/').put_u32(s.sv->planned()); return; }
+    if (s.sv && s.sv->running()) { out.put(tx::kReadingCharger).put_u32(s.sv->resolved()).put_char('/').put_u32(s.sv->planned()); return; }
     if (s.tab == Tab::Source && !s.diag.empty()) { out.put(s.diag); return; }
     if (s.sv) {
         if (!s.no_pd && !tab_empty(s.tab, s.f) && tab_unasked(s.tab, *s.sv)) { out.put(unread_text(s.tab)); return; }
