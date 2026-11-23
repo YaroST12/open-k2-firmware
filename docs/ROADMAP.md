@@ -84,6 +84,9 @@ Everything is C++23; there are no C files left in `src/` (TinyUSB and lwIP under
 
 Open defects, newest first. A row leaves this list when its fix is merged and seen on hardware.
 
+- **PD limit pick did not apply on a live contract** (2026-11-23, Anker 100W -> K2 -> phone): a level picked with the phone
+  already in a contract needed a replug. Fixed in k2/pd-limit-fixes (reset first, unseeded arm, sniffer cleared on detach), host
+  tests only; the cause is not proven on hardware. Verify: arm 15 W from the picker with the phone attached, OK twice.
 - **Vendor database follow-ups** (2026-11-23): VID 0x0716 (this K2's own, Oxus Research on the USB-IF list) is left unlabeled;
   `rl::vendor_oem_name` is a separate table. Done: cable names are "<Brand> <W>W" (c23154ac), SVID names come from the one table
   (5f5f3f8c), 0x2B01 reads CUKTECH (USB-IF: Zimi Corporation, c245aa82). 106 Asian cable makers, connector and wire
@@ -1244,8 +1247,10 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
   contract (inline, far sink seen) resets the link first (second OK within 5 s, "OK again: resets link"), then arms unseeded; no
   reset with nothing attached or only a charger. Offers come from the held list when none are live, else a "Reset link" row.
   The limit stays armed across a detach; the per-attach Request and forged-list data clear on detach; the LINK chip is
-  replaced by LAST and the Home suffix is Live-only. Cause of "pick did not apply until replug" is not proven: probably a join
-  mid-contract with no sniffed traffic, so no seed (pinned in test_fusb302_scan). The remote `pd-limit` arm stays seeded.
+  replaced by LAST and the Home suffix is Live-only; held offers show grey. The reset needs a Request heard from a sink behind
+  the K2; a contract joined mid-way with none heard arms without a reset and toasts "No reset: replug to apply". Found: the sniffed list and contract were not cleared on detach, so the next arm was seeded from the old link (fixed,
+  pinned in test_fusb302_scan). That is the likely cause of "pick did not apply until replug", not proven on hardware; a join
+  mid-contract with no Request heard still arms without a seed (use Reset link). The remote `pd-limit` arm stays seeded.
 - **Test layer reads, held data, depth-scaled preset counts** (k2/test-layer-reads: 2d2e9203, bae38bca, 7da8be65, 4e745924, cb4f51b4;
   host-tested only). Opening the Charger or Cable tab starts nothing; the offers come from a Light run with the PD pick, the cable
   from the Cable Actions row. Held data (same charger, same cable): offers stay until a different renegotiation replaces them,
