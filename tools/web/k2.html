@@ -5428,7 +5428,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = CtGrid;
     try {
       var st = await ctSoft(function () { return k2.chargerTest("status"); });
       if (S.gen !== gen || !st) return;
-      var v = CT.noView ? null : await ctSoft(function () { return k2.chargerTest("view"); });
+      var v = CT.noView ? null : await ctSoft(function () { return k2.chargerTest("view", { now: false }); });   // st.now is read once, with the status
       if (S.gen !== gen) return;
       CT.meta = st; if (v) CT.view = v;
       put("ctr-k2", v ? "K2: " + v.stage : st.state);

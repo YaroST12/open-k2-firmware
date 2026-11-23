@@ -2239,6 +2239,13 @@ test("chargerTestRun: refusals come back as values, never as a thrown error", as
   assert.equal((await remote.chargerTestRun({ confirm: true, sleep })).stage, "timeout");
 });
 
+test("the live page names the stage and lights no running dot between rows", async () => {
+  const html = await (await import("node:fs/promises")).readFile(new URL("../tools/web/k2.html", import.meta.url), "utf8");
+  assert.match(html, /var il = st\.now && st\.now\.interlude !== "row" \? st\.now : null;/);
+  assert.match(html, /current: il \? null : st\.current,/);
+  assert.match(html, /k2\.chargerTest\("view", \{ now: false \}\)/);
+});
+
 test("http: charger-test START carries confirm=1; status, view and CANCEL do not", async () => {
   const { calls, link } = httpRig((url) => { const f = frameOf(url); return jsonRes({ rsp: toHex(rsp(f[2], f[3], 0, [0])) }); });
   await link.call(P.CMD.CHARGER_TEST, [4, 3]);
