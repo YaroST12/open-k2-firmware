@@ -1574,6 +1574,7 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
 |---|---|---|---|---|
 | 240 MHz clock tree, HICK fallback | done | verified | `k2::crm` | |
 | Layout invariants, flash map | done (gate) | verified | `startup.cpp`, `link.ld`, `flash_map.hpp` | |
+| Image size tracking: `tools/size_track.py` snapshots an ELF (symbols, line-table origin per file, DWARF inline records) and diffs two snapshots (functions, clone swaps, inlining state, defined vs originating file, objects; the flash delta reconciles exactly); `make size-track` diffs the build against HEAD's snapshot; `backfill REV` builds a commit in `runs/size-track/wt`; opt-in post-commit hook `make size-hook` | prototype (2026-11-24): snapshot 3 to 10 s, diff under 1 s; same-commit noise +16 B (the `-dirty` version string); a `noinline` on `StrBufBase::view()` read as 379 sites de-inlined, +1440 B | n/a (host tool) | `size_track.py`, `tools/hooks/post-commit` | |
 | Pin map, SWJ disabled | done | verified | `k2::pins` | |
 | Math selftest behind `K2_SELFTEST` (default 0; pre-release builds only; `make gate K2_SELFTEST=1` -> flash -> `make perf-check`, the perf step says SKIPPED on a default image) | done: text 713156 -> 696948 B (-16208 B, bss unchanged) | n/a (build switch; host-tested) | `math_selftest.cpp`, `shell_hw.cpp`, `perf_gate.py` | |
 | ST7789V 240x240 LCD, screenshots | done | verified | `k2::lcd`, `gfx`, `capture` | |

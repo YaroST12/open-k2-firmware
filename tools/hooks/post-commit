@@ -1,0 +1,6 @@
+#!/bin/sh
+# Size tracking after every commit (opt-in: make size-hook). Snapshots build/open_k2.elf when it is the image of the
+# new HEAD and prints the one-line size diff against the parent's snapshot. Never fails the commit.
+top=$(git rev-parse --show-toplevel) || exit 0
+[ -f "$top/tools/size_track.py" ] || exit 0
+python3 "$top/tools/size_track.py" hook --build "$top/build" || true

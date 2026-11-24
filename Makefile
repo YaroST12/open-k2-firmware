@@ -869,3 +869,13 @@ smoke: gate
 # function: STACK_ARGS="--scenario charger-test --via ChargerTestSession::phase".
 stack-report:
 	@$(PYTHON) tools/stack_depth.py --build $(BUILD_DIR) $(STACK_ARGS)
+
+# Image size tracking (tools/size_track.py): snapshot the build, explain the size change against HEAD's snapshot
+# (functions, inlining, clones, files, objects). size-hook installs the post-commit hook (shared by all worktrees).
+.PHONY: size-track size-hook
+size-track:
+	@$(PYTHON) tools/size_track.py diff --build $(BUILD_DIR)
+size-hook:
+	@hook=$$(git rev-parse --git-common-dir)/hooks/post-commit; \
+	if [ -e "$$hook" ] && ! cmp -s "$$hook" tools/hooks/post-commit; then echo "$$hook exists and differs: not replaced"; exit 1; fi; \
+	cp tools/hooks/post-commit "$$hook" && chmod +x "$$hook" && echo "installed $$hook"
