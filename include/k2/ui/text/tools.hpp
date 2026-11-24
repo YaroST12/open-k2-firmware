@@ -57,6 +57,7 @@ inline constexpr const char *kLimNoteNoOffer = "not offered by charger";
 inline constexpr const char *kLimNoteMode = "include in forged offers";
 inline constexpr const char *kLimNoteStepV = "pick max voltage";
 inline constexpr const char *kLimNoteStepA = "pick max current";
+inline constexpr const char *kLimNoteAmpsAt = "at ", *kLimNoteAnyV = "any voltage";
 inline constexpr const char *kLimNotes[] = {kLimNoteOff, kLimNoteNone, kLimNoteFixed, kLimNotePps, kLimNoteAvs, kLimNoteApply,
                                             kLimNoteNoOffer, kLimNoteMode, kLimNoteStepV, kLimNoteStepA};
 static_assert(all_fit(kLimNotes, kLabelAdv, kit::kNoteMaxPx), "a PD limit note is wider than its line");

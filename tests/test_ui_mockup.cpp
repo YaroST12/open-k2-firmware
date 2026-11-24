@@ -589,6 +589,28 @@ int main() {
         pl.goto_page(kMenuPageBase + static_cast<uint8_t>(Menu::Tools), tp + 100);
         for (int i = 0; i < bench::tools().n + 2; i++) key(Button::Plus);
         key(Button::Ok); render(pl, tp, "pdlimit_picker_65w");
+        // Max V then that voltage's Max A (0.25 A steps up to the offer): 20 V at 3.25 A, then PPS 9 V on the 100 W list.
+        key(Button::Minus); key(Button::Plus); key(Button::Ok); render(pl, tp, "pdlimit_va_fixed_edit");   // Fixed
+        key(Button::Plus); key(Button::Ok);
+        for (int i = 0; i < 4; i++) key(Button::Plus);
+        render(pl, tp, "pdlimit_va_fixed_v");
+        key(Button::Ok); render(pl, tp, "pdlimit_va_fixed_a");
+        for (int i = 0; i < 10; i++) key(Button::Plus);
+        render(pl, tp, "pdlimit_va_fixed_a_end");
+        for (int i = 0; i < 3; i++) key(Button::Back);
+        g_stub.caps.num_pdos = 7;
+        g_stub.caps.pdos[3] = {pd::PdoType::Fixed, 0, 15000, 15000, 3000, 45000};
+        pl.goto_page(uint8_t(Page::Lines), tp + 100);
+        pl.goto_page(kMenuPageBase + static_cast<uint8_t>(Menu::Tools), tp + 100);
+        for (int i = 0; i < bench::tools().n + 2; i++) key(Button::Plus);
+        key(Button::Ok);
+        key(Button::Minus); key(Button::Minus); key(Button::Plus); key(Button::Plus);   // PPS
+        key(Button::Ok); key(Button::Plus); key(Button::Ok);
+        for (int i = 0; i < 6; i++) key(Button::Plus);
+        render(pl, tp, "pdlimit_va_pps_v");
+        key(Button::Ok); render(pl, tp, "pdlimit_va_pps_a");
+        for (int i = 0; i < 17; i++) key(Button::Plus);
+        render(pl, tp, "pdlimit_va_pps_a_end");
         pl.goto_page(uint8_t(Page::Home), tp + 100);
         pl.on_button(Button::Back, ButtonEvent::Short, tp += 100);
         for (int i = 0; i < int(ring::Pos::Link); ++i) key(Button::Plus);

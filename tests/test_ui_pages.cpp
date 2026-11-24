@@ -2309,12 +2309,17 @@ static void test_pd_limit_picker() {
     CHECK_STR(label(ui, Button::Ok), "Select");
     press(ui, Button::Plus, ButtonEvent::Short, t += 10);    // 5V
     press(ui, Button::Plus, ButtonEvent::Short, t += 10);    // 9V
-    press(ui, Button::Ok, ButtonEvent::Short, t += 10);      // commit 9V & return to EditFixed
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);      // on to 9V's Max A list
+    CHECK_EQ(ui.list_state().count, 10);                     // Max, 1..3A in 0.25A steps
+    press(ui, Button::Back, ButtonEvent::Short, t += 10);    // back to the voltages, nothing committed
+    CHECK_EQ(ui.list_state().count, 5);
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);      // 9V again
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);      // Max: commit 9V / Max A, return to EditFixed
     CHECK_EQ(ui.list_state().count, 3);
     // Open Max A picker, move, then Back cancels without changing Max A
     press(ui, Button::Plus, ButtonEvent::Short, t += 10);    // Max A
     press(ui, Button::Ok, ButtonEvent::Short, t += 10);      // PickMaxA
-    press(ui, Button::Plus, ButtonEvent::Short, t += 10);    // 0.1A
+    press(ui, Button::Plus, ButtonEvent::Short, t += 10);    // 1A
     press(ui, Button::Back, ButtonEvent::Short, t += 10);    // cancel -> EditFixed
     CHECK_EQ(ui.list_state().count, 3);
     press(ui, Button::Back, ButtonEvent::Short, t += 10);    // back to PickLimit
@@ -2352,19 +2357,17 @@ static void test_pd_limit_100w_levels() {
     press(ui, Button::Plus, ButtonEvent::Short, t += 10);    // Off
     press(ui, Button::Ok, ButtonEvent::Short, t += 10);      // commit Off -> EditFixed
     press(ui, Button::Back, ButtonEvent::Short, t += 10);    // PickLimit
-    // Edit PPS (row 2) -> Max V 11V (Max, 5..21V -> 7 steps from Max), Max A 3.0A (Max, 0.1..5.0A -> 30 steps)
+    // Edit PPS (row 2) -> Max V 11V (Max, 5..21V -> 7 steps from Max), then its Max A 3.0A (Max, 1..5A -> 9 steps)
     press(ui, Button::Plus, ButtonEvent::Short, t += 10);    // PPS
     press(ui, Button::Ok, ButtonEvent::Short, t += 10);      // EditPps
     press(ui, Button::Plus, ButtonEvent::Short, t += 10);    // Max V
     press(ui, Button::Ok, ButtonEvent::Short, t += 10);      // PickMaxV
     CHECK_EQ(ui.list_state().count, 18);                     // Max + 5..21V
     for (int i = 0; i < 7; i++) press(ui, Button::Plus, ButtonEvent::Short, t += 10);   // 11V
-    press(ui, Button::Ok, ButtonEvent::Short, t += 10);
-    press(ui, Button::Plus, ButtonEvent::Short, t += 10);    // Max A
-    press(ui, Button::Ok, ButtonEvent::Short, t += 10);      // PickMaxA
-    CHECK_EQ(ui.list_state().count, 51);                     // Max + 0.1..5.0A
-    for (int i = 0; i < 30; i++) press(ui, Button::Plus, ButtonEvent::Short, t += 10);  // 3.0A
-    press(ui, Button::Ok, ButtonEvent::Short, t += 10);
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);      // PickMaxA for 11V
+    CHECK_EQ(ui.list_state().count, 18);                     // Max + 1..5A in 0.25A steps
+    for (int i = 0; i < 9; i++) press(ui, Button::Plus, ButtonEvent::Short, t += 10);   // 3.0A
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);      // commits 11V / 3A
     press(ui, Button::Back, ButtonEvent::Short, t += 10);    // PickLimit
     press(ui, Button::Plus, ButtonEvent::Short, t += 10);    // AVS
     press(ui, Button::Plus, ButtonEvent::Short, t += 10);    // Apply
@@ -2373,6 +2376,81 @@ static void test_pd_limit_100w_levels() {
     CHECK_EQ(g_stub.lim_arm_cfg.fixed.enabled, false);
     CHECK_EQ(g_stub.lim_arm_cfg.pps.max_mv, 11000u);
     CHECK_EQ(g_stub.lim_arm_cfg.pps.max_ma, 3000u);
+}
+
+// The Max A list follows the voltage picked: Max, then 1 A up in 0.25 A steps to that voltage's offer, the exact maximum
+// last when off the grid; a stored current above the new offer drops to Max.
+static void test_pd_limit_va_lists() {
+    Ui &ui = fresh_ui();
+    g_stub.caps = {};
+    g_stub.caps.valid = true; g_stub.caps.num_pdos = 7; g_stub.caps.spec_rev = 2;
+    const pd::Pdo p[7] = {{pd::PdoType::Fixed, 0, 5000, 5000, 3000, 15000},   {pd::PdoType::Fixed, 0, 9000, 9000, 3000, 27000},
+                          {pd::PdoType::Fixed, 0, 15000, 15000, 3250, 48750}, {pd::PdoType::Fixed, 0, 20000, 20000, 5000, 100000},
+                          {pd::PdoType::Pps, 0, 5000, 11000, 5000, 55000},    {pd::PdoType::Pps, 0, 3300, 21000, 3000, 63000},
+                          {pd::PdoType::Avs, 0xE0000000u | (300u << 10) | 225u, 9000, 20000, 2250, 45000}};
+    for (int i = 0; i < 7; i++) g_stub.caps.pdos[i] = p[i];
+    uint32_t t = open_limit_row(ui, 20000);
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);      // PickLimit
+    const auto key = [&](Button b, int n = 1) { for (int i = 0; i < n; i++) press(ui, b, ButtonEvent::Short, t += 10); };
+    // From a tech editor: Max V, the voltage at row v, return the A list's row count (focus on its radio row).
+    const auto amps_for = [&](int v) {
+        key(Button::Minus, 2);                                // Mode
+        key(Button::Plus);                                    // Max V
+        key(Button::Ok);                                      // PickMaxV, focus on the stored voltage
+        key(Button::Minus, 30);
+        key(Button::Plus, v);
+        key(Button::Ok);                                      // PickMaxA
+        return ui.list_state().count;
+    };
+    const auto commit_row = [&](int a) {                     // from the A list's focus: row a, OK, back on Mode
+        key(Button::Minus, 30);
+        key(Button::Plus, a);
+        key(Button::Ok);
+        key(Button::Minus, 2);
+    };
+    key(Button::Plus);                                        // Fixed
+    key(Button::Ok);                                          // EditFixed (Mode, Max V, Max A)
+    CHECK_EQ(amps_for(3), 11);                                // 15V 3.25A: Max, 1..3A, 3.25A
+    CHECK_EQ(ui.context().rows.selected(), 0);
+    commit_row(10);                                           // 15V / 3.25A
+    CHECK_EQ(amps_for(1), 10);                                // 5V 3A: no row above the offer
+    CHECK_EQ(ui.context().rows.selected(), 0);                    // 3.25A is over 5V's offer: Max
+    commit_row(0);                                            // 5V / Max
+    CHECK_EQ(amps_for(4), 18);                                // 20V 5A
+    commit_row(17);                                           // 20V / 5A
+    CHECK_EQ(amps_for(0), 18);                                // V = Max: the highest fixed current
+    CHECK_EQ(ui.context().rows.selected(), 17);                   // the stored 5A is radio-selected
+    key(Button::Back);                                        // back to the voltages: nothing committed
+    key(Button::Back);                                        // EditFixed
+    key(Button::Back);                                        // PickLimit
+    key(Button::Plus);                                        // PPS
+    key(Button::Ok);                                          // EditPps; V list Max, 4..21V
+    CHECK_EQ(amps_for(2), 18);                                // 5V: both APDOs cover it, 5A
+    key(Button::Back);
+    key(Button::Back);
+    CHECK_EQ(amps_for(1), 10);                                // 4V: only the 3.3-21V 3A object
+    key(Button::Back);
+    key(Button::Back);
+    CHECK_EQ(amps_for(12), 10);                               // 15V: 3A
+    commit_row(9);                                            // 15V / 3A
+    key(Button::Back);                                        // PickLimit
+    key(Button::Plus);                                        // SPR AVS
+    key(Button::Ok);                                          // EditAvs; V list Max, 15V
+    CHECK_EQ(amps_for(1), 10);                                // 15V: the 9-15V field, 3A
+    key(Button::Back);
+    key(Button::Back);
+    CHECK_EQ(amps_for(0), 7);                                 // Max: the 15-20V field, 2.25A
+    commit_row(6);                                            // Max V / 2.25A
+    key(Button::Back);                                        // PickLimit
+    key(Button::Plus);                                        // Apply
+    key(Button::Ok);
+    CHECK_EQ(g_stub.lim_arms, 1);
+    CHECK_EQ(g_stub.lim_arm_cfg.fixed.max_mv, 20000u);
+    CHECK_EQ(g_stub.lim_arm_cfg.fixed.max_ma, 5000u);
+    CHECK_EQ(g_stub.lim_arm_cfg.pps.max_mv, 15000u);
+    CHECK_EQ(g_stub.lim_arm_cfg.pps.max_ma, 3000u);
+    CHECK_EQ(g_stub.lim_arm_cfg.avs.max_mv, 0u);
+    CHECK_EQ(g_stub.lim_arm_cfg.avs.max_ma, 2250u);
 }
 
 static void test_pd_limit_back_stays_on_tools() {
@@ -2395,7 +2473,8 @@ static void pick_9v_apply(Ui &ui, uint32_t &t) {
     press(ui, Button::Ok, ButtonEvent::Short, t += 10);     // PickMaxV
     press(ui, Button::Plus, ButtonEvent::Short, t += 10);   // 5V
     press(ui, Button::Plus, ButtonEvent::Short, t += 10);   // 9V
-    press(ui, Button::Ok, ButtonEvent::Short, t += 10);     // commit 9V -> EditFixed
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);     // 9V's Max A list
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);     // Max: commit 9V -> EditFixed
     press(ui, Button::Back, ButtonEvent::Short, t += 10);   // PickLimit
     for (int i = 0; i < 3; i++) press(ui, Button::Plus, ButtonEvent::Short, t += 10);   // Apply
     press(ui, Button::Ok, ButtonEvent::Short, t += 10);
@@ -2755,6 +2834,7 @@ int main() {
     test_ai_rows_on_lines();
     test_tools_hub();
     test_pd_limit_picker();
+    test_pd_limit_va_lists();
     test_pd_limit_100w_levels();
     test_pd_limit_back_stays_on_tools();
     test_pd_limit_refusals_toast();

@@ -2718,7 +2718,25 @@ const pd::LimTech &ToolsPage::cur_tech() const {
 uint16_t ToolsPage::tech_max_ma() const {
     const View tv = in_sub_pick() ? tech_view_ : view_;
     const uint16_t m = tv == View::EditFixed ? fixed_max_ma_ : tv == View::EditPps ? pps_max_ma_ : avs_max_ma_;
-    return m >= pd::kLimStepMa ? std::min<uint16_t>(m, pd::kLimMaxMa) : pd::kLimMaxMa;
+    return m >= pd::kLimMinFixedMa ? std::min<uint16_t>(m, pd::kLimMaxMa) : pd::kLimMaxMa;
+}
+
+// The A list for the voltage in play: Fixed takes that voltage's offer, PPS the APDOs covering it, SPR AVS its 15 V or
+// 20 V current field; no caps (or no match)
+// keeps the tech's ceiling. A stored current above the offer reads as Max.
+void ToolsPage::open_amps() {
+    const uint16_t mv = va_ ? pend_mv_ : cur_tech().max_mv;
+    uint16_t offer = 0;
+    const pd::SourceCaps &c = held::shown_caps();
+    if (has_caps_ && c.valid) {
+        const std::span<const pd::Pdo> p(c.pdos.data(), std::min<std::size_t>(c.num_pdos, c.pdos.size()));
+        offer = tech_view_ == View::EditFixed ? pd::lim_fixed_offer_ma(p, mv)
+              : tech_view_ == View::EditPps   ? pd::lim_pps_offer_ma(p, mv)
+                                              : pd::lim_avs_offer_ma(p, mv);
+    }
+    amp_offer_ma_ = offer ? std::min(offer, pd::kLimMaxMa) : tech_max_ma();
+    const uint16_t ma = cur_tech().max_ma;
+    amp_pick_ma_ = ma > amp_offer_ma_ ? 0 : ma;
 }
 
 // A view change repaints the body: row count and title differ across List, PickLimit, tech editors and pick lists.
@@ -2738,13 +2756,16 @@ void ToolsPage::show(View v) {
         drop_confirm();
     } else if (in_tech()) {
         if (was == View::PickLimit) edit_idx_ = 0;
+        va_ = false;
         title_ = rail::kLimit;
         drop_confirm();
     } else if (in_sub_pick()) {
         if (v == View::PickMode) {
             sub_pick_ = cur_tech().enabled ? 0 : 1;
         } else {
-            const uint16_t cur_v = v == View::PickMaxV ? cur_tech().max_mv : cur_tech().max_ma;
+            if (v == View::PickMaxA) open_amps();
+            const uint16_t cur_v = v == View::PickMaxV ? (va_ ? pend_mv_ : cur_tech().max_mv)
+                                 : amp_pick_ma_;
             sub_pick_ = 0;
             const int n = sub_count();
             for (int i = 0; i < n; ++i) {
@@ -2797,8 +2818,7 @@ void ToolsPage::build_picks() {
 }
 
 namespace {
-inline constexpr uint16_t kDefaultFxMvs[] = {5000, 9000, 12000, 15000, 20000};
-}  // namespace
+inline constexpr uint16_t kDefaultFxMvs[] = {5000, 9000, 12000, 15000, 20000};}  // namespace
 
 void ToolsPage::pps_bounds(uint16_t &lo, uint16_t &hi) const {
     const uint16_t lo_raw = pps_min_mv_ >= 3000 ? pps_min_mv_ : 5000;
@@ -2817,8 +2837,7 @@ int ToolsPage::sub_count() const {
         }
         return 2;   // SPR AVS: Max, 15V
     }
-    const uint16_t hi = static_cast<uint16_t>((tech_max_ma() / pd::kLimStepMa) * pd::kLimStepMa);
-    return 1 + int(hi / pd::kLimStepMa);
+    return pd::lim_amp_count(amp_offer_ma_);
 }
 
 uint16_t ToolsPage::sub_val(int index) const {
@@ -2835,7 +2854,7 @@ uint16_t ToolsPage::sub_val(int index) const {
         }
         return 15000;
     }
-    return static_cast<uint16_t>(index * pd::kLimStepMa);
+    return pd::lim_amp_at(amp_offer_ma_, index);
 }
 
 void ToolsPage::fmt_tech_summary(const pd::LimTech &t, StrBufBase &out) const {
@@ -2894,12 +2913,19 @@ void ToolsPage::sub_pick_row(int index, bool focused, kit::RowSpec &out) const {
     }
     const bool is_v = view_ == View::PickMaxV;
     const uint16_t v = sub_val(index);
-    const uint16_t cur_v = is_v ? t.max_mv : t.max_ma;
+    const uint16_t cur_v = is_v ? t.max_mv : amp_pick_ma_;
     out.state = cur_v == v ? 1 : 0;
     tail_.clear();
     if (v == 0) tail_.put(tx::kLimMax);
     else pg::put_exact_unit(tail_, v, is_v ? 'V' : 'A');
     out.text = tail_.view();
+    if (focused && !is_v && va_) {   // the voltage this current goes with
+        note_.clear();
+        note_.put(tx::kLimNoteAmpsAt);
+        if (pend_mv_) pg::put_exact_unit(note_, pend_mv_, 'V');
+        else note_.put(tx::kLimNoteAnyV);
+        out.note = note_.view();
+    }
 }
 
 void ToolsPage::limit_row(int index, bool focused, kit::RowSpec &out) const {
@@ -3151,14 +3177,27 @@ bool ToolsPage::on_event(Event e) {
             return true;
         }
         // In PickMode / PickMaxV / PickMaxA: commit selection and return to the tech view.
+        if (view_ == View::PickMaxV) {   // on to this voltage's current; both commit there
+            pend_mv_ = sub_val(sub_pick_);
+            va_ = true;
+            show(View::PickMaxA);
+            return true;
+        }
         if (view_ == View::PickMode) cur_tech().enabled = (sub_pick_ == 0);
-        else if (view_ == View::PickMaxV) cur_tech().max_mv = sub_val(sub_pick_);
-        else cur_tech().max_ma = sub_val(sub_pick_);
+        else {
+            if (va_) cur_tech().max_mv = pend_mv_;
+            cur_tech().max_ma = sub_val(sub_pick_);
+        }
         draft_.limit_mw = 0;
         show(tech_view_);
         return true;
     }
     if (e.button == Button::Back && view_ != View::List) {   // step back to tech view, PickLimit, or List, never out of Tools
+        if (view_ == View::PickMaxA && va_) {   // back to the voltages, nothing committed
+            show(View::PickMaxV);
+            va_ = false;
+            return true;
+        }
         show(in_sub_pick() ? tech_view_ : in_tech() ? View::PickLimit : View::List);
         return true;
     }

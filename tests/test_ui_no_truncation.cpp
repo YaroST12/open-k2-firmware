@@ -511,6 +511,9 @@ void walk_limit(Ui &ui, int rot, const Scenario &sc) {
     press(Button::Ok);     // PickMaxV
     press(Button::Plus);
     draw_for_a_while(ui, "limit-fixed-v", rot, sc.name);
+    press(Button::Ok);     // that voltage's Max A list, the voltage in the focused note
+    for (int i = 0; i < 20; ++i) { draw_for_a_while(ui, "limit-fixed-va", rot, sc.name); press(Button::Plus); }
+    press(Button::Back);   // back to the voltages
     press(Button::Back);
     press(Button::Plus);   // Max A
     press(Button::Ok);     // PickMaxA

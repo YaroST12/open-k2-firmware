@@ -1469,6 +1469,7 @@ private:
     pd::LimTech &cur_tech();
     const pd::LimTech &cur_tech() const;
     uint16_t tech_max_ma() const;
+    void open_amps();
     void pps_bounds(uint16_t &lo, uint16_t &hi) const;
     int sub_count() const;
     uint16_t sub_val(int index) const;
@@ -1492,6 +1493,10 @@ private:
     uint8_t nfixed_ = 0;
     uint16_t fixed_mvs_[pd::kMaxPdos]{};
     uint16_t fixed_max_ma_ = 0, pps_min_mv_ = 0, pps_max_mv_ = 0, pps_max_ma_ = 0, avs_max_ma_ = 0;
+    uint16_t pend_mv_ = 0;       // the voltage picked in Max V, committed with its Max A
+    uint16_t amp_offer_ma_ = 0;  // the A list's ceiling: the offer current at that voltage
+    uint16_t amp_pick_ma_ = 0;   // the A list's radio: the stored max_ma, 0 when above the offer
+    bool va_ = false;            // the A list was reached from Max V
     pd::LimConfig draft_{};
     uint32_t confirm_until_ = 0, confirm_key_ = 0;   // 0 = Off, 1 = Apply, 0xFFFFFFFF = Reset link
     pd::LimState seen_ = pd::LimState::Off;   // for the one-shot give-up result
