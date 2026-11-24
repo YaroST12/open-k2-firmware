@@ -173,18 +173,18 @@ int fmt_hex(std::span<char> out, uint32_t value, int digits);  // upper case, ze
 // instead of one per N.
 class StrBufBase {
 public:
-    void clear();
-    StrBufBase &put(std::string_view s);  // appends what fits into the first cap-1 characters, keeps the text NUL-terminated
-    StrBufBase &put(const char *s);       // the same for a NUL-terminated string (a literal: one pointer at the call site)
-    StrBufBase &put_char(char c);
-    StrBufBase &put_u32(uint32_t v, int width = 0);
-    StrBufBase &put_u32_compact(uint32_t v);
-    StrBufBase &put_count_capped(uint32_t v);
-    StrBufBase &put_fixed(int32_t milli, int decimals, int width = 0);
-    StrBufBase &put_abs_fixed(int32_t milli, int decimals, int width = 0);
-    StrBufBase &put_hex(uint32_t v, int digits);
-    StrBufBase &put_hms(uint32_t seconds);
-    StrBufBase &put_age(uint32_t seconds);
+    [[gnu::noinline]] void clear();
+    [[gnu::noinline]] StrBufBase &put(std::string_view s);  // appends what fits into the first cap-1 characters, keeps the text NUL-terminated
+    [[gnu::noinline]] StrBufBase &put(const char *s);       // the same for a NUL-terminated string (a literal: one pointer at the call site)
+    [[gnu::noinline]] StrBufBase &put_char(char c);
+    [[gnu::noinline]] StrBufBase &put_u32(uint32_t v, int width = 0);
+    [[gnu::noinline]] StrBufBase &put_u32_compact(uint32_t v);
+    [[gnu::noinline]] StrBufBase &put_count_capped(uint32_t v);
+    [[gnu::noinline]] StrBufBase &put_fixed(int32_t milli, int decimals, int width = 0);
+    [[gnu::noinline]] StrBufBase &put_abs_fixed(int32_t milli, int decimals, int width = 0);
+    [[gnu::noinline]] StrBufBase &put_hex(uint32_t v, int digits);
+    [[gnu::noinline]] StrBufBase &put_hms(uint32_t seconds);
+    [[gnu::noinline]] StrBufBase &put_age(uint32_t seconds);
     std::string_view view() const { return {data(), n_}; }
     const char *c_str() const { return data(); }
 

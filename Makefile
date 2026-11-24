@@ -355,9 +355,9 @@ LDFLAGS += $(STACK_PARAMS)
 # path by 150 B (the option to take if the stack budget gets tight).
 SIZE_FLAGS = -fno-schedule-insns2 -fno-partial-inlining
 CFLAGS += $(SIZE_FLAGS)
-# --sort-section=alignment (-508 B .text, -256 B .bss) is NOT used: it reorders the cold text so that hot-path callees in cold files
-# (lz::compress's lambda, ctsweep::summarize, ...) leave the zero-wait window; selftest lz_pack/sweep_sum/fmt_line slowed 30-100 %.
-LDFLAGS += $(SIZE_FLAGS) -flto-partition=one
+# --sort-section=alignment compacts cold text/.bss; safe because hot-path callees (lz, ctsweep, fmt/StrBufBase, fonts, live UI)
+# are explicitly pinned inside the zero-wait hot block in link.ld.
+LDFLAGS += $(SIZE_FLAGS) -flto-partition=one -Wl,--sort-section=alignment
 endif
 
 # Hot acquisition / DSP / power-conversion objects compile at speed levels while UI pages stay at -Os
@@ -377,7 +377,12 @@ $(HOT_MATH_O3_OBJS): CFLAGS += -O3
 # (K2_WEBUSB=1 K2_PDSPEC=1, text 715200 B before): -fno-reorder-blocks -1252 B, then the four after it -3096 B,
 # then the last three -2360 B (-6708 B together). Stack worst case unchanged (PSP free 2360 -> 2368 B). Rejected
 # on the same build (they grow it, or change under 100 B): -fno-tree-ccp, -fno-tree-pta, -fno-ipa-pure-const,
-# -fno-tree-vrp, -fno-gcse, -fno-tree-pre, -fno-ssa-phiopt, -fno-peephole2, -fno-tree-dse, -fno-crossjumping.
+# -fno-tree-vrp, -fno-gcse, -fno-tree-pre, -fno-ssa-phiopt, -fno-peephole2, -fno-tree-dse, -fno-crossjumping,
+# -fno-inline-small-functions (+392 B), -fno-ipa-cp-clone (0 B), -fno-ipa-cp (+>3 KB), -fno-ipa-sra (+680 B),
+# -fno-tree-ch (+996 B), -fno-ivopts (+2.9 KB), -fno-tree-loop-ivcanon (+272 B), -fno-tree-slsr (+248 B),
+# -fno-jump-tables (+2.1 KB), -fno-tree-sra (overflow), -fno-inline-functions-called-once (+2.3 KB),
+# --param=min-crossjump-insns=1 (0 B), -fno-gcse-lm (+40 B), -fno-rerun-cse-after-loop (+2.1 KB),
+# -fno-tree-ter (+1.1 KB), -fno-split-wide-types (+624 B), -fbranch-target-load-optimize (0 B), -fweb (-16 B), -fno-tree-copy-prop (+16 B).
 ifneq ($(CLANG),1)
 # -Oz on cold objects stops GCC LTO from inlining cold callees into -Os hot callers (-124 B .text, -14.8 KB hot block, -56 B stack).
 COLD_SIZE_FLAGS = -Oz -fno-reorder-blocks -fno-caller-saves -fno-if-conversion -fno-tree-dominator-opts -fno-tree-loop-im \

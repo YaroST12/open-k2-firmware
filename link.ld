@@ -123,6 +123,27 @@ SECTIONS
     *(.text.getBit .text.getBit.* .text.calcSegmentBitLength .text.calcSegmentBitLength.*)
     *(.text.getTotalBits .text.getTotalBits.* .text.numCharCountBits .text.numCharCountBits.*)
     *(.rodata.ECC_CODEWORDS_PER_BLOCK .rodata.ECC_CODEWORDS_PER_BLOCK.* .rodata.NUM_ERROR_CORRECTION_BLOCKS .rodata.NUM_ERROR_CORRECTION_BLOCKS.*)
+    /* Hot entry points of mostly-cold modules (keeps cold helpers under -Oz COLD_SIZE_FLAGS) */
+    *(.text._ZNK2k22pd11Interrogate11sopp_window* .text._ZNK2k22pd11Interrogate7settled* .text._ZN2k22pd11Interrogate7on_sopp*)
+    *(.text._ZN2k28transcap4pollEv* .text._ZN2k28transcap6sampleEv* .text._ZN2k28transcap12_GLOBAL__N_19poll_onceEv*)
+    *(.text._ZN2k29bbpersist4poll* .text._ZN2k26rescan4pollEv*)
+    /* UI fonts and 12x12 icon table (zero-wait reads speed up glyph decode and badge paints) */
+    *(.rodata._ZN2k29kIconBitsE*)
+    *(.rodata._ZN2k27font_12E* .rodata._ZN2k27font_16E* .rodata._ZN2k27font_24E* .rodata._ZN2k27font_48E* .rodata._ZN2k27font_64E*)
+    *(.rodata._ZN2k212_GLOBAL__N_1L6bitmapE* .rodata._ZN2k212_GLOBAL__N_1L6glyphsE*)
+    /* Real-time PD link/limiter/passive, compression, sweep, formatting, DSP, and UI kit primitives */
+    *(.text._ZN2k22pd4Link* .text._ZNK2k22pd4Link* .text._ZN2k22pd7Passive* .text._ZNK2k22pd7Passive*)
+    *(.text._ZN2k22pd7Limiter* .text._ZNK2k22pd7Limiter*)
+    *(.text._ZN2k22lz* .text._ZZN2k22lz* .text._ZN2k27ctsweep* .text._ZNK2k27ctsweep*)
+    *(.text._ZN2k210StrBufBase* .text._ZN2k23mixEmSt17basic_string_view* .text._ZN2k22pg8mix_cstr* .text._ZN2k22pg8mix_u32s* .text._ZN2k27fmt_fit* .text._ZN2k27fmt_u32* .text._ZN2k29fmt_fixed* .text._ZN2k213fmt_abs_fixed*)
+    *(.text._ZN2k210fastcharge* .text._ZN2k27dpsniff* .text._ZN2k26fctrig4poll* .text._ZN2k27battery* .text._ZN2k26ripple*)
+    *(.text._ZN2k23lcd* .text._ZN2k23kit* .text._ZNK2k23kit*)
+    /* Live screen update/paint paths and bezel layout helpers */
+    *(.text._ZN2k213opp_slot_rect* .text._ZN2k213panel_text_dir* .text._ZN2k212opp_reversed* .text._ZN2k212_GLOBAL__N_115build_opp_cells*)
+    *(.text._ZN2k28HomePage* .text._ZNK2k28HomePage* .text._ZN2k24home*)
+    *(.text._ZN2k214ConnectionPage* .text._ZNK2k214ConnectionPage*)
+    *(.text._ZN2k210DetailPage* .text._ZNK2k210DetailPage* .text._ZN2k29LinesPage* .text._ZNK2k29LinesPage* .text._ZN2k210RipplePage* .text._ZNK2k210RipplePage* .text._ZN2k210GraphsPage* .text._ZNK2k210GraphsPage* .text._ZN2k211BatteryPage* .text._ZNK2k211BatteryPage*)
+    *(.text._ZN2k215ChargerTestPage13paint_running*)
     *libc.a:libc_a-memcpy.o(.text .text.*)
     *libc.a:libc_a-memmove.o(.text .text.*)
     *libc.a:libc_a-memset.o(.text .text.*)

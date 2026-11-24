@@ -1,2 +1,2 @@
 # arm-none-eabi-size of build/open_k2.elf (one image, all USB modes); update with `python3 tools/gate.py --update-baseline`
-text=702144 data=4 bss=105576
+text=712424 data=4 bss=101452

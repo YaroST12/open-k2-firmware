@@ -1379,48 +1379,81 @@ void verdict(const Report& r, std::span<char> out) {
     head(r, o);
 }
 
-const char* code_name(Code c) {
-    switch (c) {
-    case Code::PowerShort: return "power_short";
-    case Code::MismatchFlag: return "mismatch_flag";
-    case Code::NoMismatchFlag: return "no_mismatch_flag";
-    case Code::OverDraw: return "over_draw";
-    case Code::Pinned: return "draw_pinned";
-    case Code::Draw: return "draw";
-    case Code::DrawReduced: return "draw_reduced";
-    case Code::FiveVoltOnly: return "five_volt_only";
-    case Code::ContractUnseen: return "contract_unseen";
-    case Code::NoContract: return "no_contract";
-    case Code::ActiveSink: return "active_sink";
-    case Code::HardReset: return "hard_reset";
-    case Code::SoftReset: return "soft_reset";
-    case Code::Reattach: return "reattach";
-    case Code::Rejected: return "rejected";
-    case Code::WaitLoop: return "wait_loop";
-    case Code::ManyRequests: return "many_requests";
-    case Code::NoAccept: return "no_accept";
-    case Code::LateAccept: return "late_accept";
-    case Code::NoPsRdy: return "no_ps_rdy";
-    case Code::LatePsRdy: return "late_ps_rdy";
-    case Code::CapsUnanswered: return "caps_unanswered";
-    case Code::VbusLow: return "vbus_low";
-    case Code::VbusHigh: return "vbus_high";
-    case Code::VbusLost: return "vbus_lost";
-    case Code::InputCuts: return "input_cuts";
-    case Code::OverSustained: return "over_sustained";
-    case Code::NoGoodCrc: return "no_goodcrc";
-    case Code::Retries: return "retries";
-    case Code::TxFail: return "tx_fail";
-    case Code::RxBad: return "rx_bad";
-    case Code::SwapRefused: return "swap_refused";
-    case Code::ModeNak: return "mode_nak";
-    case Code::EnterUsbRefused: return "enter_usb_refused";
-    case Code::EprFailed: return "epr_failed";
-    case Code::CableCap: return "cable_cap";
-    case Code::VdmLoop: return "vdm_loop";
-    case Code::CableSilent: return "cable_silent";
+namespace detail {
+
+[[gnu::noinline]] void Out::c(char ch) { if (n + 1 < b.size()) { b[n++] = ch; b[n] = 0; } }
+[[gnu::noinline]] void Out::s(const char* t) { while (t && *t) c(*t++); }
+[[gnu::noinline]] void Out::cap(const char* t) {
+    if (!t || !*t) return;
+    c(*t >= 'a' && *t <= 'z' ? char(*t - 32) : *t);
+    s(t + 1);
+}
+[[gnu::noinline]] void Out::unit(const char* t) { if (!tight) c(' '); s(t); }
+[[gnu::noinline]] void Out::u(std::uint32_t v) {
+    char t[10];
+    int k = 0;
+    do { t[k++] = char('0' + v % 10); v /= 10; } while (v);
+    while (k) c(t[--k]);
+}
+[[gnu::noinline]] void Out::milli(std::int32_t v, int dec) {
+    if (v < 0) { c('-'); v = -v; }
+    std::uint32_t scale = dec >= 2 ? 10 : dec == 1 ? 100 : 1000;
+    const std::uint32_t q = (std::uint32_t(v) + scale / 2) / scale;
+    const std::uint32_t div = dec >= 2 ? 100 : dec == 1 ? 10 : 1;
+    u(q / div);
+    std::uint32_t f = q % div;
+    if (f == 0 || div == 1) return;
+    c('.');
+    if (div == 100) { c(char('0' + f / 10)); if (f % 10) c(char('0' + f % 10)); }
+    else c(char('0' + f));
+}
+[[gnu::noinline]] void Out::volts(std::int32_t mv) { milli(mv, 1); unit("V"); }
+[[gnu::noinline]] void Out::volts2(std::int32_t mv) { milli(mv, 2); unit("V"); }
+[[gnu::noinline]] void Out::amps(std::int32_t ma) {
+    if (ma < 100) { u(std::uint32_t(ma < 0 ? 0 : ma)); unit("mA"); return; }
+    milli(ma, 2);
+    unit("A");
+}
+[[gnu::noinline]] void Out::watts(std::int32_t mw) {
+    if (mw < 10000) milli(mw, 1); else u(std::uint32_t(mw + 500) / 1000);
+    unit("W");
+}
+[[gnu::noinline]] void Out::two(std::uint32_t v) { c(char('0' + v / 10 % 10)); c(char('0' + v % 10)); }
+[[gnu::noinline]] void Out::clock(std::uint32_t ms) {
+    const std::uint32_t t = ms / 1000;
+    if (t >= 3600) { u(t / 3600); c(':'); two(t / 60 % 60); }
+    else u(t / 60);
+    c(':');
+    two(t % 60);
+}
+[[gnu::noinline]] void Out::dur(std::uint32_t ms) {
+    const std::uint32_t t = ms / 1000;
+    if (tight) {
+        if (t < 60) { u(t); c('s'); }
+        else if (t < 3600) { u(t / 60); c('m'); two(t % 60); c('s'); }
+        else { u(t / 3600); c('h'); two(t / 60 % 60); c('m'); }
+        return;
     }
-    return "?";
+    if (t < 60) { u(t); s(" s"); return; }
+    if (t < 3600) { u(t / 60); s(" min "); u(t % 60); s(" s"); return; }
+    u(t / 3600); s(" h "); u(t / 60 % 60); s(" min");
+}
+
+}  // namespace detail
+
+const char* code_name(Code c) {
+    static constexpr const char* const kCodeNames[] = {
+        "power_short", "mismatch_flag", "no_mismatch_flag", "over_draw", "draw_pinned", "draw", "draw_reduced",
+        "five_volt_only", "contract_unseen", "no_contract", "active_sink",
+        "hard_reset", "soft_reset", "reattach", "rejected", "wait_loop", "many_requests", "no_accept", "late_accept",
+        "no_ps_rdy", "late_ps_rdy", "caps_unanswered",
+        "vbus_low", "vbus_high", "vbus_lost", "input_cuts", "over_sustained",
+        "no_goodcrc", "retries", "tx_fail", "rx_bad",
+        "swap_refused", "mode_nak", "enter_usb_refused", "epr_failed", "cable_cap", "vdm_loop", "cable_silent",
+    };
+    static_assert(sizeof(kCodeNames) / sizeof(kCodeNames[0]) == static_cast<unsigned>(Code::CableSilent) + 1);
+    const unsigned i = static_cast<unsigned>(c);
+    return i < (sizeof(kCodeNames) / sizeof(kCodeNames[0])) ? kCodeNames[i] : "?";
 }
 
 }  // namespace k2::pd::diag

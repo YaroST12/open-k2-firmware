@@ -16,10 +16,7 @@ namespace k2 {
 // FNV-1a helpers, the one shared definition (pages used to each carry their own copy).
 constexpr uint32_t mix_init() { return 2166136261u; }
 constexpr uint32_t mix_u32(uint32_t h, uint32_t v) { return (h ^ v) * 16777619u; }
-inline uint32_t mix(uint32_t h, std::string_view s) {
-    for (char ch : s) h = (h ^ static_cast<uint8_t>(ch)) * 16777619u;
-    return (h ^ 0xFFu) * 16777619u;
-}
+[[gnu::noinline]] uint32_t mix(uint32_t h, std::string_view s);   // defined in ui_calc.cpp (shared across pages)
 
 // A cached element: paint(sig, fn) runs fn only when sig differs from the last painted one.
 // invalidate() forces the next paint (e.g. after the surrounding area was erased or refilled).

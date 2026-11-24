@@ -3,7 +3,6 @@
 // The Connection page's Refresh on the real hardware, see k2/core/rescan.hpp. The decisions are pure (k2/core/rescan_bridge.hpp).
 #include "k2/core/rescan.hpp"
 
-#include "k2/core/hot.h"
 #include "k2/core/log.hpp"
 #include "k2/core/rd_comeback.hpp"
 #include "k2/core/rescan_bridge.hpp"
@@ -71,7 +70,7 @@ Result request() {
 
 bool active() { return g_flow.active(); }
 
-K2_HOT void poll() {
+void poll() {
     if (!g_flow.active()) return;
     const std::uint32_t now = systick::millis();
     switch (g_flow.tick(now, fusb302::caps_count())) {

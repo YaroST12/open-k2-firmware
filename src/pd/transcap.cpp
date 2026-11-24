@@ -4,7 +4,6 @@
 #include "k2/core/log.hpp"
 #include "k2/pd/transcap.hpp"
 
-#include "k2/core/hot.h"
 #include "k2/drivers/adc.hpp"
 #include "k2/drivers/fs_flash.hpp"
 #include "k2/drivers/mode_ram.hpp"
@@ -203,7 +202,7 @@ void persist_kept() {
 
 }  // namespace
 
-K2_HOT void poll() {
+void poll() {
     if (!g_held || g_in_poll) return;
     g_in_poll = true;
     if (g_rec.state() == State::Frozen) persist_kept();
@@ -213,7 +212,7 @@ K2_HOT void poll() {
 
 // The hooks' poll: sampling only. They run deep inside a paint or a delay_ms, where the littlefs commit path (about 2 KB of
 // stack) would sit on top of the caller's frames; the write waits for the main loop's next poll().
-K2_HOT void sample() {
+void sample() {
     if (!g_held || g_in_poll) return;
     g_in_poll = true;
     poll_once();

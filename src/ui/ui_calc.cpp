@@ -3,8 +3,14 @@
 #include "k2/ui/ui_calc.hpp"
 #include "k2/core/math_opt.hpp"
 #include "k2/drivers/power_calc.hpp"
+#include "k2/ui/ui_elem.hpp"
 
 namespace k2 {
+
+[[gnu::noinline]] uint32_t mix(uint32_t h, std::string_view s) {
+    for (char ch : s) h = (h ^ static_cast<uint8_t>(ch)) * 16777619u;
+    return (h ^ 0xFFu) * 16777619u;
+}
 
 void EnergyMeter::reset(uint32_t now_ms) {
     uj_ = 0;

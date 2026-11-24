@@ -75,11 +75,6 @@ std::string_view stash_str(char *dst, std::size_t cap, std::string_view s) {
     return {dst, n};
 }
 
-[[gnu::noinline]] uint32_t mix_str(uint32_t h, std::string_view s) {
-    for (char c : s) h = (h ^ static_cast<uint8_t>(c)) * 16777619u;
-    return h;
-}
-
 [[gnu::noinline]] uint32_t mix_cstr(uint32_t h, const char *s, std::size_t max_len) {
     if (!s) return h;
     for (std::size_t i = 0; i < max_len && s[i]; i++) h = (h ^ static_cast<uint8_t>(s[i])) * 16777619u;

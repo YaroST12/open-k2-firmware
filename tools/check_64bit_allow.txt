@@ -140,7 +140,7 @@ include/k2/ui/home_model.hpp    const uint64_t num = static_cast<uint64_t>(v) * 
 include/k2/ui/readout_fmt.hpp   constexpr std::size_t fmt3(std::span<char> out, long long milli, char unit) {
 include/k2/ui/readout_fmt.hpp   uint64_t v = static_cast<uint64_t>(milli < 0 ? -milli : milli);
 include/k2/ui/readout_fmt.hpp   constexpr std::size_t formula(std::span<char> out, long long mv, long long ma, long long mw) {
-include/k2/ui/ui.hpp            uint64_t paint_px0_ = 0;
+include/k2/ui/ui.hpp            uint64_t paint_px0_ K2_BSS_INIT(0);
 include/k2/ui/ui_calc.hpp       int64_t microcoulombs() const { return uc_; }
 include/k2/ui/ui_calc.hpp       int64_t microjoules() const { return uj_; }
 include/k2/ui/ui_calc.hpp       int64_t uj_ K2_BSS_ZERO;

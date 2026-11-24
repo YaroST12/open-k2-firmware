@@ -209,7 +209,7 @@ inline bool put_field(SmallField<N> &f, PaintBudget *bg, std::string_view s, uin
 [[gnu::noinline]] void invalidate_fields(Field *f, int n);
 [[gnu::noinline]] void clear_body(const Surface &c, int16_t y0 = 0);
 [[gnu::noinline]] std::string_view stash_str(char *dst, std::size_t cap, std::string_view s);
-[[gnu::noinline]] uint32_t mix_str(uint32_t h, std::string_view s);
+inline uint32_t mix_str(uint32_t h, std::string_view s) { return k2::mix(h, s); }
 [[gnu::noinline]] uint32_t mix_cstr(uint32_t h, const char *s, std::size_t max_len = ~std::size_t(0));
 [[gnu::noinline]] uint32_t mix_u32s(uint32_t h, const uint32_t *w, std::size_t n);
 [[gnu::noinline]] void put_exact_unit(StrBufBase &out, uint32_t milli, char unit = 0);
@@ -503,7 +503,7 @@ private:
     ChargerTestPage* view_ K2_BSS_INIT(nullptr);   // the painted half while it exists
     const char* fc_words_ K2_BSS_INIT(nullptr);    // the footer words of the handshake the last start() opened (null: that protocol has none)
     charger_test::Runner runner_;
-    report_card::Identity card_id_{};
+    report_card::Identity card_id_ K2_BSS_ZERO;
     // The live inputs of the Results grid that are not part of the runner's stored result: the Xiaomi SVID seen on the wire, the
     // Mi auth state and the monitor ceiling. Frozen when the run ends (freeze_facts), so the grid built on every later entry of
     // Results is the one of the run, whatever the charger does afterwards (an unplugged source must not change its rows).
@@ -512,8 +512,8 @@ private:
         bool xiaomi_seen K2_BSS_INIT(false), mi_auth K2_BSS_INIT(false), frozen K2_BSS_INIT(false);
     } facts_;   // the one instance (`facts_ = {}` value-initialises, so a new run still clears it)
     void freeze_facts();       // snapshot the live inputs; a run's start clears it (capture_identity)
-    report_card::Card card_{};   // the run's card while save_card builds and stores it; a member, not a stack copy (the save path is stack-gated, tools/stack_depth.py)
-    std::array<report_card::DeltaLine, 8> delta_{};
+    report_card::Card card_ K2_BSS_ZERO;   // the run's card while save_card builds and stores it; a member, not a stack copy (the save path is stack-gated, tools/stack_depth.py)
+    std::array<report_card::DeltaLine, 8> delta_ K2_BSS_ZERO;
     size_t delta_n_ K2_BSS_INIT(0);
     charger_journal::ResumeGate gate_;
     // Journal writes a row in flight must not do (Runner::quiet()): the section files that hold a decided row or a replanned
@@ -533,7 +533,7 @@ public:
     uint16_t spec_rows_len() const;
     size_t spec_rows_read(uint16_t off, std::span<uint8_t> out) const;
 private:
-    uint32_t spec_live_run_ = 0;            // the run whose spec result the PD spec engine still holds (spec_done); 0 = none
+    uint32_t spec_live_run_ K2_BSS_INIT(0);            // the run whose spec result the PD spec engine still holds (spec_done); 0 = none
 #endif
     void arm_step(uint32_t now);
     void arm_abort();
@@ -548,7 +548,7 @@ private:
     bool legacy_hidden_seen_ K2_BSS_INIT(false);   // what sync_legacy() last applied to the draft (the draft starts as shown)
     charger_test::Summary summary_;
     // The Tests list's preset counts (planned_tests at the chosen depth), kept until the depth, the source list or the cable changes.
-    std::array<uint8_t, 4> preset_n_{};
+    std::array<uint8_t, 4> preset_n_ K2_BSS_ZERO;
     uint32_t preset_key_ K2_BSS_INIT(0);
     uint32_t run_t0_ K2_BSS_INIT(0);                  // when the run entered Running (the m:ss on screen)
     StrBuf<32> message_;

@@ -615,9 +615,9 @@ private:
     // Progressive slice-paint state (keeps each call under the 20 ms pass ceiling).
     struct BudgetScope {
         Ui &ui;
-        PaintBudget owned{};
-        PaintBudget *prev = nullptr;
-        bool active = false;
+        PaintBudget owned K2_BSS_ZERO;
+        PaintBudget *prev K2_BSS_INIT(nullptr);
+        bool active K2_BSS_INIT(false);
         explicit BudgetScope(Ui &u) : ui(u), prev(u.ctx_.budget) {
             if (!u.booting_ && prev == nullptr) {
                 if (u.paint_clock_) owned.arm(u.paint_clock_, PaintBudget::kPassUs);
@@ -640,7 +640,7 @@ private:
     void pump_paint(uint32_t now_ms);
     uint32_t (*paint_clock_)() K2_BSS_INIT(nullptr);
     uint32_t paint_t0_us_ K2_BSS_INIT(0);
-    uint64_t paint_px0_ = 0;
+    uint64_t paint_px0_ K2_BSS_INIT(0);
     int16_t clear_y_ K2_BSS_INIT(0);
     int16_t clear_y1_ K2_BSS_INIT(0);
     Orientation orient_ = kDefaultOrientation;
