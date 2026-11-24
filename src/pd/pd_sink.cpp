@@ -238,7 +238,8 @@ void Sink::update_rev() {
     if (caps_ && caps_->valid) rev_ = caps_->spec_rev == 2 ? 2 : 1;
 }
 
-K2_HOT void Sink::queue(const TxMsg& m) {
+// One out-of-line copy: the TxMsg copy inlined at its ~20 callers cost about 0.7 KB.
+[[gnu::noinline]] K2_HOT void Sink::queue(const TxMsg& m) {
     tx_ = m;
     tx_pending_ = true;
 #if K2_OPPO_PROBE
