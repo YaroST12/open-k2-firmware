@@ -82,6 +82,8 @@ Everything is C++23; there are no C files left in `src/` (TinyUSB and lwIP under
 
 ## Current bugs
 
+- **Battery recorder counts a moved-wiring discharge as "in"** (2026-11-24, 077dd1d9). Full bank on the K2 input, laptop on the output, `battery start discharge` with wiring moved: the monitor reads the bank-to-laptop flow as negative current (direction down, -862 mA at 20 V; the same sign as charger-to-bank earlier), so after 23 s the status read in 0.321 Wh, out 0.000 Wh. BATTERY_RECORDER.md says moved discharge = forward = out. Either the input/output port mapping or the sign rule is reversed. Also: the recorder stored a run with 0.000 Wh in and out; such runs should not be saved.
+
 - **PD limiter gives up when the sink requests a 0 mA object** (2026-11-24, 077dd1d9, 100 W charger -> K2 -> power bank). From a 30 W limit (9 V contract), `pd-limit set --fixed 15V/3A`: the bank requested position 4 (20 V, forged at 0 mA) with 0 mA (RDO 0x41000000) twice; the limiter counted "ignored" and turned off ("the sink ignores it"), leaving 20 V. The same 15 V limit from a 20 V contract earlier was accepted at 15 V. Open: treat a 0 mA request on a neutered object as a refusal to re-offer (or drop neutered objects), and why this sink prefers 20 V/0 A over 15 V.
 
 - **Inline sniffer misses frames, Diag latches on them** (2026-11-24, 1.2.0-250; Baseus 140W -> cable -> K2 -> OnePlus 15 plugged straight into the K2, PPS 5-11 V up to ~9.5 V 5 A; `runs/op15-pps-2026-11-24/trace-live.txt`, `seq.txt`). The phone charged normally the whole time; the K2's capture did not keep up:
