@@ -740,8 +740,7 @@ void detect_cc_orientation() {
     // lands here again with the fresh levels, so a VBUS collapse mid-negotiation cannot leave a wrong
     // line latched from a bad first sample.
     if (!pinned && g_force_cc == 0 && held == 0) {   // a hold's line is explicit too: the ADC window must not move it
-        std::uint8_t rd_line = pd::rd_window_line(g_cc1_mv, g_cc2_mv);
-        if (rd_line == 0 && (rd_both & (kPdwn1 | kPdwn2)) == 0 && ra_rule_ok()) rd_line = pd::ra_rule_line(g_cc1_mv, g_cc2_mv);
+        const std::uint8_t rd_line = pd::rd_window_line(g_cc1_mv, g_cc2_mv);   // the Ra rule waits for cc_window_recheck()
         if (rd_line != 0 && rd_line != c.line) {
             const pd::CcChoice alt = pd::choose_cc_forced(samples, rd_line);
             if (alt.found) {
