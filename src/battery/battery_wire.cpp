@@ -79,6 +79,11 @@ std::size_t handle(Service &s, bool monitor_online, std::span<const std::uint8_t
         }
         break;
     }
+    case kContinue: {
+        constexpr Result kRes[] = {Result::Ok, Result::Busy, Result::NoMonitor, Result::NoRun, Result::NotNewest};   // Service::Cont
+        res = kRes[int(s.continue_run(get16(&p[1]), monitor_online))];
+        break;
+    }
     case kEndPhase: res = s.rec().end_phase() ? Result::Ok : Result::NotNow; break;
     case kNext: res = s.rec().next() ? Result::Ok : Result::NotNow; break;
     case kFinish: res = s.rec().finish() ? Result::Ok : Result::NotNow; break;

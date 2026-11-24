@@ -14,9 +14,9 @@ class Service;
 
 namespace k2::battery::wire {
 
-enum Op : std::uint8_t { kStatus = 0, kStart = 1, kEndPhase = 2, kNext = 3, kFinish = 4, kConfig = 5, kList = 6, kRead = 7 };
+enum Op : std::uint8_t { kStatus = 0, kStart = 1, kEndPhase = 2, kNext = 3, kFinish = 4, kConfig = 5, kList = 6, kRead = 7, kContinue = 8 };
 // What the last op did, in the status block's `result` byte. A refusal is never a protocol error: the block tells why.
-enum class Result : std::uint8_t { Ok, Busy, NoMonitor, BadArg, NotNow };
+enum class Result : std::uint8_t { Ok, Busy, NoMonitor, BadArg, NotNow, NoRun, NotNewest };
 
 inline constexpr std::size_t kStatusBytes = 40;
 inline constexpr std::size_t kChunk = 48;     // record bytes per read
@@ -26,7 +26,7 @@ inline constexpr std::uint8_t kFlagWriteFailed = 1, kFlagUnwritten = 2, kFlagMon
 constexpr std::size_t req_len(std::uint8_t op) {
     switch (op) {
     case kStatus: case kEndPhase: case kNext: case kFinish: case kList: return 1;
-    case kStart: return 3;        // mode wiring
+    case kStart: case kContinue: return 3;   // mode wiring; id
     case kConfig: return 6;       // end_ma(2) end_s(2) wiring
     case kRead: return 5;         // id(2) off(2)
     default: return 0;

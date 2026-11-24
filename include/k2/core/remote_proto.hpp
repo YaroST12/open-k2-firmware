@@ -454,7 +454,8 @@
 //   0x58 BATTERY     req op(1) [args]  rsp per op (pure handler: k2/battery/battery_wire.hpp)
 //                                    Status block (40 bytes): state(1: 0 idle, 1 measuring, 2 between the round trip's phases,
 //                                    3 done) mode(1: 0 charge, 1 discharge, 2 round trip) wiring(1: 0 same port, 1 moved)
-//                                    phases(1) result(1: what this op did: 0 ok, 1 busy, 2 no monitor, 3 bad arg, 4 not now)
+//                                    phases(1) result(1: what this op did: 0 ok, 1 busy, 2 no monitor, 3 bad arg, 4 not now,
+//                                    5 no run to continue, 6 not the newest run)
 //                                    flags(1: bit0 the last record write failed, bit1 record not written yet, bit2 monitor online,
 //                                    bit3 the efficiency is final) id(2) end_ma(2) end_s(2) run_s(4) phase_s(4) uwh_in(4)
 //                                    uwh_out(4) uah_in(4) uah_out(4) eff_permille(2: 0xFFFF none; a round trip's discharge
@@ -467,6 +468,8 @@
 //                                    op 6 list: rsp n(1) id(2) x n, newest first.
 //                                    op 7 read, args id(2) off(2): rsp off(2) total(2) n(1) data(n), n <= 48; the 246-byte run
 //                                    record (k2/battery/battery.hpp); id 0 = the run in RAM; total 0 = no such run.
+//                                    op 8 continue, args id(2) (0 = the newest): reopens the newest run's last phase
+//                                    (Service::continue_run); answers the status block.
 //                                    Wrong length BadLength, unknown op BadArg.
 // ---- end PD Stress --------------------------------------------------------------------------------------------------------------
 //   0x32 FC          req op(1) [args] [args]  rsp state proto fail scan_flags scan_step target_mv(2) vbus_mv(2)
@@ -1518,7 +1521,7 @@ inline constexpr ShellRule kShellRules[] = {
     {Cmd::QRTest, ShellKind::Ops, shell_ops(kQrTestShow, kQrTestStop)},
     {Cmd::PdStress, ShellKind::Ops, shell_ops(kPdStressStart, kPdStressStop)},
     {Cmd::PdSpec, ShellKind::Ops, shell_ops(kPdSpecStart, kPdSpecStop)},
-    {Cmd::Battery, ShellKind::Ops, shell_ops(1, 2, 3, 4, 5)},   // wire ops: start, end phase, next, finish, config
+    {Cmd::Battery, ShellKind::Ops, shell_ops(1, 2, 3, 4, 5, 8)},   // wire ops: start, end phase, next, finish, config, continue
 };
 constexpr bool shell_rules_cover_all() {
     for (const Cmd c : kCmdIds) {

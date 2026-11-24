@@ -205,8 +205,8 @@ void Recorder::sample(std::uint32_t now_ms, std::int32_t mv, std::int32_t ma, bo
     if (!online) { primed_ = false; return; }
     ma = deadband(ma);
     if (!primed_) {
-        if (resync_) {
-            gap_ms_ += now_ms;
+        if (resync_) {   // since the boot (a resume), or since the run stopped (a continue in the same boot)
+            gap_ms_ += now_ms - last_ms_;
             resync_ = false;
         }
         primed_ = true;
@@ -325,24 +325,22 @@ bool Recorder::restore(const Record &r) {
     curve_.n = r.points;
     curve_.split = r.split;
     curve_.interval_s = r.interval_s;
+    if (r.version == 1) {   // an older firmware's file: each phase's direction from its curve
+        const int split = curve_.split == 0xFF ? curve_.n : curve_.split;
+        for (int i = 0; i < phases_; i++)
+            ph_[i].in_rev = curve_reverse(curve_, i ? split : 0, i ? curve_.n : split) != (ph_[i].kind == Kind::Discharge);
+    }
     switch (r.state) {
     case RunState::Between:
         state_ = State::Between;
         ph_[1] = Phase{.kind = Kind::Discharge};
-        if (r.version == 1) ph_[0].in_rev = curve_reverse(curve_, 0, curve_.n) != (ph_[0].kind == Kind::Discharge);
         armed_ = wiring_ == Wiring::Moved;   // a moved bank has been unplugged by the time the K2 boots again
         if (resumes_ < 63) resumes_++;
         break;
     case RunState::Measuring:
         if (r.ph[current()].end == End::Running && (r.version != 1 || !battery::empty(sums(r)))) {   // the phase goes on
             state_ = State::Measuring;
-            armed_ = r.armed;
-            if (r.version == 1) {   // an older firmware's file: each phase's direction from its curve, the end rule armed
-                const int split = curve_.split == 0xFF ? curve_.n : curve_.split;
-                for (int i = 0; i < phases_; i++)
-                    ph_[i].in_rev = curve_reverse(curve_, i ? split : 0, i ? curve_.n : split) != (ph_[i].kind == Kind::Discharge);
-                armed_ = true;
-            }
+            armed_ = r.armed || r.version == 1;   // version 1 kept no end rule state: armed
             resumed();
             break;
         }
@@ -456,12 +454,25 @@ bool has_efficiency(const Record &r) {
 void Recorder::resumed() {
     if (!active()) return;
     primed_ = false;
+    last_ms_ = 0;      // the old boot's clock: the first sample adds its uptime to the gap
     quiet_ = false;    // the quiet timer (and a round trip's outflow hold) ran on the old boot's clock: it starts again
     resync_ = true;
     if (resumes_ < 63) resumes_++;
     if (state_ == State::Measuring) ph_[current()].gaps++;
     // Not dirty: the record on flash already says "running" with this id, and a write now would land mid-measurement. The
     // resume count reaches flash with the next phase boundary.
+}
+
+
+bool Recorder::reopen() {
+    if (state_ != State::Done || !phases_) return false;
+    state_ = State::Measuring;
+    ph_[current()].end = End::Running;
+    ph_[current()].gaps++;
+    if (resumes_ < 63) resumes_++;
+    armed_ = quiet_ = primed_ = false;
+    resync_ = dirty_ = true;   // the first sample adds the stop to the gap; the record says measuring again
+    return true;
 }
 
 }  // namespace k2::battery

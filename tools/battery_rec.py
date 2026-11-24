@@ -23,7 +23,7 @@ RUN_STATES = ["measuring", "between", "done"]          # a record's state
 STATES = ["idle", "measuring", "between", "done"]      # the status block's (the recorder in RAM)
 KINDS = ["charge", "discharge"]
 ENDS = ["running", "auto", "manual", "lost"]
-RESULTS = ["ok", "busy", "no-monitor", "bad-arg", "not-now"]
+RESULTS = ["ok", "busy", "no-monitor", "bad-arg", "not-now", "no-run", "not-newest"]
 NO_RATIO = 0xFFFF
 STATUS_BYTES = 40
 

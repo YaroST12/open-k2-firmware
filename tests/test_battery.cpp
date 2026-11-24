@@ -1071,7 +1071,7 @@ void test_wire() {
     Service::Checkpoint ck{};
     Service s;
     s.boot(&v.fs, &ck, false);
-    CHECK_EQ(wire::req_len(8), 0u);
+    CHECK_EQ(wire::req_len(9), 0u);
     Rsp r = call(s, {wire::kStatus});
     CHECK_EQ(r.n, wire::kStatusBytes);
     CHECK_EQ(r.b[0], 0);                     // idle
@@ -1152,6 +1152,15 @@ void test_wire() {
     r = call(s, {wire::kRead, 9, 0, 0, 0});
     CHECK_EQ(r.u16(2), 0);
     CHECK_EQ(r.b[4], 0);
+    // continue, args id(2): 0 = the newest; an older id or a measuring run is refused with the reason in the result byte
+    CHECK_EQ(call(s, {wire::kContinue, 0, 0}, false).b[4], int(wire::Result::NoMonitor));
+    CHECK_EQ(call(s, {wire::kContinue, 2, 0}).b[4], int(wire::Result::NotNewest));
+    r = call(s, {wire::kContinue, 1, 0});
+    CHECK_EQ(r.b[4], int(wire::Result::Ok));
+    CHECK_EQ(r.b[0], 1);                     // measuring its discharge again
+    CHECK_EQ(r.b[3], 2);
+    CHECK_EQ(call(s, {wire::kContinue, 0, 0}).b[4], int(wire::Result::Busy));
+    call(s, {wire::kFinish});
     // K2_DUMP: the record for the Python decoder's test (tests/test_battery_rec.py)
     if (const char *dir = std::getenv("K2_DUMP")) {
         const std::string path = std::string(dir) + "/battery_rec.hex";
@@ -1228,6 +1237,162 @@ void test_service_empty_run_not_saved() {
     CHECK_EQ(store::load(v.fs, 60, rec), false);
 }
 
+// ---- continue: a run that ended early goes on ------------------------------------------------------------------------------
+
+// The end rule closed the charge too soon (the bank paused): reopen keeps its totals and curve, counts a resume and a gap,
+// waits for the current again (disarmed) and adds the time the run stood still to the known gap.
+void test_continue_after_auto_end() {
+    Recorder r;
+    CHECK_EQ(r.reopen(), false);                                       // no run
+    r.start(Mode::Charge, Wiring::SamePort, Config{}, 3);
+    CHECK_EQ(r.reopen(), false);                                       // measuring
+    std::uint32_t t = feed(r, 0, 600'000, 5000, 2000, 1000);
+    t = feed(r, t, 62'000, 5000, 0, 1000);
+    CHECK_EQ(int(r.state()), int(State::Done));
+    r.clean();
+    const Phase before = r.phase(0);
+    const int points = r.curve().n;
+    CHECK_EQ(r.reopen(), true);
+    CHECK_EQ(int(r.state()), int(State::Measuring));
+    CHECK_EQ(r.dirty(), true);                                          // flash must say measuring again
+    CHECK_EQ(r.phases(), 1);
+    CHECK_EQ(int(r.phase(0).kind), int(Kind::Charge));
+    CHECK_EQ(int(r.phase(0).end), int(End::Running));
+    CHECK_EQ(r.phase(0).uj_in, before.uj_in);
+    CHECK_EQ(r.phase(0).ms, before.ms);
+    CHECK_EQ(r.phase(0).gaps, before.gaps + 1);
+    CHECK_EQ(r.resumes(), 1);
+    CHECK_EQ(r.curve().n, points);
+    t += 100'000;                                                       // 100 s later
+    t = feed(r, t, 300'000, 5000, 0, 1000);                             // still paused: no end before the flow comes back
+    CHECK_EQ(int(r.state()), int(State::Measuring));
+    CHECK_EQ(r.gap_s(), 102u);                                          // the 2 s after the end + the 100 s stop
+    t = feed(r, t, 60'000, 5000, 2000, 1000);
+    CHECK_COND(r.phase(0).uj_in > before.uj_in + 10ull * 59'000 * 1000);
+    t = feed(r, t, 62'000, 5000, 0, 1000);                              // the end rule works again
+    CHECK_EQ(int(r.state()), int(State::Done));
+    CHECK_EQ(int(r.phase(0).end), int(End::Auto));
+}
+
+// A user End pressed too early: Continue on the service reopens the run in RAM, its direction kept (same-port discharge).
+void test_service_continue_after_user_end() {
+    Vol v;
+    Service::Checkpoint ck{};
+    Service s;
+    s.boot(&v.fs, &ck, false);
+    s.start(Mode::Discharge, Wiring::SamePort, true);
+    std::uint32_t t = serve(s, 0, 120'000, 5000, -1000);
+    CHECK_EQ(s.rec().end_phase(), true);
+    t = serve(s, t, 1000, 5000, 0);
+    Record r;
+    CHECK_EQ(store::load(v.fs, 1, r), true);
+    CHECK_EQ(int(r.state), int(RunState::Done));
+    const std::uint64_t out = s.rec().phase(0).uj_out;
+    s.wiring() = Wiring::Moved;                                         // the next run's wiring does not touch this one
+    CHECK_EQ(int(s.continue_run(0, false)), int(Service::Cont::NoMonitor));
+    CHECK_EQ(int(s.continue_run(0, true)), int(Service::Cont::Ok));
+    CHECK_EQ(int(s.rec().state()), int(State::Measuring));
+    CHECK_EQ(int(s.rec().wiring()), int(Wiring::SamePort));
+    CHECK_EQ(int(s.wiring()), int(Wiring::SamePort));
+    CHECK_EQ(int(s.continue_run(0, true)), int(Service::Cont::Busy));
+    t = serve(s, t, 1000, 5000, -1000);
+    CHECK_EQ(store::load(v.fs, 1, r), true);                            // written at once: a cut now resumes it
+    CHECK_EQ(int(r.state), int(RunState::Measuring));
+    CHECK_EQ(int(r.ph[0].end), int(End::Running));
+    t = serve(s, t, 60'000, 5000, -1000);
+    CHECK_COND(s.rec().phase(0).uj_out > out + 5ull * 59'000 * 1000);
+    CHECK_EQ(s.rec().phase(0).uj_in, 0u);
+    (void)t;
+}
+
+// A charge an older firmware marked Lost (version 1: no direction stored), continued after a boot: the run comes from flash,
+// its direction from the curve (negative current into the bank here), the known gap from the uptime.
+void test_service_continue_after_lost() {
+    Vol v;
+    Service::Checkpoint ck{};
+    Record old = done_record(4);
+    old.ph[0].end = End::Lost;
+    old.ph[0].uwh_in = 5'000'000;
+    old.points = 3;
+    for (int i = 0; i < 3; i++) Curve::pack(&old.pts[i * 3], 5000, -1000);
+    const auto v1 = v1_bytes(old);
+    CHECK_EQ(int(v.fs.mkdir(store::kDir)), int(k2::fs::Err::Ok));
+    CHECK_EQ(int(v.fs.write_file(store::path_of(4).data(), v1)), int(k2::fs::Err::Ok));
+    Service s;
+    CHECK_EQ(int(s.boot(&v.fs, &ck, false)), int(Service::Boot::Nothing));
+    CHECK_EQ(int(s.continue_run(4, true)), int(Service::Cont::Ok));
+    CHECK_EQ(int(s.rec().state()), int(State::Measuring));
+    CHECK_EQ(s.rec().id(), 4);
+    CHECK_EQ(int(s.rec().phase(0).end), int(End::Running));
+    CHECK_EQ(s.rec().resumes(), 1);
+    std::uint32_t t = serve(s, 30'000, 120'000, 5000, -1000);         // the first sample 30 s after the boot
+    CHECK_EQ(s.rec().phase(0).uj_in, 5'000'000ull * 3600 + 5ull * 119'000 * 1000);   // the first sample primes
+    CHECK_EQ(s.rec().phase(0).uj_out, 0u);
+    CHECK_EQ(s.rec().gap_s(), 30u);
+    s.rec().finish();
+    serve(s, t, 1000, 5000, 0);
+    Record r;
+    CHECK_EQ(store::load(v.fs, 4, r), true);
+    CHECK_EQ(int(r.state), int(RunState::Done));
+    CHECK_EQ(int(r.ph[0].end), int(End::Manual));
+    CHECK_EQ(r.resumes, 1);
+}
+
+// Only the newest run continues, and never while one measures or waits between its phases.
+void test_service_continue_refusals() {
+    Vol v;
+    Service::Checkpoint ck{};
+    Service s;
+    s.boot(&v.fs, &ck, false);
+    CHECK_EQ(int(s.continue_run(0, true)), int(Service::Cont::NoRun));
+    for (std::uint16_t id = 1; id <= 2; id++) CHECK_EQ(store::save(v.fs, done_record(id)), true);
+    Service b;
+    b.boot(&v.fs, &ck, false);
+    CHECK_EQ(int(b.continue_run(1, true)), int(Service::Cont::NotNewest));
+    CHECK_EQ(int(b.rec().state()), int(State::Idle));                  // a refusal leaves the recorder alone
+    CHECK_EQ(int(b.continue_run(9, true)), int(Service::Cont::NotNewest));
+    b.start(Mode::RoundTrip, Wiring::SamePort, true);                   // run 3
+    std::uint32_t t = serve(b, 0, 120'000, 5000, 1000);
+    CHECK_EQ(int(b.continue_run(0, true)), int(Service::Cont::Busy));
+    t = serve(b, t, 62'000, 5000, 0);
+    CHECK_EQ(int(b.rec().state()), int(State::Between));
+    CHECK_EQ(int(b.continue_run(0, true)), int(Service::Cont::Busy));
+    b.rec().finish();                                                    // closed with its charge only
+    t = serve(b, t, 1000, 5000, 0);
+    CHECK_EQ(int(b.continue_run(2, true)), int(Service::Cont::NotNewest));
+    CHECK_EQ(int(b.continue_run(3, true)), int(Service::Cont::Ok));     // the charge reopens; its end waits for the discharge
+    CHECK_EQ(int(b.rec().phase(0).end), int(End::Running));
+    t = serve(b, t, 60'000, 5000, 1000);
+    t = serve(b, t, 62'000, 5000, 0);
+    CHECK_EQ(int(b.rec().state()), int(State::Between));
+}
+
+// The thresholds the page shows (the service's) apply to the continued run; a cold boot after a continue resumes it.
+void test_service_continue_then_cold_boot() {
+    Vol v;
+    Service::Checkpoint ck{};
+    std::uint64_t in = 0;
+    {
+        Service s;
+        s.boot(&v.fs, &ck, false);
+        s.start(Mode::Charge, Wiring::SamePort, true);
+        std::uint32_t t = serve(s, 0, 120'000, 5000, 1000);
+        t = serve(s, t, 62'000, 5000, 0);
+        CHECK_EQ(int(s.rec().state()), int(State::Done));
+        s.set_config(Config{.end_ma = 100, .end_s = 600});
+        CHECK_EQ(int(s.continue_run(0, true)), int(Service::Cont::Ok));
+        CHECK_EQ(s.rec().config().end_s, 600);
+        t = serve(s, t, 30'000, 5000, 1000);
+        in = s.rec().phase(0).uj_in;
+    }
+    Service s;
+    CHECK_EQ(int(s.boot(&v.fs, &ck, false)), int(Service::Boot::ResumedFlash));
+    CHECK_EQ(int(s.rec().state()), int(State::Measuring));
+    CHECK_EQ(s.rec().resumes(), 2);
+    CHECK_EQ(s.rec().config().end_s, 600);
+    CHECK_COND(s.rec().phase(0).uj_in + 5ull * (kSaveMs + 1000) * 1000 >= in);
+}
+
 }  // namespace
 
 int main() {
@@ -1271,5 +1436,10 @@ int main() {
     test_store_migration_power_cut();
     test_service_unreadable_progress();
     test_wire();
+    test_continue_after_auto_end();
+    test_service_continue_after_user_end();
+    test_service_continue_after_lost();
+    test_service_continue_refusals();
+    test_service_continue_then_cold_boot();
     return test_report("test_battery");
 }
