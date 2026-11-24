@@ -120,6 +120,12 @@ bool Service::flush() {
     if (!fs_) return false;
     Record r;
     rec_.to_record(r);
+    if (empty(sums(r))) {   // nothing worth a kept slot: no file (an older firmware's start write goes too)
+        if (fs_->exists(store::path_of(r.id).data())) fs_->remove(store::path_of(r.id).data());
+        discarded_ = r.state == RunState::Done;
+        rec_.clean();
+        return true;
+    }
     if (!fs_->exists(store::path_of(r.id).data())) store::prune(*fs_, store::kKeep - 1);   // room first: at most kKeep files
     if (!store::save(*fs_, r)) return false;
     rec_.clean();
@@ -162,7 +168,7 @@ Recorder::Start Service::start(Mode m, Wiring w, bool monitor_online) {
         wiring_ = w;
         ckpt_ms_ = 0;
         retry_ms_ = 0;
-        failed_ = false;
+        failed_ = discarded_ = false;
     }
     return s;
 }

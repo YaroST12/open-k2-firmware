@@ -83,9 +83,12 @@ The same bytes are the flash file, the remote's `read` payload and the QR share 
 ## Storage and writes
 
 - One file per run, `/bt<id>.rec`, inline in the root directory's metadata pair; the newest 3 are kept (`store::kKeep`), the
-  oldest is pruned before a new file is written. Budget: 0 blocks (`tests/test_volume_budget.cpp`, the volume table in
+  oldest is pruned before a new file is written.
+- An empty run (under 1 mWh in and out: `0.000Wh` both ways) is not saved: no file, no kept run pruned for it. The footer
+  says `Empty run, not saved`; `battery status` says `empty run, not saved` (status flag 16). Budget: 0 blocks (`tests/test_volume_budget.cpp`, the volume table in
   `docs/ARCHITECTURE.md`); a fourth run would split the root pair (4 blocks).
-- Writes happen only at a phase boundary (the start, a phase end, the discharge's start, the finish), and only when the
+- Writes happen only at a phase boundary (a phase end, the discharge's start, the finish; not the start, so a run takes a
+  slot only once it measured something), and only when the
   main loop allows an erase (no charger test or PD Stress run owns the ports, the PD link quiet for the erase window). A
   phase that measures never writes. A failed write is retried every 10 s; the footer says `Run not saved to flash`.
 - A new run waits for the previous run's write: `start` refuses with Busy while that record is unwritten and a write is not
@@ -97,7 +100,8 @@ The same bytes are the flash file, the remote's `read` payload and the QR share 
 | :--- | :--- |
 | Warm reset (a pin, software or watchdog reset with the board powered: the reboot chord, `k2_remote reboot`) during a run | The SRAM checkpoint (`.noinit`, magic + CRC-16, rewritten every second and at every state change) still holds the recorder: the run goes on where it was; the reset gap is one counted gap, not integrated. `[BATT] boot resumed` |
 | Warm reset after a run ended but before its write | The checkpoint has the ended run: it is written at the first allowed moment. `[BATT] boot closed` |
-| Cold boot (power cut, VBUS dark; SRAM does not survive one on this board) while a phase measured | The newest file says measuring: its phase is marked Lost and the run is closed (totals up to the last write, which was the phase's start). The screen says `Cut short`. `[BATT] boot lost` |
+| Cold boot (power cut, VBUS dark; SRAM does not survive one on this board) while a first phase measured | Nothing was written yet: the run is gone. `[BATT] boot nothing` |
+| Cold boot while a round trip's discharge measured | The newest file says measuring: the discharge is marked Lost and the run is closed (the charge's totals; the discharge's were never written). The screen says `Cut short`. `[BATT] boot lost` |
 | Cold boot while a round trip waited between its phases | The run comes back between its phases; with moved wiring the swap counts as seen (moving the bank is usually what cut the power). `[BATT] boot waiting` |
 | Cold boot after a finished run | Nothing to resume; the run is on flash. |
 | Firmware update (DFU) | The app wipes SRAM before it enters the bootloader: a cold boot as above. |

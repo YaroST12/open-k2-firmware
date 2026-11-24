@@ -240,7 +240,7 @@ void ident(const Shown &s, kit::Ident &out) {
     out.line.put("Run ").put_u32(s.id).put(", ").put(hms(s.secs).view()).put(", ").put(wiring_word(s.wiring));
 }
 
-FooterTone footer(const Shown &s, bool monitor, bool write_failed, bool unwritten, StrBuf<28> &out) {
+FooterTone footer(const Shown &s, bool monitor, bool write_failed, bool unwritten, bool discarded, StrBuf<28> &out) {
     if (!monitor) { out.put("No power monitor"); return FooterTone::Error; }
     if (write_failed) { out.put("Run not saved to flash"); return FooterTone::Caution; }
     if (!s.any) { out.put("Nothing measuring"); return FooterTone::Info; }
@@ -254,6 +254,7 @@ FooterTone footer(const Shown &s, bool monitor, bool write_failed, bool unwritte
     case RunState::Done:
         break;
     }
+    if (discarded) { out.put("Empty run, not saved"); return FooterTone::Caution; }
     if (s.lost) { out.put("Phase cut by a power loss"); return FooterTone::Caution; }
     if (s.eff_final) { out.put("Round trip ").put(pct(s.eff).view()).put(" efficient"); return FooterTone::Ok; }
     out.put("Run ").put_u32(s.id).put(unwritten ? " done, not saved" : " saved");

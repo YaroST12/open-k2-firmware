@@ -161,7 +161,7 @@ void Recorder::begin_phase(Kind k) {
     if (phases_ == 2) curve_.mark_split();
     state_ = State::Measuring;
     armed_ = quiet_ = false;
-    dirty_ = true;
+    dirty_ = phases_ == 2;   // a first phase is written when it ends: a run that never measured takes no kept slot
 }
 
 void Recorder::close_phase(End e, std::uint32_t tail_ms) {

@@ -20,7 +20,7 @@ enum class Result : std::uint8_t { Ok, Busy, NoMonitor, BadArg, NotNow };
 
 inline constexpr std::size_t kStatusBytes = 40;
 inline constexpr std::size_t kChunk = 48;     // record bytes per read
-inline constexpr std::uint8_t kFlagWriteFailed = 1, kFlagUnwritten = 2, kFlagMonitor = 4, kFlagFinalEff = 8;
+inline constexpr std::uint8_t kFlagWriteFailed = 1, kFlagUnwritten = 2, kFlagMonitor = 4, kFlagFinalEff = 8, kFlagEmpty = 16;
 
 // The request length of each op (the op byte included); 0 for an unknown op. The dispatcher checks it before handle().
 constexpr std::size_t req_len(std::uint8_t op) {

@@ -126,6 +126,9 @@ bool decode(std::span<const std::uint8_t> in, Record &r);            // magic, v
 // Totals over the phases of a record, and Wh out / Wh in in tenths of a percent (kNoRatio when nothing went in).
 struct Sums { std::uint64_t uwh_in = 0, uwh_out = 0, uah_in = 0, uah_out = 0; std::uint32_t secs = 0; };
 Sums sums(const Record &r);
+// Under 1 mWh both ways: 0.000 Wh on the screen (view::wh cuts). Such a run is not saved.
+inline constexpr std::uint32_t kEmptyUwh = 1000;
+constexpr bool empty(const Sums &s) { return s.uwh_in < kEmptyUwh && s.uwh_out < kEmptyUwh; }
 inline constexpr std::uint16_t kNoRatio = 0xFFFF;
 std::uint16_t ratio_permille(std::uint64_t out, std::uint64_t in);
 // A round trip whose two phases both ran: the efficiency is meaningful.
@@ -235,6 +238,7 @@ public:
     Wiring &wiring() { return wiring_; }       // the next run's wiring
     fs::Fs *volume() const { return fs_; }
     bool write_failed() const { return failed_; }
+    bool discarded() const { return discarded_; }   // the run ended empty (empty()): not written, its file removed
 
 private:
     void checkpoint();
@@ -246,6 +250,7 @@ private:
     Wiring wiring_ = Wiring::SamePort;
     std::uint32_t ckpt_ms_ = 0, retry_ms_ = 0;
     bool failed_ = false;
+    bool discarded_ = false;
     bool may_write_ = true;       // the last poll's permission: a start flushes an unwritten earlier run only when allowed
     State ckpt_state_ = State::Idle;   // the run's state the checkpoint holds: a change is checkpointed at the next poll
 };

@@ -86,6 +86,13 @@ class Battery(unittest.TestCase):
         self.assertIn("79.5 % so far", text)
         self.assertIn("10.000 Wh", text)
 
+    def test_empty_run_flag(self):
+        s = run(FakeLink(status_block(state=3, rid=5, flags=4 | 16)), "end")["battery"]
+        self.assertTrue(s["empty"])
+        self.assertIn("empty run, not saved", kr.render("battery", {"battery": s}))
+        s = run(FakeLink(status_block(state=3, rid=5)), "status")["battery"]
+        self.assertFalse(s["empty"])
+
     def test_start_sends_mode_and_wiring(self):
         link = FakeLink(status_block(next_wiring=1))
         run(link, "start", "round-trip")                      # the K2's wiring setting

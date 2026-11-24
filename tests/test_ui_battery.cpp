@@ -110,9 +110,9 @@ static void test_ident_and_footer() {
     CHECK(eq(id.head.view(), "No run"));
     CHECK(id.dim);
     StrBuf<28> f;
-    CHECK_EQ(int(view::footer(view::shown(record_of(r), false), true, false, false, f)), int(FooterTone::Info));
+    CHECK_EQ(int(view::footer(view::shown(record_of(r), false), true, false, false, false, f)), int(FooterTone::Info));
     f.clear();
-    CHECK_EQ(int(view::footer(view::shown(record_of(r), false), false, false, false, f)), int(FooterTone::Error));
+    CHECK_EQ(int(view::footer(view::shown(record_of(r), false), false, false, false, false, f)), int(FooterTone::Error));
     CHECK(eq(f.view(), "No power monitor"));
     r.start(bt::Mode::Charge, bt::Wiring::SamePort, bt::Config{}, 4);
     feed(r, 0, 3'912'000, 5000, 1000);
@@ -122,10 +122,10 @@ static void test_ident_and_footer() {
     CHECK(eq(id.head.view(), "Charging"));
     CHECK(eq(id.line.view(), "Same port, 1h05m11s, 5.431Wh in"));   // 5 W for 3911 s = 5.4319 Wh, cut
     f.clear();
-    CHECK_EQ(int(view::footer(s, true, false, false, f)), int(FooterTone::Info));
+    CHECK_EQ(int(view::footer(s, true, false, false, false, f)), int(FooterTone::Info));
     CHECK(eq(f.view(), "Ends under 50mA for 60s"));
     f.clear();
-    CHECK_EQ(int(view::footer(s, true, true, false, f)), int(FooterTone::Caution));   // the last write failed
+    CHECK_EQ(int(view::footer(s, true, true, false, false, f)), int(FooterTone::Caution));   // the last write failed
     StrBuf<29> b;
     view::bench_status(s, b);
     CHECK(eq(b.view(), "Charging 1h05m, 5.431Wh"));
@@ -144,8 +144,11 @@ static void test_ident_and_footer() {
     CHECK_EQ(id.n, 1);
     CHECK(eq(id.chip[0].t.view(), "Round trip"));
     f.clear();
-    CHECK_EQ(int(view::footer(s, true, false, false, f)), int(FooterTone::Ok));
+    CHECK_EQ(int(view::footer(s, true, false, false, false, f)), int(FooterTone::Ok));
     CHECK(eq(f.view(), "Round trip 80.0% efficient"));
+    f.clear();
+    CHECK_EQ(int(view::footer(s, true, false, false, true, f)), int(FooterTone::Caution));   // ended empty: not saved
+    CHECK(eq(f.view(), "Empty run, not saved"));
     b.clear();
     view::bench_status(s, b);
     CHECK(eq(b.view(), "Round trip 80.0%"));
@@ -203,6 +206,10 @@ static void test_page() {
     press(ui, Button::Ok, t);
     CHECK_EQ(int(bt::hw::service().rec().state()), int(bt::State::Measuring));
     CHECK_EQ(int(bt::hw::service().rec().mode()), int(bt::Mode::Charge));
+    g_stub.pm.vbus_mv = 5000;
+    g_stub.pm.current_ma = 1000;                                                   // 5 W for 3 s: a run worth saving
+    for (int i = 0; i < 4; i++) bt::hw::poll(t += 1000, true);
+    g_stub.pm.current_ma = 0;
     // the running dot on another page
     ui.on_button(Button::Back, ButtonEvent::Short, t);   // pops the place
     ui.tick(t += 100);

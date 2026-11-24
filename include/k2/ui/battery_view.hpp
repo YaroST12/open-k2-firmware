@@ -78,6 +78,7 @@ void bench_status(const Shown &s, StrBuf<29> &out);
 // The identity block of the main view or a stored run.
 void ident(const Shown &s, kit::Ident &out);
 // The footer of the main view (a refusal or an armed confirm takes it first, BatteryPage).
-FooterTone footer(const Shown &s, bool monitor, bool write_failed, bool unwritten, StrBuf<28> &out);
+// `discarded`: the run ended empty and was not saved (Service::discarded).
+FooterTone footer(const Shown &s, bool monitor, bool write_failed, bool unwritten, bool discarded, StrBuf<28> &out);
 
 }  // namespace k2::battery::view
