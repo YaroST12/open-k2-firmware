@@ -127,9 +127,9 @@ bool request_complies(std::uint32_t rdo, std::span<const std::uint32_t> real_pdo
 std::size_t forge_caps(std::span<const std::uint32_t> real, const LimConfig& cfg, std::span<std::uint32_t> out);
 std::size_t forge_caps(std::span<const std::uint32_t> real, std::uint32_t limit_mw, std::span<std::uint32_t> out);
 bool forge_differs(std::span<const std::uint32_t> real, std::span<const std::uint32_t> forged);
-// False when `cfg` turns Fixed off yet the list it forges from `real` keeps nothing past the 5 V object (a fixed object sits
-// before the APDOs): that limit needs placeholders, which are never offered.
-bool lim_fits(std::span<const std::uint32_t> real, const LimConfig& cfg);
+// False when `cfg` turns Fixed off yet the list it forges keeps nothing past the 5 V object (a fixed object sits before the
+// APDOs): that limit would need placeholders, which are never offered.
+bool lim_fits(std::span<const Pdo> pdos, const LimConfig& cfg);
 
 struct LimStatus {
     LimState state = LimState::Off;

@@ -3053,6 +3053,7 @@ void ToolsPage::limit_edge() {
         case pd::LimWhy::SinkResets: m = tx::kLimToastSinkResets; break;
         case pd::LimWhy::SinkIgnores: m = tx::kLimToastSinkIgnores; break;
         case pd::LimWhy::Epr: m = tx::kLimToastEpr; break;
+        case pd::LimWhy::NoFit: m = tx::kLimToastNoFit; break;
         default: break;
         }
         if (m) ctx_.toast.show(FooterTone::Caution, m, ctx_.now);
@@ -3104,6 +3105,11 @@ bool ToolsPage::apply_limit(bool off) {
         }
         if (!pd::lim_config_active(draft_)) {
             ctx_.toast.show(FooterTone::Caution, tx::kLimToastNoLimit, ctx_.now);
+            return true;
+        }
+        const pd::SourceCaps &c = held::shown_caps();   // refused before any reset: the list could not carry it
+        if (c.valid && !pd::lim_fits({c.pdos.data(), std::min<size_t>(c.num_pdos, c.pdos.size())}, draft_)) {
+            ctx_.toast.show(FooterTone::Caution, tx::kLimToastNoFit, ctx_.now);
             return true;
         }
         const pd::LimStatus &s = fusb302::limit_status();

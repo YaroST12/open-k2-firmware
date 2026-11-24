@@ -68,6 +68,21 @@ struct LabelOut {
 };
 bool tech_constrained(const LimTech& t) { return !t.enabled || t.max_mv != 0 || t.max_ma != 0; }
 
+// An object past the first stays in the forged list (clamped) when its kind is on and it fits the voltage and watt ceilings.
+bool keeps(const Pdo& p, const LimConfig& cfg) {
+    const bool within_w = cfg.limit_mw == 0 || p.max_mw <= cfg.limit_mw;
+    switch (p.type) {
+        case PdoType::Fixed:
+        case PdoType::Variable:
+        case PdoType::Battery: return cfg.fixed.enabled && (cfg.fixed.max_mv == 0 || p.max_mv <= cfg.fixed.max_mv) && within_w;
+        case PdoType::Pps: return cfg.pps.enabled && (cfg.pps.max_mv == 0 || cfg.pps.max_mv >= p.min_mv) && within_w;
+        case PdoType::Avs:
+            if (((p.raw >> 28) & 3u) == 1u) return within_w;   // EPR AVS: only ever seen past the SPR positions
+            return cfg.avs.enabled && (cfg.avs.max_mv == 0 || cfg.avs.max_mv >= 15000) && within_w;
+        default: return false;
+    }
+}
+
 }  // namespace
 
 bool lim_config_valid(const LimConfig& c) {
@@ -301,63 +316,50 @@ std::size_t forge_caps(std::span<const std::uint32_t> real, const LimConfig& cfg
             const std::uint32_t lim = max_ma / 10u;
             return orig > lim ? ((cur & ~(0x3FFu << shift)) | (lim << shift)) : cur;
         };
-        const bool within_w = cfg.limit_mw == 0 || p.max_mw <= cfg.limit_mw;
-        const bool fx_ok = cfg.fixed.enabled && (cfg.fixed.max_mv == 0 || p.max_mv <= cfg.fixed.max_mv) && within_w;
-        bool keep = fx_ok;
-        switch (w >> 30) {
-            case 0:   // Fixed
-                if (i == 0) {
-                    w &= ~(1u << 23);   // never invite EPR while capped
-                    keep = true;
-                    std::uint32_t cap_ma = p.max_ma;
-                    if (!cfg.fixed.enabled) cap_ma = std::min<std::uint32_t>(cap_ma, kLimMinFixedMa);
-                    else {
-                        if (cfg.fixed.max_ma) cap_ma = std::min<std::uint32_t>(cap_ma, cfg.fixed.max_ma);
-                        if (cfg.limit_mw && p.max_mv)
-                            cap_ma = std::min<std::uint32_t>(cap_ma, std::max<std::uint32_t>(kLimMinFixedMa, cfg.limit_mw * 1000u / p.max_mv));
-                    }
-                    w = clamp10(w, 0, cap_ma);
+        if (i == 0 && (w >> 30) == 0) {   // the mandatory 5 V object always stays, clamped
+            w &= ~(1u << 23);   // never invite EPR while capped
+            std::uint32_t cap_ma = p.max_ma;
+            if (!cfg.fixed.enabled) cap_ma = std::min<std::uint32_t>(cap_ma, kLimMinFixedMa);
+            else {
+                if (cfg.fixed.max_ma) cap_ma = std::min<std::uint32_t>(cap_ma, cfg.fixed.max_ma);
+                if (cfg.limit_mw && p.max_mv)
+                    cap_ma = std::min<std::uint32_t>(cap_ma, std::max<std::uint32_t>(kLimMinFixedMa, cfg.limit_mw * 1000u / p.max_mv));
+            }
+            w = clamp10(w, 0, cap_ma);
+        } else if (!keeps(p, cfg)) {
+            break;
+        } else {
+            switch (w >> 30) {
+                case 0:   // Fixed
+                case 2:   // Variable
+                    if (cfg.fixed.max_ma) w = clamp10(w, 0, cfg.fixed.max_ma);
                     break;
-                }
-                [[fallthrough]];
-            case 2:   // Variable
-                if (fx_ok && cfg.fixed.max_ma) w = clamp10(w, 0, cfg.fixed.max_ma);
-                break;
-            case 1:   // Battery
-                if (fx_ok && cfg.fixed.max_ma && p.max_mv) {
-                    const std::uint32_t lim_mw = std::uint32_t(p.max_mv) * cfg.fixed.max_ma / 1000u;
-                    const std::uint32_t lim = lim_mw / 250u;
-                    if ((w & 0x3FFu) > lim) w = (w & ~0x3FFu) | lim;
-                }
-                break;
-            default: {
-                const unsigned apdo = (w >> 28) & 3u;
-                if (apdo == 0) {   // PPS
-                    keep = cfg.pps.enabled && (cfg.pps.max_mv == 0 || cfg.pps.max_mv >= p.min_mv) && within_w;
-                    if (keep) {
+                case 1:   // Battery
+                    if (cfg.fixed.max_ma && p.max_mv) {
+                        const std::uint32_t lim = std::uint32_t(p.max_mv) * cfg.fixed.max_ma / 1000u / 250u;
+                        if ((w & 0x3FFu) > lim) w = (w & ~0x3FFu) | lim;
+                    }
+                    break;
+                default: {
+                    const unsigned apdo = (w >> 28) & 3u;
+                    if (apdo == 0) {   // PPS
                         if (cfg.pps.max_mv && cfg.pps.max_mv < p.max_mv)
                             w = (w & ~(0xFFu << 17)) | (std::uint32_t(cfg.pps.max_mv / 100u) << 17);
                         if (cfg.pps.max_ma) {
                             const std::uint32_t lim = cfg.pps.max_ma / 50u;
                             if ((w & 0x7Fu) > lim) w = (w & ~0x7Fu) | lim;
                         }
-                    }
-                } else if (apdo == 2) {   // SPR AVS
-                    keep = cfg.avs.enabled && (cfg.avs.max_mv == 0 || cfg.avs.max_mv >= 15000) && within_w;
-                    if (keep) {
+                    } else if (apdo == 2) {   // SPR AVS
                         if (cfg.avs.max_mv && cfg.avs.max_mv < 20000) w &= ~0x3FFu;   // leaves valid 9..15 V range
                         if (cfg.avs.max_ma) {
                             w = clamp10(w, 10, cfg.avs.max_ma);
                             if ((w & 0x3FFu) != 0) w = clamp10(w, 0, cfg.avs.max_ma);
                         }
                     }
-                } else {
-                    keep = within_w;
+                    break;
                 }
-                break;
             }
         }
-        if (!keep) break;
         out[i] = w;
         out_n = i + 1;
     }
@@ -368,9 +370,8 @@ std::size_t forge_caps(std::span<const std::uint32_t> real, std::uint32_t limit_
     return forge_caps(real, lim_config_watts(limit_mw), out);
 }
 
-bool lim_fits(std::span<const std::uint32_t> real, const LimConfig& cfg) {
-    std::array<std::uint32_t, 7> f{};
-    return cfg.fixed.enabled || forge_caps(real, cfg, f) >= 2;
+bool lim_fits(std::span<const Pdo> pdos, const LimConfig& cfg) {
+    return cfg.fixed.enabled || (pdos.size() >= 2 && keeps(pdos[1], cfg));
 }
 
 bool forge_differs(std::span<const std::uint32_t> real, std::span<const std::uint32_t> forged) {
@@ -383,7 +384,8 @@ bool forge_differs(std::span<const std::uint32_t> real, std::span<const std::uin
 bool Limiter::plan(std::array<std::uint32_t, 7>& f, std::size_t& cnt) {
     const auto real = watch_.pdos();
     cnt = forge_caps(real, st_.cfg, f);
-    if (!real.empty() && !lim_fits(real, st_.cfg)) {
+    const Pdo head[2] = {real.empty() ? Pdo{} : decode_pdo(real[0]), real.size() > 1 ? decode_pdo(real[1]) : Pdo{}};
+    if (!real.empty() && !lim_fits({head, std::min<std::size_t>(real.size(), 2)}, st_.cfg)) {
         stop(LimWhy::NoFit);
         return false;
     }

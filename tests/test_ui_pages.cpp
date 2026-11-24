@@ -2372,6 +2372,14 @@ static void test_pd_limit_100w_levels() {
     press(ui, Button::Plus, ButtonEvent::Short, t += 10);    // AVS
     press(ui, Button::Plus, ButtonEvent::Short, t += 10);    // Apply
     press(ui, Button::Ok, ButtonEvent::Short, t += 10);
+    // 20 V sits before the APDOs: Fixed off would need a 0 mA placeholder there, never offered: refused, nothing armed
+    CHECK_EQ(g_stub.lim_arms, 0);
+    CHECK_STR(ui.context().toast.view().data(), "Fixed Off: not on charger");
+    // a charger whose APDOs follow 5 V straight away carries it
+    g_stub.caps.num_pdos = 3;
+    g_stub.caps.pdos[1] = g_stub.caps.pdos[2];
+    g_stub.caps.pdos[2] = g_stub.caps.pdos[3];
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);
     CHECK_EQ(g_stub.lim_arms, 1);
     CHECK_EQ(g_stub.lim_arm_cfg.fixed.enabled, false);
     CHECK_EQ(g_stub.lim_arm_cfg.pps.max_mv, 11000u);
@@ -2666,6 +2674,20 @@ static void test_pd_limit_off_resets_while_the_sink_holds_the_list() {
     idle_link();
 }
 
+// The limiter stops itself when the charger's list cannot carry Fixed off (a fixed object before the APDOs): Tools says so.
+static void test_pd_limit_no_fit_stop_says_so() {
+    Ui &ui = fresh_ui();
+    set_caps_65w();
+    uint32_t t = open_limit_row(ui, 20000);
+    g_stub.lim.state = pd::LimState::Armed;
+    ui.tick(t += 1000);
+    g_stub.lim.state = pd::LimState::Off;
+    g_stub.lim.why = pd::LimWhy::NoFit;
+    ui.tick(t += 1000);
+    CHECK_STR(ui.context().toast.view().data(), "Fixed Off: not on charger");
+    g_stub.lim = {};
+}
+
 static void test_pd_limit_reset_refusals() {
     Ui &ui = fresh_ui();
     set_caps_65w();
@@ -2838,6 +2860,7 @@ int main() {
     test_pd_limit_confirm_window();
     test_pd_limit_no_live_contract_no_reset();
     test_pd_limit_reset_refusals();
+    test_pd_limit_no_fit_stop_says_so();
     test_pd_limit_off_resets_while_the_sink_holds_the_list();
     test_pd_limit_picker_offers_held_and_reset_row();
     test_over_load_above_5v_needs_confirm();

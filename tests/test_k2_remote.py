@@ -2111,6 +2111,8 @@ class PdLimitCli(unittest.TestCase):
         self.assertIn("forged pos 2: PDO 0x0002D0C8", text)
         off = self.run_cmd(["off"], self.status(0, 5), [])["pd_limit"]
         self.assertIn("pd-limit off (the charger resets)", kr.render("pd-limit", {"pd_limit": off}))
+        nofit = self.run_cmd(["set", "--fixed", "off"], self.status(0, 8, 0, 0, ()), [])["pd_limit"]   # Fixed off, 9 V before the PPS
+        self.assertIn("pd-limit off (not on this charger)", kr.render("pd-limit", {"pd_limit": nofit}))
 
     def test_refusal_text(self):
         e = kr.RemoteError(kr.STATUS_BUSY, kr.CMD_PD_LIMIT, bytes([2]))   # Busy + LimRefusal::Busy

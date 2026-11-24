@@ -39,6 +39,11 @@ constexpr std::uint32_t rq_avs(unsigned pos, unsigned mv, unsigned ma) { return 
 void put32(std::vector<std::uint8_t>& b, std::uint32_t w) {
     for (int i = 0; i < 4; i++) b.push_back(std::uint8_t(w >> (8 * i)));
 }
+bool fits(std::span<const std::uint32_t> raw, const LimConfig& cfg) {
+    std::vector<Pdo> p;
+    for (std::uint32_t w : raw) p.push_back(decode_pdo(w));
+    return lim_fits(p, cfg);
+}
 std::uint32_t word(const TxMsg& m, unsigned i) {
     return m.data[4 * i] | (m.data[4 * i + 1] << 8) | (m.data[4 * i + 2] << 16) | (std::uint32_t(m.data[4 * i + 3]) << 24);
 }
@@ -157,7 +162,7 @@ int main() {
         pps11.avs.enabled = false;
         CHECK_EQ(int(forge_caps(charger, pps11, out)), 1);
         CHECK_EQ(out[0], fixed(5000, 100, kFlags1));
-        CHECK_COND(!lim_fits(charger, pps11));
+        CHECK_COND(!fits(charger, pps11));
         CHECK_COND(!request_complies(rq_fixed(1, 500, 500), charger, {out, 1}, pps11));
         // the same PPS straight after 5 V: clamped in place
         const std::uint32_t lead[2] = {charger[0], charger[5]};
@@ -505,9 +510,9 @@ int main() {
         LimConfig ppsonly{};
         ppsonly.fixed.enabled = false;
         ppsonly.pps = {true, 9000, 0};
-        CHECK_COND(lim_fits(lead5, ppsonly));             // 5 V then the APDO: PPS only works
-        CHECK_COND(!lim_fits(ord, ppsonly));              // 9 V before it: only 5 V 100 mA would be left
-        CHECK_COND(lim_fits(ord, lim_config_watts(10000)));   // a low Fixed limit leaving 5 V alone is still a limit
+        CHECK_COND(fits(lead5, ppsonly));             // 5 V then the APDO: PPS only works
+        CHECK_COND(!fits(ord, ppsonly));              // 9 V before it: only 5 V 100 mA would be left
+        CHECK_COND(fits(ord, lim_config_watts(10000)));   // a low Fixed limit leaving 5 V alone is still a limit
         Rig r;
         r.lim.arm(ppsonly, r.now);
         r.negotiate(0, rq_fixed(2, 3000, 3000), ord);
