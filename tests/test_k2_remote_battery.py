@@ -43,7 +43,7 @@ class FakeLink:
         assert cmd == kr.CMD_BATTERY
         self.calls.append(bytes(payload))
         op = payload[0]
-        want = {0: 1, 1: 3, 2: 1, 3: 1, 4: 1, 5: 6, 6: 1, 7: 5}[op]
+        want = {0: 1, 1: 3, 2: 1, 3: 1, 4: 1, 5: 6, 6: 1, 7: 5, 8: 3}[op]
         assert len(payload) == want, (op, payload)
         if op == 6:
             ids = sorted(self.records, reverse=True)
@@ -110,6 +110,18 @@ class Battery(unittest.TestCase):
         with self.assertRaises(SystemExit) as e:
             run(link, "start", "charge")
         self.assertIn("busy", str(e.exception))
+
+    def test_continue_sends_id(self):
+        link = FakeLink(status_block(state=1, rid=12))
+        s = run(link, "continue")["battery"]
+        self.assertEqual(link.calls[-1], bytes([8, 0, 0]))     # 0 = the newest run
+        self.assertEqual((s["state"], s["id"]), ("measuring", 12))
+        run(link, "continue", "12")
+        self.assertEqual(link.calls[-1], bytes([8, 12, 0]))
+        for code, word in ((5, "no-run"), (6, "not-newest")):
+            with self.assertRaises(SystemExit) as e:
+                run(FakeLink(refuse=code), "continue", "3")
+            self.assertIn(word, str(e.exception))
 
     def test_read_and_list(self):
         rec = fixture_record()

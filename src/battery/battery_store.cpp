@@ -124,6 +124,7 @@ Service::Boot Service::boot(fs::Fs *f, Checkpoint *ckpt, bool warm) {
         }
         if (ckpt_->rec.dirty()) {                 // a run ended and the reset came before its write
             std::memcpy(static_cast<void *>(&rec_), &ckpt_->rec, sizeof rec_);
+            rec_.resumed();
             return Boot::Closed;
         }
     }
@@ -199,6 +200,25 @@ Recorder::Start Service::start(Mode m, Wiring w, bool monitor_online) {
         failed_ = false;
     }
     return s;
+}
+
+Service::Cont Service::continue_run(std::uint16_t id, bool monitor_online) {
+    if (rec_.active()) return Cont::Busy;
+    if (!monitor_online) return Cont::NoMonitor;
+    std::uint16_t top = 0;
+    if (fs_) store::list(*fs_, &top, 1);
+    const bool ram = rec_.state() == State::Done && rec_.id() >= top;   // full precision, maybe not on flash yet
+    const std::uint16_t newest = ram ? rec_.id() : top;
+    if (!newest) return Cont::NoRun;
+    if (id && id != newest) return Cont::NotNewest;
+    Record r;
+    if (!ram && (!store::load(*fs_, top, r) || r.state != RunState::Done || !rec_.restore(r))) return Cont::NoRun;
+    if (!rec_.reopen()) return Cont::NoRun;
+    rec_.set_config(cfg_);   // the thresholds the page shows: raising "End after" is how an early end is avoided
+    wiring_ = rec_.wiring();
+    retry_ms_ = 0;
+    failed_ = false;
+    return Cont::Ok;
 }
 
 }  // namespace k2::battery

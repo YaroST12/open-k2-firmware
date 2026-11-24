@@ -40,13 +40,14 @@ constexpr const char *kNotes[] = {
     K2_P("the run as a QR code"),              // Share
     K2_P("Wh out / Wh in, so far"),            // Eff, running
     K2_P("Wh out / Wh in"),                    // Eff, final
+    K2_P("measures its last phase again"),     // Continue
 };
 static_assert(all_fit_p(kNotes, kLabelAdv, kit::kNoteMaxPx), "a Battery note is wider than the note box");
 
 // Rows without a tail run to the tail's edge; a row with one leaves the gap and the widest tail ("123.4Wh"; Wiring's
 // "Same port" sits beside a six-letter name).
 constexpr const char *kBareRows[] = {K2_P("Start round trip"), K2_P("Start discharge"), K2_P("End discharge"), K2_P("Finish run"), K2_P("Share as QR"),
-                                     K2_P("No saved runs")};
+                                     K2_P("No saved runs"), K2_P("Continue run")};
 static_assert(all_fit_p(kBareRows, kSmallAdvPx, kit::kTailX - kit::kTextX), "a Battery row runs into the tail");
 constexpr const char *kTailRows[] = {K2_P("Efficiency"), K2_P("End below"), K2_P("End after"), K2_P("#999 Dischg"), K2_P("#999 Round")};
 static_assert(all_fit_p(kTailRows, kSmallAdvPx, kit::kTailX - kit::kTextX - kit::kTailGap - 7 * static_cast<int>(kSmallAdvPx)),
@@ -65,6 +66,7 @@ bool live_any() { return bt::hw::service().rec().state() != bt::State::Idle; }
 
 const char *armed_text(Act a, const view::Shown &s) {
     if (a == Act::Finish) return K2_P("Press again to end run");
+    if (a == Act::Continue) return K2_P("Press again to continue");
     return s.kind == bt::Kind::Charge ? K2_P("Press again: end charge") : K2_P("Press again: end dischg");
 }
 }  // namespace
@@ -86,7 +88,7 @@ void BatteryPage::leave() {
 void BatteryPage::build() {
     if (view_ == View::Stored) {
         shown_ = view::shown(rec_, true);
-        rows_ = view::rows(shown_, true);
+        rows_ = view::rows(shown_, true, runs_sel_ == 0 && !bt::hw::service().rec().active());   // only the newest continues
         return;
     }
     bt::hw::service().rec().to_record(rec_);
@@ -105,7 +107,7 @@ Act BatteryPage::act() const {
 }
 
 bool BatteryPage::armed() const {
-    return armed_until_ && static_cast<int32_t>(armed_until_ - ctx_.now) > 0 && act() == armed_act_ && view_ == View::Main;
+    return armed_until_ && static_cast<int32_t>(armed_until_ - ctx_.now) > 0 && act() == armed_act_ && view_ != View::Runs;
 }
 
 void BatteryPage::load_runs() {
@@ -211,6 +213,9 @@ void BatteryPage::action_row(Act a, bool focused, kit::RowSpec &out) {
         break;
     case Act::Share:
         note = kNotes[12];
+        break;
+    case Act::Continue:
+        note = kNotes[15];
         break;
     }
     if (armed_until_ && a == armed_act_ && armed()) out.text_color = kCaution;
@@ -334,7 +339,8 @@ void BatteryPage::ok() {
     }
     case Act::EndPhase:
     case Act::Finish:
-        if (!armed() || armed_act_ != a) {   // the first OK arms, the second within the window ends
+    case Act::Continue:
+        if (!armed() || armed_act_ != a) {   // the first OK arms, the second within the window acts
             armed_act_ = a;
             armed_until_ = ctx_.now + Ui::kConfirmWindowMs;
             if (!armed_until_) armed_until_ = 1;
@@ -342,7 +348,15 @@ void BatteryPage::ok() {
         }
         armed_until_ = 0;
         if (a == Act::EndPhase) sv.rec().end_phase();
-        else sv.rec().finish();
+        else if (a == Act::Finish) sv.rec().finish();
+        else {
+            static constexpr const char *kCont[] = {"Run continues", "A run is measuring", "No power monitor",
+                                                    "No run to continue", "Only the newest run"};   // Service::Cont
+            const auto c = sv.continue_run(shown_.id, bt::hw::monitor_online());
+            refuse(kCont[static_cast<int>(c)], c == bt::Service::Cont::Ok ? FooterTone::Ok : FooterTone::Caution);
+            if (c != bt::Service::Cont::Ok) return;
+            set_view(View::Main, 0);
+        }
         build();
         sel_ = rows_.facts;
         ctx_.rows.invalidate();

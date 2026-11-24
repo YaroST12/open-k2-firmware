@@ -179,8 +179,12 @@ public:
     // counted, the end rule's quiet timer restarted); a version 1 record cannot (no direction, no end rule state): the phase
     // is marked Lost and the run is Done, dirty. Done stays Done. False for a record that is not a run.
     bool restore(const Record &r);
-    // A warm reset kept this object in SRAM: the run goes on; the reset gap is not integrated (one gap counted).
+    // A warm reset kept this object in SRAM: the run goes on; the reset gap is not integrated (one gap counted). An ended run
+    // only drops the old boot's clock (for a later reopen).
     void resumed();
+    // Continue: a Done run measures its last phase again (same kind, wiring and direction, totals and curve kept), one resume
+    // and one gap counted; the end rule waits for the current to reach the threshold again. False unless Done.
+    bool reopen();
 
 private:
     void begin_phase(Kind k);
@@ -250,6 +254,9 @@ public:
     // checkpoint once a second.
     void poll(std::uint32_t now_ms, std::int32_t mv, std::int32_t ma, bool online, bool may_write);
     Recorder::Start start(Mode m, Wiring w, bool monitor_online);
+    // Continue the newest run (`id` 0, or its id): the Done run in RAM, else the newest on flash. Never while a run is active.
+    enum class Cont : std::uint8_t { Ok, Busy, NoMonitor, NoRun, NotNewest };
+    Cont continue_run(std::uint16_t id, bool monitor_online);
     Recorder &rec() { return rec_; }
     const Recorder &rec() const { return rec_; }
     Config &config() { return cfg_; }          // the next run's settings (the running run takes a change at once)

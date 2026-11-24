@@ -154,7 +154,7 @@ PSC_FAMILY_ALIASES = {"pps-steps": "pps-avs", "pps": "pps-avs", "avs": "pps-avs"
 # ---- Loop probe (docs/LOOP_PROBE.md): constants ----
 CMD_LOOP_PROBE = 0x57     # loop probe: the stored result file /lp/last.rec, chunked read only (k2/loopprobe/loop_probe_hw.hpp)
 LOOP_CHUNK = 48           # remote::kLoopProbeChunk
-CMD_BATTERY = 0x58        # battery efficiency recorder: status / start / end / next / finish / config / list / read (k2/battery)
+CMD_BATTERY = 0x58        # battery efficiency recorder: status / start / end / next / finish / config / list / read / continue (k2/battery)
 BATTERY_CHUNK = 48        # battery::wire::kChunk
 # ---- end Loop probe constants ----
 UFCS_STATUS, UFCS_GET, UFCS_SET, UFCS_RESET, UFCS_PROBE, UFCS_STOP, UFCS_READ = range(7)
@@ -4574,7 +4574,7 @@ def loop_probe_read_file(link, sel=0):
 
 
 # ---- Battery efficiency recorder (docs/BATTERY_RECORDER.md): CMD_BATTERY 0x58 ----
-BATTERY_OPS = {"status": 0, "start": 1, "end": 2, "next": 3, "finish": 4, "config": 5, "list": 6, "read": 7}
+BATTERY_OPS = {"status": 0, "start": 1, "end": 2, "next": 3, "finish": 4, "config": 5, "list": 6, "read": 7, "continue": 8}
 
 
 def battery_status(link, op="status", args=b""):
@@ -4638,6 +4638,8 @@ def cmd_battery(link, a):
         end_s = a.end_s if a.end_s is not None else cur["end_s"]
         wiring = a.wiring if a.wiring is not None else cur["next_wiring"]
         s = battery_status(link, "config", struct.pack("<HHB", end_ma, end_s, battery_rec.WIRINGS.index(wiring)))
+    elif op == "continue":
+        s = battery_status(link, "continue", a.id.to_bytes(2, "little"))
     else:
         s = battery_status(link, op)
     if s["result"] != "ok":
@@ -6487,7 +6489,7 @@ def build_parser():
                          "starts on the K2, Tools > Loop probe); raw values with --json")
     slp.add_argument("--host", action="store_true", help="the Host report instead (/lp/host.rec, K2_HOST_REPORT=1 builds)")
     sbat = sub.add_parser("battery", help="battery efficiency recorder (Bench > Battery): status, start, end, next, finish, "
-                          "config, list, read; raw values with --json (docs/BATTERY_RECORDER.md)")
+                          "config, list, read, continue; raw values with --json (docs/BATTERY_RECORDER.md)")
     sbats = sbat.add_subparsers(dest="battery_cmd", required=True)
     sbats.add_parser("status", help="state, phase, Wh and mAh in/out, time, efficiency, end rule")
     sbst = sbats.add_parser("start", help="start a run: charge, discharge or round-trip (refused while one runs)")
@@ -6506,6 +6508,8 @@ def build_parser():
     sbrd = sbats.add_parser("read", help="one run record with its curve (id 0 or omitted: the run in RAM)")
     sbrd.add_argument("id", type=int, nargs="?", default=0)
     sbrd.add_argument("--all", action="store_true", help="every stored run")
+    sbct = sbats.add_parser("continue", help="reopen the newest run's last phase (ended too early or cut); refused while one runs")
+    sbct.add_argument("id", type=int, nargs="?", default=0, help="the newest run's id (0 or omitted: the newest)")
     sc = sub.add_parser("cable-r", help="cable resistance: passive two-point meter or Kelvin 8-wire (never drives VBUS)")
     scs = sc.add_subparsers(dest="cable_cmd", required=True)
     scs.add_parser("status", help="idle reference, loaded point, result")

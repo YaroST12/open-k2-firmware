@@ -1014,6 +1014,7 @@ static void test_battery() {
     ok({5, 50, 0, 60, 0, 0});
     ok({6});
     ok({7, 1, 0, 48, 0});
+    ok({8, 0, 0});
     f.calls = 0;
     CHECK_EQ(run(f, request(0x58, seq, {}), r), 1);
     check_header(r, 0x58, seq++, Status::BadLength, 0);
@@ -1023,7 +1024,9 @@ static void test_battery() {
     check_header(r, 0x58, seq++, Status::BadLength, 0);
     CHECK_EQ(run(f, request(0x58, seq, {7, 1, 0, 0}), r), 1);    // read without the high offset byte
     check_header(r, 0x58, seq++, Status::BadLength, 0);
-    CHECK_EQ(run(f, request(0x58, seq, {8}), r), 1);
+    CHECK_EQ(run(f, request(0x58, seq, {8}), r), 1);             // continue without its id
+    check_header(r, 0x58, seq++, Status::BadLength, 0);
+    CHECK_EQ(run(f, request(0x58, seq, {9}), r), 1);
     check_header(r, 0x58, seq++, Status::BadArg, 0);
     CHECK_EQ(f.calls, 0);
 }

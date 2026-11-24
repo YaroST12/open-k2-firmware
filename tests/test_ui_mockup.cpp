@@ -89,6 +89,26 @@ static void battery_frames(Ui& ui, uint32_t& t, const char* prefix) {
     bt::hw::poll(tb += 1000, true);
     g_stub.pm.current_ma = ma;
     ui.open_place(bench::Place::Battery, t); render(ui, t, name("place_battery_done"));
+    // Continue: the row under the facts, armed by the first OK (only on the plain frames: the README keeps its set)
+    if (!*prefix) {
+        for (int k = 0; k < 4; k++) ui.on_button(Button::Plus, ButtonEvent::Short, t);   // past In, Out, Time, Efficiency
+        render(ui, t, name("place_battery_continue"));
+        ui.on_button(Button::Ok, ButtonEvent::Short, t);
+        render(ui, t, name("place_battery_continue_armed"));
+        ui.on_button(Button::Ok, ButtonEvent::Short, t);
+        render(ui, t, name("place_battery_continued"));
+        // after a boot: Saved runs > the newest run offers it too
+        bt::hw::service().rec().finish();
+        bt::hw::poll(tb += 1000, true);
+        bt::hw::init(false);
+        ui.goto_page(uint8_t(Page::Home), t); t += 100;
+        ui.open_place(bench::Place::Battery, t);
+        for (int k = 0; k < 6; k++) ui.on_button(Button::Plus, ButtonEvent::Short, t);   // to Saved runs
+        ui.on_button(Button::Ok, ButtonEvent::Short, t);
+        ui.on_button(Button::Ok, ButtonEvent::Short, t);
+        for (int k = 0; k < 4; k++) ui.on_button(Button::Plus, ButtonEvent::Short, t);
+        render(ui, t, name("place_battery_stored_continue"));
+    }
     stub_battery_reset();
 }
 

@@ -104,7 +104,7 @@ Shown shown(const Record &r, bool any) {
 
 bool is_fact(Act a) { return a == Act::In || a == Act::Out || a == Act::Time || a == Act::Eff; }
 
-Rows rows(const Shown &s, bool stored) {
+Rows rows(const Shown &s, bool stored, bool cont) {
     Rows r;
     const auto add = [&](Act a) { if (r.n < kMaxRows) r.a[r.n++] = a; };
     if (s.any) {
@@ -114,6 +114,7 @@ Rows rows(const Shown &s, bool stored) {
         if (s.mode == Mode::RoundTrip && s.phases == 2) add(Act::Eff);
     }
     r.facts = r.n;
+    if (cont || (!stored && s.any && s.state == RunState::Done)) add(Act::Continue);
     if (stored) {
         add(Act::Share);
         return r;
@@ -158,6 +159,7 @@ const char *act_name(Act a, const Shown &s) {
     case Act::EndS: return "End after";
     case Act::Runs: return "Saved runs";
     case Act::Share: return "Share as QR";
+    case Act::Continue: return "Continue run";
     }
     return "";
 }
@@ -170,6 +172,7 @@ sl::Id act_verb(Act a) {
     case Act::EndMa: case Act::EndS: return sl::Cycle;
     case Act::Runs: return sl::Open;
     case Act::Share: return sl::Share;
+    case Act::Continue: return sl::Resume;
     case Act::In: case Act::Out: case Act::Time: case Act::Eff: break;
     }
     return sl::None;

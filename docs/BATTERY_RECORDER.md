@@ -55,6 +55,23 @@ only says which way the bank's outflow runs relative to its charge, which a roun
   bank at the end threshold for 5 s after the swap was seen (same port: a quiet moment first; moved: VBUS under 1 V, the
   bank unplugged); those seconds count into the discharge. `Finish run` ends a round trip after its charge alone.
 
+## Continue
+
+A run that ended too early (the end rule closed a phase while the bank paused or was replugged, `End` pressed too soon, or
+a phase marked Lost / `Cut short` by an older firmware) goes on with `Continue run` (OK, then OK again within 5 s) or
+`k2_remote.py battery continue [id]`.
+
+- Only the newest run: the ended run in RAM, else the newest file on flash (after a boot). Refused while a run measures or
+  waits between its phases (`busy`), without the power monitor, for an older id (`not-newest`), or with no run
+  (`no-run`).
+- Its last phase measures again: same kind, wiring and direction (a version 1 file's direction from its curve), totals and
+  curve kept. One resume and one gap counted; the known gap seconds grow by the stop (same boot: since the last sample;
+  after a boot: the uptime at the first sample). A round trip closed after its charge reopens the charge, which then waits
+  for the discharge as usual.
+- The end rule waits for the current to reach the threshold again, then works as at a start, with the thresholds the page
+  shows (raise `End after` first to ride out a longer pause).
+- The record is written at once (state measuring), so a power cut after a continue resumes it like any measuring run.
+
 ## The curve
 
 60 points of 3 bytes (VBUS in 10 mV, 12 bits; the signed current in 4 mA, 12 bits), each the average of an interval that
@@ -121,7 +138,7 @@ The same bytes are the flash file, the remote's `read` payload and the QR share 
 | Cold boot while a phase measured, version 1 record (an older firmware) | No direction or end rule state to go on with: the phase is marked Lost and the run is closed. The screen says `Cut short`. `[BATT] boot lost` |
 | Cold boot after an end or finish whose write had not gone out yet (a charger test or PD traffic held the flash) | The flash still says measuring: the run resumes. An end or finish is final only once written, normally the next main-loop pass. |
 | Cold boot while a round trip waited between its phases | The run comes back between its phases; with moved wiring the swap counts as seen (moving the bank is usually what cut the power). `[BATT] boot waiting` |
-| Cold boot after a finished run | Nothing to resume; the run is on flash. A finished or ended run never resumes. |
+| Cold boot after a finished run | Nothing to resume; the run is on flash. A finished or ended run never resumes by itself (Continue reopens it by hand). |
 | Firmware update (DFU) | The app wipes SRAM before it enters the bootloader: a cold boot as above. |
 
 ## Screen (ring page 9 Battery)
@@ -131,8 +148,9 @@ The same bytes are the flash file, the remote's `read` payload and the QR share 
 - Place page: the identity block (headline `Charging` / `Discharging` / `Charged` / the efficiency / the Wh, a chip `1 of 2`,
   `Round trip` or `Cut short`, one line with the wiring, the time and the energy), then the rows: the facts (In, Out, Time,
   Efficiency) and what can be done now (Start charge / discharge / round trip, Wiring, End below, End after, Saved runs,
-  Share as QR; while a run is in progress End charge or End discharge, Start discharge, Finish run). Saved runs lists the
-  stored runs newest first; OK opens one (its identity, facts and Share as QR). BACK steps back out, then leaves the place.
+  Share as QR, and Continue run under the facts of an ended run; while a run is in progress End charge or End discharge,
+  Start discharge, Finish run). Saved runs lists the stored runs newest first; OK opens one (its identity, facts and Share
+  as QR; the newest also Continue run while nothing measures). BACK steps back out, then leaves the place.
 - Running indicator: while a run measures or waits, a 5 x 5 accent dot sits in the content's top-right corner on every page
   but a QR code; when the run stops the page repaints whole once.
 
@@ -148,5 +166,6 @@ The same bytes are the flash file, the remote's `read` payload and the QR share 
 | `config [--end-ma N] [--end-s N] [--wiring W]` | the end rule and the next run's wiring |
 | `list` | stored run ids, newest first |
 | `read [id] [--all]` | a record decoded (id 0 or none: the run in RAM), with the curve |
+| `continue [id]` | reopens the newest run's last phase (see Continue; refusals: busy, no monitor, no-run, not-newest) |
 
 A refusal exits non-zero with the reason. The QR share decodes with `tools/k2_qr.py`.
