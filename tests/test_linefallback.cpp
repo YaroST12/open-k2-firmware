@@ -6,6 +6,8 @@
 #include "test_util.h"
 #include "k2/pd/pd_rdseek.hpp"
 
+#include <vector>
+
 using namespace k2;
 
 namespace {
@@ -156,7 +158,57 @@ void test_the_idle_wake_already_alternates_a_direct_plug_one_line_at_a_time() {
 
 }  // namespace
 
+// ---- the passive listen hunt (pd::RxHunt): the receiver alone moves while VBUS is up and nothing decodes ----
+
+// Polls every 20 ms; the ms of each "move" from t0 within span_ms.
+std::vector<int> hunt_moves(pd::RxHunt& h, std::uint32_t t0, std::uint32_t span_ms, std::int32_t vbus, bool heard = false,
+                            std::int32_t other_mv = -1, bool eligible = true) {
+    std::vector<int> at;
+    for (std::uint32_t t = 0; t <= span_ms; t += 20)
+        if (h.update(t0 + t, eligible, heard, vbus, other_mv)) at.push_back(int(t));
+    return at;
+}
+
+void test_hunt_above_5v_alternates_300_1000_3000_then_every_11_s() {
+    pd::RxHunt h;
+    const auto at = hunt_moves(h, 5000, 40000, 9000);
+    CHECK_EQ(at.size() >= 6, true);
+    if (at.size() < 6) return;
+    CHECK_EQ(at[0] >= 300 && at[0] <= 340, true);
+    CHECK_EQ(at[1] - at[0] >= 1000 && at[1] - at[0] <= 1040, true);
+    CHECK_EQ(at[2] - at[1] >= 3000 && at[2] - at[1] <= 3040, true);
+    CHECK_EQ(at[3] - at[2] >= 11000 && at[3] - at[2] <= 11040, true);
+    CHECK_EQ(at[4] - at[3] >= 11000 && at[4] - at[3] <= 11040, true);   // a contract was made: traffic will come, keep hunting
+}
+
+void test_hunt_at_5v_stops_after_four_moves() {
+    pd::RxHunt h;
+    CHECK_EQ(int(hunt_moves(h, 0, 60000, 5000).size()), int(pd::kRxHuntMoves5V));
+}
+
+void test_hunt_never_moves_a_heard_line_or_without_vbus_or_when_not_passive() {
+    pd::RxHunt h;
+    CHECK_EQ(int(hunt_moves(h, 0, 20000, 9000, true).size()), 0);           // a frame decoded on the line: it is the one
+    CHECK_EQ(int(hunt_moves(h, 0, 20000, 3000).size()), 0);                 // VBUS down: nothing to hear
+    CHECK_EQ(int(hunt_moves(h, 0, 20000, 9000, false, -1, false).size()), 0);   // our Rd / VCONN / a pinned line
+    CHECK_EQ(int(hunt_moves(h, 0, 20000, 9000, false, 50).size()), 0);     // the other net reads no Rp: no BMC there
+    CHECK_EQ(int(h.moves()), 0);
+}
+
+void test_hunt_stops_once_the_new_line_hears() {
+    pd::RxHunt h;
+    CHECK_EQ(int(hunt_moves(h, 0, 400, 9000).size()), 1);
+    CHECK_EQ(int(hunt_moves(h, 400, 30000, 9000, true).size()), 0);
+    CHECK_EQ(int(h.moves()), 1);
+    h.reset();   // a detach: the next attach hunts from the start
+    CHECK_EQ(int(h.moves()), 0);
+}
+
 int main() {
+    test_hunt_above_5v_alternates_300_1000_3000_then_every_11_s();
+    test_hunt_at_5v_stops_after_four_moves();
+    test_hunt_never_moves_a_heard_line_or_without_vbus_or_when_not_passive();
+    test_hunt_stops_once_the_new_line_hears();
     test_a_dark_first_line_on_a_direct_plug_moves_at_the_first_dwell();
     test_the_whole_schedule_is_1500_1500_5000_5000_then_stay();
     test_vbus_up_on_the_second_line_stays_and_no_further_move();
