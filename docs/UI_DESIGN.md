@@ -474,7 +474,7 @@ else advertised ones amber, `-` for none. Home keeps the combined `usblink::form
     visible as shape.
   - The verdict card puts the decoded result in pills.
   - There is no NTC row (see open question 2).
-- **Tools hub.** A kit `RowList` (see the Tools row in section 4): icon, name, a chevron when the tool is ready,
+- **Tools hub.** A kit `RowList` (see the Tools row in section 4): name (no icon), a chevron when the tool is ready,
   otherwise the readiness tag, and the reason in the footer. Blocked tools still open, into their refused state.
   Hints name ports only as "top or bottom" or "either port".
 - **Tool template (PD trigger refusal).** The refused PD trigger screen is the one place that keeps the flow

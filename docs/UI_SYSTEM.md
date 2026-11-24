@@ -80,7 +80,7 @@ Home > Lines > Numbers > Graph > Ripple > Link > Tools > Battery > Log > K2 > (H
 - ChargerTest: Back goes up to the Charger slice's Actions; long Back stops the run and shows the Link ring page.
 - Long Back target: `/prefs.cfg` optional 9th byte (written only when non-zero and below 10; older firmware reads a 9-byte
   file as defaults). Settings row `Long Back` cycles the ten positions; Home is the default.
-- Settings row `Huawei/Samsung` (toggle, `Icon::Brick`, between Test level and Long Back): OFF by default, hides the FCP, SCP and AFC
+- Settings row `Huawei/Samsung` (toggle, between Test level and Long Back): OFF by default, hides the FCP, SCP and AFC
   units from the charger test (presets, Custom list, plan, Results). Stored as bit 7 of the `/prefs.cfg` orientation byte (set =
   shown, so old files read hidden); remote view flag bit 15 (set = shown).
 - Long PLUS is not used. The OK + Back 3 s reboot chord and the Back-Hold cancel are unchanged.
@@ -1015,7 +1015,7 @@ Scope: every interactive page takes the unified design; the read-only instrument
    second BACK leaves.
 2. **Tables: one named dense variant.** The kit table stays 26 px with font-16 keys; `kit::kDenseRowH` 22 px with
    font-12 keys is the dense variant, chosen per page on purpose (Who's attached, PD trigger steps, Diag).
-3. **Tools, blocked rows: option A.** Icon in the tone colour, the tail word lower case in `kDim`; only the footer
+3. **Tools, blocked rows: option A.** The name dims, the tail word lower case in `kDim`; only the footer
    carries the red.
 4. **Who's attached tabs: option B.** The active tab is filled `kFocusT`, so it reads as focus, not progress.
 5. **Who's attached is split into three tools** (later the same day; the tabbed page did not work well). Tools lists
