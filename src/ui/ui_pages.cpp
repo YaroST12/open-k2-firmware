@@ -2220,7 +2220,7 @@ bool SettingsPage::share_boot_info() {
     return ctx_.ui->open_share(qrshare::Type::BootInfo, qrshare::kSchemaBootInfo, "Boot info", len, ctx_.now);
 }
 
-// Row i: a neutral icon, the setting name, its current value at the right (green when ON; a chevron on the row that only
+// Row i: the setting name, its current value at the right (green when ON; a chevron on the row that only
 // opens a page) and, on the focused row, one dim line saying what the value means. Everything is read live from the
 // settings, so the rows keep no value text of their own.
 void SettingsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
@@ -2230,12 +2230,6 @@ void SettingsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
         "Screenshot",
 #endif
         "Smoothing", "Wake port", "Test level", "Huawei/Samsung", "Sweep depth", "Long Back", "Home boxes", "Display", "System state", "Memory", "Boot info"};
-    static constexpr Icon kIcons[kSettingsRows] = {
-        Icon::Usb, Icon::Rotate, Icon::Keys,
-#if K2_SCREENSHOT
-        Icon::Camera,
-#endif
-        Icon::Wave, Icon::Plug, Icon::Bolt, Icon::Brick, Icon::Ohm, Icon::Clock, Icon::Meter, Icon::Meter, Icon::Chip, Icon::Chip, Icon::Report};
     static constexpr const char *kPresets[smoothing::kPresetCount] = {"Off", "Low", "Medium", "High"};
     static constexpr const char *kPresetNotes[smoothing::kPresetCount] = {"Raw readings", "Light calming", "Balanced", "Steady, slower"};
     // charger_test::Level order (Medium 0, Light 1, Deep 2): the charger test's default level and what it runs.
@@ -2252,8 +2246,6 @@ void SettingsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
     static constexpr const char *kDepthNotes[ctsweep::kDepthCount] = {"Every 100 mV, PPS and AVS", "Every 200 mV, quickest", "100 mV, 20 mV in phone zones", "Every 20 mV on PPS, slowest"};
     static_assert(all_fit(kDepthNotes, kLabelAdv, kit::kNoteMaxPx), "a Sweep depth note is wider than the row note");
     const auto *self = static_cast<const SettingsPage *>(ctx);
-    out.marker = kit::Marker::Icon;
-    out.icon = kIcons[i];
     out.text = kTitles[i];
     auto set_toggle = [&](bool on, const char *on_note, const char *off_note) {
         out.tail = on ? "ON" : "OFF";
@@ -2518,8 +2510,6 @@ void HomeBoxesPage::row_fn(void *ctx, int i, bool focused, kit::RowSpec &out) {
         if (focused) out.note = home::box_note(k);
         return;
     }
-    out.marker = kit::Marker::Icon;
-    out.icon = i < home::kBoxCount ? Icon::Meter : Icon::Rotate;
     out.text = kTitles[i];
     if (i < home::kBoxCount) {
         const home::BoxKind b = self->ctx_.keep.home_boxes[static_cast<std::size_t>(i)];
@@ -2616,7 +2606,6 @@ void DisplayPage::draw_static() {
 
 void DisplayPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
     static constexpr const char *kTitles[3] = {"Brightness", "Dim after", "Screen off"};
-    static constexpr Icon kIcons[3] = {Icon::Meter, Icon::Clock, Icon::Clock};
     const auto *self = static_cast<const DisplayPage *>(ctx);
     const idle::Config &c = idle_hw::config();
     if (self->view_ >= View::PickDim) {   // a pick list: the radio sits on the stored value
@@ -2629,8 +2618,6 @@ void DisplayPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
     }
     char *t = self->tail_[i];
     const std::span<char> buf(t, sizeof self->tail_[i]);
-    out.marker = kit::Marker::Icon;
-    out.icon = kIcons[i];
     out.text = kTitles[i];
     if (i == 0) {
         out.tail = {t, uidisp::format_percent(buf, c.brightness)};
@@ -2709,23 +2696,6 @@ Strip DisplayPage::labels() const {
 // Ring position 7 TOOLS: triggers (Request voltage, Fast charge) and active bench utilities
 // ---------------------------------------------------------------------------------------
 
-namespace {
-Icon tool_row_icon(const bench::Act &a) {
-    if (a.kind != bench::ActKind::Tool) return Icon::Bolt;
-    switch (a.arg) {
-    case 0: return Icon::Bolt;
-    case 1: return Icon::Pd;
-    case 2: return Icon::Ghost;
-    case 3: return Icon::Res;
-    case 7: return Icon::Blackbox;
-    case 9: return Icon::Report;
-    case 11: return Icon::Phone;
-    case 12: return Icon::Cable;
-    case 13: return Icon::Wave;
-    default: return Icon::Bolt;
-    }
-}
-}  // namespace
 
 int ToolsPage::rows() const { return bench::tools().n + 1; }   // the tools, then the PD limiter
 
@@ -2888,17 +2858,15 @@ void ToolsPage::draw_static() {
 
 void ToolsPage::tech_row(int index, bool focused, kit::RowSpec &out) const {
     namespace tx = text::tools;
-    struct Meta { Icon icon; const char *text, *note; };
+    struct Meta { const char *text, *note; };
     static constexpr Meta kMeta[3] = {
-        {Icon::Brick, tx::kLimRowMode, tx::kLimNoteMode},
-        {Icon::Bolt,  tx::kLimRowMaxV, tx::kLimNoteStepV},
-        {Icon::Wave,  tx::kLimRowMaxA, tx::kLimNoteStepA},
+        {tx::kLimRowMode, tx::kLimNoteMode},
+        {tx::kLimRowMaxV, tx::kLimNoteStepV},
+        {tx::kLimRowMaxA, tx::kLimNoteStepA},
     };
     const Meta &m = kMeta[index];
     const pd::LimTech &t = cur_tech();
     tail_.clear();
-    out.marker = kit::Marker::Icon;
-    out.icon = m.icon;
     out.text = m.text;
     if (focused) out.note = m.note;
     if (index == 0) {
@@ -2939,8 +2907,6 @@ void ToolsPage::limit_row(int index, bool focused, kit::RowSpec &out) const {
     const pd::LimStatus &s = fusb302::limit_status();
     const bool armed = s.state != pd::LimState::Off;
     if (view_ == View::List) {
-        out.marker = kit::Marker::Icon;
-        out.icon = Icon::Brick;
         out.text = tx::kLimName;
         tail_.clear();
         if (armed) {
@@ -2979,15 +2945,13 @@ void ToolsPage::limit_row(int index, bool focused, kit::RowSpec &out) const {
         return;
     }
     if (index >= 1 && index <= 3) {
-        struct Meta { Icon icon; const char *text, *note; };
+        struct Meta { const char *text, *note; };
         static constexpr Meta kMeta[3] = {
-            {Icon::Bolt, tx::kLimFixed, tx::kLimNoteFixed},
-            {Icon::Wave, tx::kLimPps,   tx::kLimNotePps},
-            {Icon::Chip, tx::kLimAvs,   tx::kLimNoteAvs},
+            {tx::kLimFixed, tx::kLimNoteFixed},
+            {tx::kLimPps,   tx::kLimNotePps},
+            {tx::kLimAvs,   tx::kLimNoteAvs},
         };
         const int k = index - 1;
-        out.marker = kit::Marker::Icon;
-        out.icon = kMeta[k].icon;
         out.text = kMeta[k].text;
         const bool avail = k == 0 || !has_caps_ || (k == 1 ? has_pps_ : has_avs_);
         if (!avail) {
@@ -3008,8 +2972,6 @@ void ToolsPage::limit_row(int index, bool focused, kit::RowSpec &out) const {
         return;
     }
     if (index == 4) {
-        out.marker = kit::Marker::Icon;
-        out.icon = Icon::Check;
         out.text = tx::kLimApply;
         if (draft_.limit_mw) {
             tail_.clear();
@@ -3020,8 +2982,6 @@ void ToolsPage::limit_row(int index, bool focused, kit::RowSpec &out) const {
         if (focused) out.note = tx::kLimNoteApply;
         return;
     }
-    out.marker = kit::Marker::Icon;
-    out.icon = Icon::Plug;
     out.text = tx::kLimRowReset;
     if (focused) out.note = tx::kLimNoteReset;
 }
@@ -3035,8 +2995,6 @@ void ToolsPage::row_fn(void *ctx, int index, bool focused, kit::RowSpec &out) {
     }
     if (index < 0 || index >= b.n) return;
     const bench::Act &a = b.a[index];
-    out.marker = kit::Marker::Icon;
-    out.icon = tool_row_icon(a);
     out.text = a.name;
     const SetupState ss = setup_state(self->ctx_);
     const Readiness rd = a.kind == bench::ActKind::Tool ? tool_readiness(a.arg, ss, self->ctx_.pm_online) : Readiness{};
@@ -3232,12 +3190,12 @@ Strip ToolsPage::labels() const {
 namespace {
 constexpr int kUlRows = usbcfg::rows();   // 2 without the network function (K2_NET=0) and the WebUSB transport (K2_WEBUSB=0)
 constexpr usbcfg::Row ul_row(int i) { return usbcfg::row_at(i); }
-struct UlMeta { const char *name, *hint; Icon icon; };
+struct UlMeta { const char *name, *hint; };
 constexpr UlMeta kUlMeta[4] = {
-    {"HID", "logs and remote", Icon::Plug},
-    {"Drive", "read-only files", Icon::Chip},
-    {"Network", "web 192.168.7.1", Icon::Pc},
-    {"WebUSB", "web + remote", Icon::Pc},
+    {"HID", "logs and remote"},
+    {"Drive", "read-only files"},
+    {"Network", "web 192.168.7.1"},
+    {"WebUSB", "web + remote"},
 };
 bool ul_on(const usbcfg::Setting &s, usbcfg::Row r) {
     switch (r) {
@@ -3263,15 +3221,12 @@ void UsbLinkPage::draw_static() {
     foot_.invalidate();
 }
 
-// One row per USB function: its icon (green when on), the name, ON / OFF at the right and, focused, what it carries.
+// One row per USB function: the name, ON / OFF at the right and, focused, what it carries.
 void UsbLinkPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
     const auto *self = static_cast<const UsbLinkPage *>(ctx);
     const usbcfg::Row r = ul_row(i);
     const UlMeta &m = kUlMeta[static_cast<unsigned>(r)];
     const bool on = ul_on(self->pending_, r);
-    out.marker = kit::Marker::Icon;
-    out.icon = m.icon;
-    out.marker_color = on ? kOk : 0;
     out.text = m.name;
     out.tail = on ? "ON" : "OFF";
     out.tail_color = on ? kOk : kDim;
