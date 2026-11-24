@@ -6,6 +6,7 @@
 #include <cstdint>
 
 #include "k2/core/hot.h"
+#include "k2/core/strpack.hpp"
 
 namespace k2::fmt {
 
@@ -41,6 +42,11 @@ K2_HOT void put_number(Out& out, std::uint32_t mag, bool negative, unsigned base
 
 K2_HOT std::size_t vformat(std::span<char> buf, const char* fmt, std::va_list ap) {
     if (buf.empty()) return 0;
+    char fdec[128];
+    if (strpack::is_packed(fmt)) {
+        strpack::decode(fmt, fdec, sizeof(fdec));
+        fmt = fdec;
+    }
     Out out{buf.data(), buf.data() + buf.size() - 1};
     for (const char* p = fmt; *p; p++) {
         if (*p != '%' || !p[1]) {  // plain text, or a lone '%' at the end of the string
@@ -64,7 +70,12 @@ K2_HOT std::size_t vformat(std::span<char> buf, const char* fmt, std::va_list ap
         case 's': {
             const char* s = va_arg(ap, const char*);
             if (!s) s = "(null)";
-            while (*s) out.put(*s++);
+            if (strpack::is_packed(s)) {
+                strpack::Reader r(s);
+                for (int ch; (ch = r.next()) >= 0;) out.put(static_cast<char>(ch));
+            } else {
+                while (*s) out.put(*s++);
+            }
             break;
         }
         case 'c': out.put(static_cast<char>(va_arg(ap, int))); break;

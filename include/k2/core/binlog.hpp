@@ -18,6 +18,7 @@
 #include <cstdarg>
 #include <cstddef>
 #include <cstdint>
+#include "k2/core/strpack.hpp"
 #include <span>
 
 #include "k2/core/log.hpp"
@@ -48,6 +49,11 @@ public:
         for (; sig; sig >>= 2) {
             if ((sig & 3) == logfmt::kString) {
                 const char *s = va_arg(ap, const char *);
+                char sb[kStrMax + 1];
+                if (s && strpack::is_packed(s)) {
+                    strpack::decode(s, sb, sizeof(sb));
+                    s = sb;
+                }
                 std::size_t len = 0;
                 while (s && s[len] && len < kStrMax) len++;
                 if (n + 1 + len > sizeof e) break;   // the rest does not fit: the entry stops at the last argument that did

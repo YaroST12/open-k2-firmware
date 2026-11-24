@@ -5,6 +5,7 @@
 
 #include "k2/core/hot.h"
 #include "k2/core/log.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::logfmt {
 
@@ -51,8 +52,7 @@ std::size_t vencode(std::span<char> buf, std::uint16_t id, std::uint32_t sig, st
         default: {
             const char* s = va_arg(ap, const char*);
             if (!s) s = "(null)";
-            for (; *s; s++) {
-                const auto c = static_cast<unsigned char>(*s);
+            auto emit = [&](unsigned char c) {
                 if (c <= ' ' || c == '%' || c >= 0x7F) {
                     out.put('%');
                     out.put("0123456789ABCDEF"[c >> 4]);
@@ -60,6 +60,12 @@ std::size_t vencode(std::span<char> buf, std::uint16_t id, std::uint32_t sig, st
                 } else {
                     out.put(static_cast<char>(c));
                 }
+            };
+            if (strpack::is_packed(s)) {
+                strpack::Reader r(s);
+                for (int ch; (ch = r.next()) >= 0;) emit(static_cast<unsigned char>(ch));
+            } else {
+                for (; *s; s++) emit(static_cast<unsigned char>(*s));
             }
             break;
         }
