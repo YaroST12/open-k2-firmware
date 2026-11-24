@@ -209,7 +209,7 @@ void note(const Report& r, const Finding& f, Out& o) {
         break;
     }
     case Code::CableSilent: o.s("Discover_Identity "); o.u(un(f.a)); o.s("x, no ID"); break;
-    case Code::CaptureGap: o.u(un(f.a)); o.s(" frames not decoded"); break;
+    case Code::CaptureGap: o.u(un(f.a)); o.s(f.a == 1 ? " frame not decoded" : " frames not decoded"); break;
     }
 }
 

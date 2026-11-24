@@ -335,7 +335,7 @@ private:
     std::int16_t prev_imax_ = 0;           // the previous power window's IBUS maximum (a cut-out across windows)
     std::uint16_t pre_mv_ = 0;            // VBUS before any session opened (seeds the next one)
     std::int16_t pre_ma_ = 0;
-    std::uint8_t frame_open_ = 0;          // bit per SOP type: a frame waits for its GoodCRC
+    std::uint8_t frame_open_ = 0;          // bit per SOP type: a frame waits for its GoodCRC; bit 4 + SOP: it was retried
     std::uint8_t pend_ = 0, pend_from_src_ = 0;
     bool wait_psrdy_ = false;
     bool lost_pend_ = false, low_ = false;

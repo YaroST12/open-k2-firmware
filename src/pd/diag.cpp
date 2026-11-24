@@ -648,6 +648,7 @@ void Analyzer::message(bool rx, std::uint8_t token, std::uint16_t hdr, std::span
         if (frame_open_ >> sop & 1) {
             if (f.hdr == hdr && f.crc == crc && std::uint16_t(ms16 - f.ms16) <= kRetryMs) {
                 inc(sop == 0 ? s.retries : s.cable_frames);
+                frame_open_ |= std::uint8_t(0x10u << sop);   // retried: the sender saw no GoodCRC
                 f.ms16 = ms16;
                 return;   // the same message again: its meaning was taken the first time
             }
@@ -655,9 +656,10 @@ void Analyzer::message(bool rx, std::uint8_t token, std::uint16_t hdr, std::span
             // caps-unanswered rule covers a sink that never answers): not a link fault
             const bool early_caps = (f.hdr & 0x1F) == kSrcCaps && !(f.hdr >> 15 & 1) && (f.hdr >> 12 & 7) &&
                                     !s.contract_seen;
-            // the sender keeps its MessageID until a GoodCRC comes back: the next frame from the other end or on a new
-            // ID (not a Soft_Reset) shows the GoodCRC was sent and the K2 missed it
-            const bool moved_on = ((f.hdr ^ hdr) & 0x0F00) && !(!ext && n == 0 && type == kSoftReset);
+            // a sender without GoodCRC retries the same frame: none seen and the talk moved on (the other end, a new
+            // MessageID, not a Soft_Reset) means the GoodCRC was sent and the K2 missed it
+            const bool moved_on = !(frame_open_ >> (4 + sop) & 1) && ((f.hdr ^ hdr) & 0x0F00) &&
+                                  !(!ext && n == 0 && type == kSoftReset);
             if (sop == 0 && !s.active && !early_caps) {
                 if (moved_on) gap();
                 else inc(s.no_goodcrc);
@@ -666,7 +668,7 @@ void Analyzer::message(bool rx, std::uint8_t token, std::uint16_t hdr, std::span
         f.hdr = hdr;
         f.crc = crc;
         f.ms16 = ms16;
-        frame_open_ |= std::uint8_t(1u << sop);
+        frame_open_ = std::uint8_t((frame_open_ & ~(0x10u << sop)) | 1u << sop);
     }
     const std::uint8_t* o = objs.data();
 

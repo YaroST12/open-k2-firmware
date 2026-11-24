@@ -1295,15 +1295,23 @@ void test_no_goodcrc_and_retries() {
     const auto c = t.rx(true, false, Source_Cap, kHubCaps, false, kSop, -1, 0);
     t.rx(true, false, Source_Cap, kHubCaps, false, kSop, int(c), 0);   // retry: same header and CRC within 20 ms
     t.rx(true, false, Source_Cap, kHubCaps, true, kSop, int(c), 0);
-    t.wait(200);
-    t.rx(false, true, Request, {rdo(1, 1000, 3000)}, false, kSop, -1, 1);   // no GoodCRC: the sender keeps its MessageID ...
-    t.rx(false, true, Request, {rdo(1, 900, 3000)}, true, kSop, -1, 1);     // ... for a different frame next
     Run run;
     run.go(t);
     EXPECT_CODE(run, Code::Retries, Sev::Info);
     CHECK_EQ(run.find(Code::Retries)->a, 2);
-    EXPECT_CODE(run, Code::NoGoodCrc, Sev::Info);
     EXPECT_NO(run, Code::CapsUnanswered);
+
+    Trace u;   // a Request retried without GoodCRC, then the sender gives up and moves on: a real link fault
+    u.cc(true);
+    u.rx(true, false, Source_Cap, kHubCaps);
+    const auto r = u.rx(false, true, Request, {rdo(1, 1000, 3000)}, false, kSop, -1, 0);
+    u.rx(false, true, Request, {rdo(1, 1000, 3000)}, false, kSop, int(r), 0);
+    u.id_snk = 1;
+    u.rx(false, true, Request, {rdo(1, 900, 3000)}, true);
+    Run ru;
+    ru.go(u);
+    EXPECT_CODE(ru, Code::NoGoodCrc, Sev::Info);
+    EXPECT_NO(ru, Code::CaptureGap);
 }
 
 // A frame the passive K2 did not decode is a capture gap, never a protocol verdict (PPS trace 2026-11-24: Accepts and
