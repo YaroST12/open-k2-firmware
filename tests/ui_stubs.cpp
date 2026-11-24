@@ -249,6 +249,9 @@ void limit_disarm() {
     g_stub.lim.why = pd::LimWhy::User;
 }
 bool limit_armed() { return g_stub.lim.state != pd::LimState::Off; }
+bool limit_holds_sink() {
+    return g_stub.lim_held || g_stub.lim.state == pd::LimState::Injected || g_stub.lim.state == pd::LimState::Limited;
+}
 bool far_sink_seen() { return g_stub.far_sink; }
 const pd::LimStatus& limit_status() { return g_stub.lim; }
 bool listen_active() { return g_stub.listen_on; }

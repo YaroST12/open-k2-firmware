@@ -6445,7 +6445,8 @@ def build_parser():
     sus.add_parser("stop", help="abort a running probe and release the lines")
     sus.add_parser("result", help="the last probe: handshake timings, UART errors, every TX frame and RX byte")
     spl = sub.add_parser("pd-limit", help="PD limiter, inline only: remove/clamp higher Fixed/PPS/SPR-AVS offers "
-                         "to <watts> (5..100) or per-tech --fixed/--pps/--avs limits; 'off' disarms; 'status' reads")
+                         "to <watts> (5..100) or per-tech --fixed/--pps/--avs limits; 'off' ends it (an inline Hard Reset when the sink "
+                         "still holds the forged list: the sink renegotiates, a K2 powered from that VBUS reboots); 'status' reads")
     spl.add_argument("what", nargs="?", default=None, help="watts (5..100), 'off', 'status', or 'set' with per-tech flags")
     spl.add_argument("--fixed", default=None, help="Fixed limit: off | <V>V | <A>A | <V>V/<A>A (0.1 A steps)")
     spl.add_argument("--pps", default=None, help="PPS limit: off | <V>V | <A>A | <V>V/<A>A (e.g. 11V/3A)")

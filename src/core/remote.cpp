@@ -650,7 +650,7 @@ remote::AppleReadResult Remote::apple_read(uint8_t op) {
     return r;
 }
 
-// PD limiter: arm / off / status. RAM only (short-lived comeback record if UI resets bus-powered);
+// PD limiter: arm / off / status. RAM only (short-lived comeback record if UI resets bus-powered); off resets a held list;
 // refusal is pd::LimRefusal, BadArg for invalid config, Busy for port owner.
 remote::LimitView Remote::pd_limit(uint8_t op, const pd::LimConfig &cfg) {
     remote::LimitView v;
@@ -662,7 +662,8 @@ remote::LimitView Remote::pd_limit(uint8_t op, const pd::LimConfig &cfg) {
             return v;
         }
     } else if (op == remote::kLimitOff) {
-        fusb302::limit_disarm();
+        // the UI's off, confirmed: a forged list the sink still holds is undone by an inline Hard Reset
+        ui_.pd_limit_set(pd::LimConfig{}, true, true, systick::millis());
     }
     v.s = &fusb302::limit_status();
     return v;
