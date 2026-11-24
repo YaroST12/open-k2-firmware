@@ -4,12 +4,12 @@
 
 namespace k2 {
 
-enum class Icon : uint8_t { Bolt, Cable, Warn, Check, Cross, Phone, Chip, Clock, Plug, Brick, Pd, Res, Emark,
+enum class Icon : uint8_t { Bolt, Cable, Warn, Check, Cross, Phone, Chip, Plug, Brick, Pd, Res, Emark,
                             Blackbox, Report, Ghost, Usb, Rotate, Wave, Info, Meter, Battery, Socket, Monitor, Glass, Sand };
 
 // Socket..Sand: the PC-link icon (Glass is the hourglass outline, Sand its fill).
 constexpr int kIconSize = 12;
-constexpr int kIconCount = 26;
+constexpr int kIconCount = 25;
 extern const uint16_t kIconBits[kIconCount][kIconSize];   // row bits, bit 11 = leftmost pixel
 
 }  // namespace k2
