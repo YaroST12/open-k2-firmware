@@ -196,9 +196,9 @@ struct Fake {
     RippleInfo ripple_info() { return {0x00030201, 512, 0x0010, 0x0FF0, 0x0800}; }
     uint8_t rr_op = 0xFF, rr_mask = 0xFF; int rr_calls = 0; RereadResult rr_result{};
     RereadResult reread(uint8_t op, uint8_t mask) { calls++; rr_calls++; rr_op = op; rr_mask = mask; return rr_result; }
-    uint8_t pl_op = 0xFF; uint32_t pl_mw = 0; int pl_calls = 0; k2::pd::LimStatus pl_status{}; Status pl_state = Status::Ok; uint8_t pl_refusal = 0;
-    LimitView pd_limit(uint8_t op, uint32_t mw) {
-        calls++; pl_calls++; pl_op = op; pl_mw = mw;
+    uint8_t pl_op = 0xFF; uint32_t pl_mw = 0; k2::pd::LimConfig pl_cfg{}; int pl_calls = 0; k2::pd::LimStatus pl_status{}; Status pl_state = Status::Ok; uint8_t pl_refusal = 0;
+    LimitView pd_limit(uint8_t op, const k2::pd::LimConfig &cfg) {
+        calls++; pl_calls++; pl_op = op; pl_cfg = cfg; pl_mw = cfg.limit_mw;
         return {pl_state, pl_refusal, pl_state == Status::Ok ? &pl_status : nullptr};
     }
     uint8_t ar_op = 0xFF; int ar_calls = 0; AppleReadResult ar_result{};

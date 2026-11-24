@@ -127,7 +127,7 @@ public:
     remote::OppoView oppo_probe(uint8_t op, const pd::oppo::Config &cfg);   // lab-only OPPO probe: 0 status, 1 start, 2 stop (k2/pd/oppo_probe.hpp)
     remote::OppoPowerResult oppo_power(uint16_t mv, uint16_t ma, bool confirm);   // lab-only: an advertised point of the list in force
 #endif
-    remote::LimitView pd_limit(uint8_t op, uint32_t limit_mw);   // PD limiter (k2/pd/pd_limiter.hpp): 0 status, 1 arm, 2 off
+    remote::LimitView pd_limit(uint8_t op, const pd::LimConfig &cfg);   // PD limiter (k2/pd/pd_limiter.hpp): 0 status, 1/3 arm, 2 off
     remote::AppleReadResult apple_read(uint8_t op);   // lab-only Apple charger readout (SVID 0x05AC): 0 status, 1 arm + re-request the current contract
     // `over_load` is the lab-only bypass (k2_remote `pd request --over-load`); the UI never sets it.
     remote::PdOpResult pd_request(uint8_t pos, uint16_t mv, uint16_t ma, bool confirm, bool over_load = false);

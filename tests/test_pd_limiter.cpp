@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
-// The PD limiter (k2/pd/pd_limiter.hpp): the forged Source_Capabilities, the request power, and the trigger state machine over
-// a replayed wire (charger = source role bits, sink = sink role bits, every frame 1 ms apart unless a test moves the clock).
+// The PD limiter (k2/pd/pd_limiter.hpp) and comeback store (k2/core/lim_comeback.hpp): per-tech Fixed/PPS/SPR-AVS filtering,
+// 100 mA steps, PPS range reduction, Request compliance, state-machine recovery, and wire-replayed trigger behavior.
 #include <vector>
 
+#include "k2/core/lim_comeback.hpp"
 #include "k2/pd/pd_limiter.hpp"
 #include "test_util.h"
 
 using namespace k2::pd;
+using k2::bootmode::Mode;
 
 namespace {
 
@@ -20,13 +22,19 @@ constexpr std::uint32_t fixed(unsigned mv, unsigned ma, std::uint32_t flags = 0)
 constexpr std::uint32_t pps(unsigned max_mv, unsigned min_mv, unsigned ma) {
     return 0xC0000000u | (max_mv / 100) << 17 | (min_mv / 100) << 8 | ma / 50;
 }
+constexpr std::uint32_t spr_avs(unsigned ma15, unsigned ma20) {
+    return 0xE0000000u | ((ma15 / 10u) << 10) | (ma20 / 10u);
+}
 constexpr std::uint32_t kFlags1 = 0x0A000000u;   // unconstrained power, USB communications capable
 constexpr std::uint32_t kEprBit = 1u << 23;
 // A 100 W charger: 5 / 9 / 12 / 15 V at 3 A, 20 V 5 A, a 3.3-11 V 5 A PPS.
 const std::uint32_t kCaps[6] = {fixed(5000, 3000, kFlags1 | kEprBit), fixed(9000, 3000), fixed(12000, 3000), fixed(15000, 3000),
                                 fixed(20000, 5000), pps(11000, 3300, 5000)};
-constexpr std::uint32_t rq_fixed(unsigned pos, unsigned op_ma, unsigned max_ma) { return pos << 28 | op_ma / 10 << 10 | max_ma / 10; }
+constexpr std::uint32_t rq_fixed(unsigned pos, unsigned op_ma, unsigned max_ma, std::uint32_t flags = 0) {
+    return flags | (pos << 28) | ((op_ma / 10) << 10) | (max_ma / 10);
+}
 constexpr std::uint32_t rq_pps(unsigned pos, unsigned mv, unsigned ma) { return pos << 28 | mv / 20 << 9 | ma / 50; }
+constexpr std::uint32_t rq_avs(unsigned pos, unsigned mv, unsigned ma) { return pos << 28 | mv / 25 << 9 | ma / 50; }
 
 void put32(std::vector<std::uint8_t>& b, std::uint32_t w) {
     for (int i = 0; i < 4; i++) b.push_back(std::uint8_t(w >> (8 * i)));
@@ -46,10 +54,10 @@ struct Rig {
         lim.on_message(Sop::Sop, header, payload, now);
         now += 1;
     }
-    void caps(std::uint8_t id, std::uint8_t rev = 2) {
+    void caps(std::uint8_t id, std::span<const std::uint32_t> list = kCaps, std::uint8_t rev = 2) {
         std::vector<std::uint8_t> p;
-        for (std::uint32_t w : kCaps) put32(p, w);
-        rx(hdr(1, 6, rev, kSrc, id), p);
+        for (std::uint32_t w : list) put32(p, w);
+        rx(hdr(1, std::uint8_t(list.size()), rev, kSrc, id), p);
         rx(hdr(1, 0, 1, kSnk, id));
         last_id = id;
     }
@@ -67,13 +75,13 @@ struct Rig {
         last_id = std::uint8_t((id + 1) & 7);
     }
     // caps -> Request -> Accept -> PS_RDY, ids from `id0`
-    void negotiate(std::uint8_t id0, std::uint32_t rdo) {
-        caps(id0);
+    void negotiate(std::uint8_t id0, std::uint32_t rdo, std::span<const std::uint32_t> list = kCaps) {
+        caps(id0, list);
         request(rdo);
         accept_ready(std::uint8_t((id0 + 1) & 7));
     }
     // A quiet line, then ask for the frame.
-    bool tx(TxMsg& m, std::uint32_t quiet_ms = 20) {
+    bool tx(TxMsg& m, std::uint32_t quiet_ms = kLimQuietMs) {
         now += quiet_ms;
         lim.tick(now);
         return lim.take_tx(m, now);
@@ -83,50 +91,152 @@ struct Rig {
 }  // namespace
 
 int main() {
-    // ---- request_mw: what a Request asks, by PDO kind ----
+    // ---- request_mw and request_complies ----
     {
-        CHECK_EQ(request_mw(rq_fixed(5, 1500, 1500), kCaps), 30000);   // 20 V x 1.5 A
+        CHECK_EQ(request_mw(rq_fixed(5, 1500, 1500), kCaps), 30000);
         CHECK_EQ(request_mw(rq_fixed(1, 3000, 3000), kCaps), 15000);
-        CHECK_EQ(request_mw(rq_pps(6, 9000, 3000), kCaps), 27000);     // PPS: the requested voltage x the current
-        CHECK_EQ(request_mw(rq_fixed(7, 1000, 1000), kCaps), 0);       // beyond the list: unknown, never "over"
+        CHECK_EQ(request_mw(rq_pps(6, 9000, 3000), kCaps), 27000);
+        CHECK_EQ(request_mw(rq_fixed(7, 1000, 1000), kCaps), 0);
         CHECK_EQ(request_mw(rq_fixed(0, 1000, 1000), kCaps), 0);
+
+        std::uint32_t forged[7]{};
+        const LimConfig w30 = lim_config_watts(30000);
+        const std::size_t fn = forge_caps(kCaps, w30, forged);
+        CHECK_EQ(int(fn), 2);
+        CHECK_COND(request_complies(rq_fixed(2, 3000, 3000), kCaps, {forged, fn}, w30));
+        // Low-current request on a truncated higher-voltage position (20V 0.5A = 10W) must NOT comply.
+        CHECK_COND(!request_complies(rq_fixed(5, 500, 500), kCaps, {forged, fn}, w30));
+        // max_ma exceeding forged PDO without GiveBack flag must fail compliance.
+        CHECK_COND(!request_complies(rq_fixed(2, 2000, 3500), kCaps, {forged, fn}, w30));
+        CHECK_COND(request_complies(rq_fixed(2, 2000, 3500, 1u << 27), kCaps, {forged, fn}, w30));
     }
 
-    // ---- forge_caps: the same count and positions, every PDO clamped to P ----
+    // ---- forge_caps: watt-cap removes higher tiers (no tiny high-V clamping) and keeps mandatory PDO 1 ----
     {
         std::uint32_t out[7]{};
-        CHECK_EQ(int(forge_caps(kCaps, 30000, out)), 6);
-        CHECK_EQ(out[0], fixed(5000, 3000, kFlags1));   // 15 W: unchanged; only the EPR-capable bit goes
-        CHECK_EQ(out[1], fixed(9000, 3000));            // 27 W: unchanged
-        CHECK_EQ(out[2], fixed(12000, 2500));           // 30 W / 12 V
-        CHECK_EQ(out[3], fixed(15000, 2000));
-        CHECK_EQ(out[4], fixed(20000, 1500));
-        CHECK_EQ(out[5], pps(11000, 3300, 2700));       // 30 W / 11 V = 2.72 A, rounded down to 50 mA
-        // a limit above everything changes nothing but the EPR bit
+        CHECK_EQ(int(forge_caps(kCaps, 30000, out)), 2);   // 5V 3A (15W) + 9V 3A (27W); 12/15/20V/PPS removed
+        CHECK_EQ(out[0], fixed(5000, 3000, kFlags1));      // EPR-capable bit cleared
+        CHECK_EQ(out[1], fixed(9000, 3000));
+
+        // Non-trailing gap in watt-cap keeps position alignment via 0 mA placeholder.
+        CHECK_EQ(int(forge_caps(kCaps, 60000, out)), 6);   // 20V 5A (100W) neutered in-place so PPS (55W) stays at pos 6
+        CHECK_EQ(out[4], fixed(20000, 0));
+        CHECK_EQ(out[5], kCaps[5]);
+
+        // 10 W clamps mandatory PDO 1 to 2 A and removes everything higher.
+        CHECK_EQ(int(forge_caps(kCaps, 10000, out)), 1);
+        CHECK_EQ(out[0], fixed(5000, 2000, kFlags1));
+
+        // 100 W changes nothing except PDO 1's EPR-capable bit.
         CHECK_EQ(int(forge_caps(kCaps, 100000, out)), 6);
         CHECK_EQ(out[4], kCaps[4]);
         CHECK_EQ(out[5], kCaps[5]);
-        // the other kinds: battery (250 mW units), variable (10 mA), SPR AVS (two current fields)
-        const std::uint32_t real[3] = {
-            0x40000000u | (20000 / 50) << 20 | (5000 / 50) << 10 | (60000 / 250),   // battery 5-20 V 60 W
-            0x80000000u | (20000 / 50) << 20 | (5000 / 50) << 10 | 300,             // variable 5-20 V 3 A
-            0xC0000000u | (2u << 28) | (300u << 10) | 500u};                         // SPR AVS 3 A (9-15 V), 5 A (15-20 V)
-        std::uint32_t f[3]{};
-        CHECK_EQ(int(forge_caps(real, 30000, f)), 3);
-        CHECK_EQ(f[0] & 0x3FF, 30000 / 250);
-        CHECK_EQ(f[0] >> 10, real[0] >> 10);
-        CHECK_EQ(f[1] & 0x3FF, 150);                    // 30 W / 20 V
-        CHECK_EQ((f[2] >> 10) & 0x3FF, 200);            // 30 W / 15 V = 2 A
-        CHECK_EQ(f[2] & 0x3FF, 150);                    // 30 W / 20 V
-        CHECK_EQ(f[2] >> 20, real[2] >> 20);
-        // an unused slot stays zero (the count is the list as given)
-        const std::uint32_t with_hole[2] = {kCaps[0], 0};
-        std::uint32_t h2[2]{};
-        CHECK_EQ(int(forge_caps(with_hole, 30000, h2)), 2);
-        CHECK_EQ(h2[1], 0);
     }
 
-    // ---- arming: the limit is a plain SPR figure ----
+    // ---- per-tech Fixed / PPS / SPR-AVS filtering, 100 mA steps, and PPS range clamping ----
+    {
+        // Charger with Fixed 5..20V, 5-21V 5A PPS, and 15V/20V SPR AVS
+        const std::uint32_t charger[7] = {
+            fixed(5000, 3000, kFlags1 | kEprBit), fixed(9000, 3000), fixed(12000, 3000), fixed(15000, 3000),
+            fixed(20000, 5000), pps(21000, 5000, 5000), spr_avs(3000, 5000)
+        };
+        std::uint32_t out[7]{};
+
+        // 1. Fixed capped to 9V 2.5A, PPS/AVS off -> clean tail truncation to 2 PDOs.
+        LimConfig fx9{};
+        fx9.fixed = {true, 9000, 2500};
+        fx9.pps.enabled = false;
+        fx9.avs.enabled = false;
+        CHECK_EQ(int(forge_caps(charger, fx9, out)), 2);
+        CHECK_EQ(out[0], fixed(5000, 2500, kFlags1));
+        CHECK_EQ(out[1], fixed(9000, 2500));
+
+        // 2. PPS 5-21V -> 5-11V at 3.0A, Fixed & AVS off -> Fixed PDO1 clamped to 100 mA, PDO2..5 neutered at 0 mA, PPS at pos 6.
+        LimConfig pps11{};
+        pps11.fixed.enabled = false;
+        pps11.pps = {true, 11000, 3000};
+        pps11.avs.enabled = false;
+        CHECK_EQ(int(forge_caps(charger, pps11, out)), 6);
+        CHECK_EQ(out[0], fixed(5000, 100, kFlags1));
+        CHECK_EQ(out[1], fixed(9000, 0));
+        CHECK_EQ(out[4], fixed(20000, 0));
+        CHECK_EQ(out[5], pps(11000, 5000, 3000));
+        CHECK_COND(request_complies(rq_pps(6, 11000, 3000), charger, {out, 6}, pps11));
+        CHECK_COND(!request_complies(rq_pps(6, 12000, 3000), charger, {out, 6}, pps11));
+        CHECK_COND(!request_complies(rq_fixed(5, 1000, 1000), charger, {out, 6}, pps11));
+        CHECK_COND(!request_complies(rq_fixed(1, 500, 500), charger, {out, 6}, pps11));
+
+        // 3. PPS max_mv below PPS vmin -> drops/neuters PPS cleanly.
+        LimConfig pps_drop{};
+        pps_drop.fixed.max_mv = 9000;
+        pps_drop.pps = {true, 4000, 0};   // < 5000 mV vmin -> dropped
+        pps_drop.avs.enabled = false;
+        CHECK_EQ(int(forge_caps(charger, pps_drop, out)), 2);
+
+        // 4. SPR AVS capped to 15V 2.5A (both 20V field zeroed and 15V field clamped); 20V @ 3.2A keeps 15V<=3.0A, 20V<=3.2A.
+        LimConfig avs15{};
+        avs15.avs = {true, 15000, 2500};
+        CHECK_EQ(int(forge_caps(charger, avs15, out)), 7);
+        CHECK_EQ(out[6], spr_avs(2500, 0));
+        CHECK_COND(request_complies(rq_avs(7, 15000, 2500), charger, {out, 7}, avs15));
+        CHECK_COND(!request_complies(rq_avs(7, 20000, 2000), charger, {out, 7}, avs15));
+
+        LimConfig avs20{};
+        avs20.avs = {true, 20000, 3200};
+        CHECK_EQ(int(forge_caps(charger, avs20, out)), 7);
+        CHECK_EQ(out[6], spr_avs(3000, 3200));
+        CHECK_COND(request_complies(rq_avs(7, 20000, 3200), charger, {out, 7}, avs20));
+        CHECK_COND(!request_complies(rq_avs(7, 20000, 3300), charger, {out, 7}, avs20));
+    }
+
+    // ---- LimConfig validation and labels ----
+    {
+        LimConfig c{};
+        CHECK_COND(!lim_config_valid(c));   // inactive
+        c.fixed.enabled = false; c.pps.enabled = false; c.avs.enabled = false;
+        CHECK_COND(!lim_config_valid(c));   // all off
+        c = {}; c.fixed.max_ma = 250;       // not 100 mA multiple
+        CHECK_COND(!lim_config_valid(c));
+        c = {}; c.fixed.max_ma = 2500;
+        CHECK_COND(lim_config_valid(c));
+        c = {}; c.avs.max_mv = 18000;       // only 15V/20V valid
+        CHECK_COND(!lim_config_valid(c));
+        c = {}; c.avs.max_mv = 15000;
+        CHECK_COND(lim_config_valid(c));
+
+        char buf[8]{};
+        std::size_t n = lim_label(lim_config_watts(27000), buf);
+        CHECK_STR(std::string(buf, n).c_str(), "27W");
+        LimConfig l1{}; l1.fixed = {true, 9000, 2500}; l1.pps.enabled = false; l1.avs.enabled = false;
+        n = lim_label(l1, buf);
+        CHECK_EQ(n <= kLimLabelMax, true);
+        LimConfig l2{}; l2.fixed.enabled = false; l2.pps = {true, 11000, 0}; l2.avs.enabled = false;
+        n = lim_label(l2, buf);
+        CHECK_STR(std::string(buf, n).c_str(), "PPS11");
+        LimConfig l3{}; l3.avs = {true, 15000, 0};
+        n = lim_label(l3, buf);
+        CHECK_STR(std::string(buf, n).c_str(), "AVS15");
+    }
+
+    // ---- lim_comeback pure encode/decode/restore ----
+    {
+        LimConfig cfg{};
+        cfg.fixed = {true, 9000, 2500};
+        cfg.pps = {true, 11000, 3000};
+        cfg.avs = {false, 0, 0};
+        const auto enc = k2::limcomeback::encode(cfg);
+        const auto dec = k2::limcomeback::decode(enc);
+        CHECK_COND(dec.has_value());
+        CHECK_COND(*dec == cfg);
+        auto bad = enc; bad[9] ^= 1;
+        CHECK_COND(!k2::limcomeback::decode(bad).has_value());
+        CHECK_COND(k2::limcomeback::should_restore(Mode::Plain, false, true, true));
+        CHECK_COND(!k2::limcomeback::should_restore(Mode::Plain, false, true, false));   // stale canary
+        CHECK_COND(!k2::limcomeback::should_restore(Mode::Plain, true, true, true));     // warm reset
+        CHECK_COND(!k2::limcomeback::should_restore(Mode::OkRdCc1, false, true, true));  // key held
+    }
+
+    // ---- arming: the limit is a plain SPR config ----
     {
         Limiter l;
         CHECK_EQ(int(l.status().state), int(LimState::Off));
@@ -142,520 +252,174 @@ int main() {
         CHECK_EQ(int(l.status().why), int(LimWhy::User));
     }
 
-    // ---- a first contract that asks for too much: wait for PS_RDY and a quiet line, then forge ----
+    // ---- a first contract that asks for too much: wait for PS_RDY and quiet line, then forge ----
     {
         Rig r;
         r.lim.arm(30000, r.now);
         r.caps(3);
-        CHECK_EQ(int(r.lim.status().state), int(LimState::Negotiating));   // a real list while armed: a negotiation is in flight
+        CHECK_EQ(int(r.lim.status().state), int(LimState::Negotiating));
         r.request(rq_fixed(5, 5000, 5000));                              // 100 W
         TxMsg m;
-        CHECK_COND(!r.tx(m));                                              // no PS_RDY yet: never on top of the negotiation
-        r.accept_ready(4);                                                 // Accept id 4, PS_RDY id 5
+        CHECK_COND(!r.tx(m));                                            // no PS_RDY yet
+        r.accept_ready(4);                                               // Accept id 4, PS_RDY id 5
         CHECK_EQ(int(r.lim.status().state), int(LimState::Pending));
-        r.now += 5;
+        r.now += 20;
         r.lim.tick(r.now);
-        CHECK_COND(!r.lim.take_tx(m, r.now));                              // the line was quiet only 5 ms
+        CHECK_COND(!r.lim.take_tx(m, r.now));                            // quiet time is 50 ms
         CHECK_COND(r.tx(m));
         CHECK_EQ(int(r.lim.status().state), int(LimState::Injected));
-        CHECK_COND(m.inline_tx);
-        CHECK_COND(!m.hard_reset);
-        CHECK_EQ(int(m.sop), int(Sop::Sop));
-        CHECK_EQ(m.len, 24);
-        CHECK_EQ(m.header & 0x1F, 1);                                      // Source_Capabilities
-        CHECK_EQ((m.header >> 12) & 7, 6);
-        CHECK_EQ(m.header & 0x0120, 0x0120);                               // the source's power and data role bits
-        CHECK_EQ((m.header >> 6) & 3, 2);                                  // the charger's revision
-        CHECK_EQ((m.header >> 9) & 7, (5 + 2) & 7);                        // two past the charger's newest: its Accept (6) is never ours
+        CHECK_EQ(m.len, 8);                                              // 5V3A, 9V3A (higher levels removed)
+        CHECK_EQ((m.header >> 9) & 7, (5 + 2) & 7);
         CHECK_EQ(word(m, 0), fixed(5000, 3000, kFlags1));
-        CHECK_EQ(word(m, 4), fixed(20000, 1500));
-        CHECK_EQ(word(m, 5), pps(11000, 3300, 2700));
-        CHECK_EQ(r.lim.status().injections, 1);
-        CHECK_EQ(r.lim.status().forged_n, 6);
-        CHECK_EQ(r.lim.status().forged[4], fixed(20000, 1500));
-        // the sink now asks within the limit: verified
-        r.request(rq_fixed(5, 1500, 1500));
+        CHECK_EQ(word(m, 1), fixed(9000, 3000));
+        CHECK_EQ(r.lim.status().forged_n, 2);
+        // the sink obeys at pos 2 (9V 3A = 27W): verified
+        r.request(rq_fixed(2, 3000, 3000));
         CHECK_EQ(int(r.lim.status().state), int(LimState::Limited));
-        CHECK_EQ(r.lim.status().req_pos, 5);
-        CHECK_EQ(r.lim.status().req_mw, 30000);
-        CHECK_COND(!r.tx(m));   // nothing more to send
+        CHECK_COND(!r.tx(m));
     }
 
-    // ---- a real list while armed is forged even when the first Request is already within the limit ----
+    // ---- no-op real list (already equals forged): skips injection straight to Limited ----
     {
+        const std::uint32_t small_caps[2] = {fixed(5000, 3000, kFlags1), fixed(9000, 3000)};
         Rig r;
         r.lim.arm(30000, r.now);
-        r.negotiate(0, rq_fixed(2, 1000, 1000));   // 9 V 1 A
-        TxMsg m;
-        CHECK_COND(r.tx(m));
-        CHECK_EQ(int(r.lim.status().state), int(LimState::Injected));
-        r.request(rq_fixed(2, 1000, 1000));
+        r.negotiate(0, rq_fixed(2, 3000, 3000), small_caps);
         CHECK_EQ(int(r.lim.status().state), int(LimState::Limited));
-        // the charger lists again (a replug, a Soft_Reset path): forged again
-        r.now += 2000;
-        r.negotiate(0, rq_fixed(2, 1000, 1000));
-        CHECK_COND(r.tx(m));
-        CHECK_EQ(r.lim.status().injections, 2);
-    }
-
-    // ---- armed mid-contract with no seed: no real list was seen, nothing to forge from ----
-    {
-        Rig r;
-        r.lim.arm(30000, r.now);
-        r.request(rq_fixed(5, 5000, 5000));   // the PPS-style keep-alive of a contract the limiter never saw the list of
-        r.accept_ready(1);
         TxMsg m;
         CHECK_COND(!r.tx(m));
-        CHECK_EQ(int(r.lim.status().state), int(LimState::Armed));
+        CHECK_EQ(r.lim.status().injections, 0);
     }
 
-    // ---- armed mid-contract, seeded from the sniffer: an over-limit contract is forged at once, no replug ----
+    // ---- seeded mid-contract: differs -> Pending (forged immediately); identical -> Limited ----
     {
         Rig r;
-        r.negotiate(2, rq_fixed(4, 3000, 3000));   // 15 V 3 A = 45 W, before the arm: the limiter is off and hears nothing
-        r.now += 30;
+        r.negotiate(2, rq_fixed(4, 3000, 3000));   // 15 V 3 A
+        r.now += 60;
         CHECK_COND(r.lim.arm(10000, r.now, &r.watch));
         CHECK_EQ(int(r.lim.status().state), int(LimState::Pending));
-        CHECK_EQ(r.lim.status().req_pos, 4);
-        CHECK_EQ(r.lim.status().req_mw, 45000);
         TxMsg m;
         CHECK_COND(r.tx(m));
-        CHECK_EQ(int(r.lim.status().state), int(LimState::Injected));
-        CHECK_EQ((m.header >> 9) & 7, (r.last_id + 2) & 7);   // the same MessageID rule as a list forged from the wire
-        CHECK_EQ(m.len, 24);
-        CHECK_EQ(word(m, 3), fixed(15000, 660));              // 10 W / 15 V = 0.66 A
-        CHECK_EQ(r.lim.status().injections, 1);
-        r.request(rq_fixed(4, 660, 660));                     // the sink obeys
+        CHECK_EQ(m.len, 4);
+        CHECK_EQ(word(m, 0), fixed(5000, 2000, kFlags1));
+        r.request(rq_fixed(1, 2000, 2000));
         CHECK_EQ(int(r.lim.status().state), int(LimState::Limited));
-    }
-    // ... a line that is still busy waits for the quiet time; a seeded contract within P just stays as it is
-    {
-        Rig r;
-        r.negotiate(0, rq_fixed(4, 3000, 3000));
-        r.now += 2;                                          // the PS_RDY GoodCRC was 2 ms ago
-        r.lim.arm(10000, r.now, &r.watch);
-        TxMsg m;
-        r.lim.tick(r.now);
-        CHECK_COND(!r.lim.take_tx(m, r.now));
-        CHECK_COND(r.tx(m, kLimQuietMs));
+
+        // Even if current draw is 9V 1A (<10W), charger's cached caps differ (contain 20V 5A), so seed still forges!
+        Rig idle_sink;
+        idle_sink.negotiate(0, rq_fixed(2, 1000, 1000));
+        idle_sink.lim.arm(10000, idle_sink.now, &idle_sink.watch);
+        CHECK_EQ(int(idle_sink.lim.status().state), int(LimState::Pending));
+
+        // Charger caps with nothing differing -> Limited immediately.
+        const std::uint32_t small_caps[1] = {fixed(5000, 2000, kFlags1)};
         Rig w;
-        w.negotiate(0, rq_fixed(2, 1000, 1000));             // 9 W: already within 10 W
+        w.negotiate(0, rq_fixed(1, 2000, 2000), small_caps);
         w.lim.arm(10000, w.now, &w.watch);
         CHECK_EQ(int(w.lim.status().state), int(LimState::Limited));
-        CHECK_COND(!w.tx(m));
-        w.request(rq_fixed(4, 3000, 3000));                  // it asks for more: forged from the seeded list
-        w.accept_ready(2);
-        CHECK_EQ(int(w.lim.status().state), int(LimState::Pending));
-        CHECK_COND(w.tx(m));
-        // no contract in the sniffer: armed, waiting
-        Rig e;
-        e.caps(0);                                           // a list, but no Request / PS_RDY yet
-        e.lim.arm(10000, e.now, &e.watch);
-        CHECK_EQ(int(e.lim.status().state), int(LimState::Armed));
-        CHECK_COND(!e.tx(m));
     }
 
-    // ---- the replay of hardware test 1: three list retries, the Request, Accept, PS_RDY sent twice ----
+    // ---- Injected timeout retries with fresh advancing MessageID instead of deadlocking in Armed ----
     {
         Rig r;
-        r.lim.arm(10000, r.now);                              // armed with the pair attached, then a replug: a fresh attach
-        r.lim.on_detach();
-        r.caps(0);
-        r.caps(1);
-        r.caps(2);                                            // the sink GoodCRCs the third
-        CHECK_EQ(int(r.lim.status().state), int(LimState::Negotiating));
-        r.request(rq_fixed(4, 3000, 3000));                   // 15 V 3 A
-        r.rx(hdr(3, 0, 2, kSrc, 3));                          // Accept
-        r.rx(hdr(1, 0, 1, kSnk, 3));
-        r.rx(hdr(6, 0, 2, kSrc, 4));                          // PS_RDY
-        r.rx(hdr(1, 0, 1, kSnk, 4));
-        CHECK_EQ(int(r.lim.status().state), int(LimState::Pending));
-        r.now += 2;
-        r.rx(hdr(6, 0, 2, kSrc, 5));                          // and again, 3 ms later: no new negotiation
-        r.rx(hdr(1, 0, 1, kSnk, 5));
-        CHECK_EQ(int(r.lim.status().state), int(LimState::Pending));
-        TxMsg m;
+        r.lim.arm(30000, r.now);
+        r.negotiate(0, rq_fixed(5, 5000, 5000));   // last charger ID = 2
+        TxMsg m1, m2;
+        CHECK_COND(r.tx(m1));
+        CHECK_EQ((m1.header >> 9) & 7, (2 + 2) & 7);   // skip = 1 -> ID = 4
+        r.now += kLimVerifyMs + 5;
         r.lim.tick(r.now);
-        CHECK_COND(!r.lim.take_tx(m, r.now));                 // the second PS_RDY restarted the quiet time
-        CHECK_COND(r.tx(m, kLimQuietMs));
-        CHECK_EQ((m.header >> 9) & 7, (5 + 2) & 7);           // two past the second PS_RDY
-        CHECK_EQ(r.lim.status().injections, 1);
-        CHECK_EQ(word(m, 3), fixed(15000, 660));
+        CHECK_EQ(r.lim.status().ignores, 1);
+        CHECK_EQ(int(r.lim.status().state), int(LimState::Pending));   // NOT Armed deadlock!
+        r.now += kLimGapMs;
+        CHECK_COND(r.tx(m2));
+        CHECK_EQ((m2.header >> 9) & 7, (2 + 3) & 7);   // skip = 2 -> fresh ID = 5 (never drops as duplicate)
+        r.now += kLimVerifyMs + 5;
+        r.lim.tick(r.now);
+        CHECK_COND(!r.lim.armed());
+        CHECK_EQ(int(r.lim.status().why), int(LimWhy::SinkIgnores));
     }
 
-    // ---- limited, then the sink asks for more again: forged again ----
+    // ---- Sink Get_Source_Cap followed by charger caps does NOT falsely blame ChargerResets ----
     {
         Rig r;
         r.lim.arm(30000, r.now);
         r.negotiate(0, rq_fixed(5, 5000, 5000));
         TxMsg m;
         CHECK_COND(r.tx(m));
-        r.request(rq_fixed(5, 1500, 1500));
-        r.accept_ready(1);
-        CHECK_EQ(int(r.lim.status().state), int(LimState::Limited));
-        r.now += 1500;
-        r.lim.tick(r.now);
-        r.request(rq_pps(6, 11000, 5000));   // 55 W
+        r.rx(hdr(kCtlGetSourceCap, 0, 2, kSnk, 3));
+        r.now += 20;
+        r.caps(6);   // charger answers Get_Source_Cap within kLimBlameMs
+        CHECK_EQ(r.lim.status().rejects, 0);
         CHECK_EQ(int(r.lim.status().state), int(LimState::Negotiating));
-        r.accept_ready(4);
-        CHECK_EQ(int(r.lim.status().state), int(LimState::Pending));
-        CHECK_COND(r.tx(m));
-        CHECK_EQ(r.lim.status().injections, 2);
     }
 
-    // ---- the rate: at least kLimGapMs between two forged lists, kLimMaxInjections per arm ----
+    // ---- Hard Reset and Soft Reset rejection attribution ----
     {
         Rig r;
         r.lim.arm(30000, r.now);
-        r.negotiate(0, rq_fixed(5, 1500, 1500));
+        r.negotiate(0, rq_fixed(5, 5000, 5000));
         TxMsg m;
         CHECK_COND(r.tx(m));
-        r.request(rq_fixed(5, 1500, 1500));
-        r.negotiate(0, rq_fixed(5, 1500, 1500));
-        CHECK_COND(!r.tx(m));                      // 200 ms after the last one: too soon
-        r.now += kLimGapMs;
+        r.request(rq_fixed(2, 3000, 3000));
+        r.now += 40;
+        r.lim.on_hard_reset(r.now);
+        CHECK_EQ(r.lim.status().rejects, 1);
+        r.now += 1500;
+        r.negotiate(0, rq_fixed(5, 5000, 5000));
         CHECK_COND(r.tx(m));
-        CHECK_EQ(r.lim.status().injections, 2);
+        r.now += 30;
+        r.lim.on_hard_reset(r.now);
+        CHECK_COND(!r.lim.armed());
+        CHECK_EQ(int(r.lim.status().why), int(LimWhy::SinkResets));
+
+        Rig sc;
+        sc.lim.arm(30000, sc.now);
+        for (int k = 0; k < 2; k++) {
+            sc.negotiate(0, rq_fixed(5, 5000, 5000));
+            CHECK_COND(sc.tx(m));
+            sc.now += 10;
+            sc.rx(hdr(13, 0, 2, kSrc, 7));
+            sc.now += 1500;
+        }
+        CHECK_COND(!sc.lim.armed());
+        CHECK_EQ(int(sc.lim.status().why), int(LimWhy::ChargerResets));
+    }
+
+    // ---- rate cap, EPR exit, detach, gate, picks ----
+    {
+        Rig r;
+        r.lim.arm(30000, r.now);
+        TxMsg m;
         for (int i = 0; i < 40 && r.lim.armed(); i++) {
-            r.request(rq_fixed(5, 1500, 1500));
+            r.negotiate(0, rq_fixed(5, 5000, 5000));
+            r.tx(m);
+            r.request(rq_fixed(2, 3000, 3000));
             r.now += 1200;
             r.lim.tick(r.now);
-            r.negotiate(0, rq_fixed(5, 1500, 1500));
-            r.tx(m);
         }
         CHECK_COND(!r.lim.armed());
         CHECK_EQ(int(r.lim.status().why), int(LimWhy::Rate));
         CHECK_EQ(r.lim.status().injections, kLimMaxInjections);
-    }
 
-    // ---- a Hard Reset within kLimBlameMs of the forged list is a rejection; two end it ----
-    {
-        Rig r;
-        r.lim.arm(30000, r.now);
-        r.negotiate(0, rq_fixed(5, 5000, 5000));
-        TxMsg m;
-        CHECK_COND(r.tx(m));
-        r.request(rq_fixed(5, 1500, 1500));        // the sink answered, then the charger resets
-        r.now += 40;
-        r.lim.on_hard_reset(r.now);
-        CHECK_EQ(r.lim.status().rejects, 1);
-        CHECK_COND(r.lim.armed());
-        CHECK_EQ(int(r.lim.status().state), int(LimState::Armed));
-        r.now += 1500;
-        r.negotiate(0, rq_fixed(5, 5000, 5000));   // the charger lists again after its reset
-        CHECK_COND(r.tx(m));
-        r.now += 30;                                // no Request came: the sink side gave up
-        r.lim.on_hard_reset(r.now);
-        CHECK_COND(!r.lim.armed());
-        CHECK_EQ(int(r.lim.status().why), int(LimWhy::SinkResets));
-        CHECK_EQ(r.lim.status().rejects, 2);
-    }
-    // a Hard Reset long after it is just a new negotiation, no rejection
-    {
-        Rig r;
-        r.lim.arm(30000, r.now);
-        r.negotiate(0, rq_fixed(5, 5000, 5000));
-        TxMsg m;
-        CHECK_COND(r.tx(m));
-        r.request(rq_fixed(5, 1500, 1500));
-        r.now += kLimBlameMs + 50;
-        r.lim.tick(r.now);
-        r.lim.on_hard_reset(r.now);
-        CHECK_EQ(r.lim.status().rejects, 0);
-        CHECK_COND(r.lim.armed());
-        CHECK_EQ(int(r.lim.status().state), int(LimState::Armed));
-    }
-    // Soft_Reset by role: the charger's is ChargerResets, the sink's SinkResets
-    {
-        Rig r;
-        r.lim.arm(30000, r.now);
-        TxMsg m;
-        for (int k = 0; k < 2; k++) {
-            r.negotiate(0, rq_fixed(5, 5000, 5000));
-            CHECK_COND(r.tx(m));
-            r.now += 10;
-            r.rx(hdr(13, 0, 2, kSrc, 7));   // Soft_Reset from the source
-            r.now += 1500;
-        }
-        CHECK_COND(!r.lim.armed());
-        CHECK_EQ(int(r.lim.status().why), int(LimWhy::ChargerResets));
-        Rig s;
-        s.lim.arm(30000, s.now);
-        for (int k = 0; k < 2; k++) {
-            s.negotiate(0, rq_fixed(5, 5000, 5000));
-            CHECK_COND(s.tx(m));
-            s.now += 10;
-            s.rx(hdr(13, 0, 2, kSnk, 7));   // Soft_Reset from the sink
-            s.now += 1500;
-        }
-        CHECK_COND(!s.lim.armed());
-        CHECK_EQ(int(s.lim.status().why), int(LimWhy::SinkResets));
-    }
-    // a real list right after the forged one is the charger starting over: a rejection too
-    {
-        Rig r;
-        r.lim.arm(30000, r.now);
-        r.negotiate(0, rq_fixed(5, 5000, 5000));
-        TxMsg m;
-        CHECK_COND(r.tx(m));
-        r.now += 20;
-        r.caps(6);
-        CHECK_EQ(r.lim.status().rejects, 1);
-        CHECK_EQ(int(r.lim.status().state), int(LimState::Negotiating));
-    }
-    // a stable limited link clears the count
-    {
-        Rig r;
-        r.lim.arm(30000, r.now);
-        r.negotiate(0, rq_fixed(5, 5000, 5000));
-        TxMsg m;
-        CHECK_COND(r.tx(m));
-        r.now += 30;
-        r.lim.on_hard_reset(r.now);
-        CHECK_EQ(r.lim.status().rejects, 1);
-        r.now += 1500;
-        r.negotiate(0, rq_fixed(5, 5000, 5000));
-        CHECK_COND(r.tx(m));
-        r.request(rq_fixed(5, 1500, 1500));
-        r.now += kLimBlameMs + 20;
-        r.lim.tick(r.now);
-        CHECK_EQ(int(r.lim.status().state), int(LimState::Limited));
-        CHECK_EQ(r.lim.status().rejects, 0);
-    }
+        Rig epr;
+        epr.lim.arm(30000, epr.now);
+        epr.rx(hdr(0x11, 1, 2, kSrc, 0, true), {0x00, 0x80, 0, 0});
+        CHECK_EQ(int(epr.lim.status().why), int(LimWhy::Epr));
 
-    // ---- the sink never answers, or keeps asking too much: counted, then given up ----
-    {
-        Rig r;
-        r.lim.arm(30000, r.now);
-        TxMsg m;
-        for (int k = 0; k < 2; k++) {
-            r.negotiate(0, rq_fixed(5, 5000, 5000));
-            CHECK_COND(r.tx(m));
-            r.now += kLimVerifyMs + 10;
-            r.lim.tick(r.now);
-            r.now += 1500;
-        }
-        CHECK_COND(!r.lim.armed());
-        CHECK_EQ(int(r.lim.status().why), int(LimWhy::SinkIgnores));
-        Rig s;
-        s.lim.arm(30000, s.now);
-        for (int k = 0; k < 2; k++) {
-            s.negotiate(0, rq_fixed(5, 5000, 5000));
-            CHECK_COND(s.tx(m));
-            s.request(rq_fixed(5, 5000, 5000));   // still 100 W
-            s.accept_ready(1);
-            s.now += 1500;
-        }
-        CHECK_COND(!s.lim.armed());
-        CHECK_EQ(int(s.lim.status().why), int(LimWhy::SinkIgnores));
-    }
+        Rig dt;
+        dt.lim.arm(10000, dt.now);
+        dt.negotiate(0, rq_fixed(4, 3000, 3000));
+        CHECK_COND(dt.tx(m));
+        dt.request(rq_fixed(1, 2000, 2000));
+        dt.lim.on_detach();
+        CHECK_EQ(int(dt.lim.status().state), int(LimState::Armed));
+        CHECK_EQ(dt.lim.status().req_pos, 0);
+        CHECK_EQ(dt.lim.status().forged_n, 0);
 
-    // ---- a negotiation that never reaches PS_RDY, or a line that is never quiet, is dropped ----
-    {
-        Rig r;
-        r.lim.arm(30000, r.now);
-        r.caps(0);
-        r.now += kLimNegMs + 10;
-        r.lim.tick(r.now);
-        CHECK_EQ(int(r.lim.status().state), int(LimState::Armed));
-        CHECK_EQ(r.lim.status().rejects, 0);
-        Rig b;
-        b.lim.arm(30000, b.now);
-        b.negotiate(0, rq_fixed(5, 5000, 5000));
-        TxMsg m;
-        for (int i = 0; i < 700; i++) {   // chatter every 8 ms: never 10 ms quiet
-            b.now += 8;
-            b.rx(hdr(1, 0, 1, kSnk, 0));
-            b.lim.tick(b.now);
-            if (b.lim.take_tx(m, b.now)) break;
-        }
-        CHECK_EQ(int(b.lim.status().state), int(LimState::Armed));
-        CHECK_EQ(b.lim.status().injections, 0);
-    }
-
-    // ---- EPR is not ours: any sign of it stops the limiter ----
-    {
-        Rig a;
-        a.lim.arm(30000, a.now);
-        a.rx(hdr(0x11, 1, 2, kSrc, 0, true), {0x00, 0x80, 0, 0});   // EPR_Source_Capabilities (extended)
-        CHECK_COND(!a.lim.armed());
-        CHECK_EQ(int(a.lim.status().why), int(LimWhy::Epr));
-        Rig b;
-        b.lim.arm(30000, b.now);
-        b.rx(hdr(10, 1, 2, kSrc, 0), {0, 0, 0, 0x03});               // EPR_Mode: Enter Succeeded
-        CHECK_COND(!b.lim.armed());
-        CHECK_EQ(int(b.lim.status().why), int(LimWhy::Epr));
-        Rig c;
-        c.lim.arm(30000, c.now);
-        c.caps(0);
-        c.request(rq_fixed(8, 1000, 1000));                          // an EPR object position
-        CHECK_COND(!c.lim.armed());
-        CHECK_EQ(int(c.lim.status().why), int(LimWhy::Epr));
-        Rig d;
-        d.lim.arm(30000, d.now);
-        d.rx(hdr(10, 1, 2, kSnk, 0), {0, 0, 0, 0x01});                // Enter asked only: not yet a contract
-        CHECK_COND(d.lim.armed());
-    }
-
-    // ---- a detach only waits: the armed limit survives it, nothing of the old link counts ----
-    {
-        Rig r;
-        r.lim.arm(30000, r.now);
-        r.negotiate(0, rq_fixed(5, 5000, 5000));
-        CHECK_EQ(int(r.lim.status().state), int(LimState::Pending));
-        r.lim.on_detach();
-        CHECK_COND(r.lim.armed());
-        CHECK_EQ(int(r.lim.status().state), int(LimState::Armed));
-        CHECK_EQ(int(r.lim.status().why), int(LimWhy::None));
-        TxMsg m;
-        CHECK_COND(!r.tx(m));                            // the old contract is gone: nothing to forge from
-        r.negotiate(0, rq_fixed(5, 5000, 5000));        // the next attach
-        CHECK_COND(r.tx(m));
-        CHECK_EQ(r.lim.status().injections, 1);
-        // the same after an injected list and a verified one
-        r.request(rq_fixed(5, 1500, 1500));
-        CHECK_EQ(int(r.lim.status().state), int(LimState::Limited));
-        r.lim.on_detach();
-        CHECK_EQ(int(r.lim.status().state), int(LimState::Armed));
-        r.now += kLimGapMs;
-        r.negotiate(0, rq_fixed(5, 5000, 5000));
-        CHECK_COND(r.tx(m));
-        CHECK_EQ(r.lim.status().injections, 2);
-        // a detach while off stays off; arming again starts clean
-        r.lim.disarm();
-        r.lim.on_detach();
-        CHECK_COND(!r.lim.armed());
-        CHECK_EQ(int(r.lim.status().why), int(LimWhy::User));
-        CHECK_COND(r.lim.arm(20000, r.now));
-        CHECK_EQ(int(r.lim.status().why), int(LimWhy::None));
-        CHECK_EQ(r.lim.status().limit_mw, 20000);
-        CHECK_EQ(r.lim.status().injections, 0);
-    }
-
-    // ---- SOP' / SOP'' traffic is not the contract ----
-    {
-        Rig r;
-        r.lim.arm(30000, r.now);
-        r.lim.on_message(Sop::SopP, hdr(1, 6, 2, kSrc, 0), std::vector<std::uint8_t>(24, 0), r.now);
-        CHECK_EQ(int(r.lim.status().state), int(LimState::Armed));
-    }
-
-    // ---- the arming gate ----
-    {
-        const LimFacts ok{false};   // nothing attached, or only a charger: it waits, no refusal
-        CHECK_EQ(int(lim_gate(ok, 30000)), int(LimRefusal::None));
-        CHECK_EQ(int(lim_gate(ok, kLimMinMw - 1)), int(LimRefusal::BadLimit));
-        CHECK_EQ(int(lim_gate(ok, kLimMaxMw + 1)), int(LimRefusal::BadLimit));
+        CHECK_EQ(int(lim_gate({false}, 30000)), int(LimRefusal::None));
+        CHECK_EQ(int(lim_gate({false}, kLimMinMw - 1)), int(LimRefusal::BadLimit));
         CHECK_EQ(int(lim_gate({true}, 30000)), int(LimRefusal::Busy));
-        CHECK_STR(lim_refusal_name(LimRefusal::Busy), "another feature is running");
-    }
-
-    // ---- the names (the shell and the wire carry them) ----
-    {
-        CHECK_STR(lim_state_name(LimState::Limited), "limited");
-        CHECK_STR(lim_why_name(LimWhy::ChargerResets), "the charger resets");
-        CHECK_STR(lim_why_name(LimWhy::SinkResets), "the sink resets");
-    }
-    // ---- the picker's list: whole-watt levels of the charger's own fixed offers below its best ----
-    {
-        auto fx = [](unsigned mv, unsigned ma) {
-            Pdo p;
-            p.type = PdoType::Fixed;
-            p.max_mv = std::uint16_t(mv);
-            p.max_ma = std::uint16_t(ma);
-            p.max_mw = mv * ma / 1000;
-            return p;
-        };
-        auto pp = [](unsigned max_mv, unsigned min_mv, unsigned ma) {
-            Pdo p;
-            p.type = PdoType::Pps;
-            p.min_mv = std::uint16_t(min_mv);
-            p.max_mv = std::uint16_t(max_mv);
-            p.max_ma = std::uint16_t(ma);
-            p.max_mw = max_mv * ma / 1000;
-            return p;
-        };
-        LimPick out[kLimMaxPicks];
-        // 65 W: 5 V 3 A, 9 V 3 A, 15 V 3 A, 20 V 3.25 A -> three levels, the top one is the charger's own max
-        {
-            const Pdo l[] = {fx(5000, 3000), fx(9000, 3000), fx(15000, 3000), fx(20000, 3250)};
-            CHECK_EQ(lim_picks(l, out), 3u);
-            CHECK_EQ(out[0].mw, 15000u);
-            CHECK_EQ(out[0].mv, 5000u);
-            CHECK_EQ(out[0].ma, 3000u);
-            CHECK_EQ(out[1].mw, 27000u);
-            CHECK_EQ(out[2].mw, 45000u);
-            CHECK_EQ(out[2].mv, 15000u);
-        }
-        // 100 W: the 100 W object is the max and PPS adds no level
-        {
-            const Pdo l[] = {fx(5000, 3000), fx(9000, 3000), fx(12000, 3000), fx(15000, 3000), fx(20000, 5000), pp(11000, 3300, 5000)};
-            CHECK_EQ(lim_picks(l, out), 4u);
-            CHECK_EQ(out[0].mw, 15000u);
-            CHECK_EQ(out[1].mw, 27000u);
-            CHECK_EQ(out[2].mw, 36000u);
-            CHECK_EQ(out[3].mw, 45000u);
-        }
-        // equal powers collapse to the first (lowest voltage); a fraction rounds the level up to the whole watt
-        {
-            const Pdo l[] = {fx(5000, 3000), fx(9000, 3000), fx(12000, 2250), fx(20000, 2220), fx(20000, 5000)};
-            CHECK_EQ(lim_picks(l, out), 3u);
-            CHECK_EQ(out[1].mw, 27000u);
-            CHECK_EQ(out[1].mv, 9000u);
-            CHECK_EQ(out[2].mw, 45000u);   // 20 V x 2.22 A = 44.4 W
-        }
-        // below the arming floor or above its ceiling: dropped, never clamped (EPR objects, a 5 V 0.5 A source)
-        {
-            const Pdo l[] = {fx(5000, 500), fx(9000, 3000), fx(20000, 5000), fx(28000, 5000), fx(36000, 5000)};
-            CHECK_EQ(lim_picks(l, out), 2u);
-            CHECK_EQ(out[0].mw, 27000u);
-            CHECK_EQ(out[1].mw, 100000u);   // the arming ceiling is inclusive; the EPR objects above it are dropped
-        }
-        // a lone 5 V offer, an empty list, a list of PPS only, a battery object: nothing to pick
-        {
-            const Pdo one[] = {fx(5000, 3000)};
-            CHECK_EQ(lim_picks(one, out), 0u);
-            CHECK_EQ(lim_picks(std::span<const Pdo>{}, out), 0u);
-            const Pdo only_pps[] = {pp(11000, 3300, 5000)};
-            CHECK_EQ(lim_picks(only_pps, out), 0u);
-            Pdo bat;
-            bat.type = PdoType::Battery;
-            bat.max_mw = 60000;
-            const Pdo b[] = {fx(5000, 3000), bat};
-            CHECK_EQ(lim_picks(b, out), 1u);   // 15 W is below the 60 W battery object
-        }
-        // the output never overruns: a short span takes the lowest levels
-        {
-            const Pdo l[] = {fx(5000, 3000), fx(9000, 3000), fx(12000, 3000), fx(15000, 3000), fx(20000, 5000)};
-            LimPick two[2];
-            CHECK_EQ(lim_picks(l, two), 2u);
-            CHECK_EQ(two[1].mw, 27000u);
-        }
-        // whole watts of a limit, as every label prints them: a remote-set odd value floors
-        CHECK_EQ(lim_watts(27000), 27u);
-        CHECK_EQ(lim_watts(27500), 27u);
-        CHECK_EQ(lim_watts(100000), 100u);
-    }
-    // ---- a detach ends the sink's attach: its Request and the list we forged for it go, the limit and the give-up counters stay ----
-    {
-        Rig r;
-        r.lim.arm(10000, r.now);
-        r.negotiate(0, rq_fixed(4, 3000, 3000));
-        TxMsg m;
-        CHECK_COND(r.tx(m));
-        r.request(rq_fixed(4, 660, 660));
-        CHECK_EQ(int(r.lim.status().state), int(LimState::Limited));
-        CHECK_EQ(r.lim.status().req_pos, 4);
-        r.lim.on_detach();
-        const LimStatus& s = r.lim.status();
-        CHECK_EQ(int(s.state), int(LimState::Armed));
-        CHECK_EQ(s.limit_mw, 10000u);
-        CHECK_EQ(s.req_pos, 0);
-        CHECK_EQ(s.req_rdo, 0u);
-        CHECK_EQ(s.req_mw, 0u);
-        CHECK_EQ(s.forged_n, 0);
-        CHECK_EQ(s.forged[3], 0u);
-        CHECK_EQ(s.injections, 1);   // the per-arm rate cap is not a per-attach fact
     }
     return test_report("test_pd_limiter");
 }

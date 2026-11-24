@@ -459,6 +459,7 @@ K2_HOT bool transmit(const pd::TxMsg& m) {
         g_msg_id = 0;
         g_new_source = true;
         if (!g_inline) g_detach.hard_reset(systick::millis());   // our own link resets: its VBUS gap is no detach (pd_passive.hpp)
+        if (g_iq_inited) iq().on_hard_reset(systick::millis());
         K2LOG("[PD] t=%u Hard reset sent\n", unsigned(systick::millis()));
         return true;
     }
@@ -1367,9 +1368,9 @@ K2_HOT void active_tick() {
             sent = true;
         }
     }
-    if (g_lim_on) {   // the limiter's forged list: only for a far sink's Request seen this attach, and when nothing else sent
+    if (g_lim_on) {   // the limiter's forged list: only for a far sink's Request, quiet line with no unread RX frame
         lim().tick(now);
-        if (!sent && far_sink_seen() && lim().take_tx(m, now)) {
+        if (!sent && !g_rx_nonempty && far_sink_seen() && lim().take_tx(m, now)) {
             transmit(m);   // both PHYs GoodCRC it and collide: the result means nothing, the sink's next Request is the proof
             sent = true;
         }
