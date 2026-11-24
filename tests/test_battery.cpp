@@ -870,7 +870,7 @@ void test_service_warm_quiet_restarts() {
 
 // The wear an hour of progress saves costs on a volume like the device's (the settings files and two kept runs share the
 // root pair with the running one): the run's file stays inline (no block, no split); measured 90 erases of the pair (45 per
-// 2 KB block; block_cycles 500 moves the pair after ~11 h) and 446 B programmed per save.
+// 2 KB block) and 446 B programmed per save. Past ~500 erases littlefs expands the superblock pair {0,1} once (docs).
 void test_service_hour_of_saves_wear() {
     k2test::RamDisk disk{111};
     k2::fs::Fs fs{disk, 111};
@@ -923,6 +923,16 @@ void test_service_unreadable_progress() {
     old.ph[0].end = End::Running;
     const auto v1 = v1_bytes(old);
     CHECK_EQ(int(v.fs.write_file("/bt2.rec", v1)), int(k2::fs::Err::Ok));
+    {
+        Service s;
+        CHECK_EQ(int(s.boot(&v.fs, &ck, false)), int(Service::Boot::Lost));
+        CHECK_EQ(int(s.rec().state()), int(State::Done));
+        CHECK_EQ(int(s.rec().phase(0).end), int(End::Lost));
+    }
+    // a version 2 record that says measuring while its phase says ended does not resume either
+    Record odd = done_record(3);
+    odd.state = RunState::Measuring;
+    CHECK_EQ(store::save(v.fs, odd), true);
     Service s;
     CHECK_EQ(int(s.boot(&v.fs, &ck, false)), int(Service::Boot::Lost));
     CHECK_EQ(int(s.rec().state()), int(State::Done));

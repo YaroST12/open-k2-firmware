@@ -334,14 +334,14 @@ bool Recorder::restore(const Record &r) {
         if (resumes_ < 63) resumes_++;
         break;
     case RunState::Measuring:
-        if (r.version != 1) {                // the last progress save: the same phase goes on from it
+        if (r.version != 1 && r.ph[current()].end == End::Running) {   // the last progress save: the phase goes on
             state_ = State::Measuring;
             ph_[current()].end = End::Running;
             armed_ = r.armed;
             resumed();
             break;
         }
-        ph_[current()].end = End::Lost;      // what it measured since the phase began was never written
+        ph_[current()].end = End::Lost;      // version 1 (or an inconsistent record): what it measured since its last write is gone
         state_ = State::Done;
         dirty_ = true;
         break;
