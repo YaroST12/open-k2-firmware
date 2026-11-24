@@ -83,6 +83,7 @@ Everything is C++23; there are no C files left in `src/` (TinyUSB and lwIP under
 ## Current bugs
 
 - **Battery recorder counts a moved-wiring discharge as "in"** (2026-11-24, 077dd1d9). Full bank on the K2 input, laptop on the output, `battery start discharge` with wiring moved: the monitor reads the bank-to-laptop flow as negative current (direction down, -862 mA at 20 V; the same sign as charger-to-bank earlier), so after 23 s the status read in 0.321 Wh, out 0.000 Wh. BATTERY_RECORDER.md says moved discharge = forward = out. Either the input/output port mapping or the sign rule is reversed. Also: the recorder stored a run with 0.000 Wh in and out; such runs should not be saved.
+  Fixed on k2/battfix (05313146, c69d052e), host-tested, not verified on hardware. Root cause: the firmware's positive current is bottom port to top port (charger on the bottom); the recorder read it as charger-to-bank, so with the charger on the top port every column swapped. Each phase now takes its dominant direction as its own (charge = in, discharge = out). Empty runs (under 1 mWh both ways) are no longer saved, and the start no longer writes a file. A record from the old firmware: swap a phase's in/out (Wh and mAh) when its dominant column disagrees with its kind; the totals are exact.
 
 - **PD limiter gives up when the sink requests a 0 mA object** (2026-11-24, 077dd1d9, 100 W charger -> K2 -> power bank). From a 30 W limit (9 V contract), `pd-limit set --fixed 15V/3A`: the bank requested position 4 (20 V, forged at 0 mA) with 0 mA (RDO 0x41000000) twice; the limiter counted "ignored" and turned off ("the sink ignores it"), leaving 20 V. The same 15 V limit from a 20 V contract earlier was accepted at 15 V. Open: treat a 0 mA request on a neutered object as a refusal to re-offer (or drop neutered objects), and why this sink prefers 20 V/0 A over 15 V.
 
@@ -116,7 +117,8 @@ Everything is C++23; there are no C files left in `src/` (TinyUSB and lwIP under
   native width, so values end about 15 px short of the stretched bars (217 against 232; kit-wide). Route: shift a right-aligned
   field's logical origin as the RowList tail does (`tail_origin`, kit_hot.cpp), so the ground holes stay consistent.
 - **Battery rows mixed icons** (2026-11-23, user): the settings rows, Saved runs and Share had no marker. Fixed in k2/ui-native
-  (5ff1c12e): Plug, Meter, Clock, Report, Phone. Host test `test_ui_battery`. Not verified on hardware.
+  (5ff1c12e): Plug, Meter, Clock, Report, Phone. Superseded on k2/battfix (fd665c40): all Battery rows marker-less (user: icons
+  "not needed at all"), Clock icon deleted. Host test `test_ui_battery`. Not verified on hardware.
 - **PC-link socket icon too dim on the rail** (2026-11-23, user): brightened from `kInk3` to `kInk2` (`src/ui/kit_hot.cpp`), along with bezel-pinned telemetry rail and link icon across all 4 rotations (`include/k2/ui/ui_layout.hpp`, `src/ui/ui_layout.cpp`). Host-tested (`test_kit`, `test_ui_layout`, `test_ui_rotation`, `test_ui_capture`, `test_ui_extremes`); not verified on hardware. Verify: plug into a dumb charger/PC power port (Power state) across all 4 rotations; socket icon is readable and the rail/icon stay pinned to the physical bezel ends.
 
 Open defects, newest first. A row leaves this list when its fix is merged and seen on hardware.
