@@ -1176,8 +1176,12 @@ and the hardware check). A row leaves this list when its fix is merged and the h
     Built and host-tested on k2/battresume (932a34e7, 2026-11-24), NOT hardware-verified. Own directory
     (k2/battresume, 2026-11-24): 72 erases/h of the /bt pair, ~380 B/save, root never erased, 24 h: 5 blocks levelled,
     no superblock expansion. K2_PDSTRESS=1 builds with every store at cap are now 2 blocks short (only /jr misses).
-  - Shell `k2_remote.py [--json] battery status|start|end|next|finish|config|list|read` (CMD_BATTERY 0x58), QR share
+  - Shell `k2_remote.py [--json] battery status|start|end|next|finish|config|list|read|continue` (CMD_BATTERY 0x58), QR share
     `BATT`, `k2_remote.py page battery`.
+  - Continue (user 2026-11-25): `Continue run` (arm + confirm) under an ended run's facts and in Saved runs > the newest
+    run, `battery continue [id]` (wire op 8): reopens the newest run's last phase, totals kept, one resume + gap, end rule
+    disarmed until the current returns. k2/battcont (104bd71a, a8354d65), host-tested, NOT hardware-verified. Validate:
+    end a charge by hand, Continue, Wh in keeps growing from the old total; power-cut after a continue resumes it.
   - Validate on hardware: a short charge of a power bank from the bench charger (Wh in against the Home Wh counter),
     a same-port round trip into a resistive load, a warm reboot mid-phase (`[BATT] boot resumed`), a power cut
     mid-phase (`[BATT] boot continued`, totals within 10 s of the cut, `battery read` shows the resume), heartbeat `stack_free` with the Battery page open.
