@@ -82,6 +82,9 @@ Everything is C++23; there are no C files left in `src/` (TinyUSB and lwIP under
 
 ## Current bugs
 
+- **Diag "No accept" latches on one missed frame (inline)** (2026-11-24, 1.2.0-250, Baseus 140W -> K2 -> OnePlus 15 on PPS, `runs/op15-pps-2026-11-24/trace-live.txt`): 191 Requests, 190 Accepts, 187 PS_RDY seen; every later Request was accepted and the phone charged at PPS ~9.5 V 5 A, yet Diag kept "No accept". A single lost Accept (a sniffer miss) must not outlive a later Accept / PS_RDY. Also: `pd_trace.py live` printed every record with one frozen timestamp (4153787.251 ms, +0.000) after a "records lost" wrap.
+- **Inline: charger's 5 A offer varies per attach** (same session): the Baseus 140W on the top plug listed 3 A on some attaches and 20 V 5 A / PPS 5 A on others with the same phone cable; it reads the phone cable's e-marker through the K2 only some of the time (SOP' through the passive path). Cause not established.
+
 - **Rail flips in the two side rotations** (2026-11-23, v1.2.0-192, user): the fixed rail order holds top/bottom, but left/right
   still flips. Fixed in k2/ui-native (ab89ae9d): both side rails read bottom-up (`rail_text_dir`), so rotation 2 has its title
   at the bottom like rotation 0; the button strip keeps `panel_text_dir`. Host tests `test_ui_layout` (side rails read alike),
