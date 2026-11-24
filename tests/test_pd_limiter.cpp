@@ -216,6 +216,25 @@ int main() {
         LimConfig l3{}; l3.avs = {true, 15000, 0};
         n = lim_label(l3, buf);
         CHECK_STR(std::string(buf, n).c_str(), "AVS15");
+        // Fixed alone: volts and amps, the 'A' dropped when one over, the volts alone when longer.
+        const auto fixed_label = [&](std::uint16_t mv, std::uint16_t ma) {
+            LimConfig c{};
+            c.fixed = {true, mv, ma};
+            return std::string(buf, lim_label(c, buf));
+        };
+        CHECK_STR(fixed_label(9000, 3000).c_str(), "9V3A");
+        CHECK_STR(fixed_label(9000, 1500).c_str(), "9V1.5");
+        CHECK_STR(fixed_label(20000, 1500).c_str(), "20V");
+        LimConfig l4{}; l4.fixed.enabled = false;
+        CHECK_STR(std::string(buf, lim_label(l4, buf)).c_str(), "FIX");   // Fixed off: the one constrained
+        l4.avs.enabled = false;
+        CHECK_STR(std::string(buf, lim_label(l4, buf)).c_str(), "PPS");   // only PPS on
+        LimConfig l5{}; l5.fixed.max_mv = 9000; l5.pps.max_ma = 1500;
+        CHECK_STR(std::string(buf, lim_label(l5, buf)).c_str(), "9V");    // two constrained, no watts: the Fixed volts
+        l5.limit_mw = 27000;
+        CHECK_STR(std::string(buf, lim_label(l5, buf)).c_str(), "27W");
+        LimConfig l6{}; l6.pps.max_ma = 1500;
+        CHECK_STR(std::string(buf, lim_label(l6, buf)).c_str(), "PPS2");
     }
 
     // ---- the shared 17-byte form (Cmd::PdLimit op 3 and /lim.rec) ----

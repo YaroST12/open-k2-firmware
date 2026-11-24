@@ -25,27 +25,37 @@ bool valid_tech(const LimTech& t, std::uint16_t min_mv, std::uint16_t mv_unit, b
     return t.max_mv >= min_mv && t.max_mv <= kLimMaxMv && (t.max_mv % mv_unit) == 0;
 }
 
-std::size_t append_str(std::span<char> out, std::size_t at, const char* s) {
-    while (*s && at < out.size()) out[at++] = *s++;
-    return at;
-}
-std::size_t append_u(std::span<char> out, std::size_t at, std::uint32_t v) {
-    char tmp[10];
+// A label writer that never runs past its span; a number cut short keeps its leading digits.
+struct LabelOut {
+    std::span<char> d;
     std::size_t n = 0;
-    do { tmp[n++] = static_cast<char>('0' + v % 10); v /= 10; } while (v && n < sizeof tmp);
-    while (n && at < out.size()) out[at++] = tmp[--n];
-    return at;
-}
-std::size_t append_tenth(std::span<char> out, std::size_t at, std::uint16_t milli, char unit) {
-    const std::uint32_t t = (milli + 50u) / 100u;
-    at = append_u(out, at, t / 10u);
-    if (t % 10u != 0u && at + 2 <= out.size()) {
-        out[at++] = '.';
-        out[at++] = static_cast<char>('0' + (t % 10u));
+    void ch(char c) {
+        if (n < d.size()) d[n++] = c;
     }
-    if (unit && at < out.size()) out[at++] = unit;
-    return at;
-}
+    void str(const char* s) {
+        while (*s) ch(*s++);
+    }
+    void u(std::uint32_t v) {
+        char t[10];
+        std::size_t k = 0;
+        do { t[k++] = static_cast<char>('0' + v % 10); } while ((v /= 10) != 0);
+        while (k) ch(t[--k]);
+    }
+    void tenth(std::uint16_t milli, char unit) {   // "9V", "1.5A": tenths only when both characters fit
+        const std::uint32_t t = (milli + 50u) / 100u;
+        u(t / 10u);
+        if (t % 10u != 0u && n + 2 <= d.size()) {
+            ch('.');
+            ch(static_cast<char>('0' + t % 10u));
+        }
+        ch(unit);
+    }
+    void volt_or_amp(const LimTech& t, const char* none) {
+        if (t.max_mv) tenth(t.max_mv, 'V');
+        else if (t.max_ma) tenth(t.max_ma, 'A');
+        else str(none);
+    }
+};
 bool tech_constrained(const LimTech& t) { return !t.enabled || t.max_mv != 0 || t.max_ma != 0; }
 
 }  // namespace
@@ -129,44 +139,46 @@ LimRefusal lim_gate(const LimFacts& f, std::uint32_t limit_mw) {
 }
 
 std::size_t lim_label(const LimConfig& cfg, std::span<char> out) {
-    if (out.empty()) return 0;
-    const std::size_t cap = std::min(out.size(), kLimLabelMax);
-    std::span<char> dst = out.first(cap);
-    const bool fx = cfg.fixed.enabled, pp = cfg.pps.enabled, av = cfg.avs.enabled;
-    const bool fx_c = tech_constrained(cfg.fixed), pp_c = tech_constrained(cfg.pps), av_c = tech_constrained(cfg.avs);
-    auto fmt_va = [&](std::uint16_t mv, std::uint16_t ma, const char* fallback) -> std::size_t {
-        if (mv && ma) {
-            char b[8]{};
-            std::size_t n = append_tenth(b, 0, mv, 'V');
-            n = append_tenth(b, n, ma, 'A');
-            // Drop trailing 'A' when 7 chars (e.g. "20V1.5A" -> "20V1.5") so both numbers stay visible in 6 chars.
-            if (n <= cap || (n == cap + 1 && b[n - 1] == 'A')) {
-                const std::size_t copy_n = std::min(n, cap);
-                for (std::size_t i = 0; i < copy_n; ++i) dst[i] = b[i];
-                return copy_n;
-            }
-            return append_tenth(dst, 0, mv, 'V');
-        }
-        if (mv) return append_tenth(dst, 0, mv, 'V');
-        if (ma) return append_tenth(dst, 0, ma, 'A');
-        return append_str(dst, 0, fallback);
-    };
-    auto fmt_tag = [&](const char* tag, const LimTech& t) -> std::size_t {
-        const std::size_t n = append_str(dst, 0, tag);
-        if (t.max_mv) return append_u(dst, n, t.max_mv / 1000u);
-        return t.max_ma ? append_u(dst, n, (t.max_ma + 500u) / 1000u) : n;
-    };
-    if ((fx && !pp && !av) || (fx_c && !pp_c && !av_c)) return fmt_va(cfg.fixed.max_mv, cfg.fixed.max_ma, "FIX");
-    if ((!fx && pp && !av) || (pp_c && !fx_c && !av_c)) return fmt_tag("PPS", cfg.pps);
-    if ((!fx && !pp && av) || (av_c && !fx_c && !pp_c)) return fmt_tag("AVS", cfg.avs);
-    if (cfg.limit_mw != 0) {
-        std::size_t n = append_u(dst, 0, lim_watts(cfg.limit_mw));
-        if (n < cap) dst[n++] = 'W';
-        return n;
+    LabelOut o{out.first(std::min(out.size(), kLimLabelMax))};
+    const LimTech* t[3] = {&cfg.fixed, &cfg.pps, &cfg.avs};
+    unsigned on = 0, con = 0;
+    for (unsigned i = 0; i < 3; i++) {
+        on |= unsigned(t[i]->enabled) << i;
+        con |= unsigned(tech_constrained(*t[i])) << i;
     }
-    if (cfg.fixed.enabled && cfg.fixed.max_mv) return append_tenth(dst, 0, cfg.fixed.max_mv, 'V');
-    if (cfg.fixed.enabled && cfg.fixed.max_ma) return append_tenth(dst, 0, cfg.fixed.max_ma, 'A');
-    return append_str(dst, 0, "LIMIT");
+    // A tech names the label when it is the only one on, or the only one constrained (Fixed, then PPS, then AVS).
+    const auto only = [&](unsigned bit) { return on == bit || con == bit; };
+    const LimTech& f = cfg.fixed;
+    if (only(1)) {
+        if (f.max_mv && f.max_ma) {
+            char b[8];
+            LabelOut x{b};
+            x.tenth(f.max_mv, 'V');
+            x.tenth(f.max_ma, 'A');
+            if (x.n <= o.d.size() + 1) {   // one over drops the trailing 'A' ("9V1.5"): both numbers stay
+                for (std::size_t i = 0; i < x.n; i++) o.ch(b[i]);
+                return o.n;
+            }
+        }
+        o.volt_or_amp(f, "FIX");
+        return o.n;
+    }
+    for (unsigned i = 1; i < 3; i++) {
+        if (!only(1u << i)) continue;
+        o.str(i == 1 ? "PPS" : "AVS");
+        if (t[i]->max_mv) o.u(t[i]->max_mv / 1000u);
+        else if (t[i]->max_ma) o.u((t[i]->max_ma + 500u) / 1000u);
+        return o.n;
+    }
+    if (cfg.limit_mw != 0) {
+        o.u(lim_watts(cfg.limit_mw));
+        o.ch('W');
+    } else if (f.enabled) {
+        o.volt_or_amp(f, "LIMIT");
+    } else {
+        o.str("LIMIT");
+    }
+    return o.n;
 }
 
 std::size_t lim_picks(std::span<const Pdo> pdos, std::span<LimPick> out) {
