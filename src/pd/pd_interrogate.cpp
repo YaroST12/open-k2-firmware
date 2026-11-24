@@ -120,6 +120,10 @@ void IqWatch::on_message(Sop sop, std::uint16_t h, std::span<const std::uint8_t>
     if (ctl && t == kCtlSoftReset) {        // either side: the counters restart, the source lists again
         caps_ = requested_ = accepted_ = false;
         c_ = {};
+        snk_known_ = false;                 // and the source holds no sink ID for its retry check
+    } else if (!from_source(h)) {
+        snk_known_ = true;
+        snk_id_ = id_of(h);
     }
     if (from_source(h)) {
         src_known_ = true;

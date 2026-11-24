@@ -53,6 +53,7 @@ struct Rig {
     IqWatch watch;              // the driver's always-fed sniffer: what an arm mid-contract is seeded from
     std::uint32_t now = 10000;
     std::uint8_t last_id = 0;   // the charger's newest MessageID
+    std::uint8_t snk_id = 0;    // the sink's next MessageID
 
     void rx(std::uint16_t header, std::vector<std::uint8_t> payload = {}) {
         watch.on_message(Sop::Sop, header, payload, now);
@@ -69,8 +70,19 @@ struct Rig {
     void request(std::uint32_t rdo) {
         std::vector<std::uint8_t> p;
         put32(p, rdo);
-        rx(hdr(2, 1, 2, kSnk, 0), p);
-        rx(hdr(1, 0, 1, kSrc, 0));
+        rx(hdr(2, 1, 2, kSnk, snk_id), p);
+        rx(hdr(1, 0, 1, kSrc, snk_id));
+        snk_id = std::uint8_t((snk_id + 1) & 7);
+    }
+    void answer(std::uint8_t type, std::uint8_t id) {   // a charger control message and the sink's GoodCRC
+        rx(hdr(type, 0, 2, kSrc, id));
+        rx(hdr(1, 0, 1, kSnk, id));
+        last_id = id;
+    }
+    void hard_reset() {   // both counters restart
+        lim.on_hard_reset(now);
+        watch.reset();
+        snk_id = 0;
     }
     void accept_ready(std::uint8_t id) {   // Accept id, PS_RDY id + 1
         rx(hdr(3, 0, 2, kSrc, id));
@@ -322,14 +334,129 @@ int main() {
         CHECK_COND(r.tx(m));
         CHECK_EQ(int(r.lim.status().state), int(LimState::Injected));
         CHECK_EQ(m.len, 8);                                              // 5V3A, 9V3A (higher levels removed)
-        CHECK_EQ((m.header >> 9) & 7, (5 + 2) & 7);
+        CHECK_EQ((m.header >> 9) & 7, 0);                                // the sink's newest MessageID (its Request)
+        CHECK_EQ(m.header & 0x0120, 0x0120);                             // spoken as the source
         CHECK_EQ(word(m, 0), fixed(5000, 3000, kFlags1));
         CHECK_EQ(word(m, 1), fixed(9000, 3000));
         CHECK_EQ(r.lim.status().forged_n, 2);
-        // the sink obeys at pos 2 (9V 3A = 27W): verified
+        CHECK_COND(r.lim.status().forged_dup);
+        // the sink obeys at pos 2 (9V 3A = 27W): only the charger's Accept and PS_RDY make it Limited
         r.request(rq_fixed(2, 3000, 3000));
+        CHECK_EQ(int(r.lim.status().state), int(LimState::Injected));
+        r.answer(kCtlAccept, 6);
+        CHECK_EQ(int(r.lim.status().state), int(LimState::Injected));
+        r.answer(kCtlPsRdy, 7);
         CHECK_EQ(int(r.lim.status().state), int(LimState::Limited));
+        CHECK_EQ(r.lim.status().refusals, 0);
         CHECK_COND(!r.tx(m));
+    }
+
+    // ---- a strict charger refuses the re-offered Request (hardware 2026-11-24: 5/9/12/15 V, 20 V 5 A, PPS charger -> K2 ->
+    // camera charger). After the Reset link: two real lists, our 5/9/12 V list, the sink's Request for 12 V, then the charger's
+    // Not_Supported and no Accept; VBUS stayed 15 V while the status said limited. Now: refused, the other ID scheme, give-up.
+    {
+        LimConfig f12{};
+        f12.fixed.max_mv = 12000;
+        Rig r;
+        r.lim.arm(f12, r.now);
+        r.negotiate(0, rq_fixed(4, 3000, 3000));   // Caps 0, Request 0 (15 V), Accept 1, PS_RDY 2
+        r.now += 15;
+        r.negotiate(3, rq_fixed(4, 3000, 3000));   // the charger's second list: Caps 3, Request 1, Accept 4, PS_RDY 5
+        TxMsg m;
+        CHECK_COND(r.tx(m));
+        CHECK_EQ(unsigned(m.len / 4), 3u);
+        CHECK_EQ((m.header >> 9) & 7, 1);          // the sink's Request id 1: the charger drops our list as a retry
+        r.rx(hdr(1, 0, 1, kSnk, 1));               // the sink's GoodCRC
+        r.request(rq_fixed(3, 3000, 3000));        // Request id 2: 12 V, compliant
+        CHECK_EQ(int(r.lim.status().state), int(LimState::Injected));   // not limited on the sink's word alone
+        r.answer(kCtlNotSupported, 6);
+        CHECK_EQ(r.lim.status().refusals, 1);
+        CHECK_EQ(int(r.lim.status().state), int(LimState::Pending));
+        CHECK_COND(!r.tx(m));                      // the gap between two lists
+        CHECK_COND(r.tx(m, kLimGapMs));
+        CHECK_COND(!r.lim.status().forged_dup);
+        CHECK_EQ((m.header >> 9) & 7, 0);          // fresh: past the charger's 6 and its next (7)
+        r.request(rq_fixed(3, 3000, 3000));        // id 3
+        r.answer(kCtlNotSupported, 7);
+        CHECK_COND(!r.lim.armed());
+        CHECK_EQ(int(r.lim.status().why), int(LimWhy::ChargerRefuses));
+        CHECK_EQ(r.lim.status().refusals, 2);
+        CHECK_COND(r.lim.sink_holds_forged());     // the off path's reset hands the sink the real list
+        CHECK_STR(lim_why_name(LimWhy::ChargerRefuses), "the charger refuses re-offers");
+    }
+
+    // ---- a refusal by Reject, by silence, by an Accept without PS_RDY; a Not_Supported before the Request is not one ----
+    {
+        TxMsg m;
+        Rig rj;
+        rj.lim.arm(30000, rj.now);
+        rj.negotiate(0, rq_fixed(5, 5000, 5000));
+        CHECK_COND(rj.tx(m));
+        rj.request(rq_fixed(2, 3000, 3000));
+        rj.answer(kCtlReject, 3);
+        CHECK_EQ(rj.lim.status().refusals, 1);
+        CHECK_EQ(int(rj.lim.status().state), int(LimState::Pending));
+
+        Rig si;
+        si.lim.arm(30000, si.now);
+        si.negotiate(0, rq_fixed(5, 5000, 5000));
+        CHECK_COND(si.tx(m));
+        si.request(rq_fixed(2, 3000, 3000));
+        si.now += kLimVerifyMs - 5;
+        si.lim.tick(si.now);
+        CHECK_EQ(si.lim.status().refusals, 0);
+        si.now += 10;
+        si.lim.tick(si.now);
+        CHECK_EQ(si.lim.status().refusals, 1);
+        CHECK_EQ(si.lim.status().ignores, 0);      // the sink did answer
+
+        Rig ps;
+        ps.lim.arm(30000, ps.now);
+        ps.negotiate(0, rq_fixed(5, 5000, 5000));
+        CHECK_COND(ps.tx(m));
+        ps.request(rq_fixed(2, 3000, 3000));
+        ps.answer(kCtlAccept, 3);
+        ps.now += kLimNegMs + 2;
+        ps.lim.tick(ps.now);
+        CHECK_EQ(ps.lim.status().refusals, 1);
+
+        Rig ma;                                    // the sniffer missed the Accept: PS_RDY still proves it
+        ma.lim.arm(30000, ma.now);
+        ma.negotiate(0, rq_fixed(5, 5000, 5000));
+        CHECK_COND(ma.tx(m));
+        ma.request(rq_fixed(2, 3000, 3000));
+        ma.answer(kCtlPsRdy, 4);
+        CHECK_EQ(int(ma.lim.status().state), int(LimState::Limited));
+
+        Rig ns;                                    // the charger answers our list itself, then accepts the Request
+        ns.lim.arm(30000, ns.now);
+        ns.negotiate(0, rq_fixed(5, 5000, 5000));
+        CHECK_COND(ns.tx(m));
+        ns.answer(kCtlNotSupported, 3);
+        ns.request(rq_fixed(2, 3000, 3000));
+        ns.answer(kCtlAccept, 4);
+        ns.answer(kCtlPsRdy, 5);
+        CHECK_EQ(int(ns.lim.status().state), int(LimState::Limited));
+        CHECK_EQ(ns.lim.status().refusals, 0);
+    }
+
+    // ---- the sink's newest ID cannot be used: the sink holds it already, or the charger's Accept would carry it ----
+    {
+        TxMsg m;
+        Rig same;
+        same.lim.arm(30000, same.now);
+        same.snk_id = 5;
+        same.negotiate(3, rq_fixed(5, 5000, 5000));   // Caps 3, Request 5, Accept 4, PS_RDY 5: the sink holds 5
+        CHECK_COND(same.tx(m));
+        CHECK_COND(!same.lim.status().forged_dup);
+        CHECK_EQ((m.header >> 9) & 7, 7);             // past 5 and its next (6, which the sink's next Request also takes)
+        Rig next;
+        next.lim.arm(30000, next.now);
+        next.snk_id = 6;
+        next.negotiate(3, rq_fixed(5, 5000, 5000));   // Request 6 = the charger's next (its Accept)
+        CHECK_COND(next.tx(m));
+        CHECK_COND(!next.lim.status().forged_dup);
+        CHECK_EQ((m.header >> 9) & 7, 0);             // 6 the Accept's, 7 the sink's next Request's
     }
 
     // ---- no-op real list (already equals forged): skips injection straight to Limited ----
@@ -355,7 +482,11 @@ int main() {
         CHECK_COND(r.tx(m));
         CHECK_EQ(m.len, 4);
         CHECK_EQ(word(m, 0), fixed(5000, 2000, kFlags1));
+        CHECK_COND(r.lim.status().forged_dup);     // the seed carries the sink's newest ID too
+        CHECK_EQ((m.header >> 9) & 7, 0);
         r.request(rq_fixed(1, 2000, 2000));
+        r.answer(kCtlAccept, 5);
+        r.answer(kCtlPsRdy, 6);
         CHECK_EQ(int(r.lim.status().state), int(LimState::Limited));
 
         // Even if current draw is 9V 1A (<10W), charger's cached caps differ (contain 20V 5A), so seed still forges!
@@ -372,21 +503,21 @@ int main() {
         CHECK_EQ(int(w.lim.status().state), int(LimState::Limited));
     }
 
-    // ---- Injected timeout retries with fresh advancing MessageID instead of deadlocking in Armed ----
+    // ---- Injected timeout retries (never deadlocks in Armed) with an ID the sink does not hold yet ----
     {
         Rig r;
         r.lim.arm(30000, r.now);
         r.negotiate(0, rq_fixed(5, 5000, 5000));   // last charger ID = 2
         TxMsg m1, m2;
         CHECK_COND(r.tx(m1));
-        CHECK_EQ((m1.header >> 9) & 7, (2 + 2) & 7);   // skip = 1 -> ID = 4
+        CHECK_EQ((m1.header >> 9) & 7, 0);   // the sink's newest (its Request)
         r.now += kLimVerifyMs + 5;
         r.lim.tick(r.now);
         CHECK_EQ(r.lim.status().ignores, 1);
         CHECK_EQ(int(r.lim.status().state), int(LimState::Pending));   // NOT Armed deadlock!
         r.now += kLimGapMs;
         CHECK_COND(r.tx(m2));
-        CHECK_EQ((m2.header >> 9) & 7, (2 + 3) & 7);   // skip = 2 -> fresh ID = 5 (never drops as duplicate)
+        CHECK_EQ((m2.header >> 9) & 7, 4);   // the sink holds 0 now: fresh, past the charger's 2, its next 3 and the sink's next 1
         r.now += kLimVerifyMs + 5;
         r.lim.tick(r.now);
         CHECK_COND(!r.lim.armed());
@@ -448,6 +579,7 @@ int main() {
             r.negotiate(0, rq_fixed(5, 5000, 5000));
             r.tx(m);
             r.request(rq_fixed(2, 3000, 3000));
+            r.accept_ready(3);
             r.now += 1200;
             r.lim.tick(r.now);
         }
@@ -492,11 +624,13 @@ int main() {
         CHECK_EQ(unsigned(m.len / 4), 3u);                // 5 / 9 / 15 V: nothing above the limit to take
         CHECK_EQ(word(m, 2), fixed(15000, 3000));
         r.request(rq_fixed(3, 3000, 3000));
+        r.answer(kCtlAccept, 3);
+        r.answer(kCtlPsRdy, 4);
         CHECK_EQ(int(r.lim.status().state), int(LimState::Limited));
         // position 4 is outside the list the sink holds: never compliant, re-offered, then counted
         r.request(0x41000000u);
         CHECK_EQ(int(r.lim.status().state), int(LimState::Negotiating));
-        r.accept_ready(3);
+        r.accept_ready(5);
         CHECK_COND(r.tx(m, kLimGapMs));
         CHECK_EQ(unsigned(m.len / 4), 3u);
         r.request(0x41000000u);
@@ -581,6 +715,8 @@ int main() {
         CHECK_EQ(unsigned(m.len / 4), 3u);
         CHECK_EQ(word(m, 2), c45[2]);
         r.request(rq_fixed(3, 3000, 3000));
+        r.answer(kCtlAccept, 5);
+        r.answer(kCtlPsRdy, 6);
         CHECK_EQ(int(r.lim.status().state), int(LimState::Limited));
         CHECK_COND(!r.lim.sink_holds_forged());          // it was the charger's own list: off has nothing to undo
     }

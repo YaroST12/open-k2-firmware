@@ -1112,6 +1112,7 @@ void interrogate_abort() {
 static pd::LimState g_lim_logged = pd::LimState::Off;
 static std::uint8_t g_lim_logged_inj = 0;
 static std::uint32_t g_lim_logged_rdo = 0;
+static std::uint8_t g_lim_logged_ref = 0;
 
 pd::LimRefusal limit_arm(const pd::LimConfig& cfg, const pd::LimFacts& outside, bool seed) {
     pd::LimFacts f = outside;
@@ -1127,6 +1128,7 @@ pd::LimRefusal limit_arm(const pd::LimConfig& cfg, const pd::LimFacts& outside, 
     g_lim_logged = pd::LimState::Armed;
     g_lim_logged_inj = 0;
     g_lim_logged_rdo = 0;
+    g_lim_logged_ref = 0;
     K2LOG("[LIM] t=%u armed: limit %u mW\n", unsigned(systick::millis()), unsigned(cfg.limit_mw));
     return r;
 }
@@ -1142,7 +1144,6 @@ void limit_disarm() {
 bool limit_armed() { return g_lim_on && lim().armed(); }
 const pd::LimStatus& limit_status() { return lim().status(); }
 bool limit_holds_sink() { return g_lim_on && lim().sink_holds_forged(); }
-
 namespace detail {
 void lim_report() {
     const pd::LimStatus& s = lim().status();
@@ -1152,6 +1153,12 @@ void lim_report() {
         K2LOG("[LIM] t=%u forged list %u: %u objects, limit %u mW\n", t, unsigned(s.injections), unsigned(s.forged_n),
               unsigned(s.limit_mw));
         for (unsigned i = 0; i < s.forged_n; i++) K2LOG("[LIM] forged pos %u PDO 0x%08X\n", i + 1, unsigned(s.forged[i]));
+        K2LOG("[LIM] forged list MessageID %u (%s)\n", unsigned(s.forged_id), s.forged_dup ? "the sink's newest" : "fresh");
+    }
+    if (s.refusals != g_lim_logged_ref) {
+        g_lim_logged_ref = s.refusals;
+        if (s.refusals != 0)
+            K2LOG("[LIM] t=%u charger refused the Request to our list (%u of %u)\n", t, unsigned(s.refusals), unsigned(pd::kLimMaxRejects));
     }
     if (s.req_rdo == 0) g_lim_logged_rdo = 0;   // a detach cleared it: the next attach's first Request logs again
     else if (s.req_rdo != g_lim_logged_rdo) {

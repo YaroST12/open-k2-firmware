@@ -6117,8 +6117,8 @@ std::vector<std::uint32_t> tx_objects(std::size_t n) {
 }
 
 // Charger -> K2 -> sink at 15 V 3 A (45 W), limit 30 W: once PS_RDY has gone by and the line is quiet the K2 speaks as the source,
-// same two objects, the 15 V one at 2 A, with the id after the charger's next one. The sink's next Request inside the limit is
-// proof; the log says so. Refused outside 5..100 W; a charger detach only makes it wait.
+// same two objects, the 15 V one at 2 A, with the sink's newest id (the charger drops it as a retry). The sink's next Request inside
+// the limit and the charger's Accept and PS_RDY are the proof; the log says so. Refused outside 5..100 W; a charger detach only makes it wait.
 void test_inline_pd_limiter_injects_the_clamped_list_and_sees_the_sink_obey() {
     attach_inline();
     pd::LimFacts f;
@@ -6143,7 +6143,7 @@ void test_inline_pd_limiter_injects_the_clamped_list_and_sees_the_sink_obey() {
     CHECK_EQ(h.empty() ? 0u : h[0] & 0x1F, 1u);                          // Source_Capabilities
     CHECK_EQ(h.empty() ? 0u : (h[0] >> 12) & 7, 1u);                     // 15 V 3 A (45 W > 30 W) removed from tail
     CHECK_EQ(h.empty() ? 0u : (h[0] >> 8) & 1, 1u);                      // as the source
-    CHECK_EQ(h.empty() ? 0u : (h[0] >> 9) & 7, 4u);                      // the charger's next id is 3: ours is the one after
+    CHECK_EQ(h.empty() ? 0u : (h[0] >> 9) & 7, 0u);                      // the sink's Request id 0
     const std::vector<std::uint32_t> o = tx_objects(0);
     CHECK_EQ(o.size(), 1u);
     CHECK_EQ(o.empty() ? 0u : o[0], 0x0A01912Cu);                        // 5 V 3 A kept cleanly
@@ -6154,9 +6154,14 @@ void test_inline_pd_limiter_injects_the_clamped_list_and_sees_the_sink_obey() {
     // the sink asks inside the removed/capped limit (position 1, 5 V 3 A): verified
     push_frame(0xE0, hdr(2, 1, false, 1), {0x1004B12Cu});
     service_ms(3);
+    CHECK_EQ(int(fusb302::limit_status().state), int(pd::LimState::Injected));   // the charger has not taken it yet
+    push_frame(0xE0, hdr(3, 0, true, 3), {});
+    push_frame(0xE0, hdr(6, 0, true, 4), {});
+    service_ms(3);
     CHECK_EQ(int(fusb302::limit_status().state), int(pd::LimState::Limited));
     CHECK_EQ(fusb302::limit_status().req_mw, 15000u);
     CHECK_EQ(usb_has("[LIM] "), true);
+    CHECK_EQ(usb_has("MessageID 0 (the sink's newest)"), true);
     CHECK_EQ(usb_has("sink Request pos 1"), true);
     fusb302::limit_disarm();
     service_ms(3);
@@ -6211,7 +6216,7 @@ void test_pd_limiter_waits_through_a_replug_and_acts_on_a_far_request() {
     std::vector<unsigned> h = tx_headers();
     CHECK_EQ(h.size(), 1u);
     CHECK_EQ(h.empty() ? 0u : h[0] & 0x1F, 1u);                              // Source_Capabilities
-    CHECK_EQ(h.empty() ? 0u : (h[0] >> 9) & 7, 7u);                          // the charger's newest is 5 (the second PS_RDY): 5 + 2
+    CHECK_EQ(h.empty() ? 0u : (h[0] >> 9) & 7, 0u);                          // the sink's Request id 0
     const std::vector<std::uint32_t> o = tx_objects(0);
     CHECK_EQ(o.size(), 1u);
     CHECK_EQ(o.empty() ? 0u : o[0], 0x0A0190C8u);                            // 5 V 3 A -> 2 A (10 W), 15 V removed
@@ -6219,6 +6224,8 @@ void test_pd_limiter_waits_through_a_replug_and_acts_on_a_far_request() {
     CHECK_EQ(usb_has("forged list 1"), true);
     // the sink obeys at 5 V 2 A (Limited) before unplugging
     push_frame(0xE0, hdr(2, 1, false, 1), {0x100320C8u});
+    push_frame(0xE0, hdr(3, 0, true, 6), {});
+    push_frame(0xE0, hdr(6, 0, true, 7), {});
     service_ms(3);
     CHECK_EQ(int(fusb302::limit_status().state), int(pd::LimState::Limited));
     // the replug: the line goes quiet, a detach; the limit waits, injections count on
@@ -6254,7 +6261,7 @@ void test_pd_limiter_waits_through_a_replug_and_acts_on_a_far_request() {
     for (int i = 0; i < 100 && tx_headers().empty(); i++) { g_ms += 1; fusb302::service(); }
     h = tx_headers();
     CHECK_EQ(h.size(), 1u);
-    CHECK_EQ(h.empty() ? 0u : (h[0] >> 9) & 7, 4u);                          // the charger's next id is 3: ours is the one after
+    CHECK_EQ(h.empty() ? 0u : (h[0] >> 9) & 7, 0u);                          // the sink's Request id 0
     CHECK_EQ(int(fusb302::limit_status().state), int(pd::LimState::Injected));
     fusb302::limit_disarm();
     service_ms(3);

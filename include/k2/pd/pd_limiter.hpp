@@ -9,12 +9,16 @@
 //   Armed        waiting for a real Source_Capabilities (nothing attached, a detach and a replug all land here: the limit stays)
 //   Negotiating  a real list is out: the sink's Request, the charger's Accept (kLimNegMs at most)
 //   Pending      PS_RDY seen: send the forged list on a quiet line (kLimQuietMs), at least kLimGapMs after the last one
-//   Injected     sent: the sink's next Request decides (kLimVerifyMs)
-//   Limited      that Request complies with the forged list. A real list again, or a non-compliant Request, starts over
+//   Injected     sent: the sink's Request (kLimVerifyMs), then the charger's Accept (kLimVerifyMs) and PS_RDY (kLimNegMs)
+//   Limited      the charger accepted a compliant Request and switched. A real list again, or a non-compliant Request, starts over
 //
-// The forged list takes a fresh MessageID past the charger's newest (skipping at least +1 ID so the charger's Accept uses a
-// distinct ID, advancing further on retries so the sink's duplicate filter never drops it). Our frame and the charger's GoodCRC
-// collide with the sink's: the transmit result means nothing, the Request is the proof.
+// The charger hears our list too. A Source_Capabilities from a source reaching its policy engine can make it refuse the
+// sink's Request (hardware 2026-11-24: Not_Supported, no Accept). So the list first carries the sink's newest MessageID: the
+// charger has stored that ID and drops the frame as a retry, while the sink (which stored the charger's) takes it. When that
+// ID is unusable or was refused, a fresh ID past the charger's newest. Both avoid the ID the sink holds and the charger's next
+// one (its Accept). Our frame collides with both GoodCRCs: the transmit result means nothing, the Accept and PS_RDY are the proof.
+// A Reject, Not_Supported, Wait or silence after a compliant Request is a refusal: the other ID scheme next, the second
+// refusal stops (LimWhy::ChargerRefuses).
 // Never a 0 mA placeholder: a sink may request it, and the charger serves that position at its real voltage. A limit the list
 // cannot carry without one (Fixed off, a fixed object before the APDOs) stops (LimWhy::NoFit).
 // Give-up: a Hard or Soft Reset within kLimBlameMs of our list counts against us (kLimMaxRejects, attributed to the side that
@@ -110,7 +114,7 @@ std::size_t lim_picks(std::span<const Pdo> pdos, std::span<LimPick> out);   // c
 constexpr std::uint32_t lim_watts(std::uint32_t mw) { return mw / 1000; }   // every label floors
 
 enum class LimState : std::uint8_t { Off, Armed, Negotiating, Pending, Injected, Limited };
-enum class LimWhy : std::uint8_t { None, User, Detached, Epr, Rate, ChargerResets, SinkResets, SinkIgnores, NoFit };
+enum class LimWhy : std::uint8_t { None, User, Detached, Epr, Rate, ChargerResets, SinkResets, SinkIgnores, NoFit, ChargerRefuses };
 const char* lim_state_name(LimState s);
 const char* lim_why_name(LimWhy w);
 
@@ -139,6 +143,9 @@ struct LimStatus {
     std::uint8_t injections = 0;
     std::uint8_t rejects = 0;           // resets right after our list, since the last stable Limited
     std::uint8_t ignores = 0;           // lists the sink answered with another too-large Request or nothing
+    std::uint8_t refusals = 0;          // compliant Requests the charger refused or left unanswered
+    std::uint8_t forged_id = 0;         // the last list's MessageID
+    bool forged_dup = false;            // it was the sink's newest (the charger drops it as a retry), else a fresh one
     std::uint8_t forged_n = 0;
     std::array<std::uint32_t, 7> forged{};   // the last list we sent
     std::uint8_t req_pos = 0;           // the sink's latest Request
@@ -172,12 +179,18 @@ private:
     void reject(LimWhy cause);
     void blame_check(LimWhy cause, std::uint32_t now);  // a reset or a new list right after our list
     void saw_request(std::uint32_t rdo, std::uint32_t now);
+    void refused(std::uint32_t now);                    // a compliant Request the charger refused or left unanswered
+    std::uint8_t pick_id(bool& dup) const;              // the forged list's MessageID
     bool plan(std::array<std::uint32_t, 7>& f, std::size_t& cnt);   // the list to send (true: it differs); stops on NoFit
 
     LimStatus st_{};
     IqWatch watch_{};
-    std::uint32_t last_at_ = 0, neg_at_ = 0, ready_at_ = 0, inj_at_ = 0;
-    std::uint8_t inj_streak_ = 0;
+    enum class Await : std::uint8_t { Request, Accept, PsRdy };   // Injected: what the next proof is
+    std::uint32_t last_at_ = 0, neg_at_ = 0, ready_at_ = 0, inj_at_ = 0, await_at_ = 0;
+    Await await_ = Await::Request;
+    std::uint8_t fed_id_ = 0;
+    bool fed_own_ = false;      // our list is the newest source-role frame the sink took: it holds fed_id_
+    bool fresh_first_ = false;  // the sink-ID scheme was refused: a fresh ID first
     bool sink_asked_caps_ = false;
     bool held_ = false;
 };

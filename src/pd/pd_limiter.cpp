@@ -142,6 +142,7 @@ const char* lim_why_name(LimWhy w) {
         case LimWhy::SinkResets: return "the sink resets";
         case LimWhy::SinkIgnores: return "the sink ignores it";
         case LimWhy::NoFit: return "not on this charger";
+        case LimWhy::ChargerRefuses: return "the charger refuses re-offers";
     }
     return "?";
 }
@@ -400,7 +401,7 @@ bool Limiter::arm(const LimConfig& cfg, std::uint32_t now, const IqWatch* seed) 
     st_.limit_mw = cfg.limit_mw;
     watch_.reset();
     last_at_ = now;
-    inj_streak_ = 0;
+    fresh_first_ = false;
     sink_asked_caps_ = false;
     if (seed && seed->contract().ready) {   // armed mid-contract: the list, the Request and the MessageID are already known
         watch_ = *seed;
@@ -437,6 +438,7 @@ void Limiter::stop(LimWhy why) {
 
 void Limiter::on_detach() {
     held_ = false;
+    fed_own_ = false;
     if (!armed()) return;   // an off limiter's last status stays as the stop left it
     restart();
     st_.req_pos = 0;
@@ -450,7 +452,7 @@ void Limiter::restart() {
     if (!armed()) return;
     watch_.reset();
     st_.state = LimState::Armed;
-    inj_streak_ = 0;
+    fed_own_ = false;
     sink_asked_caps_ = false;
 }
 
@@ -479,9 +481,11 @@ void Limiter::saw_request(std::uint32_t rdo, std::uint32_t now) {
             if (!watch_.pdos().empty() && !ok) restart_neg();
             break;
         case LimState::Injected:
-            if (ok) {
-                st_.state = LimState::Limited;
+            if (ok) {   // the sink took the list; the charger's Accept and PS_RDY decide
+                await_ = Await::Accept;
+                await_at_ = now;
             } else {
+                await_ = Await::Request;
                 if (++st_.ignores >= kLimMaxRejects) return stop(LimWhy::SinkIgnores);
                 restart_neg();
             }
@@ -501,13 +505,13 @@ void Limiter::on_message(Sop sop, std::uint16_t h, std::span<const std::uint8_t>
     if (sop != Sop::Sop) return;
     const bool real_caps = from_source(h) && !ext_of(h) && ndo_of(h) > 0 && type_of(h) == kDataSourceCap;
     if (real_caps) held_ = false;   // the sink has the charger's own list again
-    if (!armed()) return;
-    last_at_ = now;
-    watch_.on_message(sop, h, payload, now);
     const std::uint8_t t = type_of(h);
     const unsigned n = ndo_of(h);
     const bool src = from_source(h);
-    if (src && (ext_of(h) || n > 0 || t != kCtlGoodCrc)) inj_streak_ = 0;
+    if (src && (ext_of(h) || n > 0 || t != kCtlGoodCrc)) fed_own_ = false;   // the sink now holds the charger's ID
+    if (!armed()) return;
+    last_at_ = now;
+    watch_.on_message(sop, h, payload, now);
     if (ext_of(h)) {
         if (src && t == kExtEprSourceCap) stop(LimWhy::Epr);
         return;
@@ -528,6 +532,18 @@ void Limiter::on_message(Sop sop, std::uint16_t h, std::span<const std::uint8_t>
         return;
     }
     if (t == kCtlGoodCrc) return;
+    if (src && st_.state == LimState::Injected && await_ == Await::Accept) {
+        if (t == kCtlAccept) {
+            await_ = Await::PsRdy;
+            await_at_ = now;
+            return;
+        }
+        if (t == kCtlReject || t == kCtlNotSupported || t == kCtlWait) return refused(now);
+    }
+    if (src && st_.state == LimState::Injected && await_ != Await::Request && t == kCtlPsRdy) {   // an Accept the sniffer missed too
+        st_.state = LimState::Limited;
+        return;
+    }
     if (!src && t == kCtlGetSourceCap) sink_asked_caps_ = true;
     if (t == kCtlSoftReset) {
         blame_check(src ? LimWhy::ChargerResets : LimWhy::SinkResets, now);
@@ -551,8 +567,10 @@ void Limiter::on_message(Sop sop, std::uint16_t h, std::span<const std::uint8_t>
 // Request; a reset with no answer is the sink refusing the list.
 void Limiter::on_hard_reset(std::uint32_t now) {
     held_ = false;
+    fed_own_ = false;
     if (!armed()) return;
-    blame_check(st_.state == LimState::Limited ? LimWhy::ChargerResets : LimWhy::SinkResets, now);
+    const bool answered = st_.state == LimState::Limited || (st_.state == LimState::Injected && await_ != Await::Request);
+    blame_check(answered ? LimWhy::ChargerResets : LimWhy::SinkResets, now);
     restart();
 }
 
@@ -565,7 +583,10 @@ void Limiter::tick(std::uint32_t now) {
             if (due(now, ready_at_, kLimPendMs + 1)) st_.state = LimState::Armed;
             break;
         case LimState::Injected:
-            if (due(now, inj_at_, kLimVerifyMs + 1)) {   // the sink never answered: retry instead of stalling in Armed
+            if (await_ == Await::Accept ? due(now, await_at_, kLimVerifyMs + 1)
+                : await_ == Await::PsRdy ? due(now, await_at_, kLimNegMs + 1) : false) {
+                refused(now);   // the charger let the sink's Request (or its own Accept) hang
+            } else if (await_ == Await::Request && due(now, inj_at_, kLimVerifyMs + 1)) {   // the sink never answered: retry
                 if (++st_.ignores >= kLimMaxRejects) stop(LimWhy::SinkIgnores);
                 else {
                     st_.state = LimState::Pending;
@@ -574,10 +595,34 @@ void Limiter::tick(std::uint32_t now) {
             }
             break;
         case LimState::Limited:
-            if (due(now, inj_at_, kLimBlameMs + 1)) st_.rejects = st_.ignores = 0;   // it held: the count starts over
+            if (due(now, inj_at_, kLimBlameMs + 1)) st_.rejects = st_.ignores = st_.refusals = 0;   // it held: the count starts over
             break;
         default: break;
     }
+}
+
+// The other ID scheme next; the second refusal since the last stable Limited stops. The sink keeps our list (held_).
+void Limiter::refused(std::uint32_t now) {
+    await_ = Await::Request;
+    fresh_first_ = st_.forged_dup;
+    if (++st_.refusals >= kLimMaxRejects) return stop(LimWhy::ChargerRefuses);
+    st_.state = LimState::Pending;
+    ready_at_ = now;
+}
+
+// The sink's newest ID when the sink does not hold it already and the charger's Accept will not carry it; else a fresh one
+// past the charger's newest, clear of those two and of the sink's next Request (the charger may store ours).
+std::uint8_t Limiter::pick_id(bool& dup) const {
+    const std::uint8_t c = watch_.src_id();
+    const std::uint8_t held = fed_own_ ? fed_id_ : c;
+    const std::uint8_t accept = std::uint8_t((c + 1) & 7);
+    const bool snk = watch_.snk_known();
+    const std::uint8_t s = watch_.snk_id();
+    dup = snk && !fresh_first_ && s != held && s != accept;
+    if (dup) return s;
+    std::uint8_t id = std::uint8_t((c + 2) & 7);
+    while (id == held || id == accept || (snk && id == ((s + 1) & 7))) id = std::uint8_t((id + 1) & 7);
+    return id;
 }
 
 bool Limiter::take_tx(TxMsg& m, std::uint32_t now) {
@@ -599,12 +644,17 @@ bool Limiter::take_tx(TxMsg& m, std::uint32_t now) {
     }
     const std::uint8_t drev = watch_.contract().dev_rev;
     const std::uint8_t rev = (drev > 0 && drev < watch_.src_rev()) ? drev : watch_.src_rev();
-    const std::uint8_t skip = static_cast<std::uint8_t>(1u + (inj_streak_ % 6u));
-    inj_streak_++;
+    bool dup = false;
+    const std::uint8_t id = pick_id(dup);
     m = TxMsg{};
     m.sop = Sop::Sop;
     m.inline_tx = true;
-    m.header = watch_.stamp(make_header(kDataSourceCap, std::uint8_t(cnt), rev), skip);
+    m.header = with_msg_id(std::uint16_t(make_header(kDataSourceCap, std::uint8_t(cnt), rev) | watch_.src_roles()), id);
+    st_.forged_id = id;
+    st_.forged_dup = dup;
+    fed_id_ = id;
+    fed_own_ = true;
+    await_ = Await::Request;
     for (std::size_t i = 0; i < cnt; i++)
         for (unsigned b = 0; b < 4; b++) m.data[4 * i + b] = std::uint8_t(f[i] >> (8 * b));
     m.len = std::uint8_t(4 * cnt);

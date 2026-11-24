@@ -419,7 +419,7 @@ const pd::IqStatus& interrogate_status();   // the latest run's, kept until the 
 // attached it waits, and it survives a detach and a replug; it acts on a far sink's Request (far_sink_seen), not on the inline
 // latch. A contract already on the wire when armed is limited at once.
 // Latency: the list goes out once PS_RDY has been seen and the line has been quiet for kLimQuietMs, so the sink draws at the
-// charger's real contract for that long; the clamp lands with its next Request, never before.
+// charger's real contract for that long; the clamp holds once the charger accepts the sink's next Request (Accept, PS_RDY).
 // `seed` false: do not take the sniffer's contract (a link reset was just asked for: it is about to end).
 pd::LimRefusal limit_arm(const pd::LimConfig& cfg, const pd::LimFacts& outside, bool seed = true);
 pd::LimRefusal limit_arm(std::uint32_t limit_mw, const pd::LimFacts& outside, bool seed = true);
@@ -427,7 +427,6 @@ void limit_disarm();
 bool limit_armed();
 const pd::LimStatus& limit_status();   // kept after the stop: state off and why
 bool limit_holds_sink();   // a forged list is still the sink's (armed or not): ending the limit takes a reset
-
 // Quick source probe for the charger report card (k2/pd/pd_probe.hpp): Discover Identity, Get_Manufacturer_Info and
 // Get_Source_Cap_Extended on SOP, one try each, over within ~1 s whatever the charger does. False when refused
 // (no CC, inline, or the sink / Identify is busy). The answers land in vdm() and ext(); probe_status() says which.

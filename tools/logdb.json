@@ -775,6 +775,8 @@
   "778": "[UI] link reset: VBUS did not come back, waking the source\n",
   "779": "[LIM] comeback bring-up: state=%s after %u ms\n",
   "780": "[LIM] comeback boot: re-arming saved limit\n",
-  "781": "[PD] Listen CC%u -> CC%u: no PD frame, VBUS %d mV (move %u)\n"
+  "781": "[PD] Listen CC%u -> CC%u: no PD frame, VBUS %d mV (move %u)\n",
+  "782": "[LIM] forged list MessageID %u (%s)\n",
+  "783": "[LIM] t=%u charger refused the Request to our list (%u of %u)\n"
  }
 }

@@ -158,6 +158,9 @@ public:
     const IqContract& contract() const { return c_; }
     bool src_known() const { return src_known_; }
     std::uint8_t next_id() const { return src_known_ ? std::uint8_t((src_id_ + 1) & 7) : std::uint8_t(0); }
+    std::uint8_t src_id() const { return src_id_; }   // the source's newest MessageID (valid when src_known())
+    bool snk_known() const { return snk_known_; }
+    std::uint8_t snk_id() const { return snk_id_; }   // the sink's newest MessageID: the one the source holds for its retry check
     std::uint16_t src_roles() const { return src_roles_; }   // header bits 8 (power role) and 5 (data role) of the source
     std::uint8_t src_rev() const { return src_rev_; }
     // A source-role message of this header: the source's roles and the next MessageID (plus `skip` IDs).
@@ -176,6 +179,8 @@ private:
     bool caps_ = false, requested_ = false, accepted_ = false;
     bool src_known_ = false, heard_ = false;
     std::uint8_t src_id_ = 0, src_rev_ = 0;
+    bool snk_known_ = false;
+    std::uint8_t snk_id_ = 0;
     std::uint16_t src_roles_ = 0x0120;   // source, DFP until the wire says otherwise
     std::uint32_t psrdy_at_ = 0, last_at_ = 0;
     std::uint8_t pend_pos_ = 0, pend_rev_ = 0;

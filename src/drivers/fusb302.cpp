@@ -1320,7 +1320,7 @@ K2_HOT void active_tick() {
     if (g_lim_on) {   // the limiter's forged list: only for a far sink's Request, quiet line with no unread RX frame
         lim().tick(now);
         if (!sent && !g_rx_nonempty && far_sink_seen() && lim().take_tx(m, now)) {
-            transmit(m);   // both PHYs GoodCRC it and collide: the result means nothing, the sink's next Request is the proof
+            transmit(m);   // both PHYs GoodCRC it and collide: the result means nothing, the charger's Accept is the proof
             sent = true;
         }
     }
