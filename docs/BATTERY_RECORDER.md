@@ -96,8 +96,15 @@ The same bytes are the flash file, the remote's `read` payload and the QR share 
 - Every write rewrites the run's file in place (`Fs::rewrite_file`: one metadata commit, no `.tmp` and rename; a power
   cut leaves the old record or the new one). Cost, measured in `tests/test_battery.cpp` on a device-like root (settings
   and two kept runs): 360 saves an hour, 446 B programmed per save, 90 erases of the root pair an hour (45 per 2 KB
-  block), about 19 s of flash time an hour (~50 ms per save, ~130-170 ms when the save compacts the pair). littlefs moves
-  the pair after 500 erases (`block_cycles`), so about every 11 h of recording, onto free blocks of the volume.
+  block), about 19 s of flash time an hour (~50 ms per save, ~130-170 ms when the save compacts the pair). With the
+  device's root (store directories, `/log.txt`) 72 erases an hour.
+- Wear levelling: the root is the superblock pair (blocks 0 and 1), which littlefs never relocates. After 500 erases of
+  it (`block_cycles`, about 6-7 h of recording) it expands the superblock once on a volume under 88 % full: the root's
+  entries move to a new pair, +2 blocks for good (measured on a 111-block RamDisk: used 17 -> 19 at hour 7, then flat to
+  48 h, erases spread over 10 blocks, at most ~500 each per cycle). On a fuller volume it does not expand and blocks 0/1
+  take every erase (~36 an hour each).
+- A save waits while the main loop forbids an erase (a port owner, or PD traffic in the last second), so the flash copy
+  can be older than 10 s at a cut. A run cut before its first save (the first 10 s, or under 1 mWh) is not on flash.
 - A new run waits for the previous run's write: `start` refuses with Busy while that record is unwritten and a write is not
   allowed now.
 
