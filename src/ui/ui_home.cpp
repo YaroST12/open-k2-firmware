@@ -30,17 +30,17 @@ namespace {
 constexpr uint16_t tone(hm::Mode m, uint16_t live) { return m == hm::Mode::Live ? live : m == hm::Mode::Stale ? kStale : kFaint; }
 
 // ---- quantity cells (slot 0 = hero, 1 / 2 = side-by-side sub-heroes) ---------------------------
-constexpr int16_t kHeroDigitX = 72, kHeroDigitTop = 21, kHeroUnitX = 198, kHeroUnitTop = 32;   // font_48 baseline 51
+constexpr int16_t kHeroDigitX = 43, kHeroDigitTop = 21, kHeroUnitX = 169, kHeroUnitTop = 32;   // font_48 baseline 51
 constexpr int16_t kHeroRows = 30;                     // font_48 line height
 constexpr int16_t kSubDigitTop = 91, kSubUnitTop = 98;   // font_24 baseline 110, font_16 unit baseline 110
 constexpr int16_t kSubRows = 24;                      // font_24 line height
 constexpr int kDigitChars = 5;
 constexpr int16_t kPillRight = 222, kPillY = 1, kPillBoxH = 17;
 constexpr int16_t kHeroArrowX = 14, kHeroArrowY = 26, kHeroArrowBox = 18;
-constexpr int16_t kSubArrowDy = 23, kSubArrowBox = 13;
 constexpr int16_t kHeroLabelX = 10, kSubLabelDx = 5;
 constexpr int16_t kMaxRightHero = 219;
-static_assert(kHeroDigitX + kDigitChars * 24 - 1 == 191, "hero digits end at x191");
+static_assert(kHeroDigitX + kDigitChars * 24 - 1 == 162, "hero digits end at x162");
+static_assert(kHeroArrowX + kHeroArrowBox <= kHeroDigitX, "hero arrow clears centered hero digits");
 static_assert(hm::kSubX0[0] + 35 + kDigitChars * 12 - 1 <= hm::kSubX1[0] - 15, "left sub-hero digits clear unit");
 
 // ---- 3 configurable boxes (y128..193, 74x66 each) ----------------------------------------------
@@ -123,6 +123,18 @@ uint32_t sig_items(uint32_t h, std::span<const hm::Item> items) {
         h = mix(h, i.text);
     }
     return h;
+}
+
+// Effective drop voltage (mV) for the Home DROP box: prefer cable_r::Meter's measured idle reference
+// whenever current is flowing (even < 1 A step), and fall back to the settled contract level (sag_level_mv)
+// when no idle reference was captured (e.g. plugged in under load or PD negotiated while under load).
+uint32_t effective_drop_mv(bool live, const cable_r::Meter &cable, uint32_t sag_level_mv,
+                           int32_t v_mv, int32_t a_ma) {
+    const hm::Drop d = hm::drop_of(live, cable.has_idle(), cable.idle_mv(), cable.idle_ma(), v_mv, a_ma);
+    if (d.state == hm::DropState::Value) return d.mv;
+    if (!live || a_ma <= 50) return 0;
+    const int32_t ref_mv = cable.has_idle() ? cable.idle_mv() : static_cast<int32_t>(sag_level_mv);
+    return ref_mv > v_mv ? static_cast<uint32_t>(ref_mv - v_mv) : 0u;
 }
 
 }  // namespace
@@ -250,7 +262,8 @@ void HomePage::sample_values(Frame &f, uint32_t now_ms) {
         card_.has_sag = x.has_sag();
         card_.sag_bp = x.sag_bp();
         card_.sag_level_mv = x.sag_level_mv();
-        card_.drop = hm::drop_of(live, ctx_.cable.has_idle(), ctx_.cable.idle_mv(), ctx_.cable.idle_ma(), v_mv_, a_ma_);
+        const uint32_t drop_mv = effective_drop_mv(live, ctx_.cable, x.sag_level_mv() ? x.sag_level_mv() : ctx_.sag_level_mv, v_mv_, a_ma_);
+        card_.drop = {live ? hm::DropState::Value : hm::DropState::None, drop_mv};
         const std::optional<adc::Reading> &an = ctx_.analog;
         card_.lines[0] = an ? an->cc1_mv : -1;
         card_.lines[1] = an ? an->cc2_mv : -1;
@@ -331,6 +344,7 @@ namespace {
     const int n = hm::fmt_level(tmp, milli);
     out.put({tmp, static_cast<size_t>(n)}).put_char(unit);
 }
+
 }  // namespace
 
 // At most 4 head items: the warning triangle and the alarm line (or the letter W/V/A), then the pill's plate and
@@ -608,9 +622,9 @@ void HomePage::paint_qty(int si, hm::Qty q, const Frame &f) {
     qc.dtop = hero ? kHeroDigitTop : kSubDigitTop;
     qc.drows = hero ? kHeroRows : kSubRows;
     qc.bg = hero ? hm::kHeroBar : hm::sub_bar(si - 1);
-    qc.ax = hero ? kHeroArrowX : static_cast<int16_t>(s.x0 + 8);
-    qc.ay = hero ? kHeroArrowY : static_cast<int16_t>(s.top + kSubArrowDy);
-    qc.abox = hero ? kHeroArrowBox : kSubArrowBox;
+    qc.ax = kHeroArrowX;
+    qc.ay = kHeroArrowY;
+    qc.abox = kHeroArrowBox;
     qc.prev_hd = hd_[si];
     qc.digits_changed = hd_[si].set(f.text[qi], qc.px0, qc.px1);   // before the items: the digit item views hd_'s text
 
@@ -641,7 +655,7 @@ void HomePage::paint_qty(int si, hm::Qty q, const Frame &f) {
         it[n++] = hm::fill(hm::bar_tick_x(qc.bg), static_cast<int16_t>(qc.bg.y - 2), 1, hm::kBarH + 4, tc);
         qc.bar_sig = mix_u32(mix_u32(mix_u32(1, static_cast<uint32_t>(fw)), fc), tc);
     }
-    if (q == hm::Qty::A && shown) {
+    if (hero && shown) {
         const bool dash = flow_ == power::Flow::Idle;
         const uint8_t aux = dash ? hm::dash_dir(ctx_.rotation) : hm::arrow_dir(flow_ == power::Flow::Forward, ctx_.rotation);
         const uint16_t ac = over ? kAlarmInk : dash ? kFaint : live ? kFlow : kStale;
@@ -1073,9 +1087,10 @@ void HomePage::update(uint32_t now_ms) {
 
     // Box availability mask & cycler step.
     const bool live = f.mode == hm::Mode::Live;
-    const hm::Drop drop = hm::drop_of(live, ctx_.cable.has_idle(), ctx_.cable.idle_mv(), ctx_.cable.idle_ma(),
-                                      abs32(ctx_.pm.vbus_mv), abs32(ctx_.pm.current_ma));
-    const bool has_drop = drop.state == hm::DropState::Value && drop.mv > 0;
+    const uint32_t drop_mv = effective_drop_mv(live, ctx_.cable,
+                                               ctx_.extremes.sag_level_mv() ? ctx_.extremes.sag_level_mv() : ctx_.sag_level_mv,
+                                               abs32(ctx_.pm.vbus_mv), abs32(ctx_.pm.current_ma));
+    const bool has_drop = drop_mv > 0;
     const bool has_sag = ctx_.extremes.has_sag() && ctx_.extremes.sag_bp() > 0 && ctx_.extremes.sag_level_mv() > 0;
     const std::optional<adc::Reading> &an = ctx_.analog;
     const bool has_cc = an && (an->cc1_mv >= 0 || an->cc2_mv >= 0);

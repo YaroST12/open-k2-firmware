@@ -34,7 +34,7 @@ using namespace k2;
 
 namespace {
 
-constexpr int kHeroX = 72, kHeroTop = 21;            // Home hero digits, logical content coords (ui_home.cpp)
+constexpr int kHeroX = 43, kHeroTop = 21;            // Home hero digits, logical content coords (ui_home.cpp)
 constexpr int kHeroChars = 5;                        // DigitField of 5 chars
 constexpr home::CellGeom kHeroCell = home::cell_geom(home::kHeroY0, home::kHeroY1, true);   // the Home hero cell
 

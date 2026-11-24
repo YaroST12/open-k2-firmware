@@ -212,7 +212,7 @@ static void unplug() {
 
 // Reorganized Home regions in logical coordinates (W hero by default: V left sub-hero, A right sub-hero, 3x74 boxes below).
 static constexpr int kHeroH = 70;                                  // y0..69
-static constexpr int kHeroDigits[4] = {72, 21, 120, 30};          // x, y, w, h of the 48 px field
+static constexpr int kHeroDigits[4] = {43, 21, 120, 30};          // x, y, w, h of the 48 px field
 static constexpr int kSubX[2] = {0, 112}, kSubW = 111;
 static constexpr int kSubDigitX[2] = {35, 148}, kSubDigitY = 91;   // 24 px digits, 60 x 24
 static constexpr int kSubTop = 72, kSubH = 54;
@@ -543,7 +543,8 @@ static void test_idle_home() {
     CHECK_EQ(ink_logical(ui, 0, hm::kRule3Y, hm::kW, 2, kAccent), 0);
     CHECK_EQ(ink_logical(ui, 0, hm::kRule3Y, hm::kW, 2, kRule), hm::kW * 2);
     CHECK_TRUE(ink_logical(ui, 52, 201, 120, 16, kDim) > 8);            // "No source" (session row 1)
-    CHECK_EQ(ink_logical(ui, 120, 95, 13, 13, kFlow), 0);               // no arrow
+    CHECK_EQ(ink_logical(ui, 14, 26, 18, 18, kFlow), 0);                 // no arrow on hero
+    CHECK_EQ(ink_logical(ui, 120, 95, 13, 13, kFlow), 0);                // no arrow on sub-hero
     CHECK_EQ(ink_logical(ui, 10, 61, 205, 7, kRule), 0);                // no bars
     CHECK_EQ(ink_logical(ui, 118, 117, 100, 7, kRule), 0);
 }
@@ -679,9 +680,9 @@ static void test_nometer_grace() {
     g_t = saved;
 }
 
-// ---- direction arrow: a 13 px glyph in the IBUS ledger row (22 px when A is the hero) ----------------
+// ---- direction arrow: an 18 px glyph permanently on the hero graph (x=14, y=26, 18x18) ------------
 
-static constexpr int kAx = 120, kAy = 95, kAs = 13;
+static constexpr int kAx = 14, kAy = 26, kAs = 18;
 
 // Per half of the box, the widest physical ink line across the arrow's axis: the head's base is far wider than the
 // shaft. Physical pixels, so the landscape stretch (a logical column can cover two panel columns) counts nothing twice.
@@ -757,11 +758,21 @@ static void test_flow_arrow() {
     }
 }
 
-// The sub-hero A arrow box lies inside the right sub-hero cell (x=120, y=95, 13x13).
+// The hero flow arrow box lies inside the hero cell (x=14, y=26, 18x18), clears status edge & digits,
+// and stays on the hero graph for W, V, and A heroes (never on sub-heroes).
 static void test_flow_arrow_geometry() {
-    CHECK_EQ(kAx >= hm::kSubX0[1], 1);
-    CHECK_EQ(kAy >= hm::kSubY0 && kAy + kAs <= hm::kSubY1, 1);
-    CHECK_EQ(kAx + kAs <= hm::kSubX1[1], 1);
+    CHECK_EQ(kAx >= 4, 1);
+    CHECK_EQ(kAy >= hm::kHeroY0 + 18 && kAy + kAs <= hm::kHeroBar.y - 2, 1);
+    CHECK_EQ(kAx + kAs <= kHeroDigits[0], 1);
+    for (int i = 0; i < 3; i++) {
+        Ui &ui = home_ui(0);
+        for (int s = 0; s < i; s++) { ui.on_button(Button::Plus, ButtonEvent::Short, g_t); g_t += 50; }
+        live_pd(false, 20010, 1520);
+        run(ui, 20);
+        CHECK_TRUE(ink_logical(ui, kAx, kAy, kAs, kAs, kFlow) > 20);
+        CHECK_EQ(ink_logical(ui, hm::kSubX0[0], hm::kSubY0, 111, 54, kFlow), 0);
+        CHECK_EQ(ink_logical(ui, hm::kSubX0[1], hm::kSubY0, 112, 54, kFlow), 0);
+    }
 }
 
 // Three consecutive frames of the live screen, for the animation strip.
@@ -822,6 +833,30 @@ static void test_drop_and_sag_cards() {
     CHECK_EQ(int(ui.context().keep.boxes.shown(2)), int(hm::BoxKind::Drop));
     CHECK_TRUE(ui.context().keep.boxes.glow_level(2, g_t) > 0);
     CHECK_TRUE(ink_logical(ui, kBoxX[2], kBoxTop, kBoxW, 2, kAccent) > 30);   // fading cyan border
+    CHECK_TRUE(ink_logical(ui, kBoxX[2] + 4, kBoxTop + 20, kBoxW - 8, 16, kInk) > 10);   // drop voltage rendered (not "--")
+
+    // DROP box also shows drop voltage when plugged in under load (no idle reference) or with < 1 A load.
+    {
+        unplug();
+        Ui &u2 = home_ui();
+        u2.set_home_boxes({hm::BoxKind::Pd, hm::BoxKind::Energy, hm::BoxKind::Drop});
+        live_pd(false, 19800, 600);                                      // already 600 mA at attach: no idle ref
+        run(u2, 30);
+        CHECK_EQ(u2.context().cable.has_idle() ? 1 : 0, 0);
+        CHECK_TRUE(ink_logical(u2, kBoxX[2] + 4, kBoxTop + 20, kBoxW - 8, 16, kInk) > 10);   // 0.20 V from sag_level_mv
+    }
+    // Centered hero text: unit at x169..180, no stale pixels when digit count changes (60.00 -> --).
+    {
+        Ui &u3 = home_ui();
+        live_pd(false, 20000, 3000);                                      // 60.00 W (5 chars, kWatt)
+        run(u3, 15);
+        CHECK_TRUE(ink_logical(u3, 169, 32, 12, 24, kWatt) > 20);         // centered unit W
+        CHECK_EQ(ink_logical(u3, 181, 21, 42, 30, kWatt), 0);             // right margin clear
+        g_stub.pm_online = false;                                         // NoMeter: "--" (2 chars)
+        run(u3, 15);
+        CHECK_EQ(ink_logical(u3, 43, 21, 72, 30, kWatt), 0);              // leading char slots cleared cleanly
+        CHECK_EQ(ink_logical(u3, 43, 21, 72, 30, kFaint), 0);             // leading char slots empty in NoMeter too
+    }
 }
 
 static void check_badge_centered(Ui &ui, int lx0, int ly0, int lx1, int ly1, uint16_t fill, const char *name) {
