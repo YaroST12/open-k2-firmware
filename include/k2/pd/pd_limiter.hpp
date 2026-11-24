@@ -65,6 +65,12 @@ constexpr bool lim_config_active(const LimConfig& c) {
 }
 bool lim_config_valid(const LimConfig& c);
 
+// The 17-byte form shared by Cmd::PdLimit op 3 and the /lim.rec record: flags (bit0 fixed, bit1 pps, bit2 avs), then
+// 3 x (u16 max_mv, u16 max_ma) and u32 limit_mw, little-endian.
+inline constexpr std::size_t kLimPackBytes = 17;
+void lim_pack(const LimConfig& c, std::span<std::uint8_t, kLimPackBytes> out);
+bool lim_unpack(std::span<const std::uint8_t, kLimPackBytes> in, LimConfig& out);   // false: unknown flag bits or invalid
+
 // Arming gate: valid config and "another feature owns the wire". Nothing attached, or only a charger, is no refusal: it waits.
 enum class LimRefusal : std::uint8_t { None, BadLimit, Busy };
 struct LimFacts {

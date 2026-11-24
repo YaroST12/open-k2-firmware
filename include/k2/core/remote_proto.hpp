@@ -1584,7 +1584,7 @@ struct AppleReadResult { Status status = Status::Ok; uint8_t refusal = 0; AppleR
 
 // PD limiter (Cmd::PdLimit). The view points at the driver's own status (never copied).
 constexpr uint8_t kLimitStatus = 0, kLimitArm = 1, kLimitOff = 2, kLimitArmCfg = 3;
-constexpr size_t kLimitCfgBytes = 18;   // op, flags (bit0 fixed, bit1 pps, bit2 avs), 3*(u16 mv, u16 ma), u32 limit_mw
+constexpr size_t kLimitCfgBytes = 1 + pd::kLimPackBytes;   // op, then pd::lim_pack's form
 constexpr size_t kLimitRspBytes = 20 + 4 * 7;   // 7 bytes of state, limit / request mW and RDO as u32, then seven forged PDO slots
 static_assert(kLimitRspBytes <= kMaxRspPayload);
 struct LimitView { Status status = Status::Ok; uint8_t refusal = 0; const pd::LimStatus* s = nullptr; };
@@ -2224,13 +2224,8 @@ template <Backend B>
             const uint32_t mw = rd32(&p[1]);
             if (mw < pd::kLimMinMw || mw > pd::kLimMaxMw) return reply_bad_arg(f);
             cfg = pd::lim_config_watts(mw);
-        } else if (op == kLimitArmCfg) {
-            if (p[1] & ~0x07u) return reply_bad_arg(f);
-            cfg.fixed = {(p[1] & 1) != 0, rd16(&p[2]), rd16(&p[4])};
-            cfg.pps   = {(p[1] & 2) != 0, rd16(&p[6]), rd16(&p[8])};
-            cfg.avs   = {(p[1] & 4) != 0, rd16(&p[10]), rd16(&p[12])};
-            cfg.limit_mw = rd32(&p[14]);
-            if (!pd::lim_config_valid(cfg)) return reply_bad_arg(f);
+        } else if (op == kLimitArmCfg && !pd::lim_unpack(p.subspan(1).first<pd::kLimPackBytes>(), cfg)) {
+            return reply_bad_arg(f);
         }
         const LimitView v = backend.pd_limit(op, cfg);
         if (v.status != Status::Ok) return reply_byte(f, v.status, v.refusal);

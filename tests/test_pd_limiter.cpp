@@ -218,6 +218,24 @@ int main() {
         CHECK_STR(std::string(buf, n).c_str(), "AVS15");
     }
 
+    // ---- the shared 17-byte form (Cmd::PdLimit op 3 and /lim.rec) ----
+    {
+        LimConfig c{};
+        c.fixed = {true, 9000, 2500}; c.pps = {false, 0, 0}; c.avs = {true, 15000, 3000}; c.limit_mw = 45000;
+        std::array<std::uint8_t, kLimPackBytes> b{};
+        lim_pack(c, b);
+        const std::array<std::uint8_t, kLimPackBytes> want{0x05, 0x28, 0x23, 0xC4, 0x09, 0, 0, 0, 0,
+                                                           0x98, 0x3A, 0xB8, 0x0B, 0xC8, 0xAF, 0x00, 0x00};
+        CHECK_COND(b == want);
+        LimConfig d{};
+        CHECK_COND(lim_unpack(b, d));
+        CHECK_COND(d == c);
+        b[0] |= 0x08;
+        CHECK_COND(!lim_unpack(b, d));   // an unknown flag bit
+        b[0] = 0;
+        CHECK_COND(!lim_unpack(b, d));   // every tech off
+    }
+
     // ---- lim_comeback pure encode/decode/restore ----
     {
         LimConfig cfg{};

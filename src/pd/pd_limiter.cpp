@@ -57,6 +57,33 @@ bool lim_config_valid(const LimConfig& c) {
     return valid_tech(c.fixed, 5000, 50, false) && valid_tech(c.pps, kLimMinMv, 100, false) && valid_tech(c.avs, 15000, 100, true);
 }
 
+void lim_pack(const LimConfig& c, std::span<std::uint8_t, kLimPackBytes> out) {
+    const LimTech* t[3] = {&c.fixed, &c.pps, &c.avs};
+    std::uint16_t h[8];
+    out[0] = 0;
+    for (unsigned i = 0; i < 3; i++) {
+        out[0] |= std::uint8_t(t[i]->enabled << i);
+        h[2 * i] = t[i]->max_mv;
+        h[2 * i + 1] = t[i]->max_ma;
+    }
+    h[6] = std::uint16_t(c.limit_mw);
+    h[7] = std::uint16_t(c.limit_mw >> 16);
+    for (unsigned i = 0; i < 8; i++) {
+        out[1 + 2 * i] = std::uint8_t(h[i]);
+        out[2 + 2 * i] = std::uint8_t(h[i] >> 8);
+    }
+}
+
+bool lim_unpack(std::span<const std::uint8_t, kLimPackBytes> in, LimConfig& c) {
+    if (in[0] & ~0x07u) return false;
+    std::uint16_t h[8];
+    for (unsigned i = 0; i < 8; i++) h[i] = std::uint16_t(in[1 + 2 * i] | (in[2 + 2 * i] << 8));
+    LimTech* t[3] = {&c.fixed, &c.pps, &c.avs};
+    for (unsigned i = 0; i < 3; i++) *t[i] = {((in[0] >> i) & 1u) != 0, h[2 * i], h[2 * i + 1]};
+    c.limit_mw = h[6] | (std::uint32_t(h[7]) << 16);
+    return lim_config_valid(c);
+}
+
 const char* lim_state_name(LimState s) {
     switch (s) {
         case LimState::Off: return "off";
