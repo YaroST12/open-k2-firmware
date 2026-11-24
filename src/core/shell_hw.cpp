@@ -184,7 +184,7 @@ struct Line {
     char b[200];
     std::size_t n = 0;
     bool json = false;
-    explicit Line(const lab::Cmd& c, std::string_view name) { reset(c, name); }
+    [[gnu::noinline]] explicit Line(const lab::Cmd& c, std::string_view name) { reset(c, name); }
     [[gnu::noinline]] void reset(const lab::Cmd& c, std::string_view name) {
         n = 0;
         json = c.o.json;

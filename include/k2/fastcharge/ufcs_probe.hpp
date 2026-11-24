@@ -304,7 +304,7 @@ private:
     ProbeEnv& env_;
     Tuner tuner_{};
     Tuner used_tuner_{};
-    ProbeResult res_{};
+    ProbeResult res_ K2_BSS_ZERO;
     bool running_ K2_BSS_INIT(false), opened_ K2_BSS_INIT(false), done_ K2_BSS_INIT(false);
     std::uint32_t t0_ K2_BSS_INIT(0), due_ms_ K2_BSS_INIT(0), last_rx_ms_ K2_BSS_INIT(0);
     int tries_ K2_BSS_INIT(0);

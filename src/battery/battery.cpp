@@ -8,6 +8,7 @@
 namespace k2::battery {
 
 namespace {
+[[gnu::noinline]]
 std::uint64_t udiv64_by_u16(std::uint64_t x, std::uint16_t d) {
     const std::uint32_t hi = std::uint32_t(x >> 32);
     if (hi == 0) return std::uint32_t(x) / d;

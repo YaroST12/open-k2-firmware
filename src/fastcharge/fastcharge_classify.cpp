@@ -49,7 +49,7 @@ struct SteadyPair {
     bool bias = false;
     bool quiet = false;
 };
-SteadyPair steady_pair(const Ring& ring) {
+[[gnu::noinline]] SteadyPair steady_pair(const Ring& ring) {
     int lo = 255, hi = 0;
     for (std::size_t i = 0; i < kRingSize; i++) {
         const int d = ring.dp[i], m = ring.dm[i];

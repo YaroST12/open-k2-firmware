@@ -108,8 +108,8 @@ private:
 
     ringlog::Ring& ring_;
     mutable std::array<Ent, kMaxCards> idx_;
-    mutable unsigned n_ = 0;
-    mutable bool valid_ = false;
+    mutable unsigned n_ K2_BSS_INIT(0);
+    mutable bool valid_ K2_BSS_INIT(false);
 
     int by_fp(std::uint32_t fp) const;
 

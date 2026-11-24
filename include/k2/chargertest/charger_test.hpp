@@ -887,7 +887,7 @@ public:
     ctsweep::Depth sweep_depth() const { return opts_.sweep_depth; }   // the step of the run in hand (the card names it)
     Level level() const { return opts_.level; }   // the level of the run in hand (started or restored)
     uint8_t reattach_count() const { return reattach_; }   // how many times the run went through the planned re-attach
-    bool busy() const { return (state_ >= State::Baseline && state_ <= State::Releasing) || state_ == State::Unsafe || state_ == State::Detach || state_ == State::Attach || state_ == State::Ceiling || state_ == State::Spec; }
+    [[gnu::noinline]] bool busy() const { return (state_ >= State::Baseline && state_ <= State::Releasing) || state_ == State::Unsafe || state_ == State::Detach || state_ == State::Attach || state_ == State::Ceiling || state_ == State::Spec; }
     // The page scans for the source's Rp while a unit attaches (the main loop's own scan is too slow for a fast announcer).
     bool attaching() const { return state_ == State::Attach; }
     State state() const { return state_; }

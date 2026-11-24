@@ -111,7 +111,7 @@ void exti_on() {
     ex.IMR |= kLines;
     reg::nvic().ISER[0] = (1u << 8) | (1u << 23);
 }
-void exti_off() {
+[[gnu::noinline]] void exti_off() {
     if (g_mon || g_hook) return;   // the inline monitor or the SuperVOOC trigger still listens
     reg::nvic().ICER[0] = (1u << 8) | (1u << 23);
     auto& ex = reg::exti();
