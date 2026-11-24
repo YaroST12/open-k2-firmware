@@ -41,10 +41,10 @@ class Icons(unittest.TestCase):
 
     def test_symmetric_icons(self):
         icons = self.icons()
-        for name in ("therm", "warn", "cross", "phone", "chip", "ohm", "plug", "anon", "brick", "emark", "blackbox",
-                     "ghost", "info", "socket", "monitor", "glass", "sand", "keys"):
+        for name in ("warn", "cross", "phone", "chip", "plug", "brick", "emark", "blackbox",
+                     "ghost", "info", "socket", "monitor", "glass", "sand"):
             self.assertTrue(all(r == r[::-1] for r in icons[name]), name + " is not left-right symmetric")
-        for name in ("socket", "glass", "cross", "chip", "keys"):
+        for name in ("socket", "glass", "cross", "chip"):
             self.assertEqual(icons[name], icons[name][::-1], name + " is not top-bottom symmetric")
 
     def test_sand_inside_glass(self):

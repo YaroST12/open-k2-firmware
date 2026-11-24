@@ -4,14 +4,12 @@
 
 namespace k2 {
 
-enum class Icon : uint8_t { Bolt, Cable, Therm, Warn, Check, Cross, Phone, Chip, Ohm, Clock, Pc, Plug,
-                            Brick, Anon, Pd, Res, Emark, Blackbox, Report, Ghost, Usb, Rotate, Keys, Camera, Wave,
-                            Info, Meter, Battery, Socket, Monitor, Glass, Sand };
+enum class Icon : uint8_t { Bolt, Cable, Warn, Check, Cross, Phone, Chip, Clock, Plug, Brick, Pd, Res, Emark,
+                            Blackbox, Report, Ghost, Usb, Rotate, Wave, Info, Meter, Battery, Socket, Monitor, Glass, Sand };
 
-// Emark..Wave: the Tools / Settings menu rows (E-marker, Black Box, Report cards, Spoof, USB link,
-// Autorotate, Rotate buttons, Screenshot, Smoothing). Socket..Sand: the PC-link icon (Glass is the hourglass outline, Sand its fill).
+// Socket..Sand: the PC-link icon (Glass is the hourglass outline, Sand its fill).
 constexpr int kIconSize = 12;
-constexpr int kIconCount = 32;
+constexpr int kIconCount = 26;
 extern const uint16_t kIconBits[kIconCount][kIconSize];   // row bits, bit 11 = leftmost pixel
 
 }  // namespace k2

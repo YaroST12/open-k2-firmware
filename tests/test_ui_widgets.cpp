@@ -90,7 +90,7 @@ static void test_icon() {
     CHECK_EQ(px(5 + 8, 7 + 4), 0xFFFF);
     CHECK_EQ(px(5 + 9, 7 + 4), 0xFFFF);
     CHECK_EQ(px(5 + 12, 7 + 4), 0x0001);  // outside the box: the clear colour
-    CHECK_EQ(kIconCount, 32);
+    CHECK_EQ(kIconCount, 26);
     CHECK_EQ(static_cast<int>(Icon::Sand) + 1, kIconCount);   // Sand (the PC-link hourglass fill) is the last icon
 }
 
