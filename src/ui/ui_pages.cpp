@@ -2342,50 +2342,50 @@ bool SettingsPage::on_event(Event e) {
         return true;
     }
     if (e.press == Press::Short && e.button == Button::Ok) {
-        const auto row = static_cast<SettingRow>(sel_);
-        if (row == SettingRow::Smoothing || row == SettingRow::IdleWake || row == SettingRow::TestLevel ||
-            row == SettingRow::LegacyUnits || row == SettingRow::SweepDepth
-#if K2_SCREENSHOT
-            || row == SettingRow::Screenshot
-#endif
-        ) {
+        switch (static_cast<SettingRow>(sel_)) {
+        case SettingRow::Smoothing: {   // Off -> Low -> Medium -> High -> Off; remembered, applied at once
             uiprefs::Prefs p = uiprefs::stored();
-            switch (row) {
-            case SettingRow::Smoothing:
-                p.smoothing = smoothing::preset_from_index((static_cast<unsigned>(power::smoothing_preset()) + 1) % smoothing::kPresetCount);
-                power::set_smoothing(p.smoothing);
-                break;
-            case SettingRow::IdleWake:
-                p.idle_wake = !fusb302::idle_wake();
-                fusb302::set_idle_wake(p.idle_wake);
-                break;
-            case SettingRow::TestLevel:
-                p.ct_level = static_cast<uint8_t>(charger_test::next_level(charger_test::Level(ct_level_ < charger_test::kLevelCount ? ct_level_ : 0)));
-                ct_level_ = p.ct_level;
-                if (!ctx_.ui->charger_test_busy()) ctx_.ui->charger_test_set_level(p.ct_level);
-                break;
-            case SettingRow::LegacyUnits:
-                p.legacy_units = !uiprefs::legacy_units_shown;
-                uiprefs::legacy_units_shown = p.legacy_units;
-                ctx_.ui->charger_test_legacy_changed();
-                break;
-            case SettingRow::SweepDepth:
-                p.sweep_depth = static_cast<uint8_t>(ctsweep::next_depth(ctsweep::Depth(sweep_depth_ < ctsweep::kDepthCount ? sweep_depth_ : 1)));
-                sweep_depth_ = p.sweep_depth;
-                if (!ctx_.ui->charger_test_busy()) ctx_.ui->charger_test_set_sweep_depth(p.sweep_depth);
-                break;
-#if K2_SCREENSHOT
-            default:
-                p.screenshot = !uiprefs::screenshot_enabled;
-                uiprefs::screenshot_enabled = p.screenshot;
-                break;
-#endif
-            }
+            p.smoothing = smoothing::preset_from_index((static_cast<unsigned>(power::smoothing_preset()) + 1) % smoothing::kPresetCount);
             uiprefs::set(p);
+            power::set_smoothing(p.smoothing);
             update(ctx_.now);
-            return true;
+            break;
         }
-        switch (row) {
+        case SettingRow::IdleWake: {   // remembered in the same record, applied at once (off drops a running hold)
+            uiprefs::Prefs p = uiprefs::stored();
+            p.idle_wake = !fusb302::idle_wake();
+            uiprefs::set(p);
+            fusb302::set_idle_wake(p.idle_wake);
+            update(ctx_.now);
+            break;
+        }
+        case SettingRow::TestLevel: {   // Light -> Medium -> Deep -> Light (Review's order); remembered, the idle draft follows
+            uiprefs::Prefs p = uiprefs::stored();
+            p.ct_level = static_cast<uint8_t>(charger_test::next_level(charger_test::Level(ct_level_ < charger_test::kLevelCount ? ct_level_ : 0)));
+            uiprefs::set(p);
+            ct_level_ = p.ct_level;
+            if (!ctx_.ui->charger_test_busy()) ctx_.ui->charger_test_set_level(p.ct_level);   // a running test keeps its level
+            update(ctx_.now);
+            break;
+        }
+        case SettingRow::LegacyUnits: {   // remembered; the idle draft gains or loses the units at once (a running test keeps its rows)
+            uiprefs::Prefs p = uiprefs::stored();
+            p.legacy_units = !uiprefs::legacy_units_shown;
+            uiprefs::set(p);
+            uiprefs::legacy_units_shown = p.legacy_units;
+            ctx_.ui->charger_test_legacy_changed();
+            update(ctx_.now);
+            break;
+        }
+        case SettingRow::SweepDepth: {   // 200 -> 100 -> Phone -> 20 -> 200 mV; remembered, the idle draft follows
+            uiprefs::Prefs p = uiprefs::stored();
+            p.sweep_depth = static_cast<uint8_t>(ctsweep::next_depth(ctsweep::Depth(sweep_depth_ < ctsweep::kDepthCount ? sweep_depth_ : 1)));
+            uiprefs::set(p);
+            sweep_depth_ = p.sweep_depth;
+            if (!ctx_.ui->charger_test_busy()) ctx_.ui->charger_test_set_sweep_depth(p.sweep_depth);   // a running test keeps its step
+            update(ctx_.now);
+            break;
+        }
         case SettingRow::LongBack:   // Home -> Lines -> ... -> K2 -> Home; remembered
             ctx_.ui->set_long_back(static_cast<uint8_t>(ring::next(ring::sanitize_target(ctx_.keep.long_back))));
             update(ctx_.now);
@@ -2394,6 +2394,16 @@ bool SettingsPage::on_event(Event e) {
             ctx_.ui->set_rotate_buttons(!ctx_.ui->rotate_buttons());
             update(ctx_.now);
             break;
+#if K2_SCREENSHOT
+        case SettingRow::Screenshot: {
+            uiprefs::Prefs p = uiprefs::stored();
+            p.screenshot = !uiprefs::screenshot_enabled;
+            uiprefs::set(p);
+            uiprefs::screenshot_enabled = p.screenshot;
+            update(ctx_.now);
+            break;
+        }
+#endif
         case SettingRow::Display:
             ctx_.ui->push_menu(Menu::Display, ctx_.now);
             break;
@@ -2406,6 +2416,8 @@ bool SettingsPage::on_event(Event e) {
         case SettingRow::BootInfo:
             share_boot_info();
             break;
+        case SettingRow::UsbLink:
+        case SettingRow::Autorotate:
         default:
             ctx_.ui->push_menu(sel_ == 0 ? Menu::UsbLink : Menu::Autorotate, ctx_.now);
             break;
@@ -2620,43 +2632,24 @@ int ToolsPage::rows() const { return bench::tools().n + 1; }   // the tools, the
 
 void ToolsPage::enter() {
     view_ = View::List;
-    adjust_ = false;
     title_ = rail::kTools;
     sel_ = std::clamp(sel_, 0, rows() - 1);
     seen_ = fusb302::limit_status().state;   // a give-up while elsewhere shows on the Charger slice, not as a late result
 }
 
-pd::LimTech &ToolsPage::cur_tech() {
-    return view_ == View::EditFixed ? draft_.fixed : view_ == View::EditPps ? draft_.pps : draft_.avs;
-}
-const pd::LimTech &ToolsPage::cur_tech() const {
-    return view_ == View::EditFixed ? draft_.fixed : view_ == View::EditPps ? draft_.pps : draft_.avs;
-}
-
-uint16_t ToolsPage::tech_max_ma() const {
-    const uint16_t m = view_ == View::EditFixed ? fixed_max_ma_ : view_ == View::EditPps ? pps_max_ma_ : avs_max_ma_;
-    return m >= pd::kLimStepMa ? std::min<uint16_t>(m, pd::kLimMaxMa) : pd::kLimMaxMa;
-}
-
-// A view change repaints the body: row count and title differ across List, PickLimit and tech editors.
+// A view change repaints the body: the row count and the title differ between the list and the picker.
 void ToolsPage::show(View v) {
-    const View was = view_;
     view_ = v;
-    adjust_ = false;
     if (v == View::PickLimit) {
         build_picks();
-        if (was == View::List) {
-            const pd::LimStatus &s = fusb302::limit_status();
-            draft_ = s.state != pd::LimState::Off ? pd::lim_effective_config(s) : pd::LimConfig{};
-            pick_ = s.state != pd::LimState::Off ? 1 : 0;
-            if (!has_caps_) ctx_.toast.show(FooterTone::Info, text::tools::kLimToastNoOffers, ctx_.now);
-        }
+        const pd::LimStatus &s = fusb302::limit_status();
+        pick_ = 0;   // Off, or the level in force
+        for (int i = 0; s.state != pd::LimState::Off && i < npicks_; i++)
+            if (picks_[i].mw == s.limit_mw) pick_ = i + 1;
         title_ = rail::kLimit;
         drop_confirm();
-    } else if (in_tech()) {
-        edit_idx_ = 0;
-        title_ = rail::kLimit;
-        drop_confirm();
+        if (npicks_ == 0)
+            ctx_.toast.show(FooterTone::Info, held::shown_caps().valid ? text::tools::kLimToastNoLower : text::tools::kLimToastNoOffers, ctx_.now);
     } else {
         title_ = rail::kTools;
         drop_confirm();
@@ -2669,89 +2662,13 @@ void ToolsPage::show(View v) {
     update(ctx_.now);
 }
 
-// Extract Fixed voltages and PPS/SPR-AVS ceilings from held/live caps for the per-tech picker steps.
+// The charger's own list: the live one, else the last one the K2 held (inline it only sniffs). A new list reshapes the picker
+// (its rows repaint by signature). With none known at all, row 1 is Reset link: the charger lists again into the K2.
 void ToolsPage::build_picks() {
     const pd::SourceCaps &c = held::shown_caps();
-    has_caps_ = c.valid;
-    nfixed_ = 0;
-    fixed_max_ma_ = 0;
-    has_pps_ = false; pps_min_mv_ = 0; pps_max_mv_ = 0; pps_max_ma_ = 0;
-    has_avs_ = false; avs_max_ma_ = 0;
-    if (!c.valid) return;
     const std::size_t n = std::min<std::size_t>(c.num_pdos, c.pdos.size());
-    for (std::size_t i = 0; i < n; ++i) {
-        const pd::Pdo &p = c.pdos[i];
-        if (p.type == pd::PdoType::Fixed && p.max_mv >= 5000 && p.max_mv <= pd::kLimMaxMv) {
-            fixed_max_ma_ = std::max(fixed_max_ma_, p.max_ma);
-            bool dup = false;
-            for (uint8_t j = 0; j < nfixed_; ++j) dup |= fixed_mvs_[j] == p.max_mv;
-            if (!dup && nfixed_ < pd::kMaxPdos) fixed_mvs_[nfixed_++] = p.max_mv;
-        } else if (p.type == pd::PdoType::Pps) {
-            has_pps_ = true;
-            pps_min_mv_ = pps_min_mv_ == 0 ? p.min_mv : std::min(pps_min_mv_, p.min_mv);
-            pps_max_mv_ = std::max(pps_max_mv_, p.max_mv);
-            pps_max_ma_ = std::max(pps_max_ma_, p.max_ma);
-        } else if (p.type == pd::PdoType::Avs && (p.raw >> 28) == 0xE) {
-            has_avs_ = true;
-            const uint16_t m15 = static_cast<uint16_t>(((p.raw >> 10) & 0x3FFu) * 10u);
-            avs_max_ma_ = std::max(avs_max_ma_, std::max(m15, p.max_ma));
-        }
-    }
-    for (uint8_t i = 1; i < nfixed_; ++i)
-        for (uint8_t j = i; j > 0 && fixed_mvs_[j] < fixed_mvs_[j - 1]; --j) std::swap(fixed_mvs_[j], fixed_mvs_[j - 1]);
-}
-
-namespace {
-void step_range(uint16_t &val, int dir, uint16_t lo, uint16_t hi, uint16_t step) {
-    if (hi < lo) return;
-    if (val == 0) {
-        if (dir < 0) val = hi;
-        return;
-    }
-    const int nxt = static_cast<int>(val) + dir * static_cast<int>(step);
-    val = nxt > static_cast<int>(hi) ? 0 : static_cast<uint16_t>(std::max<int>(lo, nxt));
-}
-}  // namespace
-
-void ToolsPage::step_v(int dir) {
-    pd::LimTech &t = cur_tech();
-    draft_.limit_mw = 0;
-    if (view_ == View::EditFixed) {
-        static constexpr uint16_t kDefaultFx[] = {5000, 9000, 12000, 15000, 20000};
-        const uint16_t *vals = nfixed_ > 0 ? fixed_mvs_ : kDefaultFx;
-        const int nv = nfixed_ > 0 ? int(nfixed_) : int(std::size(kDefaultFx));
-        int idx = nv;
-        for (int i = 0; i < nv; ++i)
-            if (vals[i] == t.max_mv) { idx = i; break; }
-        idx = std::clamp(idx + dir, 0, nv);
-        t.max_mv = idx == nv ? 0 : vals[idx];
-    } else if (view_ == View::EditPps) {
-        const uint16_t lo_raw = pps_min_mv_ >= 3000 ? pps_min_mv_ : 5000;
-        const uint16_t lo = static_cast<uint16_t>(((lo_raw + 999u) / 1000u) * 1000u);
-        const uint16_t hi = pps_max_mv_ >= lo ? static_cast<uint16_t>((pps_max_mv_ / 1000u) * 1000u) : 21000;
-        step_range(t.max_mv, dir, lo, hi, pd::kLimPpsStepMv);
-    } else {
-        if (dir < 0 && t.max_mv == 0) t.max_mv = 15000;
-        else if (dir > 0 && t.max_mv == 15000) t.max_mv = 0;
-    }
-}
-
-void ToolsPage::step_a(int dir) {
-    pd::LimTech &t = cur_tech();
-    draft_.limit_mw = 0;
-    const uint16_t hi = static_cast<uint16_t>((tech_max_ma() / pd::kLimStepMa) * pd::kLimStepMa);
-    step_range(t.max_ma, dir, pd::kLimStepMa, hi, pd::kLimStepMa);
-}
-
-void ToolsPage::fmt_tech_summary(const pd::LimTech &t, StrBufBase &out) const {
-    out.clear();
-    if (!t.enabled) { out.put(text::tools::kLimOff); return; }
-    if (t.max_mv == 0 && t.max_ma == 0) { out.put(text::tools::kLimMax); return; }
-    if (t.max_mv) {
-        pg::put_exact_unit(out, t.max_mv, 'V');
-        if (t.max_ma) out.put_char(' ');
-    }
-    if (t.max_ma) pg::put_exact_unit(out, t.max_ma, 'A');
+    npicks_ = c.valid ? static_cast<uint8_t>(pd::lim_picks({c.pdos.data(), n}, picks_)) : 0;
+    reset_row_ = !c.valid;
 }
 
 void ToolsPage::draw_static() {
@@ -2761,33 +2678,7 @@ void ToolsPage::draw_static() {
     ctx_.rows.select(cur());
 }
 
-void ToolsPage::tech_row(int index, bool focused, kit::RowSpec &out) const {
-    namespace tx = text::tools;
-    struct Meta { Icon icon; const char *text, *note; };
-    static constexpr Meta kMeta[3] = {
-        {Icon::Brick, tx::kLimRowMode, tx::kLimNoteMode},
-        {Icon::Bolt,  tx::kLimRowMaxV, tx::kLimNoteStepV},
-        {Icon::Wave,  tx::kLimRowMaxA, tx::kLimNoteStepA},
-    };
-    const Meta &m = kMeta[index];
-    const pd::LimTech &t = cur_tech();
-    tail_.clear();
-    out.marker = kit::Marker::Icon;
-    out.icon = m.icon;
-    out.text = m.text;
-    if (focused) out.note = m.note;
-    if (index == 0) {
-        out.tail = t.enabled ? tx::kLimOn : tx::kLimOff;
-        out.tail_color = t.enabled ? kOk : kCaution;
-        return;
-    }
-    const uint16_t val = index == 1 ? t.max_mv : t.max_ma;
-    if (val == 0) tail_.put(tx::kLimMax);
-    else pg::put_exact_unit(tail_, val, index == 1 ? 'V' : 'A');
-    out.tail = tail_.view();
-    out.tail_color = (adjust_ && edit_idx_ == index) ? kFocus : val ? kCaution : kDim;
-}
-
+// The list's PD limit row (tail: the level in force or Off) and the picker's rows (Off, then "27W" with the offer that sets it).
 void ToolsPage::limit_row(int index, bool focused, kit::RowSpec &out) const {
     namespace tx = text::tools;
     const pd::LimStatus &s = fusb302::limit_status();
@@ -2798,9 +2689,7 @@ void ToolsPage::limit_row(int index, bool focused, kit::RowSpec &out) const {
         out.text = tx::kLimName;
         tail_.clear();
         if (armed) {
-            char lb[pd::kLimLabelMax + 1]{};
-            const std::size_t ln = pd::lim_label(pd::lim_effective_config(s), lb);
-            tail_.put(std::string_view{lb, ln});
+            tail_.put_u32(pd::lim_watts(s.limit_mw)).put_char('W');
             out.tail_color = kCaution;
         } else {
             tail_.put(tx::kLimOff);
@@ -2809,7 +2698,7 @@ void ToolsPage::limit_row(int index, bool focused, kit::RowSpec &out) const {
         if (focused) {
             if (armed) {
                 note_.clear();
-                note_.put(tx::kLimNoteAbove).put(tail_.view());
+                note_.put(tx::kLimNoteAbove).put_u32(pd::lim_watts(s.limit_mw)).put_char('W');
                 out.note = note_.view();
             } else {
                 out.note = tx::kLimNoteOff;
@@ -2817,69 +2706,42 @@ void ToolsPage::limit_row(int index, bool focused, kit::RowSpec &out) const {
         }
         return;
     }
-    if (in_tech()) {
-        tech_row(index, focused, out);
+    if (reset_row_ && index == 1) {
+        out.marker = kit::Marker::Icon;
+        out.icon = Icon::Plug;
+        out.text = tx::kLimRowReset;
+        if (focused) out.note = tx::kLimNoteReset;
         return;
     }
+    out.marker = kit::Marker::Radio;
     if (index == 0) {
-        out.marker = kit::Marker::Radio;
         out.state = armed ? 0 : 1;
         out.text = tx::kLimOff;
         if (focused) out.note = tx::kLimNoteNone;
         return;
     }
-    if (index >= 1 && index <= 3) {
-        struct Meta { Icon icon; const char *text, *note; };
-        static constexpr Meta kMeta[3] = {
-            {Icon::Bolt, tx::kLimFixed, tx::kLimNoteFixed},
-            {Icon::Wave, tx::kLimPps,   tx::kLimNotePps},
-            {Icon::Chip, tx::kLimAvs,   tx::kLimNoteAvs},
-        };
-        const int k = index - 1;
-        out.marker = kit::Marker::Icon;
-        out.icon = kMeta[k].icon;
-        out.text = kMeta[k].text;
-        const bool avail = k == 0 || !has_caps_ || (k == 1 ? has_pps_ : has_avs_);
-        if (!avail) {
-            out.text_color = kInk3;
-            out.tail = "none";
-            out.tail_color = kInk3;
-            if (focused) out.note = tx::kLimNoteNoOffer;
-            return;
-        }
-        const pd::LimTech *techs[3] = {&draft_.fixed, &draft_.pps, &draft_.avs};
-        const pd::LimTech &t = *techs[k];
-        fmt_tech_summary(t, tail_);
-        out.tail = tail_.view();
-        out.tail_color = !t.enabled || t.max_mv || t.max_ma ? kCaution : (held::showing_held() ? kStale : kDim);
-        if (held::showing_held() && has_caps_) out.text_color = kStale;
-        out.chevron = true;
-        if (focused) out.note = kMeta[k].note;
-        return;
+    const pd::LimPick &p = picks_[index - 1];
+    out.state = armed && p.mw == s.limit_mw ? 1 : 0;
+    text_.clear();
+    text_.put_u32(pd::lim_watts(p.mw)).put_char('W');
+    out.text = text_.view();
+    if (held::showing_held()) out.text_color = kStale;   // the gone charger's offers: grey, the frozen-value rule
+    char t[12];
+    col2_.clear();
+    col2_.put(std::string_view{t, static_cast<std::size_t>(home::fmt_level(t, p.mv))}).put_char('V');
+    col2_.put(std::string_view{t, static_cast<std::size_t>(home::fmt_level(t, p.ma))}).put_char('A');
+    out.col2 = col2_.view();
+    if (focused) {
+        note_.clear();
+        note_.put(tx::kLimNoteAbove).put_u32(pd::lim_watts(p.mw)).put_char('W');
+        out.note = note_.view();
     }
-    if (index == 4) {
-        out.marker = kit::Marker::Icon;
-        out.icon = Icon::Check;
-        out.text = tx::kLimApply;
-        if (draft_.limit_mw) {
-            tail_.clear();
-            tail_.put_u32(pd::lim_watts(draft_.limit_mw)).put_char('W');
-            out.tail = tail_.view();
-            out.tail_color = kCaution;
-        }
-        if (focused) out.note = tx::kLimNoteApply;
-        return;
-    }
-    out.marker = kit::Marker::Icon;
-    out.icon = Icon::Plug;
-    out.text = tx::kLimRowReset;
-    if (focused) out.note = tx::kLimNoteReset;
 }
 
 void ToolsPage::row_fn(void *ctx, int index, bool focused, kit::RowSpec &out) {
     auto *self = static_cast<ToolsPage *>(ctx);
     const bench::Acts b = bench::tools();
-    if (self->view_ != View::List || index == b.n) {
+    if (self->view_ == View::PickLimit || index == b.n) {
         self->limit_row(index, focused, out);
         return;
     }
@@ -2929,8 +2791,12 @@ void ToolsPage::limit_edge() {
 void ToolsPage::update(uint32_t) {
     title_badge(false);
     limit_edge();
-    if (view_ == View::PickLimit) build_picks();
-    cur() = std::clamp(cur(), 0, count() - 1);
+    if (view_ == View::PickLimit) {
+        build_picks();
+        pick_ = std::min(pick_, count() - 1);
+    } else {
+        sel_ = std::min(sel_, rows() - 1);
+    }
     ctx_.rows.set_count(count());
     ctx_.rows.select(cur());
     ctx_.rows.draw(ctx_.now, ctx_.budget);
@@ -2948,58 +2814,43 @@ void ToolsPage::ask_confirm(uint32_t key) {
     ctx_.toast.show(FooterTone::Caution, text::tools::kLimToastConfirm, ctx_.now, Ui::kConfirmWindowMs);
 }
 
-bool ToolsPage::apply_limit(bool off) {
+// OK on a level (or Off) goes through Ui::pd_limit_set: a live contract is reset first, on a second OK within the window, so the
+// charger lists again into the clamp; the row keeps what was in force until then. The Reset link row only reads the offers.
+bool ToolsPage::pick_limit() {
     namespace tx = text::tools;
-    const uint32_t key = off ? 0u : 1u;
-    if (!off) {
-        if (!draft_.fixed.enabled && !draft_.pps.enabled && !draft_.avs.enabled) {
-            ctx_.toast.show(FooterTone::Caution, tx::kLimToastKeepOne, ctx_.now);
-            return true;
+    constexpr uint32_t kResetKey = 0xFFFFFFFFu;
+    if (reset_row_ && pick_ == 1) {
+        const bool confirmed = confirmed_for(kResetKey);
+        drop_confirm();
+        switch (ctx_.ui->link_reset(confirmed, ctx_.now)) {
+        case Ui::LinkResetResult::Cycled: ctx_.toast.show(FooterTone::Info, tx::kLimToastRescan, ctx_.now, 2500); break;
+        case Ui::LinkResetResult::HardReset: ctx_.toast.show(FooterTone::Info, tx::kLimToastResetting, ctx_.now, 2500); break;
+        case Ui::LinkResetResult::NeedConfirm: ask_confirm(kResetKey); break;
+        case Ui::LinkResetResult::SelfPowered: ctx_.toast.show(FooterTone::Caution, tx::kLimToastSelfPowered, ctx_.now); break;
+        case Ui::LinkResetResult::Busy: ctx_.toast.show(FooterTone::Caution, tx::kLimToastRetry, ctx_.now, 1500); break;
+        case Ui::LinkResetResult::NoLink: ctx_.toast.show(FooterTone::Info, tx::kLimToastNoLink, ctx_.now, 1500); break;
         }
-        if (!pd::lim_config_active(draft_)) {
-            ctx_.toast.show(FooterTone::Caution, tx::kLimToastNoLimit, ctx_.now);
-            return true;
-        }
-        const pd::LimStatus &s = fusb302::limit_status();
-        if (s.state != pd::LimState::Off && pd::lim_effective_config(s) == draft_) return false;
+        return true;   // stays: the offers show up here once the charger lists again
     }
-    const bool confirmed = confirmed_for(key);
+    const pd::LimStatus &s = fusb302::limit_status();
+    const bool armed = s.state != pd::LimState::Off;
+    const uint32_t mw = pick_ > 0 && pick_ <= npicks_ ? picks_[pick_ - 1].mw : 0;
+    if (armed && s.limit_mw == mw) return false;   // already on it: arming again would restart the negotiation
+    const bool confirmed = confirmed_for(mw);
     drop_confirm();
-    const Ui::LimitSet ls = ctx_.ui->pd_limit_set(off ? pd::LimConfig{} : draft_, off, confirmed, ctx_.now);
-    if (ls == Ui::LimitSet::NeedConfirm) { ask_confirm(key); return true; }
-    struct Toast { FooterTone tone; const char *msg; uint16_t ms; };
-    static constexpr Toast kSetToast[] = {
-        {FooterTone::Info, nullptr, 0},                   // Done
-        {FooterTone::Info, tx::kLimToastResetting, 2500}, // DoneReset
-        {FooterTone::Info, nullptr, 0},                   // NeedConfirm
-        {FooterTone::Caution, tx::kLimToastNoReset, 0},   // NoReset
-        {FooterTone::Caution, tx::kLimToastBusy, 0},      // Busy
-        {FooterTone::Error, tx::kLimToastBadLimit, 0},    // BadLimit
-    };
-    static_assert(sizeof(kSetToast) / sizeof(kSetToast[0]) == static_cast<size_t>(Ui::LimitSet::BadLimit) + 1);
-    const Toast &t = kSetToast[static_cast<unsigned>(ls)];
-    if (t.msg) ctx_.toast.show(t.tone, t.msg, ctx_.now, t.ms);
+    switch (ctx_.ui->pd_limit_set(mw, confirmed, ctx_.now)) {
+    case Ui::LimitSet::Done: break;
+    case Ui::LimitSet::DoneReset: ctx_.toast.show(FooterTone::Info, tx::kLimToastResetting, ctx_.now, 2500); break;
+    case Ui::LimitSet::NeedConfirm: ask_confirm(mw); return true;
+    case Ui::LimitSet::NoReset: ctx_.toast.show(FooterTone::Caution, tx::kLimToastNoReset, ctx_.now); break;
+    case Ui::LimitSet::BadLimit: ctx_.toast.show(FooterTone::Error, tx::kLimToastBadLimit, ctx_.now); break;
+    case Ui::LimitSet::Busy: ctx_.toast.show(FooterTone::Caution, tx::kLimToastBusy, ctx_.now); break;
+    }
     return false;
 }
 
 bool ToolsPage::on_event(Event e) {
     if (e.press != Press::Short) return false;
-    namespace tx = text::tools;
-    if (adjust_) {
-        if (e.button == Button::Plus || e.button == Button::Minus) {
-            const int dir = e.button == Button::Plus ? 1 : -1;
-            if (edit_idx_ == 1) step_v(dir);
-            else if (edit_idx_ == 2) step_a(dir);
-            update(ctx_.now);
-            return true;
-        }
-        if (e.button == Button::Ok || e.button == Button::Back) {
-            adjust_ = false;
-            update(ctx_.now);
-            return true;
-        }
-        return false;
-    }
     if (e.button == Button::Plus || e.button == Button::Minus) {
         cur() = std::clamp(cur() + (e.button == Button::Plus ? 1 : -1), 0, count() - 1);
         drop_confirm();   // a moved selection is another question
@@ -3008,80 +2859,30 @@ bool ToolsPage::on_event(Event e) {
     }
     if (e.button == Button::Ok) {
         const bench::Acts b = bench::tools();
-        if (view_ == View::List) {
-            if (sel_ >= b.n) show(View::PickLimit);
-            else open_bench_act(*ctx_.ui, b.a[sel_], ctx_.now);
-            return true;
-        }
         if (view_ == View::PickLimit) {
-            if (pick_ == 0 || pick_ == 4) {
-                if (apply_limit(pick_ == 0)) update(ctx_.now);
-                else show(View::List);
-            } else if (pick_ >= 1 && pick_ <= 3) {
-                const bool ok[3] = {true, !has_caps_ || has_pps_, !has_caps_ || has_avs_};
-                if (ok[pick_ - 1]) show(static_cast<View>(static_cast<int>(View::EditFixed) + pick_ - 1));
-            } else if (!has_caps_ && pick_ == 5) {
-                constexpr uint32_t kResetKey = 0xFFFFFFFFu;
-                const bool confirmed = confirmed_for(kResetKey);
-                drop_confirm();
-                const Ui::LinkResetResult lr = ctx_.ui->link_reset(confirmed, ctx_.now);
-                if (lr == Ui::LinkResetResult::NeedConfirm) {
-                    ask_confirm(kResetKey);
-                } else {
-                    struct Toast { FooterTone tone; const char *msg; uint16_t ms; };
-                    static constexpr Toast kLrToast[] = {
-                        {FooterTone::Info, tx::kLimToastRescan, 2500},
-                        {FooterTone::Info, tx::kLimToastResetting, 2500},
-                        {FooterTone::Info, nullptr, 0},
-                        {FooterTone::Caution, tx::kLimToastSelfPowered, 0},
-                        {FooterTone::Caution, tx::kLimToastRetry, 1500},
-                        {FooterTone::Info, tx::kLimToastNoLink, 1500},
-                    };
-                    const Toast &t = kLrToast[static_cast<unsigned>(lr)];
-                    if (t.msg) ctx_.toast.show(t.tone, t.msg, ctx_.now, t.ms);
-                }
-                update(ctx_.now);
-            }
-            return true;
-        }
-        // In EditFixed / EditPps / EditAvs:
-        if (edit_idx_ == 0) {
-            cur_tech().enabled = !cur_tech().enabled;
-            draft_.limit_mw = 0;
-            update(ctx_.now);
+            if (pick_limit()) update(ctx_.now);
+            else show(View::List);
+        } else if (sel_ >= b.n) {
+            show(View::PickLimit);
         } else {
-            adjust_ = true;
-            update(ctx_.now);
+            open_bench_act(*ctx_.ui, b.a[sel_], ctx_.now);
         }
         return true;
     }
-    if (e.button == Button::Back && view_ != View::List) {   // step back to PickLimit or List, never out of Tools
-        show(in_tech() ? View::PickLimit : View::List);
+    if (e.button == Button::Back && view_ == View::PickLimit) {   // out of the picker, not out of the page
+        show(View::List);
         return true;
     }
     return false;
 }
 
 Strip ToolsPage::labels() const {
-    Strip l = base_labels();
-    if (adjust_) {
-        l[Button::Minus] = sl::Dec;
-        l[Button::Plus] = sl::Inc;
-        l[Button::Ok] = sl::Done;
-        return l;
-    }
-    l = list_strip(l);
-    const int at = view_ == View::List ? sel_ : view_ == View::PickLimit ? pick_ : edit_idx_;
+    Strip l = list_strip(base_labels());
+    const int at = view_ == View::PickLimit ? pick_ : sel_;
     const int n = count();
     if (at == 0) l[Button::Minus] = sl::UpDim;
     if (at >= n - 1) l[Button::Plus] = sl::DnDim;
-    if (view_ == View::List) {
-        l[Button::Ok] = sel_ >= bench::tools().n ? sl::Pick : sl::Open;
-    } else if (view_ == View::PickLimit) {
-        l[Button::Ok] = (pick_ >= 1 && pick_ <= 3) ? sl::Open : sl::Select;
-    } else {
-        l[Button::Ok] = edit_idx_ == 0 ? sl::Select : sl::Set;
-    }
+    l[Button::Ok] = view_ == View::PickLimit ? sl::Select : sel_ >= bench::tools().n ? sl::Pick : sl::Open;
     return l;
 }
 

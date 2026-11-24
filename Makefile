@@ -672,7 +672,7 @@ $(HOST_DIR)/test_fusb302_scan: $(OBJ_DIR)/tests/test_fusb302_scan.o $(SCAN_OBJS)
 # PD half of boot() (src/core/boot_pd.cpp) and the real self-powered comeback (src/core/rd_comeback.cpp); the main loop runs the
 # real HID-cable loop guard (src/core/loop_guard.cpp) on the world's aux rail and VBUS.
 WORLD_SRCS    = tests/test_world_replay.cpp tests/world_sim.cpp tests/ui_stubs.cpp $(SRC_DIR)/core/main_loop.cpp $(SRC_DIR)/core/main_loop_cold.cpp
-WORLD_SRCS    += $(SRC_DIR)/core/boot_pd.cpp $(SRC_DIR)/core/lim_comeback.cpp $(SRC_DIR)/core/rd_comeback.cpp $(SRC_DIR)/core/loop_guard.cpp
+WORLD_SRCS    += $(SRC_DIR)/core/boot_pd.cpp $(SRC_DIR)/core/rd_comeback.cpp $(SRC_DIR)/core/loop_guard.cpp
 WORLD_OBJS     = $(patsubst %.cpp, $(OBJ_DIR)/world/%.o, $(WORLD_SRCS)) $(OBJ_DIR)/scan/$(SRC_DIR)/drivers/fusb302.o $(OBJ_DIR)/scan/$(SRC_DIR)/drivers/fusb302_cold.o
 WORLD_OBJS    += $(patsubst %.cpp, $(OBJ_DIR)/lib/%.o, $(SRC_DIR)/drivers/power_monitor.cpp $(SRC_DIR)/drivers/accelerometer.cpp)
 HOST_WORLD_CMD = $(HOST_CXX) $(HOST_CXXFLAGS) -DK2_HOST_PINS -DK2_WORLD_STUBS -MMD -MP -c $< -o $@
@@ -685,7 +685,7 @@ $(HOST_DIR)/test_world_replay: $(WORLD_OBJS) $(filter-out $(OBJ_DIR)/lib/tests/u
 # against the adapter, line and interrupt model in tests/world_svooc.cpp. Built with -DK2_WORLD_SVOOC, which drops the world's
 # and ui_stubs' stand-ins for the trigger hooks (fctrig, shell_hw, link) that tests/world_svooc.cpp provides instead.
 WSVOOC_SRCS    = tests/test_world_svooc.cpp tests/world_svooc.cpp tests/world_sim.cpp tests/ui_stubs.cpp $(SRC_DIR)/core/main_loop.cpp $(SRC_DIR)/core/main_loop_cold.cpp
-WSVOOC_SRCS   += $(SRC_DIR)/core/boot_pd.cpp $(SRC_DIR)/core/lim_comeback.cpp $(SRC_DIR)/core/rd_comeback.cpp $(SRC_DIR)/core/loop_guard.cpp
+WSVOOC_SRCS   += $(SRC_DIR)/core/boot_pd.cpp $(SRC_DIR)/core/rd_comeback.cpp $(SRC_DIR)/core/loop_guard.cpp
 WSVOOC_SRCS   += $(SRC_DIR)/fastcharge/svooc_trig.cpp
 WSVOOC_OBJS    = $(patsubst %.cpp, $(OBJ_DIR)/wsvooc/%.o, $(WSVOOC_SRCS)) $(OBJ_DIR)/scan/$(SRC_DIR)/drivers/fusb302.o $(OBJ_DIR)/scan/$(SRC_DIR)/drivers/fusb302_cold.o
 WSVOOC_OBJS   += $(patsubst %.cpp, $(OBJ_DIR)/lib/%.o, $(SRC_DIR)/drivers/power_monitor.cpp $(SRC_DIR)/drivers/accelerometer.cpp)

@@ -39,7 +39,6 @@
 #include "k2/loopprobe/loop_probe_hw.hpp"
 #include "k2/battery/battery_hw.hpp"
 #include "k2/core/held.hpp"
-#include "k2/core/lim_comeback.hpp"
 #include "k2/core/memstat.hpp"
 #include "k2/core/hw_revision.hpp"
 #include "k2/core/idle_hw.hpp"
@@ -225,23 +224,18 @@ void interrogate_abort() {
 }
 bool interrogate_running() { return g_stub.iq_running; }
 const pd::IqStatus& interrogate_status() { return g_stub.iq_status; }
-pd::LimRefusal limit_arm(const pd::LimConfig& cfg, const pd::LimFacts& f, bool seed) {
+pd::LimRefusal limit_arm(std::uint32_t mw, const pd::LimFacts& f, bool seed) {
     g_stub.lim_arms++;
-    g_stub.lim_arm_cfg = cfg;
-    g_stub.lim_arm_mw = cfg.limit_mw;
+    g_stub.lim_arm_mw = mw;
     g_stub.lim_arm_seeded = seed;
     g_stub.lim_arm_resets = g_stub.hard_resets;   // the link resets the arm came after
     if (g_stub.lim_refusal != pd::LimRefusal::None) return g_stub.lim_refusal;
-    const pd::LimRefusal why = pd::lim_gate(f, cfg);
+    const pd::LimRefusal why = pd::lim_gate(f, mw);
     if (why != pd::LimRefusal::None) return why;
     g_stub.lim = {};
     g_stub.lim.state = pd::LimState::Armed;
-    g_stub.lim.cfg = cfg;
-    g_stub.lim.limit_mw = cfg.limit_mw;
+    g_stub.lim.limit_mw = mw;
     return pd::LimRefusal::None;
-}
-pd::LimRefusal limit_arm(std::uint32_t mw, const pd::LimFacts& f, bool seed) {
-    return limit_arm(pd::lim_config_watts(mw), f, seed);
 }
 void limit_disarm() {
     g_stub.lim_offs++;
@@ -934,7 +928,7 @@ std::size_t file_read(std::uint16_t off, std::span<std::uint8_t> out) {
 
 namespace k2::fctrig {
 // Host stand-in for the trigger driver: idle, never running, records what the UI asked for.
-static Status g_status{fc::State::Idle, fc::Proto::Qc2, fc::Fail::None, 0, 0, 0};
+static Status g_status{fc::State::Idle, fc::Proto::Qc2, fc::Fail::None, 0, 0};
 Fail start(Proto proto, int mv, bool confirmed, bool allow_inline, int, int) {
     if (g_stub.fc_start_hook) g_stub.fc_start_hook(int(proto));
     g_stub.fc_starts++;
@@ -1310,27 +1304,3 @@ bool active() { return false; }
 namespace k2::bootinfo {
 void collect(Snapshot& s) { s = Snapshot{}; }
 }  // namespace k2::bootinfo
-
-#ifndef K2_WORLD_STUBS   // the worlds link the real src/core/lim_comeback.cpp
-namespace k2::limcomeback {
-bool save(const pd::LimConfig& cfg) {
-    if (g_stub.lim_comeback_save_fail || !pd::lim_config_valid(cfg)) return false;
-    g_stub.lim_comeback_saves++;
-    g_stub.lim_comeback_cfg = cfg;
-    g_stub.lim_comeback_present = true;
-    return true;
-}
-void clear() {
-    g_stub.lim_comeback_clears++;
-    g_stub.lim_comeback_present = false;
-    g_stub.lim_comeback_cfg = {};
-}
-bool begin(bootmode::Mode, bool) { return false; }
-bool pending() { return false; }
-const pd::LimConfig& config() { return g_stub.lim_comeback_cfg; }
-void consume() {
-    g_stub.lim_comeback_consumes++;
-    g_stub.lim_comeback_present = false;
-}
-}  // namespace k2::limcomeback
-#endif

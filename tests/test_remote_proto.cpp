@@ -2935,7 +2935,7 @@ static void test_pd_limit_wire() {
     check_bytes(r, kRspHeader, {2});
     f.pl_state = Status::Ok; f.pl_refusal = 0;
     f.pl_calls = 0;
-    run(f, request(0x4E, 5, {4}), r);                    // unknown op
+    run(f, request(0x4E, 5, {3}), r);                    // unknown op
     check_header(r, 0x4E, 5, Status::BadArg, 0);
     run(f, request(0x4E, 6, {}), r);
     check_header(r, 0x4E, 6, Status::BadLength, 0);
@@ -2947,26 +2947,6 @@ static void test_pd_limit_wire() {
     check_header(r, 0x4E, 9, Status::BadArg, 0);
     run(f, request(0x4E, 10, {1, 0xA1, 0x86, 1, 0}), r); // 100001 mW: above the SPR ceiling
     check_header(r, 0x4E, 10, Status::BadArg, 0);
-    CHECK_EQ(f.pl_calls, 0);
-    // kLimitArmCfg (op 3): Fixed 9 V / 2.5 A, PPS 11 V / 3.0 A, AVS off
-    run(f, request(0x4E, 11, {3, 0x03,
-                              0x28, 0x23, 0xC4, 0x09,    // Fixed 9000 mV, 2500 mA
-                              0xF8, 0x2A, 0xB8, 0x0B,    // PPS 11000 mV, 3000 mA
-                              0x00, 0x00, 0x00, 0x00,    // AVS disabled
-                              0x00, 0x00, 0x00, 0x00}), r);
-    check_header(r, 0x4E, 11, Status::Ok, kLimitRspBytes);
-    CHECK_EQ(f.pl_op, 3);
-    CHECK_EQ(f.pl_cfg.fixed.enabled, true);
-    CHECK_EQ(f.pl_cfg.fixed.max_mv, 9000u);
-    CHECK_EQ(f.pl_cfg.fixed.max_ma, 2500u);
-    CHECK_EQ(f.pl_cfg.pps.enabled, true);
-    CHECK_EQ(f.pl_cfg.pps.max_mv, 11000u);
-    CHECK_EQ(f.pl_cfg.avs.enabled, false);
-    f.pl_calls = 0;
-    run(f, request(0x4E, 12, {3, 0x07}), r);             // bad len
-    check_header(r, 0x4E, 12, Status::BadLength, 0);
-    run(f, request(0x4E, 13, {3, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}), r);   // all disabled = BadArg
-    check_header(r, 0x4E, 13, Status::BadArg, 0);
     CHECK_EQ(f.pl_calls, 0);
 }
 

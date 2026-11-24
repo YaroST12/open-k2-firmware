@@ -6,7 +6,6 @@
 #include <cstdint>
 
 #include "k2/core/boottrace_store.hpp"
-#include "k2/core/lim_comeback.hpp"
 #include "k2/core/log.hpp"
 #include "k2/core/rd_comeback.hpp"
 #include "k2/drivers/fusb302.hpp"
@@ -14,42 +13,26 @@
 
 namespace k2::bootpd {
 
-namespace {
-// Wait up to `max_ms` serving PD every 1 ms and polling every 10 ms until the bring-up condition settles.
-[[gnu::noinline]] void bringup_loop(std::uint32_t max_ms, bool is_rd) {
-    const std::uint32_t t0 = systick::millis();
-    std::uint32_t last = t0, last_poll = t0;
-    while (systick::millis() - t0 < max_ms) {
-        const std::uint32_t t = systick::millis();
-        if (t != last) { last = t; fusb302::service(); }
-        if (t - last_poll >= 10) { last_poll = t; fusb302::poll(); }
-        if (is_rd) {
-            boottrace::poll();   // the power trace and the meter's late-probe go on through the bring-up (no-op before boottrace::init)
-            if (rdcomeback::pending() && rdcomeback::judge_step(t - t0)) break;   // released: an ordinary plain boot from here
-            if (fusb302::sink_status().state == pd::SinkState::Ready) break;
-        } else {
-            const pd::LimState st = fusb302::limit_status().state;
-            if (st == pd::LimState::Limited || st == pd::LimState::Off) break;
-        }
-    }
-    const std::uint32_t dt = systick::millis() - t0;
-    if (is_rd) {
-        K2LOG("[PD] self-power bring-up: %s after %u ms\n",
-              fusb302::sink_status().state == pd::SinkState::Ready ? "contract ready" : "no contract",
-              static_cast<unsigned>(dt));
-    } else {
-        K2LOG("[LIM] comeback bring-up: state=%s after %u ms\n",
-              pd::lim_state_name(fusb302::limit_status().state),
-              static_cast<unsigned>(dt));
-    }
-}
-}  // namespace
-
 // The init after fusb302::init() (black box reload, report cards, the first UI build) keeps the main loop away for about a
 // second with a full store: Auto-CRC came on late, an acknowledged capabilities message went unanswered, the source sent a
 // Hard Reset and cut VBUS, and a K2 without another supply died (CUKTECH 120 W, 2026-11-09, runs/selfpwr-drop/cap1). So the
 // PD link is served here, before that init, until the self-hold contract is Ready or kBringupMs pass.
-[[gnu::noinline]] void self_power_bringup() { bringup_loop(3000, true); }
+[[gnu::noinline]] void self_power_bringup() {
+    constexpr std::uint32_t kBringupMs = 3000;
+    const std::uint32_t t0 = systick::millis();
+    std::uint32_t last = t0, last_poll = t0;
+    while (systick::millis() - t0 < kBringupMs) {
+        const std::uint32_t t = systick::millis();
+        if (t != last) { last = t; fusb302::service(); }
+        if (t - last_poll >= 10) { last_poll = t; fusb302::poll(); }
+        boottrace::poll();   // the power trace and the meter's late-probe go on through the bring-up (no-op before boottrace::init)
+        if (rdcomeback::pending() && rdcomeback::judge_step(t - t0)) break;   // released: an ordinary plain boot from here
+        if (fusb302::sink_status().state == pd::SinkState::Ready) break;
+    }
+    K2LOG("[PD] self-power bring-up: %s after %u ms\n",
+          fusb302::sink_status().state == pd::SinkState::Ready ? "contract ready" : "no contract",
+          static_cast<unsigned>(systick::millis() - t0));
+}
 
 Early early(bootmode::Mode keys, bool warm) {
     // A cold plain boot reads the Rd intent marker (k2/core/rd_comeback.hpp): the comeback of a self-powered session the charger
@@ -69,15 +52,8 @@ Early early(bootmode::Mode keys, bool warm) {
         fusb302::init();
         rdcomeback::arm();
         self_power_bringup();
-        return {mode, true};
     }
-    if (limcomeback::begin(keys, warm)) {
-        fusb302::init();
-        fusb302::limit_arm(limcomeback::config(), {}, false);
-        bringup_loop(1500, false);
-        return {mode, true};
-    }
-    return {mode, false};
+    return {mode, comeback};
 }
 
 void late(const Early& e) {

@@ -2080,24 +2080,15 @@ class PdLimitCli(unittest.TestCase):
         self.run_cmd(["30"], self.status(), sent)
         self.run_cmd(["off"], self.status(0, 1), sent)
         self.run_cmd(["status"], self.status(), sent)
-        self.run_cmd(["set", "--fixed", "9V/2.5A", "--pps", "11V", "--avs", "off"], self.status(), sent)
         self.assertEqual(sent[0], (0x4E, bytes([1]) + (30000).to_bytes(4, "little")))
         self.assertEqual(sent[1], (0x4E, bytes([2])))
         self.assertEqual(sent[2], (0x4E, bytes([0])))
-        want_cfg = (bytes([3, 3])
-                    + (9000).to_bytes(2, "little") + (2500).to_bytes(2, "little")
-                    + (11000).to_bytes(2, "little") + (0).to_bytes(2, "little")
-                    + (0).to_bytes(2, "little") + (0).to_bytes(2, "little")
-                    + (0).to_bytes(4, "little"))
-        self.assertEqual(sent[3], (0x4E, want_cfg))
 
     def test_limit_range_and_words_are_checked_before_sending(self):
-        for bad in (["4"], ["101"], ["abc"], ["set", "--fixed", "3.3V", "--avs", "15V"],
-                    ["set", "--fixed", "2.25A"],
-                    ["set", "--fixed", "off", "--pps", "off", "--avs", "off"], ["set", "--avs", "12V"]):
+        for bad in ("4", "101", "abc"):
             sent = []
             with self.assertRaises(SystemExit):
-                self.run_cmd(bad, b"", sent)
+                self.run_cmd([bad], b"", sent)
             self.assertEqual(sent, [])
 
     def test_decode_and_render(self):

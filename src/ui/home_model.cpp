@@ -168,31 +168,20 @@ void format_proto(const ProtoInfo &p, ProtoText &out) {
     }
 }
 
-void format_limit(ProtoText &out, ProtoKind kind, std::string_view label) {
-    if (label.empty() || (kind != ProtoKind::PdFixed && kind != ProtoKind::PdEpr && kind != ProtoKind::Pps && kind != ProtoKind::Avs)) return;
-    StrBuf<12> suffix;
-    suffix.put(" lim").put(label);
+void format_limit(ProtoText &out, ProtoKind kind, uint32_t watts) {
+    if (watts == 0 || (kind != ProtoKind::PdFixed && kind != ProtoKind::PdEpr && kind != ProtoKind::Pps && kind != ProtoKind::Avs)) return;
+    StrBuf<10> suffix;
+    suffix.put(" lim").put_u32(watts).put_char('W');
     std::string_view v = out.value.view();
     if (v.size() + suffix.view().size() > static_cast<std::size_t>(kProtoChars)) {
         const std::size_t volt = v.find('V');   // every PD value names its voltage first
         if (volt != std::string_view::npos) v = std::string_view(v.data(), volt + 1);   // not substr: it can throw
+        // "3.3-21V lim100W" is one over: the range loses its unit ("3.3-21 lim100W"), never the limit.
         if (v.size() + suffix.view().size() > static_cast<std::size_t>(kProtoChars) && v.back() == 'V') v.remove_suffix(1);
-    }
-    if (v.size() + suffix.view().size() > static_cast<std::size_t>(kProtoChars)) {
-        suffix.clear();
-        suffix.put(" L").put(label);
-        while (v.size() + suffix.view().size() > static_cast<std::size_t>(kProtoChars) && !v.empty()) v.remove_suffix(1);
     }
     StrBuf<20> joined;
     joined.put(v).put(suffix.view());
     out.value = joined;
-}
-
-void format_limit(ProtoText &out, ProtoKind kind, uint32_t watts) {
-    if (watts == 0) return;
-    StrBuf<10> l;
-    l.put_u32(watts).put_char('W');
-    format_limit(out, kind, l.view());
 }
 
 void format_idle_wait(raguard::WaitKind wait, ProtoText &out) {

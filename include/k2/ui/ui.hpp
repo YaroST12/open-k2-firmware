@@ -232,7 +232,7 @@ public:
     // with no USB host supply).
     enum class LinkResetResult : uint8_t { Cycled, HardReset, NeedConfirm, SelfPowered, Busy, NoLink };
     bool link_reset_inline() const;
-    LinkResetResult link_reset(bool confirmed, uint32_t now_ms, bool allow_bus_powered = false);
+    LinkResetResult link_reset(bool confirmed, uint32_t now_ms);
     // The comeback of a bridged Refresh (core/rescan.cpp): Connection on its Source tab, saying "Rescanned (rebooted)".
     bool land_rescanned(uint32_t now_ms);
     // Submenus: a small stack (depth 3: Tools > Connection > Saved cables > Share). While one is open it gets every event,
@@ -419,14 +419,13 @@ public:
     // The attach's auto read gate (core/survey.cpp): Inline = the inline latch (a downstream sink or load); ChargerTest = a tool,
     // a spoof, the Ra mode or any other owner holds the link; None = free to ask.
     pd::SvWhy auto_read_block() const;
-    // PD limiter arm through the remote's path (same gate, same refusals); runtime state is RAM only.
+    // PD limiter arm through the remote's path (same gate, same refusals); the limit is RAM only.
     // `seed` false: the sniffer's contract is not taken (a link reset was asked for).
-    pd::LimRefusal pd_limit_arm(const pd::LimConfig &cfg, bool seed = true) const;
     pd::LimRefusal pd_limit_arm(uint32_t limit_mw, bool seed = true) const;
-    // The picker's change of limit (off = true disarms). A live contract is reset first (link_reset, same confirm),
-    // saving a one-shot comeback record when bus-powered so K2 survives VBUS drop and re-arms early; then arms unseeded.
+    // The picker's change of limit (0 = Off). A live contract is never re-listed by an arm alone: the link is reset first
+    // (link_reset, same confirm), then the limit is armed unseeded so the charger lists again into the forged clamp. No live
+    // contract (nothing attached, a charger only): armed or cleared at once. Off is never refused.
     enum class LimitSet : uint8_t { Done, DoneReset, NeedConfirm, NoReset, Busy, BadLimit };
-    LimitSet pd_limit_set(const pd::LimConfig &cfg, bool off, bool confirmed, uint32_t now_ms);
     LimitSet pd_limit_set(uint32_t limit_mw, bool confirmed, uint32_t now_ms);
     bool pd_limit_link_live() const;   // inline with a far sink's Request or a sniffed contract
     // A loop probe run (Tools -> Loop probe) drives D+/D-, the backlight and the K2's own Rd: the ports are its until it ends.
@@ -692,8 +691,6 @@ private:
     bool timing_in_flight_ K2_BSS_INIT(false);
     uint8_t panel_mask_ K2_BSS_INIT(0);
     uint8_t opp_mask_ K2_BSS_INIT(0);
-    bool lim_comeback_scrub_ K2_BSS_INIT(false);
-    uint32_t lim_comeback_scrub_at_ms_ K2_BSS_INIT(0);
 };
 
 }  // namespace k2

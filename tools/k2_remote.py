@@ -4271,45 +4271,7 @@ LIM_STATES = ["off", "armed", "negotiating", "pending", "injected", "limited"]
 LIM_WHYS = ["none", "turned off", "detached", "EPR is not covered", "too many lists", "the charger resets", "the sink resets",
             "the sink ignores it"]
 LIM_REFUSALS = ["none", "limit outside 5..100 W", "another feature is running"]
-LIM_OP_STATUS, LIM_OP_ARM, LIM_OP_OFF, LIM_OP_ARM_CFG = 0, 1, 2, 3
-
-
-def _parse_tech_limit(spec, *, avs=False):
-    """Parse 'off', '<V>V', '<A>A', or '<V>V/<A>A' -> (enabled, mv, ma) with 100 mA steps."""
-    s = spec.strip().lower()
-    if s == "off":
-        return False, 0, 0
-    if s in ("on", "max"):
-        return True, 0, 0
-    mv, ma = 0, 0
-    for part in s.split("/"):
-        part = part.strip()
-        if not part:
-            raise SystemExit(f"pd-limit: empty field in '{spec}'")
-        if part.endswith("v"):
-            try:
-                v = float(part[:-1])
-            except ValueError:
-                raise SystemExit(f"pd-limit: bad voltage '{part}'")
-            val = int(round(v * 1000))
-            if avs:
-                if val not in (15000, 20000):
-                    raise SystemExit("pd-limit: AVS voltage must be 15V or 20V")
-            elif not (3300 <= val <= 21000 and val % 100 == 0):
-                raise SystemExit("pd-limit: voltage out of 3.3..21.0 V (0.1 V steps)")
-            mv = val
-        elif part.endswith("a"):
-            try:
-                a = float(part[:-1])
-            except ValueError:
-                raise SystemExit(f"pd-limit: bad current '{part}'")
-            val = int(round(a * 1000))
-            if not (100 <= val <= 5000 and val % 100 == 0):
-                raise SystemExit("pd-limit: current must be 0.1..5.0 A in 0.1 A steps")
-            ma = val
-        else:
-            raise SystemExit(f"pd-limit: expected V or A suffix in '{part}'")
-    return True, mv, ma
+LIM_OP_STATUS, LIM_OP_ARM, LIM_OP_OFF = 0, 1, 2
 
 
 def decode_pd_limit(p):
@@ -4323,46 +4285,20 @@ def decode_pd_limit(p):
 
 
 def cmd_pd_limit(link, a):
-    """pd-limit <watts>|off|status|[set --fixed .. --pps .. --avs .. --watts ..]."""
-    fixed_s = getattr(a, "fixed", None)
-    pps_s = getattr(a, "pps", None)
-    avs_s = getattr(a, "avs", None)
-    watts_o = getattr(a, "watts", None)
-    has_cfg = any(x is not None for x in (fixed_s, pps_s, avs_s, watts_o))
-    what = a.what.lower() if getattr(a, "what", None) is not None else ("set" if has_cfg else "status")
-    if what in ("status", "off") and not has_cfg:
-        payload = bytes([LIM_OP_STATUS if what == "status" else LIM_OP_OFF])
-    elif not has_cfg:
+    """pd-limit <watts>|off|status. Arming needs the K2 inline (charger -> K2 -> sink); it never loads the output."""
+    what = a.what.lower()
+    if what == "status":
+        payload = bytes([LIM_OP_STATUS])
+    elif what == "off":
+        payload = bytes([LIM_OP_OFF])
+    else:
         try:
             mw = int(round(float(what) * 1000))
         except ValueError:
-            raise SystemExit("pd-limit: watts, 'off', 'status', or --fixed/--pps/--avs")
+            raise SystemExit("pd-limit: watts, 'off' or 'status'")
         if not 5000 <= mw <= 100000:
             raise SystemExit("pd-limit: the limit is 5..100 W")
         payload = bytes([LIM_OP_ARM]) + mw.to_bytes(4, "little")
-    else:
-        if what not in ("set", "arm", "cfg"):
-            raise SystemExit("pd-limit: combine --fixed/--pps/--avs/--watts with 'set' (not a positional wattage)")
-        fx = _parse_tech_limit(fixed_s) if fixed_s is not None else (True, 0, 0)
-        if fx[0] and fx[1] != 0 and fx[1] < 5000:
-            raise SystemExit("pd-limit: Fixed voltage must be >= 5V")
-        pp = _parse_tech_limit(pps_s) if pps_s is not None else (True, 0, 0)
-        av = _parse_tech_limit(avs_s, avs=True) if avs_s is not None else (True, 0, 0)
-        if not (fx[0] or pp[0] or av[0]):
-            raise SystemExit("pd-limit: at least one of Fixed/PPS/AVS must stay enabled (use 'off')")
-        mw = 0
-        if watts_o is not None:
-            mw = int(round(float(watts_o) * 1000))
-            if not 5000 <= mw <= 100000:
-                raise SystemExit("pd-limit: --watts is 5..100 W")
-        if mw == 0 and fx == (True, 0, 0) and pp == (True, 0, 0) and av == (True, 0, 0):
-            raise SystemExit("pd-limit: no limit specified")
-        flags = (1 if fx[0] else 0) | (2 if pp[0] else 0) | (4 if av[0] else 0)
-        payload = (bytes([LIM_OP_ARM_CFG, flags])
-                   + fx[1].to_bytes(2, "little") + fx[2].to_bytes(2, "little")
-                   + pp[1].to_bytes(2, "little") + pp[2].to_bytes(2, "little")
-                   + av[1].to_bytes(2, "little") + av[2].to_bytes(2, "little")
-                   + mw.to_bytes(4, "little"))
     return {"pd_limit": decode_pd_limit(link.call(CMD_PD_LIMIT, payload).payload)}
 
 
@@ -6444,13 +6380,10 @@ def build_parser():
     sus.add_parser("probe", help="start the probe (5 V only, refused inline or off 5 V); read it with `ufcs result`")
     sus.add_parser("stop", help="abort a running probe and release the lines")
     sus.add_parser("result", help="the last probe: handshake timings, UART errors, every TX frame and RX byte")
-    spl = sub.add_parser("pd-limit", help="PD limiter, inline only: remove/clamp higher Fixed/PPS/SPR-AVS offers "
-                         "to <watts> (5..100) or per-tech --fixed/--pps/--avs limits; 'off' disarms; 'status' reads")
-    spl.add_argument("what", nargs="?", default=None, help="watts (5..100), 'off', 'status', or 'set' with per-tech flags")
-    spl.add_argument("--fixed", default=None, help="Fixed limit: off | <V>V | <A>A | <V>V/<A>A (0.1 A steps)")
-    spl.add_argument("--pps", default=None, help="PPS limit: off | <V>V | <A>A | <V>V/<A>A (e.g. 11V/3A)")
-    spl.add_argument("--avs", default=None, help="SPR AVS limit: off | 15V | 20V | <A>A | 15V/<A>A")
-    spl.add_argument("--watts", type=float, default=None, help="optional overall watt cap 5..100")
+    spl = sub.add_parser("pd-limit", help="PD limiter, inline only: the sink is sent the charger's own Source_Capabilities clamped "
+                         "to <watts> (5..100), spoken as the source; 'status' reads the state, forged list and the sink's Request, "
+                         "'off' disarms. SPR only; nothing is put on the output")
+    spl.add_argument("what", help="watts (5..100), 'off' or 'status'")
     # ---- PD Stress (docs/PD_SPEC_CHECK.md): parser ----
     sps = sub.add_parser("pd-stress", help="PD Stress: renegotiation stress run on the attached charger (inside the PD rules, "
                          "no load); score 0 = ideal. Start, watch, read the raw result, stop; tools/pd_stress.py records and rescored runs")

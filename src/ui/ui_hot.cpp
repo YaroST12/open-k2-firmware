@@ -11,7 +11,6 @@
 #include "k2/core/gap_meter.hpp"
 #include "k2/core/held.hpp"
 #include "k2/core/hot.h"
-#include "k2/core/lim_comeback.hpp"
 #include "k2/core/log.hpp"
 #include "k2/core/loop_guard.hpp"
 #include "k2/core/paint_meter.hpp"
@@ -222,10 +221,6 @@ K2_HOT UiAction Ui::tick(uint32_t now_ms) {
     ctx_.pm_avg = power::read().value_or(power::Metrics{});
     ctx_.vbus_fast_mv = power::vbus_fast_mv().value_or(ctx_.pm.vbus_mv);
     if (hr_recover_.armed()) hr_recover_poll(now_ms);
-    if (lim_comeback_scrub_ && static_cast<int32_t>(now_ms - lim_comeback_scrub_at_ms_) >= 0) {
-        lim_comeback_scrub_ = false;
-        limcomeback::consume();
-    }
     const auto previous_release = fc_release_.state();
     if (TriggerPage *trigger = find<TriggerPage>(Menu::Trigger)) trigger->poll();   // no page, no session: leave() ended it
 #if K2_LOOPPROBE

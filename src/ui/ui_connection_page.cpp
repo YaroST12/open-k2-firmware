@@ -1913,10 +1913,8 @@ void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
     const MatchResult &r = *d.r;
     // First, so the 3-chip cap never drops it: the user's PD limit hides offers (a chip that explains a short list).
     if (const pd::LimStatus &ls = fusb302::limit_status(); ls.state != pd::LimState::Off) {
-        char lb[pd::kLimLabelMax + 1]{};
-        const std::size_t ln = pd::lim_label(pd::lim_effective_config(ls), lb);
-        StrBuf<12> lim;
-        lim.put("LIM ").put(std::string_view{lb, ln});
+        StrBuf<10> lim;
+        lim.put("LIM ").put_u32(pd::lim_watts(ls.limit_mw)).put_char('W');
         sl.add_chip(lim.view(), SliceSpec::Warn);
     }
     if (r.caps_seen) {
@@ -1944,27 +1942,25 @@ void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
         }
         if (best_mv > 0 && best_ma > 0) put_va(sl.l1, best_mv, best_ma);
         const pd::Identity &vid = fusb302::vdm().identity;
-        StrBuf<36> seg;
-        if (!sl.l1.view().empty()) seg.put(" \xC2\xB7 ");
         if (vid.valid) {
-            if (!vid.vendor.empty()) {
-                seg.put(vid.vendor.c_str()).put_char(' ');
-                seg.put_hex(vid.vid, 4).put_char(':').put_hex(vid.pid, 4);
-                if (!put_slice_if_fits(sl.l1, seg.view())) {
-                    seg.clear();
-                    if (!sl.l1.view().empty()) seg.put(" \xC2\xB7 ");
-                    seg.put_hex(vid.vid, 4).put_char(':').put_hex(vid.pid, 4);
-                    put_slice_if_fits(sl.l1, seg.view());
-                }
-            } else {
+            StrBuf<36> seg;
+            if (!sl.l1.view().empty()) seg.put(" \xC2\xB7 ");
+            if (!vid.vendor.empty()) seg.put(vid.vendor.c_str()).put_char(' ');
+            seg.put_hex(vid.vid, 4).put_char(':').put_hex(vid.pid, 4);
+            if (!put_slice_if_fits(sl.l1, seg.view())) {
+                seg.clear();
+                if (!sl.l1.view().empty()) seg.put(" \xC2\xB7 ");
                 seg.put_hex(vid.vid, 4).put_char(':').put_hex(vid.pid, 4);
                 put_slice_if_fits(sl.l1, seg.view());
             }
+            if (caps.epr) put_slice_if_fits(sl.l1, " \xC2\xB7 EPR");
         } else {
+            StrBuf<28> seg;
+            if (!sl.l1.view().empty()) seg.put(" \xC2\xB7 ");
             seg.put_u32(static_cast<uint32_t>(r.rows)).put(r.rows == 1 ? " offer" : " offers");
             put_slice_if_fits(sl.l1, seg.view());
+            if (caps.epr) put_slice_if_fits(sl.l1, " \xC2\xB7 EPR");
         }
-        if (caps.epr) put_slice_if_fits(sl.l1, " \xC2\xB7 EPR");
         if (throttled) {
             sl.l2_warn = true;
             sl.l2.put("Now offering ").put_u32(held::live_offer_mw() / 1000u).put("W \xC2\xB7 throttled");
@@ -2000,27 +1996,20 @@ void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
     }
     sl.dim = true;
     const uint32_t rp_ma = r.typec_ma ? r.typec_ma : fusb302::typec_ma();
-    auto put_legacy_fc = [&] {
-        if (legacy_row_protocol(d.fc) && d.fc != fastcharge::Protocol::Pending) {
-            StrBuf<6> fcn;
-            fc_pill_text(d.fc, fcn);
-            if (!fcn.view().empty()) sl.l2.put("Legacy ").put(fcn.view());
-            return true;
-        }
-        return false;
-    };
-    auto put_rp_live = [&](const char *chip, const char *tag, const char *l2_txt) {
-        sl.dim = false;
-        put_w_hero(sl.head, static_cast<uint32_t>(d.vbus_mv) * rp_ma / 1000u);
-        sl.add_chip(chip, SliceSpec::Neutral);
-        put_va(sl.l1, static_cast<uint32_t>(d.vbus_mv), rp_ma);
-        put_slice_if_fits(sl.l1, tag);
-        if (l2_txt) sl.l2.put(l2_txt);
-    };
     if (verdict == pd::PdVerdict::None && none_why == pd::PdNoneWhy::SourceNeverOffered) {
         if (d.vbus_mv >= 1000 && rp_ma > 0) {
-            put_rp_live("NO PD", " \xC2\xB7 No PD offers", nullptr);
-            if (!put_legacy_fc()) sl.l2.put(text::conn::kNoPdNeverL);
+            sl.dim = false;
+            put_w_hero(sl.head, static_cast<uint32_t>(d.vbus_mv) * rp_ma / 1000u);
+            sl.add_chip("NO PD", SliceSpec::Neutral);
+            put_va(sl.l1, static_cast<uint32_t>(d.vbus_mv), rp_ma);
+            put_slice_if_fits(sl.l1, " \xC2\xB7 No PD offers");
+            if (legacy_row_protocol(d.fc) && d.fc != fastcharge::Protocol::Pending) {
+                StrBuf<6> fcn;
+                fc_pill_text(d.fc, fcn);
+                if (!fcn.view().empty()) sl.l2.put("Legacy ").put(fcn.view());
+            } else {
+                sl.l2.put(text::conn::kNoPdNeverL);
+            }
             return;
         }
         sl.head.put("No PD");
@@ -2028,10 +2017,19 @@ void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
         StrBuf<28> tc;
         typec_row_text(d.vbus_mv, rp_ma, tc);
         if (!tc.view().empty()) sl.l2.put("Type-C ").put(tc.view());
-        else put_legacy_fc();
+        else if (legacy_row_protocol(d.fc) && d.fc != fastcharge::Protocol::Pending) {
+            StrBuf<6> fcn;
+            fc_pill_text(d.fc, fcn);
+            if (!fcn.view().empty()) sl.l2.put("Legacy ").put(fcn.view());
+        }
     } else if (r.typec_ma || r.typec_rp) {
         if (d.vbus_mv >= 1000 && rp_ma > 0) {
-            put_rp_live("TYPE-C", " \xC2\xB7 Type-C Rp", "No PD offers on the line");
+            sl.dim = false;
+            put_w_hero(sl.head, static_cast<uint32_t>(d.vbus_mv) * rp_ma / 1000u);
+            sl.add_chip("TYPE-C", SliceSpec::Neutral);
+            put_va(sl.l1, static_cast<uint32_t>(d.vbus_mv), rp_ma);
+            put_slice_if_fits(sl.l1, " \xC2\xB7 Type-C Rp");
+            sl.l2.put("No PD offers on the line");
             return;
         }
         sl.head.put("Type-C");
@@ -2869,16 +2867,7 @@ void ConnectionPage::update(uint32_t now_ms) {
     c = mix_u32(c, uint32_t(vbus_));   // the Type-C row's VBUS (100 mV steps)
     if (view_ == View::Overview) {   // the Charger slice's LIM chip
         const pd::LimStatus &ls = fusb302::limit_status();
-        if (ls.state != pd::LimState::Off) {
-            const pd::LimConfig lc = pd::lim_effective_config(ls);
-            c = mix_u32(c, lc.limit_mw + 1u);
-            c = mix_u32(c, (uint32_t(lc.fixed.enabled) | (uint32_t(lc.pps.enabled) << 1) | (uint32_t(lc.avs.enabled) << 2)) ^
-                               (uint32_t(lc.fixed.max_mv) << 3) ^ (uint32_t(lc.fixed.max_ma) << 15) ^
-                               (uint32_t(lc.pps.max_mv) << 5) ^ (uint32_t(lc.pps.max_ma) << 17) ^
-                               (uint32_t(lc.avs.max_mv) << 7) ^ (uint32_t(lc.avs.max_ma) << 19));
-        } else {
-            c = mix_u32(c, 0u);
-        }
+        c = mix_u32(c, ls.state != pd::LimState::Off ? ls.limit_mw + 1u : 0u);
     }
     if (view_ == View::Overview && (!shown_caps.valid || !ct.valid || fusb302::self_powered())) {
         c = mix_u32(c, uint32_t(ibus_));
