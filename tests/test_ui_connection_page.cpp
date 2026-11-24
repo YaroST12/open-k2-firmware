@@ -3172,6 +3172,7 @@ static void test_charger_slice_lim_chip_while_armed() {
     const int x0 = kOppRailThickness, x1 = x0 + 208;
     CHECK_EQ(count_px(2 + 24, 2 + 38, x0, x1, kCautionT), 0);
     g_stub.lim.state = pd::LimState::Armed; g_stub.lim.limit_mw = 100000;   // the widest text: LIM 100W
+    g_stub.lim.cfg = pd::lim_config_watts(100000);
     for (int i = 0; i < 12; i++) ui.tick(t += 100);
     settle(ui, t);
     CHECK(count_px(2 + 24, 2 + 38, x0, x1, kCautionT) > 0);
@@ -3450,7 +3451,7 @@ static void test_stale_charger_slice_drops_lim_chip() {
     uint32_t t = 90000;
     inline_pd_scene(ui, t);
     g_stub.lim = {};
-    g_stub.lim.state = pd::LimState::Limited; g_stub.lim.limit_mw = 100000;
+    g_stub.lim.state = pd::LimState::Limited; g_stub.lim.limit_mw = 100000; g_stub.lim.cfg = pd::lim_config_watts(100000);
     for (int i = 0; i < 6; i++) ui.tick(t += 100);
     settle(ui, t);
     CHECK_EQ(cp(ui).overview_mode(), true);
