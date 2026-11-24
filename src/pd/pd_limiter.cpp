@@ -18,7 +18,44 @@ constexpr std::uint8_t kEprActionAck = 2, kEprActionSucceeded = 3;   // EPR_Mode
 
 bool due(std::uint32_t now, std::uint32_t t, std::uint32_t span) { return std::uint32_t(now - t) >= span; }
 
+bool valid_tech(const LimTech& t, std::uint16_t min_mv, std::uint16_t mv_unit, bool avs) {
+    if (t.max_ma != 0 && (t.max_ma < kLimStepMa || t.max_ma > kLimMaxMa || t.max_ma % kLimStepMa != 0)) return false;
+    if (t.max_mv == 0) return true;
+    if (avs) return t.max_mv == 15000 || t.max_mv == 20000;
+    return t.max_mv >= min_mv && t.max_mv <= kLimMaxMv && (t.max_mv % mv_unit) == 0;
+}
+
+std::size_t append_str(std::span<char> out, std::size_t at, const char* s) {
+    while (*s && at < out.size()) out[at++] = *s++;
+    return at;
+}
+std::size_t append_u(std::span<char> out, std::size_t at, std::uint32_t v) {
+    char tmp[10];
+    std::size_t n = 0;
+    do { tmp[n++] = static_cast<char>('0' + v % 10); v /= 10; } while (v && n < sizeof tmp);
+    while (n && at < out.size()) out[at++] = tmp[--n];
+    return at;
+}
+std::size_t append_tenth(std::span<char> out, std::size_t at, std::uint16_t milli, char unit) {
+    const std::uint32_t t = (milli + 50u) / 100u;
+    at = append_u(out, at, t / 10u);
+    if (t % 10u != 0u && at + 2 <= out.size()) {
+        out[at++] = '.';
+        out[at++] = static_cast<char>('0' + (t % 10u));
+    }
+    if (unit && at < out.size()) out[at++] = unit;
+    return at;
+}
+bool tech_constrained(const LimTech& t) { return !t.enabled || t.max_mv != 0 || t.max_ma != 0; }
+
 }  // namespace
+
+bool lim_config_valid(const LimConfig& c) {
+    if (!lim_config_active(c)) return false;
+    if (!c.fixed.enabled && !c.pps.enabled && !c.avs.enabled) return false;
+    if (c.limit_mw != 0 && (c.limit_mw < kLimMinMw || c.limit_mw > kLimMaxMw)) return false;
+    return valid_tech(c.fixed, 5000, 50, false) && valid_tech(c.pps, kLimMinMv, 100, false) && valid_tech(c.avs, 15000, 100, true);
+}
 
 const char* lim_state_name(LimState s) {
     switch (s) {
@@ -55,9 +92,54 @@ const char* lim_refusal_name(LimRefusal r) {
     return "?";
 }
 
-LimRefusal lim_gate(const LimFacts& f, std::uint32_t limit_mw) {
-    if (limit_mw < kLimMinMw || limit_mw > kLimMaxMw) return LimRefusal::BadLimit;
+LimRefusal lim_gate(const LimFacts& f, const LimConfig& cfg) {
+    if (!lim_config_valid(cfg)) return LimRefusal::BadLimit;
     return f.busy ? LimRefusal::Busy : LimRefusal::None;
+}
+
+LimRefusal lim_gate(const LimFacts& f, std::uint32_t limit_mw) {
+    return lim_gate(f, lim_config_watts(limit_mw));
+}
+
+std::size_t lim_label(const LimConfig& cfg, std::span<char> out) {
+    if (out.empty()) return 0;
+    const std::size_t cap = std::min(out.size(), kLimLabelMax);
+    std::span<char> dst = out.first(cap);
+    const bool fx = cfg.fixed.enabled, pp = cfg.pps.enabled, av = cfg.avs.enabled;
+    const bool fx_c = tech_constrained(cfg.fixed), pp_c = tech_constrained(cfg.pps), av_c = tech_constrained(cfg.avs);
+    auto fmt_va = [&](std::uint16_t mv, std::uint16_t ma, const char* fallback) -> std::size_t {
+        if (mv && ma) {
+            char b[8]{};
+            std::size_t n = append_tenth(b, 0, mv, 'V');
+            n = append_tenth(b, n, ma, 'A');
+            // Drop trailing 'A' when 7 chars (e.g. "20V1.5A" -> "20V1.5") so both numbers stay visible in 6 chars.
+            if (n <= cap || (n == cap + 1 && b[n - 1] == 'A')) {
+                const std::size_t copy_n = std::min(n, cap);
+                for (std::size_t i = 0; i < copy_n; ++i) dst[i] = b[i];
+                return copy_n;
+            }
+            return append_tenth(dst, 0, mv, 'V');
+        }
+        if (mv) return append_tenth(dst, 0, mv, 'V');
+        if (ma) return append_tenth(dst, 0, ma, 'A');
+        return append_str(dst, 0, fallback);
+    };
+    auto fmt_tag = [&](const char* tag, const LimTech& t) -> std::size_t {
+        const std::size_t n = append_str(dst, 0, tag);
+        if (t.max_mv) return append_u(dst, n, t.max_mv / 1000u);
+        return t.max_ma ? append_u(dst, n, (t.max_ma + 500u) / 1000u) : n;
+    };
+    if ((fx && !pp && !av) || (fx_c && !pp_c && !av_c)) return fmt_va(cfg.fixed.max_mv, cfg.fixed.max_ma, "FIX");
+    if ((!fx && pp && !av) || (pp_c && !fx_c && !av_c)) return fmt_tag("PPS", cfg.pps);
+    if ((!fx && !pp && av) || (av_c && !fx_c && !pp_c)) return fmt_tag("AVS", cfg.avs);
+    if (cfg.limit_mw != 0) {
+        std::size_t n = append_u(dst, 0, lim_watts(cfg.limit_mw));
+        if (n < cap) dst[n++] = 'W';
+        return n;
+    }
+    if (cfg.fixed.enabled && cfg.fixed.max_mv) return append_tenth(dst, 0, cfg.fixed.max_mv, 'V');
+    if (cfg.fixed.enabled && cfg.fixed.max_ma) return append_tenth(dst, 0, cfg.fixed.max_ma, 'A');
+    return append_str(dst, 0, "LIMIT");
 }
 
 std::size_t lim_picks(std::span<const Pdo> pdos, std::span<LimPick> out) {
@@ -92,49 +174,169 @@ std::uint32_t request_mw(std::uint32_t rdo, std::span<const std::uint32_t> pdos)
     return std::uint32_t(r.mv) * r.op_ma / 1000;
 }
 
-std::size_t forge_caps(std::span<const std::uint32_t> real, std::uint32_t limit_mw, std::span<std::uint32_t> out) {
-    const std::size_t n = std::min(real.size(), out.size());
-    for (std::size_t i = 0; i < n; i++) {
-        std::uint32_t w = real[i];
-        // current limit in `unit_ma` units at `mv`: P/V rounded down, never above the object's own
-        auto cap = [&](unsigned shift, std::uint32_t mask, std::uint32_t mv, std::uint32_t unit_ma) {
-            if (mv == 0) return;
-            const std::uint32_t lim = std::uint32_t(limit_mw) * 1000u / mv / unit_ma;
-            if (((w >> shift) & mask) > lim) w = (w & ~(mask << shift)) | (lim << shift);
-        };
-        switch (w >> 30) {
-            case 0:   // fixed
-                cap(0, 0x3FF, ((w >> 10) & 0x3FF) * 50, 10);
-                if (i == 0) w &= ~(1u << 23);   // EPR capable
-                break;
-            case 1: { // battery: power in 250 mW
-                const std::uint32_t lim = limit_mw / 250;
-                if ((w & 0x3FF) > lim) w = (w & ~0x3FFu) | lim;
-                break;
-            }
-            case 2:   // variable: the current at the top voltage
-                cap(0, 0x3FF, ((w >> 20) & 0x3FF) * 50, 10);
-                break;
-            default:
-                if (((w >> 28) & 3) == 0) cap(0, 0x7F, ((w >> 17) & 0xFF) * 100, 50);   // PPS at its top voltage
-                else if (((w >> 28) & 3) == 2) {                                             // SPR AVS: 15 V and 20 V limits
-                    cap(10, 0x3FF, 15000, 10);
-                    cap(0, 0x3FF, 20000, 10);
-                }
-                break;   // EPR AVS never sits in an SPR list; left alone
+bool request_complies(std::uint32_t rdo, std::span<const std::uint32_t> real_pdos,
+                      std::span<const std::uint32_t> forged_pdos, const LimConfig& cfg) {
+    const unsigned pos = rdo >> 28;
+    if (pos < 1 || pos > forged_pdos.size() || pos > real_pdos.size()) return false;
+    const Pdo fp = decode_pdo(forged_pdos[pos - 1]);
+    if (fp.type == PdoType::Unknown) return false;
+    if (fp.type == PdoType::Battery) {
+        if (fp.max_mw == 0) return false;
+        const std::uint32_t op_mw = ((rdo >> 10) & 0x3FFu) * 250u;
+        const std::uint32_t max_mw_r = (rdo & 0x3FFu) * 250u;
+        const bool gb = (rdo & (1u << 27)) != 0;
+        if (op_mw > fp.max_mw || (!gb && max_mw_r > fp.max_mw)) return false;
+    } else {
+        if (fp.max_ma == 0) return false;
+        const Rdo r = decode_rdo(rdo, &fp);
+        if (fp.type == PdoType::Pps) {
+            if (r.mv < fp.min_mv || r.mv > fp.max_mv || r.op_ma > fp.max_ma) return false;
+        } else if (fp.type == PdoType::Avs) {
+            const std::uint16_t lim_ma = current_limit_ma(fp, r.mv);
+            if (r.mv > fp.max_mv || lim_ma == 0 || r.op_ma > lim_ma) return false;
+        } else {
+            const std::uint16_t req_ma = (r.flags & kRdoFGiveBack) ? r.op_ma : std::max(r.op_ma, r.max_ma);
+            if (req_ma > fp.max_ma) return false;
         }
-        out[i] = w;
     }
-    return n;
+    if (cfg.limit_mw != 0 && request_mw(rdo, real_pdos) > cfg.limit_mw) return false;
+    return true;
 }
 
-bool Limiter::arm(std::uint32_t limit_mw, std::uint32_t now, const IqWatch* seed) {
-    if (limit_mw < kLimMinMw || limit_mw > kLimMaxMw) return false;
+std::size_t forge_caps(std::span<const std::uint32_t> real, const LimConfig& cfg, std::span<std::uint32_t> out) {
+    const std::size_t n = std::min(std::min(real.size(), out.size()), kMaxPdos);
+    if (n == 0) return 0;
+    std::array<std::uint32_t, kMaxPdos> words{};
+    std::array<bool, kMaxPdos> keep{};
+    for (std::size_t i = 0; i < n; i++) {
+        std::uint32_t w = real[i];
+        if (w == 0) {
+            words[i] = 0;
+            keep[i] = false;
+            continue;
+        }
+        const Pdo p = decode_pdo(w);
+        auto clamp10 = [](std::uint32_t cur, std::uint32_t shift, std::uint32_t max_ma) {
+            const std::uint32_t orig = (cur >> shift) & 0x3FFu;
+            const std::uint32_t lim = max_ma / 10u;
+            return orig > lim ? ((cur & ~(0x3FFu << shift)) | (lim << shift)) : cur;
+        };
+        const bool within_w = cfg.limit_mw == 0 || p.max_mw <= cfg.limit_mw;
+        const bool fx_ok = cfg.fixed.enabled && (cfg.fixed.max_mv == 0 || p.max_mv <= cfg.fixed.max_mv) && within_w;
+        switch (w >> 30) {
+            case 0: { // Fixed
+                if (i == 0) {
+                    w &= ~(1u << 23);   // never invite EPR while capped
+                    keep[i] = true;
+                    std::uint32_t cap_ma = p.max_ma;
+                    if (!cfg.fixed.enabled) cap_ma = std::min<std::uint32_t>(cap_ma, kLimMinFixedMa);
+                    else {
+                        if (cfg.fixed.max_ma) cap_ma = std::min<std::uint32_t>(cap_ma, cfg.fixed.max_ma);
+                        if (cfg.limit_mw && p.max_mv)
+                            cap_ma = std::min<std::uint32_t>(cap_ma, std::max<std::uint32_t>(kLimMinFixedMa, cfg.limit_mw * 1000u / p.max_mv));
+                    }
+                    w = clamp10(w, 0, cap_ma);
+                } else {
+                    keep[i] = fx_ok;
+                    if (!fx_ok) w &= ~0x3FFu;   // neutered placeholder (0 mA) if followed by an enabled slot
+                    else if (cfg.fixed.max_ma) w = clamp10(w, 0, cfg.fixed.max_ma);
+                }
+                break;
+            }
+            case 1: { // Battery
+                keep[i] = fx_ok;
+                if (!fx_ok) {
+                    w &= ~0x3FFu;
+                } else if (cfg.fixed.max_ma && p.max_mv) {
+                    const std::uint32_t lim_mw = std::uint32_t(p.max_mv) * cfg.fixed.max_ma / 1000u;
+                    const std::uint32_t lim = lim_mw / 250u;
+                    if ((w & 0x3FFu) > lim) w = (w & ~0x3FFu) | lim;
+                }
+                break;
+            }
+            case 2: { // Variable
+                keep[i] = fx_ok;
+                if (!fx_ok) w &= ~0x3FFu;
+                else if (cfg.fixed.max_ma) w = clamp10(w, 0, cfg.fixed.max_ma);
+                break;
+            }
+            default: {
+                const unsigned apdo = (w >> 28) & 3u;
+                if (apdo == 0) {   // PPS
+                    const bool ok = cfg.pps.enabled && (cfg.pps.max_mv == 0 || cfg.pps.max_mv >= p.min_mv) && within_w;
+                    keep[i] = ok;
+                    if (!ok) {
+                        w &= ~0x7Fu;
+                    } else {
+                        if (cfg.pps.max_mv && cfg.pps.max_mv < p.max_mv)
+                            w = (w & ~(0xFFu << 17)) | (std::uint32_t(cfg.pps.max_mv / 100u) << 17);
+                        if (cfg.pps.max_ma) {
+                            const std::uint32_t lim = cfg.pps.max_ma / 50u;
+                            if ((w & 0x7Fu) > lim) w = (w & ~0x7Fu) | lim;
+                        }
+                    }
+                } else if (apdo == 2) {   // SPR AVS
+                    const bool ok = cfg.avs.enabled && (cfg.avs.max_mv == 0 || cfg.avs.max_mv >= 15000) && within_w;
+                    keep[i] = ok;
+                    if (!ok) {
+                        w &= ~0xFFFFFu;
+                    } else {
+                        if (cfg.avs.max_mv && cfg.avs.max_mv < 20000) w &= ~0x3FFu;   // leaves valid 9..15 V range
+                        if (cfg.avs.max_ma) {
+                            w = clamp10(w, 10, cfg.avs.max_ma);
+                            if ((w & 0x3FFu) != 0) w = clamp10(w, 0, cfg.avs.max_ma);
+                        }
+                    }
+                } else {
+                    keep[i] = within_w;
+                }
+                break;
+            }
+        }
+        words[i] = w;
+    }
+    std::size_t last_kept = 0;
+    bool any_kept = false;
+    for (std::size_t i = n; i > 0; i--) {
+        if (keep[i - 1]) {
+            last_kept = i - 1;
+            any_kept = true;
+            break;
+        }
+    }
+    if (!any_kept) return 0;
+    const std::size_t out_n = last_kept + 1;
+    for (std::size_t i = 0; i < out_n; i++) out[i] = words[i];
+    return out_n;
+}
+
+std::size_t forge_caps(std::span<const std::uint32_t> real, std::uint32_t limit_mw, std::span<std::uint32_t> out) {
+    return forge_caps(real, lim_config_watts(limit_mw), out);
+}
+
+bool forge_differs(std::span<const std::uint32_t> real, std::span<const std::uint32_t> forged) {
+    if (real.size() != forged.size()) return true;
+    for (std::size_t i = 0; i < real.size(); i++)
+        if (real[i] != forged[i]) return true;
+    return false;
+}
+
+bool Limiter::forged_differs_from_watch(std::array<std::uint32_t, 7>& f, std::size_t& cnt) const {
+    const auto real = watch_.pdos();
+    cnt = forge_caps(real, st_.cfg, f);
+    return cnt > 0 && forge_differs(real, {f.data(), cnt});
+}
+
+bool Limiter::arm(const LimConfig& cfg, std::uint32_t now, const IqWatch* seed) {
+    if (!lim_config_valid(cfg)) return false;
     st_ = LimStatus{};
     st_.state = LimState::Armed;
-    st_.limit_mw = limit_mw;
+    st_.cfg = cfg;
+    st_.limit_mw = cfg.limit_mw;
     watch_.reset();
     last_at_ = now;
+    inj_streak_ = 0;
+    sink_asked_caps_ = false;
     if (seed && seed->contract().ready) {   // armed mid-contract: the list, the Request and the MessageID are already known
         watch_ = *seed;
         last_at_ = watch_.last_frame_at();
@@ -142,15 +344,21 @@ bool Limiter::arm(std::uint32_t limit_mw, std::uint32_t now, const IqWatch* seed
         st_.req_rdo = c.rdo;
         st_.req_pos = c.pos;
         st_.req_mw = request_mw(c.rdo, watch_.pdos());
-        if (st_.req_mw > limit_mw) {
+        std::array<std::uint32_t, 7> f{};
+        std::size_t cnt = 0;
+        if (forged_differs_from_watch(f, cnt)) {
             st_.state = LimState::Pending;
             ready_at_ = now;
         } else {
             st_.state = LimState::Limited;
-            inj_at_ = now - kLimBlameMs - 1;   // no list of ours is in flight: a reset now is nobody's rejection
+            inj_at_ = now - kLimBlameMs - 1;   // nothing to forge: a reset now is nobody's rejection
         }
     }
     return true;
+}
+
+bool Limiter::arm(std::uint32_t limit_mw, std::uint32_t now, const IqWatch* seed) {
+    return arm(lim_config_watts(limit_mw), now, seed);
 }
 
 void Limiter::stop(LimWhy why) {
@@ -173,6 +381,8 @@ void Limiter::restart() {
     if (!armed()) return;
     watch_.reset();
     st_.state = LimState::Armed;
+    inj_streak_ = 0;
+    sink_asked_caps_ = false;
 }
 
 void Limiter::reject(LimWhy cause) {
@@ -188,14 +398,19 @@ void Limiter::saw_request(std::uint32_t rdo, std::uint32_t now) {
     st_.req_rdo = rdo;
     st_.req_pos = std::uint8_t(rdo >> 28);
     st_.req_mw = request_mw(rdo, watch_.pdos());
-    const bool over = st_.req_mw > st_.limit_mw;
+    std::array<std::uint32_t, 7> f{};
+    const std::size_t cnt = forge_caps(watch_.pdos(), st_.cfg, f);
+    const bool ok = cnt > 0 && request_complies(rdo, watch_.pdos(), {f.data(), cnt}, st_.cfg);
     auto restart_neg = [&] {
         st_.state = LimState::Negotiating;
         neg_at_ = now;
     };
     switch (st_.state) {
+        case LimState::Armed:
+            if (!watch_.pdos().empty() && !ok) restart_neg();
+            break;
         case LimState::Injected:
-            if (!over) {
+            if (ok) {
                 st_.state = LimState::Limited;
             } else {
                 if (++st_.ignores >= kLimMaxRejects) return stop(LimWhy::SinkIgnores);
@@ -203,13 +418,13 @@ void Limiter::saw_request(std::uint32_t rdo, std::uint32_t now) {
             }
             break;
         case LimState::Limited:
-            if (over) restart_neg();
+            if (!ok) restart_neg();
             break;
         case LimState::Negotiating:
         case LimState::Pending:
             restart_neg();
             break;
-        default: break;   // Armed: no real list seen, nothing to forge from
+        default: break;
     }
 }
 
@@ -220,6 +435,7 @@ void Limiter::on_message(Sop sop, std::uint16_t h, std::span<const std::uint8_t>
     const std::uint8_t t = type_of(h);
     const unsigned n = ndo_of(h);
     const bool src = from_source(h);
+    if (src && (ext_of(h) || n > 0 || t != kCtlGoodCrc)) inj_streak_ = 0;
     if (ext_of(h)) {
         if (src && t == kExtEprSourceCap) stop(LimWhy::Epr);
         return;
@@ -229,7 +445,8 @@ void Limiter::on_message(Sop sop, std::uint16_t h, std::span<const std::uint8_t>
             const std::uint8_t a = payload[3];
             if (a == kEprActionAck || a == kEprActionSucceeded) stop(LimWhy::Epr);
         } else if (src && t == kDataSourceCap) {
-            blame_check(LimWhy::ChargerResets, now);   // the charger starting over right after our list
+            if (!sink_asked_caps_) blame_check(LimWhy::ChargerResets, now);   // ignore a charger list answered to Get_Source_Cap
+            sink_asked_caps_ = false;
             if (!armed()) return;
             st_.state = LimState::Negotiating;
             neg_at_ = now;
@@ -239,12 +456,20 @@ void Limiter::on_message(Sop sop, std::uint16_t h, std::span<const std::uint8_t>
         return;
     }
     if (t == kCtlGoodCrc) return;
+    if (!src && t == kCtlGetSourceCap) sink_asked_caps_ = true;
     if (t == kCtlSoftReset) {
         blame_check(src ? LimWhy::ChargerResets : LimWhy::SinkResets, now);
         restart();
     } else if (src && t == kCtlPsRdy && st_.state == LimState::Negotiating && watch_.contract().ready) {
-        st_.state = LimState::Pending;
-        ready_at_ = now;
+        std::array<std::uint32_t, 7> f{};
+        std::size_t cnt = 0;
+        if (forged_differs_from_watch(f, cnt)) {
+            st_.state = LimState::Pending;
+            ready_at_ = now;
+        } else {
+            st_.state = LimState::Limited;
+            inj_at_ = now - kLimBlameMs - 1;
+        }
     }
 }
 
@@ -265,9 +490,12 @@ void Limiter::tick(std::uint32_t now) {
             if (due(now, ready_at_, kLimPendMs + 1)) st_.state = LimState::Armed;
             break;
         case LimState::Injected:
-            if (due(now, inj_at_, kLimVerifyMs + 1)) {   // the sink never answered the list
-                st_.state = LimState::Armed;
+            if (due(now, inj_at_, kLimVerifyMs + 1)) {   // the sink never answered: retry instead of stalling in Armed
                 if (++st_.ignores >= kLimMaxRejects) stop(LimWhy::SinkIgnores);
+                else {
+                    st_.state = LimState::Pending;
+                    ready_at_ = now;
+                }
             }
             break;
         case LimState::Limited:
@@ -286,15 +514,20 @@ bool Limiter::take_tx(TxMsg& m, std::uint32_t now) {
     if (!due(now, last_at_, kLimQuietMs)) return false;
     if (st_.injections > 0 && !due(now, inj_at_, kLimGapMs)) return false;
     std::array<std::uint32_t, 7> f{};
-    const std::size_t cnt = forge_caps(watch_.pdos(), st_.limit_mw, f);
-    if (cnt == 0) {
-        st_.state = LimState::Armed;
+    std::size_t cnt = 0;
+    if (!forged_differs_from_watch(f, cnt)) {
+        st_.state = cnt == 0 ? LimState::Armed : LimState::Limited;
+        if (cnt > 0) inj_at_ = now - kLimBlameMs - 1;
         return false;
     }
+    const std::uint8_t drev = watch_.contract().dev_rev;
+    const std::uint8_t rev = (drev > 0 && drev < watch_.src_rev()) ? drev : watch_.src_rev();
+    const std::uint8_t skip = static_cast<std::uint8_t>(1u + (inj_streak_ % 6u));
+    inj_streak_++;
     m = TxMsg{};
     m.sop = Sop::Sop;
     m.inline_tx = true;
-    m.header = watch_.stamp(make_header(kDataSourceCap, std::uint8_t(cnt), watch_.src_rev()), 1);
+    m.header = watch_.stamp(make_header(kDataSourceCap, std::uint8_t(cnt), rev), skip);
     for (std::size_t i = 0; i < cnt; i++)
         for (unsigned b = 0; b < 4; b++) m.data[4 * i + b] = std::uint8_t(f[i] >> (8 * b));
     m.len = std::uint8_t(4 * cnt);

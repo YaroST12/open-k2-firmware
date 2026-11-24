@@ -1113,22 +1113,26 @@ static pd::LimState g_lim_logged = pd::LimState::Off;
 static std::uint8_t g_lim_logged_inj = 0;
 static std::uint32_t g_lim_logged_rdo = 0;
 
-pd::LimRefusal limit_arm(std::uint32_t limit_mw, const pd::LimFacts& outside, bool seed) {
+pd::LimRefusal limit_arm(const pd::LimConfig& cfg, const pd::LimFacts& outside, bool seed) {
     pd::LimFacts f = outside;
     f.busy = f.busy || engines_busy() || iq_running();
-    const pd::LimRefusal r = pd::lim_gate(f, limit_mw);
+    const pd::LimRefusal r = pd::lim_gate(f, cfg);
     if (r != pd::LimRefusal::None) {
         K2LOG("[LIM] refused: %s\n", pd::lim_refusal_name(r));
         return r;
     }
     // A far sink's Request on this attach means the always-fed sniffer holds its contract: limit it now, no replug.
-    lim().arm(limit_mw, systick::millis(), seed && far_sink_seen() ? &iq().watch() : nullptr);
+    lim().arm(cfg, systick::millis(), seed && far_sink_seen() ? &iq().watch() : nullptr);
     g_lim_on = true;
     g_lim_logged = pd::LimState::Armed;
     g_lim_logged_inj = 0;
     g_lim_logged_rdo = 0;
-    K2LOG("[LIM] t=%u armed: limit %u mW\n", unsigned(systick::millis()), unsigned(limit_mw));
+    K2LOG("[LIM] t=%u armed: limit %u mW\n", unsigned(systick::millis()), unsigned(cfg.limit_mw));
     return r;
+}
+
+pd::LimRefusal limit_arm(std::uint32_t limit_mw, const pd::LimFacts& outside, bool seed) {
+    return limit_arm(pd::lim_config_watts(limit_mw), outside, seed);
 }
 
 void limit_disarm() {

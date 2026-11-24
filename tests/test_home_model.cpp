@@ -497,6 +497,13 @@ static void test_protocol_limit_suffix() {
     format_limit(t, ProtoKind::Qc3, 27);
     CHECK_STR(t.value.c_str(), "3.6-12V");
     t = fmt({.kind = ProtoKind::PdFixed, .mv = 9000, .ma = 3000});
+    format_limit(t, ProtoKind::PdFixed, std::string_view{"9V2.5"});
+    CHECK_STR(t.value.c_str(), "9V3A lim9V2.5");
+    t = fmt({.kind = ProtoKind::Pps, .lo_mv = 3300, .hi_mv = 21000, .ma = 5000});
+    format_limit(t, ProtoKind::Pps, std::string_view{"PPS11"});
+    CHECK_EQ(t.value.view().size() <= static_cast<size_t>(kProtoChars), true);
+    CHECK_EQ(t.value.view().find("PPS11") != std::string_view::npos, true);
+    t = fmt({.kind = ProtoKind::PdFixed, .mv = 9000, .ma = 3000});
     format_limit(t, ProtoKind::PdFixed, 0);
     CHECK_STR(t.value.c_str(), "9V3A");
     // Every limit-capable kind, widest contracts and limits: never over the row.

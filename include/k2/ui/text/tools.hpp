@@ -42,16 +42,28 @@ inline constexpr const char *kSomeReadyTail = " tools ready";
 inline constexpr const char *kFooters[] = {kLoadAttached, kLiveSink, kNoPd, kNoPm, kAllReady, "14 of 14 tools ready"};
 static_assert(all_fit(kFooters, kSmallAdvPx, 27 * kSmallAdvPx), "a Tools footer is over 27 characters");
 
-// PD limit: the last Tools row, its picker and their results (docs/UI_SYSTEM.md 7.4). A note is at most 29 cells; a toast 30.
-inline constexpr const char *kLimName = "PD limit", *kLimOff = "Off";
-inline constexpr const char *kLimNoteOff = "hides offers above a limit";   // the row with no limit set
-inline constexpr const char *kLimNoteNone = "no limit, every offer shown";   // the picker's Off
-inline constexpr const char *kLimNoteAbove = "hides offers above ";         // then "100W"
-inline constexpr const char *kLimNotes[] = {kLimNoteOff, kLimNoteNone};
+// PD limit: the last Tools row, its per-tech picker and their results. A note is at most 29 cells; a toast 30.
+inline constexpr const char *kLimName = "PD limit", *kLimOff = "Off", *kLimOn = "On", *kLimMax = "Max";
+inline constexpr const char *kLimFixed = "Fixed", *kLimPps = "PPS", *kLimAvs = "SPR AVS", *kLimApply = "Apply";
+inline constexpr const char *kLimRowMode = "Mode", *kLimRowMaxV = "Max V", *kLimRowMaxA = "Max A";
+inline constexpr const char *kLimNoteOff = "limits PD Fixed, PPS or AVS";   // the row with no limit set
+inline constexpr const char *kLimNoteNone = "no limit, every offer shown";  // the picker's Off
+inline constexpr const char *kLimNoteAbove = "limit active: ";              // then e.g. "9V3A" / "27W"
+inline constexpr const char *kLimNoteFixed = "fixed 5-20V offers";
+inline constexpr const char *kLimNotePps = "PPS voltage range and A";
+inline constexpr const char *kLimNoteAvs = "SPR AVS 15/20V and A";
+inline constexpr const char *kLimNoteApply = "arms selected PD limit";
+inline constexpr const char *kLimNoteNoOffer = "not offered by charger";
+inline constexpr const char *kLimNoteMode = "include in forged offers";
+inline constexpr const char *kLimNoteStepV = "OK then +/- to step V";
+inline constexpr const char *kLimNoteStepA = "OK then +/- to step 0.1A";
+inline constexpr const char *kLimNotes[] = {kLimNoteOff, kLimNoteNone, kLimNoteFixed, kLimNotePps, kLimNoteAvs, kLimNoteApply,
+                                            kLimNoteNoOffer, kLimNoteMode, kLimNoteStepV, kLimNoteStepA};
 static_assert(all_fit(kLimNotes, kLabelAdv, kit::kNoteMaxPx), "a PD limit note is wider than its line");
-static_assert(fits_px(kLabelAdv, kLimNoteAbove, kit::kNoteMaxPx - 4 * static_cast<int>(kLabelAdv)), "the PD limit note plus 100W is over its line");
+static_assert(fits_px(kLabelAdv, kLimNoteAbove, kit::kNoteMaxPx - 5 * static_cast<int>(kLabelAdv)), "the PD limit note plus label is over its line");
 inline constexpr const char *kLimToastNoOffers = "No charger offers yet";
-inline constexpr const char *kLimToastNoLower = "Nothing lower to pick";
+inline constexpr const char *kLimToastNoLimit = "Set a limit first";
+inline constexpr const char *kLimToastKeepOne = "Keep one PD mode On";
 inline constexpr const char *kLimToastBadLimit = "Limit out of range";
 inline constexpr const char *kLimToastBusy = "Port in use: stop it first";
 inline constexpr const char *kLimToastRate = "Limit off: too many retries";
@@ -69,7 +81,7 @@ inline constexpr const char *kLimToastRetry = "Busy, retry";
 inline constexpr const char *kLimToastNoLink = "No active link";
 inline constexpr const char *kLimRowReset = "Reset link";                       // the picker's row when no offers are known
 inline constexpr const char *kLimNoteReset = "reads the charger's offers";
-inline constexpr const char *kLimToasts[] = {kLimToastNoOffers, kLimToastNoLower, kLimToastBadLimit, kLimToastBusy, kLimToastRate,
+inline constexpr const char *kLimToasts[] = {kLimToastNoOffers, kLimToastNoLimit, kLimToastKeepOne, kLimToastBadLimit, kLimToastBusy, kLimToastRate,
                                              kLimToastChargerResets, kLimToastSinkResets, kLimToastSinkIgnores, kLimToastEpr,
                                              kLimToastConfirm, kLimToastResetting, kLimToastRescan, kLimToastNoReset,
                                              kLimToastSelfPowered, kLimToastRetry, kLimToastNoLink};
