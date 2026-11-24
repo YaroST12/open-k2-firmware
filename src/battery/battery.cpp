@@ -452,9 +452,9 @@ bool has_efficiency(const Record &r) {
 }
 
 void Recorder::resumed() {
+    last_ms_ = 0;      // the old boot's clock: the first sample adds its uptime to the gap (of a resume or a continue)
     if (!active()) return;
     primed_ = false;
-    last_ms_ = 0;      // the old boot's clock: the first sample adds its uptime to the gap
     quiet_ = false;    // the quiet timer (and a round trip's outflow hold) ran on the old boot's clock: it starts again
     resync_ = true;
     if (resumes_ < 63) resumes_++;

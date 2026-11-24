@@ -124,6 +124,7 @@ Service::Boot Service::boot(fs::Fs *f, Checkpoint *ckpt, bool warm) {
         }
         if (ckpt_->rec.dirty()) {                 // a run ended and the reset came before its write
             std::memcpy(static_cast<void *>(&rec_), &ckpt_->rec, sizeof rec_);
+            rec_.resumed();
             return Boot::Closed;
         }
     }

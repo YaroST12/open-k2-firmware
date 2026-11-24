@@ -1367,6 +1367,26 @@ void test_service_continue_refusals() {
     CHECK_EQ(int(b.rec().state()), int(State::Between));
 }
 
+// A warm reset after an end whose write had not gone out (Boot::Closed): a continue counts the uptime as the gap, not the
+// old boot's clock.
+void test_service_continue_after_closed_boot() {
+    Vol v;
+    Service::Checkpoint ck{};
+    {
+        Service s;
+        s.boot(&v.fs, &ck, false);
+        s.start(Mode::Charge, Wiring::SamePort, true);
+        std::uint32_t t = serve(s, 0, 3600'000, 5000, 1000, false);     // late in the old boot, no write allowed
+        s.rec().end_phase();
+        s.poll(t, 5000, 0, true, false);
+    }
+    Service s;
+    CHECK_EQ(int(s.boot(&v.fs, &ck, true)), int(Service::Boot::Closed));
+    CHECK_EQ(int(s.continue_run(0, true)), int(Service::Cont::Ok));
+    serve(s, 5000, 3000, 5000, 1000);
+    CHECK_EQ(s.rec().gap_s(), 5u);
+}
+
 // The thresholds the page shows (the service's) apply to the continued run; a cold boot after a continue resumes it.
 void test_service_continue_then_cold_boot() {
     Vol v;
@@ -1441,5 +1461,6 @@ int main() {
     test_service_continue_after_lost();
     test_service_continue_refusals();
     test_service_continue_then_cold_boot();
+    test_service_continue_after_closed_boot();
     return test_report("test_battery");
 }
