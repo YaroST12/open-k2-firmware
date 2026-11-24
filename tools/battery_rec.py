@@ -5,7 +5,7 @@ dict, and the remote status block (CMD_BATTERY 0x58, include/k2/core/remote_prot
 
 The 246-byte record is what /bt<id>.rec holds, what `k2_remote.py battery read` fetches and what a BATT QR share
 carries. Every value keeps its unit in the key name (_uwh microwatt-hours, _uah microamp-hours, _s seconds, _mv, _ma).
-Raw numbers only, no verdicts. Curve current keeps the power monitor's sign: positive = input port -> output port.
+Raw numbers only, no verdicts. Curve current keeps the power monitor's sign: positive = bottom port -> top port.
 """
 import struct
 
@@ -112,7 +112,7 @@ def decode_status(p):
         "state": _name(STATES, p[0], "state"), "mode": _name(MODES, p[1], "mode"), "wiring": _name(WIRINGS, p[2], "wiring"),
         "phases": p[3], "result": _name(RESULTS, p[4], "result"),
         "write_failed": bool(flags & 1), "unwritten": bool(flags & 2), "monitor": bool(flags & 4),
-        "efficiency_final": bool(flags & 8),
+        "efficiency_final": bool(flags & 8), "empty": bool(flags & 16),
         "id": rid, "end_ma": end_ma, "end_s": end_s, "run_s": run_s, "phase_s": phase_s,
         "in_uwh": uwh_in, "out_uwh": uwh_out, "in_uah": uah_in, "out_uah": uah_out,
         "efficiency_permille": None if eff == NO_RATIO else eff,
@@ -158,7 +158,7 @@ def render_status(s):
         lines.append(f"  efficiency {s['efficiency_permille'] / 10:.1f} %" + ("" if s["efficiency_final"] else " so far"))
     lines.append(f"  end rule: under {s['end_ma']} mA for {s['end_s']} s; next run wiring {s['next_wiring']}; "
                  f"{s['runs_stored']} runs stored" + ("; MONITOR OFFLINE" if not s["monitor"] else "")
-                 + ("; last record write FAILED" if s["write_failed"] else "") + ("; record not written yet" if s["unwritten"] else ""))
+                 + ("; last record write FAILED" if s["write_failed"] else "") + ("; record not written yet" if s["unwritten"] else "") + ("; empty run, not saved" if s.get("empty") else ""))
     if s["result"] != "ok":
         lines.append(f"  refused: {s['result']}")
     return "\n".join(lines)

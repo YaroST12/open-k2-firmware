@@ -21,17 +21,22 @@ Battery page of the ring (page 9).
 | Discharge | one discharge phase |
 | Round trip | a charge, a wait, then a discharge; the efficiency is Wh out / Wh in |
 
-The wiring says where the bank sits, and so which direction of the current is "in" and which is "out":
+A charge counts energy into the bank ("in"), a discharge energy out of it ("out"), whichever port the bank is on. The wiring
+only says which way the bank's outflow runs relative to its charge, which a round trip needs to see its discharge start:
 
 | Wiring | Charge (bank takes energy) | Discharge (bank gives energy) |
 | :--- | :--- | :--- |
-| Same port | charger on the input, bank on the output: forward = in | the bank stays on the output and feeds a load on the input: reverse = out |
-| Moved | charger on the input, bank on the output: forward = in | the bank moves to the input and feeds a load on the output: forward = out |
+| Same port | charger on one port, bank on the other | the bank stays put and feeds a load on the charger's port: the charge's opposite direction |
+| Moved | charger on one port, bank on the other | the bank moves to the charger's port and feeds a load on the other: the charge's direction |
 
 ## Sign convention, integration and dead-band
 
-- The samples keep the power monitor's sign: positive current = forward = input port to output port
-  (`k2/drivers/power_calc.hpp`). The record's curve keeps that sign; only the totals are mapped to the bank's in and out.
+- The samples keep the power monitor's sign: positive current = bottom port to top port (`k2/drivers/power_calc.hpp`,
+  `direction` "up"). The record's curve keeps that sign; only the totals are mapped to the bank's in and out.
+- The sign does not say which port the bank is on, so each phase takes the direction that carried more energy as its own:
+  in for a charge, out for a discharge (the two columns swap, Wh and mAh together, when the other direction overtakes). A
+  round trip's discharge waits for the outflow in the direction the charge and the wiring give (after a cold boot, the
+  charge's direction comes from the sign of its curve).
 - Every main-loop pass takes the latest sample (`power::read_raw()`, the monitor's 10 mA dead band already applied) and
   integrates the step since the previous one: trapezoid over the real time (mW x ms = uJ, mA x ms = uC). A step whose
   current changes sign is split at the zero crossing, so the two directions never cancel.
@@ -78,9 +83,12 @@ The same bytes are the flash file, the remote's `read` payload and the QR share 
 ## Storage and writes
 
 - One file per run, `/bt<id>.rec`, inline in the root directory's metadata pair; the newest 3 are kept (`store::kKeep`), the
-  oldest is pruned before a new file is written. Budget: 0 blocks (`tests/test_volume_budget.cpp`, the volume table in
+  oldest is pruned before a new file is written.
+- An empty run (under 1 mWh in and out: `0.000Wh` both ways) is not saved: no file, no kept run pruned for it. The footer
+  says `Empty run, not saved`; `battery status` says `empty run, not saved` (status flag 16). Budget: 0 blocks (`tests/test_volume_budget.cpp`, the volume table in
   `docs/ARCHITECTURE.md`); a fourth run would split the root pair (4 blocks).
-- Writes happen only at a phase boundary (the start, a phase end, the discharge's start, the finish), and only when the
+- Writes happen only at a phase boundary (a phase end, the discharge's start, the finish; not the start, so a run takes a
+  slot only once it measured something), and only when the
   main loop allows an erase (no charger test or PD Stress run owns the ports, the PD link quiet for the erase window). A
   phase that measures never writes. A failed write is retried every 10 s; the footer says `Run not saved to flash`.
 - A new run waits for the previous run's write: `start` refuses with Busy while that record is unwritten and a write is not
@@ -92,7 +100,8 @@ The same bytes are the flash file, the remote's `read` payload and the QR share 
 | :--- | :--- |
 | Warm reset (a pin, software or watchdog reset with the board powered: the reboot chord, `k2_remote reboot`) during a run | The SRAM checkpoint (`.noinit`, magic + CRC-16, rewritten every second and at every state change) still holds the recorder: the run goes on where it was; the reset gap is one counted gap, not integrated. `[BATT] boot resumed` |
 | Warm reset after a run ended but before its write | The checkpoint has the ended run: it is written at the first allowed moment. `[BATT] boot closed` |
-| Cold boot (power cut, VBUS dark; SRAM does not survive one on this board) while a phase measured | The newest file says measuring: its phase is marked Lost and the run is closed (totals up to the last write, which was the phase's start). The screen says `Cut short`. `[BATT] boot lost` |
+| Cold boot (power cut, VBUS dark; SRAM does not survive one on this board) while a first phase measured | Nothing was written yet: the run is gone. `[BATT] boot nothing` |
+| Cold boot while a round trip's discharge measured | The newest file says measuring: the discharge is marked Lost and the run is closed (the charge's totals; the discharge's were never written). The screen says `Cut short`. `[BATT] boot lost` |
 | Cold boot while a round trip waited between its phases | The run comes back between its phases; with moved wiring the swap counts as seen (moving the bank is usually what cut the power). `[BATT] boot waiting` |
 | Cold boot after a finished run | Nothing to resume; the run is on flash. |
 | Firmware update (DFU) | The app wipes SRAM before it enters the bootloader: a cold boot as above. |
@@ -115,7 +124,7 @@ The same bytes are the flash file, the remote's `read` payload and the QR share 
 
 | Command | Does |
 | :--- | :--- |
-| `status` | state, mode, wiring, phases, the last op's result, flags (write failed, unwritten, monitor, final efficiency), id, settings, run and phase seconds, uWh / uAh in and out, efficiency, stored runs, the next run's wiring |
+| `status` | state, mode, wiring, phases, the last op's result, flags (write failed, unwritten, monitor, final efficiency, empty run not saved), id, settings, run and phase seconds, uWh / uAh in and out, efficiency, stored runs, the next run's wiring |
 | `start charge\|discharge\|round-trip [--wiring same-port\|moved]` | starts a run (refusals: busy, no monitor) |
 | `end`, `next`, `finish` | ends the phase, starts the discharge, ends the run |
 | `config [--end-ma N] [--end-s N] [--wiring W]` | the end rule and the next run's wiring |

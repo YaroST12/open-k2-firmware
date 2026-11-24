@@ -169,23 +169,17 @@ void BatteryPage::action_row(Act a, bool focused, kit::RowSpec &out) {
     case Act::In:
     case Act::Out: {
         const bool in = a == Act::In;
-        out.marker = kit::Marker::Icon;
-        out.icon = Icon::Bolt;
         tail_.put(view::wh(in ? s.sum.uwh_in : s.sum.uwh_out).view());
         out.tail_color = kEnergy;
         note_row_.put(view::mah(in ? s.sum.uah_in : s.sum.uah_out).view()).put(in ? " into the bank" : " out of the bank");
         break;
     }
     case Act::Time:
-        out.marker = kit::Marker::Icon;
-        out.icon = Icon::Clock;
         tail_.put(view::hms(s.secs).view());
         if (s.gaps) note_row_.put_u32(s.gaps).put(s.gaps == 1 ? " gap not counted" : " gaps not counted");
         else if (s.phases == 2) note_row_.put(view::hms(s.secs - s.phase_secs).view()).put(" in, ").put(view::hms(s.phase_secs).view()).put(" out");
         break;
     case Act::Eff:
-        out.marker = kit::Marker::Icon;
-        out.icon = Icon::Battery;
         if (s.eff != bt::kNoRatio) tail_.put(view::pct(s.eff).view());
         else tail_.put("none");
         out.tail_color = s.eff_final ? kInk : kInk2;
@@ -198,39 +192,25 @@ void BatteryPage::action_row(Act a, bool focused, kit::RowSpec &out) {
     case Act::Next: note = kNotes[5]; break;
     case Act::Finish: note = kNotes[6]; break;
     case Act::Wiring:
-        out.marker = kit::Marker::Icon;   // the settings carry icons as on the Settings and Display pages
-        out.icon = Icon::Plug;
         tail_.put(same ? "Same port" : "Moved");
         note = same ? kNotes[7] : kNotes[8];
         break;
     case Act::EndMa:
-        out.marker = kit::Marker::Icon;
-        out.icon = Icon::Meter;
         tail_.put_u32(cfg.end_ma).put("mA");
         note = kNotes[9];
         break;
     case Act::EndS:
-        out.marker = kit::Marker::Icon;
-        out.icon = Icon::Clock;
         if (cfg.end_s >= 120 && cfg.end_s % 60 == 0) tail_.put_u32(cfg.end_s / 60u).put_char('m');
         else tail_.put_u32(cfg.end_s).put_char('s');
         note = kNotes[10];
         break;
     case Act::Runs:
-        out.marker = kit::Marker::Icon;
-        out.icon = Icon::Report;
         out.chevron = true;
         note = kNotes[11];
         break;
     case Act::Share:
-        out.marker = kit::Marker::Icon;
-        out.icon = Icon::Phone;   // a phone reads the QR
         note = kNotes[12];
         break;
-    }
-    if (out.marker != kit::Marker::Icon) {   // the verbs: a start, or an end (the cross)
-        out.marker = kit::Marker::Icon;
-        out.icon = a == Act::EndPhase || a == Act::Finish ? Icon::Cross : Icon::Bolt;
     }
     if (armed_until_ && a == armed_act_ && armed()) out.text_color = kCaution;
     out.tail = tail_.view();
@@ -291,9 +271,9 @@ void BatteryPage::update(uint32_t now_ms) {
     } else if (view_ == View::Runs) {
         f.put_u32(static_cast<uint32_t>(n_runs_)).put(" of ").put_u32(bt::store::kKeep).put(" kept on flash");
     } else if (view_ == View::Stored) {
-        tone = view::footer(shown_, true, false, false, f);
+        tone = view::footer(shown_, true, false, false, false, f);
     } else {
-        tone = view::footer(shown_, bt::hw::monitor_online(), sv.write_failed(), sv.rec().dirty(), f);
+        tone = view::footer(shown_, bt::hw::monitor_online(), sv.write_failed(), sv.rec().dirty() && !sv.discarded(), sv.discarded(), f);
     }
     const bool pill = tone != FooterTone::Info && !f.view().empty();
     // A pill floats over the rows and a new one never covers the old one's ends: repaint the rows under it first.

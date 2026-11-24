@@ -110,9 +110,9 @@ static void test_ident_and_footer() {
     CHECK(eq(id.head.view(), "No run"));
     CHECK(id.dim);
     StrBuf<28> f;
-    CHECK_EQ(int(view::footer(view::shown(record_of(r), false), true, false, false, f)), int(FooterTone::Info));
+    CHECK_EQ(int(view::footer(view::shown(record_of(r), false), true, false, false, false, f)), int(FooterTone::Info));
     f.clear();
-    CHECK_EQ(int(view::footer(view::shown(record_of(r), false), false, false, false, f)), int(FooterTone::Error));
+    CHECK_EQ(int(view::footer(view::shown(record_of(r), false), false, false, false, false, f)), int(FooterTone::Error));
     CHECK(eq(f.view(), "No power monitor"));
     r.start(bt::Mode::Charge, bt::Wiring::SamePort, bt::Config{}, 4);
     feed(r, 0, 3'912'000, 5000, 1000);
@@ -122,10 +122,10 @@ static void test_ident_and_footer() {
     CHECK(eq(id.head.view(), "Charging"));
     CHECK(eq(id.line.view(), "Same port, 1h05m11s, 5.431Wh in"));   // 5 W for 3911 s = 5.4319 Wh, cut
     f.clear();
-    CHECK_EQ(int(view::footer(s, true, false, false, f)), int(FooterTone::Info));
+    CHECK_EQ(int(view::footer(s, true, false, false, false, f)), int(FooterTone::Info));
     CHECK(eq(f.view(), "Ends under 50mA for 60s"));
     f.clear();
-    CHECK_EQ(int(view::footer(s, true, true, false, f)), int(FooterTone::Caution));   // the last write failed
+    CHECK_EQ(int(view::footer(s, true, true, false, false, f)), int(FooterTone::Caution));   // the last write failed
     StrBuf<29> b;
     view::bench_status(s, b);
     CHECK(eq(b.view(), "Charging 1h05m, 5.431Wh"));
@@ -144,8 +144,11 @@ static void test_ident_and_footer() {
     CHECK_EQ(id.n, 1);
     CHECK(eq(id.chip[0].t.view(), "Round trip"));
     f.clear();
-    CHECK_EQ(int(view::footer(s, true, false, false, f)), int(FooterTone::Ok));
+    CHECK_EQ(int(view::footer(s, true, false, false, false, f)), int(FooterTone::Ok));
     CHECK(eq(f.view(), "Round trip 80.0% efficient"));
+    f.clear();
+    CHECK_EQ(int(view::footer(s, true, false, false, true, f)), int(FooterTone::Caution));   // ended empty: not saved
+    CHECK(eq(f.view(), "Empty run, not saved"));
     b.clear();
     view::bench_status(s, b);
     CHECK(eq(b.view(), "Round trip 80.0%"));
@@ -203,6 +206,10 @@ static void test_page() {
     press(ui, Button::Ok, t);
     CHECK_EQ(int(bt::hw::service().rec().state()), int(bt::State::Measuring));
     CHECK_EQ(int(bt::hw::service().rec().mode()), int(bt::Mode::Charge));
+    g_stub.pm.vbus_mv = 5000;
+    g_stub.pm.current_ma = 1000;                                                   // 5 W for 3 s: a run worth saving
+    for (int i = 0; i < 4; i++) bt::hw::poll(t += 1000, true);
+    g_stub.pm.current_ma = 0;
     // the running dot on another page
     ui.on_button(Button::Back, ButtonEvent::Short, t);   // pops the place
     ui.tick(t += 100);
@@ -234,9 +241,9 @@ static void test_page() {
     CHECK_EQ(int(ui.menu()), int(Menu::Battery));
 }
 
-// Every row of the list carries a marker (RowList: the settings rows had none beside the icon rows). A text line is a band of
-// rows with ink at x28.. at least 10 px tall (a font 12 note is shorter); its marker box x8..19 must hold ink too.
-static int rows_without_marker() {
+// The rows are marker-less like the Tools and Settings menus: text at x28, nothing in the marker box. A text line is a band of
+// rows with ink at x28.. at least 10 px tall (a font 12 note is shorter); its marker box x8..19 must stay empty.
+static int rows_with_marker() {
     const int x0 = kOppRailThickness;
     int bad = 0;
     for (int y = kit::kIdDashY + 2; y < 240;) {
@@ -252,15 +259,15 @@ static int rows_without_marker() {
         if (y1 - y >= 10) {
             bool marker = false;
             for (int yy = y; yy < y1 && !marker; yy++) marker = ink_row(yy, 8, 20);
-            if (!marker) std::printf("  a row at y%d..%d has no marker\n", y, y1 - 1);
-            bad += !marker;
+            if (marker) std::printf("  a row at y%d..%d has a marker\n", y, y1 - 1);
+            bad += marker;
         }
         y = y1;
     }
     return bad;
 }
 
-static void test_every_row_has_a_marker() {
+static void test_rows_have_no_marker() {
     Ui &ui = fresh_ui();
     std::uint32_t t = 1000;
     ui.tick(t);
@@ -269,11 +276,11 @@ static void test_every_row_has_a_marker() {
     CHECK(p != nullptr);
     if (!p) return;
     for (int i = 0; i < 20 && p->selected() > 0; i++) press(ui, Button::Minus, t);
-    int bad = rows_without_marker(), seen = 1;
+    int bad = rows_with_marker(), seen = 1;
     while (p->selected() < p->list_state().count - 1 && seen < 20) {
         ++seen;
         press(ui, Button::Plus, t);
-        bad += rows_without_marker();
+        bad += rows_with_marker();
     }
     CHECK_EQ(seen >= 6, true);   // walked the whole list: three starts, three settings
     CHECK_EQ(bad, 0);
@@ -296,7 +303,7 @@ int main() {
     test_rows();
     test_ident_and_footer();
     test_page();
-    test_every_row_has_a_marker();
+    test_rows_have_no_marker();
     test_classic();
     return test_report("test_ui_battery");
 }
