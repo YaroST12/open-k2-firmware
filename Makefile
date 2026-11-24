@@ -696,7 +696,7 @@ $(HOST_DIR)/test_world_svooc: $(WSVOOC_OBJS) $(filter-out $(OBJ_DIR)/lib/tests/u
 	@$(HOST_CXX) $(HOST_CXXFLAGS) $^ -o $@
 
 # The spoof state test uses its fake receive/transmit hook, not the UI driver's stand-ins.
-$(HOST_DIR)/test_emk_spoof: $(OBJ_DIR)/tests/test_emk_spoof.o $(patsubst %.cpp, $(OBJ_DIR)/lib/%.o, src/pd/emk_spoof.cpp src/pd/emk_quirk.cpp src/pd/emk_respond.cpp src/pd/emrec.cpp src/pd/xiaomi_auth.cpp src/core/fmt.cpp)
+$(HOST_DIR)/test_emk_spoof: $(OBJ_DIR)/tests/test_emk_spoof.o $(patsubst %.cpp, $(OBJ_DIR)/lib/%.o, src/pd/emk_spoof.cpp src/pd/emk_quirk.cpp src/pd/emk_respond.cpp src/pd/emrec.cpp src/pd/xiaomi_auth.cpp src/core/fmt.cpp src/core/strpack.cpp)
 	@$(HOST_CXX) $(HOST_CXXFLAGS) $^ -o $@
 
 # The real accelerometer driver runs against this test's fake INA-bus transport.
