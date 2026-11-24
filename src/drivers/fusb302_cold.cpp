@@ -1087,7 +1087,7 @@ pd::IqRefusal interrogate_start(const pd::IqFacts& outside) {
     pd::IqFacts f = outside;
     f.cc = g_active_cc != 0;
     f.inline_link = inline_now();
-    f.busy = f.busy || engines_busy() || g_lim_on;
+    f.busy = f.busy || engines_busy() || (g_lim_on && lim().armed());
     const pd::SinkStatus& ss = sink().status();
     f.own_contract = f.own_contract || ss.held || (ss.state != pd::SinkState::Idle && ss.state != pd::SinkState::Failed);
     f.self_powered = f.self_powered || self_powered();
@@ -1141,6 +1141,7 @@ void limit_disarm() {
 
 bool limit_armed() { return g_lim_on && lim().armed(); }
 const pd::LimStatus& limit_status() { return lim().status(); }
+bool limit_holds_sink() { return g_lim_on && lim().sink_holds_forged(); }
 
 namespace detail {
 void lim_report() {
@@ -1163,7 +1164,7 @@ void lim_report() {
         if (s.state == pd::LimState::Off) K2LOG("[LIM] t=%u off: %s\n", t, pd::lim_why_name(s.why));
         else K2LOG("[LIM] t=%u %s\n", t, pd::lim_state_name(s.state));
     }
-    if (!lim().armed()) g_lim_on = false;
+    if (!lim().armed() && !lim().sink_holds_forged()) g_lim_on = false;   // fed on until the sink has a real list again
 }
 }  // namespace detail
 

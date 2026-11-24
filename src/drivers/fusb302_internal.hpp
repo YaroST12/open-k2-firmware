@@ -129,7 +129,7 @@ extern pd::IqStep g_iq_step;
 extern std::uint8_t g_iq_closed;
 extern bool g_iq_inited;
 extern bool g_lim_inited;
-extern bool g_lim_on;   // the PD limiter is armed (or has a stop still to report): the hot paths feed and tick it only then
+extern bool g_lim_on;   // the PD limiter is armed, has a stop to report or its list is still the sink's: the hot paths feed it then
 #if K2_HOST_REPORT
 extern LoopHost* g_lh;
 extern bool g_lh_dfp;

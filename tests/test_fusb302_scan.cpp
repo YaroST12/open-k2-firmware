@@ -4674,6 +4674,7 @@ void test_inline_pd_limiter_injects_the_clamped_list_and_sees_the_sink_obey();
 void test_pd_limiter_waits_through_a_replug_and_acts_on_a_far_request();
 void test_pd_limiter_arm_without_a_heard_list_and_unseeded();
 void test_pd_limiter_tx_hr_clears_watch_and_rx_nonempty_guards_tx();
+void test_pd_limiter_off_keeps_track_of_the_forged_list_until_the_reset();
 void test_stress_soft_reset_goes_out_and_keeps_rd_when_the_source_answers();
 void test_stress_soft_reset_to_a_silent_source_asks_for_the_caps_with_rd_kept();
 void test_a_request_is_answered_in_the_service_pass_that_reads_it();
@@ -5829,6 +5830,7 @@ int main() {
     test_pd_limiter_waits_through_a_replug_and_acts_on_a_far_request();
     test_pd_limiter_arm_without_a_heard_list_and_unseeded();
     test_pd_limiter_tx_hr_clears_watch_and_rx_nonempty_guards_tx();
+    test_pd_limiter_off_keeps_track_of_the_forged_list_until_the_reset();
     test_stress_soft_reset_goes_out_and_keeps_rd_when_the_source_answers();   // each ends with a detach
     test_stress_soft_reset_to_a_silent_source_asks_for_the_caps_with_rd_kept();
     test_a_request_is_answered_in_the_service_pass_that_reads_it();   // ends with a detach
@@ -6361,6 +6363,42 @@ void test_pd_limiter_tx_hr_clears_watch_and_rx_nonempty_guards_tx() {
     CHECK_EQ(int(fusb302::limit_status().state), int(pd::LimState::Injected));
     fusb302::limit_disarm();
     service_ms(3);
+    end_inline_case();
+}
+
+// Hardware 2026-11-24: `pd-limit off` left the sink on its limited contract. Off is only real once the sink has the charger's own
+// list: the driver remembers that a forged list is still out after the stop, the inline Hard Reset the off path sends goes out, and
+// the renegotiation after it passes untouched (no forged frame) and clears the mark.
+void test_pd_limiter_off_keeps_track_of_the_forged_list_until_the_reset() {
+    pd::LimFacts f;
+    attach_inline();
+    CHECK_EQ(int(fusb302::limit_arm(30000, f)), int(pd::LimRefusal::None));
+    g_log.clear(); g_usb.clear();
+    push_frame(0xE0, hdr(1, 2, true, 0), {0x0A01912Cu, 0x0004B12Cu});
+    push_frame(0xE0, hdr(2, 1, false, 0), {0x2204B12Cu});
+    push_frame(0xE0, hdr(3, 0, true, 1), {});
+    push_frame(0xE0, hdr(6, 0, true, 2), {});
+    for (int i = 0; i < 100 && tx_headers().empty(); i++) { g_ms += 1; fusb302::service(); }
+    CHECK_EQ(tx_headers().size(), 1u);
+    CHECK_EQ(fusb302::limit_holds_sink(), true);
+    push_frame(0xE0, hdr(2, 1, false, 1), {0x1004B12Cu});                    // the sink obeys: 5 V 3 A
+    service_ms(3);
+    fusb302::limit_disarm();
+    service_ms(3);
+    CHECK_EQ(fusb302::limit_armed(), false);
+    CHECK_EQ(fusb302::limit_holds_sink(), true);                             // off, the sink still on our list
+    g_log.clear(); g_usb.clear();
+    CHECK_EQ(fusb302::sink_hard_reset(true), true);                          // the off path's reset
+    service_ms(10);
+    CHECK_EQ(hard_reset_written(), true);
+    g_log.clear();
+    push_frame(0xE0, hdr(1, 2, true, 0), {0x0A01912Cu, 0x0004B12Cu});        // the charger's own list after the reset
+    push_frame(0xE0, hdr(2, 1, false, 0), {0x2204B12Cu});                    // the sink takes 15 V 3 A again
+    push_frame(0xE0, hdr(3, 0, true, 1), {});
+    push_frame(0xE0, hdr(6, 0, true, 2), {});
+    service_ms(700);
+    CHECK_EQ(tx_headers().size(), 0u);                                       // nothing forged
+    CHECK_EQ(fusb302::limit_holds_sink(), false);
     end_inline_case();
 }
 

@@ -72,6 +72,7 @@ struct StubState {
     uint32_t lim_arm_mw = 0;
     k2::pd::LimConfig lim_arm_cfg{};
     int lim_arms = 0, lim_offs = 0;
+    bool lim_held = false;               // limit_holds_sink(): set, or implied by Injected / Limited
     bool lim_arm_seeded = true;          // the last arm's seed flag
     int lim_arm_resets = 0;              // hard_resets when the last arm was made (proves reset-then-arm)
     bool lim_comeback_save_fail = false;

@@ -237,7 +237,7 @@ public:
     // with no USB host supply).
     enum class LinkResetResult : uint8_t { Cycled, HardReset, NeedConfirm, SelfPowered, Busy, NoLink };
     bool link_reset_inline() const;
-    LinkResetResult link_reset(bool confirmed, uint32_t now_ms, bool allow_bus_powered = false);
+    LinkResetResult link_reset(bool confirmed, uint32_t now_ms, bool allow_bus_powered = false, bool inline_known = false);
     // The comeback of a bridged Refresh (core/rescan.cpp): Connection on its Source tab, saying "Rescanned (rebooted)".
     bool land_rescanned(uint32_t now_ms);
     // Submenus: a small stack (depth 3: Tools > Connection > Saved cables > Share). While one is open it gets every event,

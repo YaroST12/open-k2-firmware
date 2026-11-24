@@ -470,6 +470,115 @@ int main() {
         CHECK_EQ(int(lim_gate({true}, 30000)), int(LimRefusal::Busy));
     }
 
+    // ---- a sink that takes a 0 mA placeholder (hardware 2026-11-24, 100 W charger -> K2 -> power bank) ----
+    // From a 9 V contract, re-armed Fixed 15V/3A: the forged list kept 20 V as a 0 mA placeholder (PDO 0x00064000) for the PPS
+    // behind it; the bank asked position 4 at 0 mA (RDO 0x41000000) twice, the limiter counted it ignored and gave up at 20 V.
+    // A placeholder the sink takes is cut: the list is offered again ending before it, and that is no ignore.
+    {
+        const std::uint32_t bank[5] = {fixed(5000, 3000, kFlags1), fixed(9000, 3000), fixed(15000, 3000), fixed(20000, 5000),
+                                       pps(21000, 3300, 5000)};
+        constexpr std::uint32_t kRdo0mA = 0x41000000u;   // position 4, no USB suspend, 0 mA
+        LimConfig f15{};
+        f15.fixed.max_mv = 15000;
+        f15.fixed.max_ma = 3000;
+        Rig r;
+        r.negotiate(0, rq_fixed(2, 3000, 3000), bank);   // the 9 V contract the 30 W limit left
+        CHECK_COND(r.lim.arm(f15, r.now, &r.watch));
+        TxMsg m;
+        CHECK_COND(r.tx(m));
+        CHECK_EQ(unsigned(m.len / 4), 5u);
+        CHECK_EQ(word(m, 3), 0x00064000u);                // 20 V neutered: the PPS after it keeps position 5
+        r.request(kRdo0mA);
+        CHECK_COND(r.lim.armed());
+        CHECK_EQ(r.lim.status().ignores, 0);
+        r.accept_ready(3);                                // the charger accepts its real 20 V object
+        CHECK_COND(r.tx(m, kLimGapMs));
+        CHECK_EQ(unsigned(m.len / 4), 3u);                // 5 / 9 / 15 V: nothing above the limit left to take
+        CHECK_EQ(word(m, 2), fixed(15000, 3000));
+        r.request(rq_fixed(3, 3000, 3000));
+        CHECK_EQ(int(r.lim.status().state), int(LimState::Limited));
+        CHECK_EQ(r.lim.status().ignores, 0);
+        // a sink that asks position 4 again asks outside its list: offered again, then counted (two answers like it end the limit)
+        {
+            Rig x = r;
+            x.request(kRdo0mA);
+            CHECK_EQ(int(x.lim.status().state), int(LimState::Negotiating));
+            x.accept_ready(5);
+            CHECK_COND(x.tx(m, kLimGapMs));
+            CHECK_EQ(unsigned(m.len / 4), 3u);
+            x.request(kRdo0mA);
+            CHECK_EQ(x.lim.status().ignores, 1);
+            CHECK_COND(x.lim.armed());
+        }
+        // the cut holds across a Hard Reset (same charger) and ends with the attach
+        r.lim.on_hard_reset(r.now += 1000);
+        r.negotiate(0, rq_fixed(4, 0, 0, 1u << 24), bank);
+        CHECK_COND(r.tx(m));
+        CHECK_EQ(unsigned(m.len / 4), 3u);
+        r.lim.on_detach();
+        r.negotiate(0, rq_fixed(2, 3000, 3000), bank);
+        CHECK_COND(r.tx(m, kLimGapMs));
+        CHECK_EQ(unsigned(m.len / 4), 5u);
+    }
+
+    // ---- the sink keeps a forged list past a stop: only a real list, a Hard Reset or a detach hands the charger's back ----
+    {
+        TxMsg m;
+        Rig r;
+        r.lim.arm(30000, r.now);
+        r.negotiate(0, rq_fixed(5, 5000, 5000));
+        CHECK_COND(!r.lim.sink_holds_forged());
+        CHECK_COND(r.tx(m));
+        CHECK_COND(r.lim.sink_holds_forged());
+        r.request(rq_fixed(2, 3000, 3000));
+        r.lim.disarm();
+        CHECK_COND(r.lim.sink_holds_forged());          // off, yet the sink is still on 9 V 3 A from our list
+        r.caps(3);
+        CHECK_COND(!r.lim.sink_holds_forged());         // the charger's own list reached it
+
+        Rig g;                                            // a give-up leaves the last list with the sink too
+        g.lim.arm(30000, g.now);
+        g.negotiate(0, rq_fixed(5, 5000, 5000));
+        for (int i = 0; i < 4 && g.lim.armed(); i++) {
+            g.tx(m, kLimGapMs);
+            g.now += kLimVerifyMs + 1;
+            g.lim.tick(g.now);
+        }
+        CHECK_EQ(int(g.lim.status().why), int(LimWhy::SinkIgnores));
+        CHECK_COND(g.lim.sink_holds_forged());
+        g.lim.on_hard_reset(g.now);
+        CHECK_COND(!g.lim.sink_holds_forged());
+
+        Rig d;
+        d.lim.arm(30000, d.now);
+        d.negotiate(0, rq_fixed(5, 5000, 5000));
+        CHECK_COND(d.tx(m));
+        d.lim.disarm();
+        d.lim.on_detach();
+        CHECK_COND(!d.lim.sink_holds_forged());
+    }
+
+    // ---- re-armed to a limit the charger's list already meets: the sink, still on the old forged list, gets the real one ----
+    {
+        const std::uint32_t c45[3] = {fixed(5000, 3000, kFlags1), fixed(9000, 3000), fixed(15000, 3000)};
+        TxMsg m;
+        Rig r;
+        r.lim.arm(30000, r.now);
+        r.negotiate(0, rq_fixed(3, 3000, 3000), c45);
+        CHECK_COND(r.tx(m));
+        CHECK_EQ(unsigned(m.len / 4), 2u);
+        r.request(rq_fixed(2, 3000, 3000));
+        r.accept_ready(3);
+        CHECK_EQ(int(r.lim.status().state), int(LimState::Limited));
+        CHECK_COND(r.lim.arm(45000, r.now, &r.watch));   // nothing left to clamp
+        CHECK_COND(r.tx(m, kLimGapMs));
+        CHECK_EQ(unsigned(m.len / 4), 3u);
+        CHECK_EQ(word(m, 2), c45[2]);
+        r.request(rq_fixed(3, 3000, 3000));
+        CHECK_EQ(int(r.lim.status().state), int(LimState::Limited));
+        CHECK_COND(!r.lim.sink_holds_forged());          // it was the charger's own list: off has nothing to undo
+    }
+
     // ---- the Max A picker: Max, then 1 A up in 0.25 A steps to the offer, the offer's exact maximum last ----
     {
         const auto amps = [](std::uint16_t offer) {

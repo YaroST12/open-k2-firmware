@@ -423,7 +423,10 @@ bool Ui::pd_limit_link_live() const {
 
 Ui::LimitSet Ui::pd_limit_set(const pd::LimConfig &cfg, bool off, bool confirmed, uint32_t now_ms) {
     if (off) lim_comeback_scrub_ = false;
-    if (off && !fusb302::limit_armed()) return LimitSet::Done;
+    // Off undoes a forged list the sink still holds (a give-up's included); with none out there is nothing to reset.
+    const bool held = off && fusb302::limit_holds_sink();   // our list on the wire: inline, whatever the latch says
+    const bool undo = !off || held;
+    if (off && !undo && !fusb302::limit_armed()) return LimitSet::Done;
     if (!off) {   // the gate before the reset: a refused limit never costs a link reset
         pd::LimFacts f;
         f.busy = port_owner_busy();
@@ -435,13 +438,13 @@ Ui::LimitSet Ui::pd_limit_set(const pd::LimConfig &cfg, bool off, bool confirmed
     }
     bool seed = true;
     LimitSet res = LimitSet::Done;
-    if (pd_limit_link_live()) {
+    if (undo && (pd_limit_link_live() || held)) {
         const bool bus_pwr = fusb302::self_powered() || power_source::bus_powered();
         if (confirmed && bus_pwr && !off && !limcomeback::save(cfg)) {
             res = LimitSet::NoReset;   // never cut VBUS unless comeback persisted: arm seeded and ask to replug
         } else {
             if (confirmed && bus_pwr && off) limcomeback::clear();
-            switch (link_reset(confirmed, now_ms, /*allow_bus_powered=*/true)) {
+            switch (link_reset(confirmed, now_ms, /*allow_bus_powered=*/true, held)) {
             case LinkResetResult::HardReset:
             case LinkResetResult::Cycled: seed = false; res = LimitSet::DoneReset; break;   // the contract the sniffer holds is ending
             case LinkResetResult::NeedConfirm: return LimitSet::NeedConfirm;
@@ -463,7 +466,7 @@ Ui::LimitSet Ui::pd_limit_set(const pd::LimConfig &cfg, bool off, bool confirmed
                 lim_comeback_scrub_at_ms_ = now_ms + 5000;
             }
         }
-    } else if (link_reset_inline() && (fusb302::contract().valid || (ctx_.pm_online && ctx_.vbus_fast_mv > pd::kVSafe5MaxMv))) {
+    } else if (undo && link_reset_inline() && (fusb302::contract().valid || (ctx_.pm_online && ctx_.vbus_fast_mv > pd::kVSafe5MaxMv))) {
         res = LimitSet::NoReset;   // a contract joined mid-way, no Request heard: nothing to seed from, the sink must re-ask
     }
     if (off) {
@@ -1571,9 +1574,9 @@ bool Ui::link_reset_inline() const {
     return acc_mv >= 0 && pd::sink_present(acc_mv);
 }
 
-Ui::LinkResetResult Ui::link_reset(bool confirmed, uint32_t now_ms, bool allow_bus_powered) {
+Ui::LinkResetResult Ui::link_reset(bool confirmed, uint32_t now_ms, bool allow_bus_powered, bool inline_known) {
     if (ports_busy()) return LinkResetResult::Busy;
-    const bool inl = link_reset_inline();
+    const bool inl = inline_known || link_reset_inline();
     if (inl) {
         if (!allow_bus_powered && (fusb302::self_powered() || power_source::bus_powered())) return LinkResetResult::SelfPowered;
         if (!confirmed) return LinkResetResult::NeedConfirm;

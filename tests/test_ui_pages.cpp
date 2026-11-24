@@ -2632,6 +2632,40 @@ static void test_pd_limit_no_live_contract_no_reset() {
     }
 }
 
+// Hardware 2026-11-24: off left the sink on the limited contract. Off resets whenever the sink still holds a forged list, a
+// give-up included (the limiter is already off then); with no forged list out there is nothing to undo and no reset.
+static void test_pd_limit_off_resets_while_the_sink_holds_the_list() {
+    Ui &ui = fresh_ui();
+    uint32_t t = g_stub.ms;
+    live_contract();
+    g_stub.lim = {};
+    g_stub.lim.why = pd::LimWhy::SinkIgnores;           // given up: off, the forged list still with the sink
+    g_stub.lim_held = true;
+    g_stub.lim_offs = 0;
+    CHECK_EQ(int(ui.pd_limit_set(pd::LimConfig{}, true, false, t)), int(Ui::LimitSet::NeedConfirm));
+    CHECK_EQ(g_stub.hard_resets, 0);
+    CHECK_EQ(int(ui.pd_limit_set(pd::LimConfig{}, true, true, t + 10)), int(Ui::LimitSet::DoneReset));
+    CHECK_EQ(g_stub.hard_resets, 1);
+    CHECK_EQ(g_stub.lab_hard_resets, 1);                // the inline Hard Reset
+    // no inline latch and no sniffed contract (a far-sink attach): the held list alone is the evidence, the reset is inline
+    idle_link();
+    g_stub.hard_resets = g_stub.lab_hard_resets = 0;
+    g_stub.lim_held = true;
+    CHECK_EQ(int(ui.pd_limit_set(pd::LimConfig{}, true, false, t + 12)), int(Ui::LimitSet::NeedConfirm));
+    CHECK_EQ(int(ui.pd_limit_set(pd::LimConfig{}, true, true, t + 14)), int(Ui::LimitSet::DoneReset));
+    CHECK_EQ(g_stub.lab_hard_resets, 1);
+    live_contract();
+    g_stub.hard_resets = 1;
+    // armed, nothing forged yet: off just disarms
+    g_stub.lim_held = false;
+    g_stub.lim_offs = 0;
+    g_stub.lim.state = pd::LimState::Armed;
+    CHECK_EQ(int(ui.pd_limit_set(pd::LimConfig{}, true, false, t + 20)), int(Ui::LimitSet::Done));
+    CHECK_EQ(g_stub.hard_resets, 1);
+    CHECK_EQ(g_stub.lim_offs, 1);
+    idle_link();
+}
+
 static void test_pd_limit_reset_refusals() {
     Ui &ui = fresh_ui();
     set_caps_65w();
@@ -2692,7 +2726,9 @@ static void test_pd_limit_reset_refusals() {
     CHECK_EQ(int(ui.pd_limit_set(pd::lim_config_watts(20000), false, true, t)), int(Ui::LimitSet::DoneReset));
     CHECK_EQ(g_stub.lim_comeback_present, true);
     CHECK_EQ(g_stub.lim_comeback_consumes, 0);
+    g_stub.lim_held = true;                                 // the reset arm's forged list reached the sink
     CHECK_EQ(int(ui.pd_limit_set(pd::LimConfig{}, true, true, t + 1000)), int(Ui::LimitSet::DoneReset));
+    g_stub.lim_held = false;
     CHECK_EQ(g_stub.lim_comeback_present, false);
     ui.tick(t + 6000);
     CHECK_EQ(g_stub.lim_comeback_consumes, 0);
@@ -2802,6 +2838,7 @@ int main() {
     test_pd_limit_confirm_window();
     test_pd_limit_no_live_contract_no_reset();
     test_pd_limit_reset_refusals();
+    test_pd_limit_off_resets_while_the_sink_holds_the_list();
     test_pd_limit_picker_offers_held_and_reset_row();
     test_over_load_above_5v_needs_confirm();
     test_usb_link_footer_icon_tone();
