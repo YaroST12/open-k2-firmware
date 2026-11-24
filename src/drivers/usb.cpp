@@ -179,7 +179,7 @@ void detach(std::uint32_t hold_ms) {
 }
 
 bool configured() { return tud_mounted(); }
-bool host_active() { return g_started && tud_mounted() && !tud_suspended(); }
+K2_HOT bool host_active() { return g_started && tud_mounted() && !tud_suspended(); }
 
 Lines lines() {
     Lines l;
