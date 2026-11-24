@@ -335,7 +335,7 @@ public:
     PanelLabels labels() { return resolve(strip_now()); }
     // True when the current page covers the strip (the QR code): its four labels are not drawn (GET_STATE part 3).
     bool strip_hidden() { return current().hides_strip(); }
-    bool charger_test_busy() const { return charger_test_.busy(); }
+    [[gnu::noinline]] bool charger_test_busy() const { return charger_test_.busy(); }   // 31 callers: one copy
     const charger_test::Runner& charger_test_results() const { return charger_test_.results(); }
     // The draft selection on the wire (Cmd::ChargerTest schema 2): the algorithm mask, with bit 31 = the PPS deep
     // sweep on, bit 30 = the AVS deep sweep on and bits 28..29 = the level (Options fields, not algorithm bits; all were
