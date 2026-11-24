@@ -90,7 +90,7 @@ public:
     // The one selection (what the next START presents). False = refused (malformed, or a clone that is not in the library);
     // the selection is unchanged then. A successful select is a pick: it counts as chosen and is written when it changes.
     bool select(ctcable::Choice);
-    ctcable::Choice selected() const { return selected_; }
+    [[gnu::noinline]] ctcable::Choice selected() const { return selected_; }
     // What somebody picked: selected() once it was picked (or read back from the record), Off while the selection is only the
     // default. Anything that acts without a START or a Spoof OK in front of it (the boot arming) reads this, never selected().
     ctcable::Choice chosen() const { return chosen_ ? selected_ : ctcable::Choice{}; }

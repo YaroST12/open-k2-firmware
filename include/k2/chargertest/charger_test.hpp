@@ -943,7 +943,7 @@ public:
     const mi_unlock::Mode* mi_mode(const Step&) const;
     // The deep sweep (ROADMAP "PPS deep sweep"): the finished rows (one per APDO part: a PPS sweep is split at 5 V) and the whole point record
     // (one int16 error per point). The results strip, the card and the remote read it through this view.
-    ctsweep::View sweep_view() const { return {{sweep_rows_.data(), n_sweep_rows_}, {sweep_err_.data(), sweep_used_}}; }
+    [[gnu::noinline]] ctsweep::View sweep_view() const { return {{sweep_rows_.data(), n_sweep_rows_}, {sweep_err_.data(), sweep_used_}}; }
     // PD Stress borrows the point buffer for its own record (no second 1.3 KB of .bss). Refused while a test runs; the last test's sweep
     // plot is gone afterwards (the view reads empty), which the caller says out loud. Empty span = refused.
     std::span<int16_t> claim_sweep_record() {

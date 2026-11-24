@@ -238,7 +238,9 @@ static void test_cable_step_marks() {
     // Armed Xiaomi 6A (row 2), pick Off: NEXT on Off, CURR on Xiaomi 6A in the Cable step; the Spoof view keeps ARMED.
     CHECK_EQ(int(l.arm(Choice{Kind::Builtin, 2}, f, name)), int(CableIdentityList::ArmErr::Ok));
     // the record the cable-auth answer is gated on (emk_spoof: g_rec == builtin_cable(kXiaomi6aId)) is what the list arms
-    CHECK_EQ(emk_spoof::matches(emrec::builtin_cable(emrec::kXiaomi6aId), emk_quirk::builtin_quirks(emrec::kXiaomi6aId)), true);
+    emk_quirk::Quirks xq;
+    emk_quirk::builtin_quirks(emrec::kXiaomi6aId, xq);
+    CHECK_EQ(emk_spoof::matches(emrec::builtin_cable(emrec::kXiaomi6aId), xq), true);
     CHECK_EQ(l.select(Choice{}) ? 1 : 0, 1);
     CHECK_EQ(int(l.row(0, V::CableStep).mark), int(CableIdentityList::Mark::Next));
     CHECK_EQ(int(l.row(2, V::CableStep).mark), int(CableIdentityList::Mark::Curr));

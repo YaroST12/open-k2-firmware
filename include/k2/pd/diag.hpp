@@ -93,7 +93,7 @@ inline constexpr std::uint32_t kOverGapMs = 300;        // ... longer than this 
 // mostly inside the contract do not count here (OverDraw covers them).
 inline constexpr std::uint32_t kSustainMs = 10000;
 inline constexpr unsigned kSustainPct = 50;
-constexpr std::uint32_t over_limit_ma(std::uint32_t contract_ma) { return contract_ma * kOverPermille / 1000 + kOverOffsetMa; }
+[[gnu::noinline]] constexpr std::uint32_t over_limit_ma(std::uint32_t contract_ma) { return contract_ma * kOverPermille / 1000 + kOverOffsetMa; }
 
 // One tracked VDM request (SVID << 8 | command) with its count and the last answer.
 struct VdmKey {

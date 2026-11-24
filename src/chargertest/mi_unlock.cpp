@@ -11,15 +11,7 @@ namespace k2::mi_unlock {
 namespace {
 using pd::PdoType;
 
-struct Out {
-    step_label::Text& t;
-    void put(char c) { if (t.len + 1 < step_label::kMax) t.s[t.len++] = c; t.s[t.len] = 0; }
-    void put(const char* s) { while (*s) put(*s++); }
-    void num(unsigned v) { char d[10]; int k = 0; do { d[k++] = char('0' + v % 10); v /= 10; } while (v && k < 10); while (k) put(d[--k]); }
-    void milli(unsigned v) {   // 5000 -> "5", 3250 -> "3.25"
-        num(v / 1000);
-        if (const unsigned frac = v % 1000 / 10) { put('.'); put(char('0' + frac / 10)); if (frac % 10) put(char('0' + frac % 10)); }
-    }
+struct Out : step_label::TextOut {
     void arrow() { put("\xE2\x86\x92"); }   // U+2192, one glyph cell
     bool top = false;   // the short form: a range by its top voltage alone
     void volts(const pd::Pdo& p) {
@@ -95,7 +87,7 @@ unsigned point_w(uint32_t after) {
 namespace {
 step_label::Text mode_form(const Mode& m, bool fresh, bool top) {
     step_label::Text t;
-    Out o{t, top};
+    Out o{{t}, top};
     const pd::Pdo a = pd::decode_pdo(m.after);
     if (!known(a)) return t;
     o.put(proto(a.type)); o.put(' ');
@@ -142,7 +134,7 @@ uint8_t chain_step(uint8_t code) { return chain_of(code) == Chain::Stalled ? uin
 
 step_label::Text chain_text(uint8_t code) {
     step_label::Text t;
-    Out o{t};
+    Out o{{t}};
     switch (chain_of(code)) {
     case Chain::NoSvid: o.put("no 0x2717 SVID"); break;
     case Chain::NoAnswer: o.put("no answer"); break;

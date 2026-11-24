@@ -6,21 +6,21 @@
 namespace k2::step_label {
 namespace ct = charger_test;
 using A = ct::Algorithm;
-namespace {
-struct Out {
-    Text& t;
-    void put(char c) { if (t.len + 1 < kMax) t.s[t.len++] = c; t.s[t.len] = 0; }
-    void put(const char* s) { while (*s) put(*s++); }
-    void num(unsigned v) { char d[10]; int k = 0; do { d[k++] = char('0' + v % 10); v /= 10; } while (v && k < 10); while (k) put(d[--k]); }
-    // 5000 -> "5", 3300 -> "3.3", 12140 -> "12.14" (volts or amps from milli-units, up to two decimals)
-    void milli(unsigned v) {
-        num(v / 1000);
-        if (const unsigned frac = v % 1000 / 10) {
-            put('.'); put(char('0' + frac / 10));
-            if (frac % 10) put(char('0' + frac % 10));
-        }
+
+void TextOut::put(char c) { if (t.len + 1 < kMax) t.s[t.len++] = c; t.s[t.len] = 0; }
+void TextOut::put(const char* s) { while (*s) put(*s++); }
+void TextOut::put(std::string_view s) { for (const char c : s) put(c); }
+void TextOut::num(unsigned v) { char d[10]; int k = 0; do { d[k++] = char('0' + v % 10); v /= 10; } while (v && k < 10); while (k) put(d[--k]); }
+void TextOut::milli(unsigned v) {
+    num(v / 1000);
+    if (const unsigned frac = v % 1000 / 10) {
+        put('.'); put(char('0' + frac / 10));
+        if (frac % 10) put(char('0' + frac % 10));
     }
-};
+}
+
+namespace {
+using Out = TextOut;
 bool is_avs(const ct::Step& s) { return s.algorithm == A::SprAvs || s.algorithm == A::EprAvs || (s.algorithm == A::Epr && s.avs); }
 // The offers whose rows ramp (one sequence of targets per PDO position).
 bool is_programmable(const ct::Step& s) { return s.algorithm == A::Pps || is_avs(s); }

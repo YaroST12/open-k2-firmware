@@ -24,7 +24,7 @@ bool Wizard::offer_available(const pd::SourceCaps &caps, unsigned idx, uint32_t 
     return pd::plan_request(caps, c, cap_mv, c.pos >= 8).err == pd::Err::Ok;
 }
 
-uint16_t Wizard::volt_step_mv(const pd::SourceCaps &caps) const {
+[[gnu::noinline]] uint16_t Wizard::volt_step_mv(const pd::SourceCaps &caps) const {
     return cursor < pd::kMaxPdos && caps.pdos[cursor].type == pd::PdoType::Avs ? kAvsStepMv : kPpsStepMv;
 }
 

@@ -1473,7 +1473,7 @@ constexpr bool wakes_screen(Cmd cmd, size_t payload_len) {
 // One row per command id (shell_rules_cover_all() is a static_assert, so a new id must pick a side). Ops rows: control when
 // the first payload byte is in `ops`, a request with no payload reads; ops of 32 and above count as control.
 enum class ShellKind : uint8_t { Read, Control, Ops, ChargerTest, Fc };
-struct ShellRule {
+struct [[gnu::packed]] ShellRule {   // packed: 6 B a row, not 8 (72 rows in flash)
     Cmd cmd;
     ShellKind kind;
     uint32_t ops = 0;

@@ -250,6 +250,7 @@ void Analyzer::hold_to(std::uint32_t ms) {
     }
 }
 
+[[gnu::noinline]]
 static std::uint32_t sat_add(std::uint32_t a, std::uint64_t b) {
     const std::uint64_t s = std::uint64_t(a) + b;
     return s > 0xFFFFFFFFu ? 0xFFFFFFFFu : std::uint32_t(s);
@@ -928,7 +929,7 @@ Report evaluate(const Session& s, const TwinHint* twin, std::uint32_t now_ms) {
     if (s.eusb_refused) r.lanes.eusb = false;   // seen, not agreed
     // PD seen: any SOP message, a reset, or the cable asked on SOP'; VBUS above 5 V means a contract was made earlier
     r.no_pd = s.msgs == 0 && s.caps == 0 && s.hard == 0 && s.cable_frames == 0 && s.up_mv == 0;
-    auto at = [&](std::uint32_t ms) { return ms >= s.start_ms ? ms - s.start_ms : 0; };
+    auto at = [&](std::uint32_t ms) __attribute__((noinline)) { return ms >= s.start_ms ? ms - s.start_ms : 0; };   // 25 uses
 
     r.offer_mw = s.offer_mw;
     const std::uint16_t off_ma = s.offer_ma;

@@ -65,7 +65,7 @@ include/k2/core/remote_proto.hpp  if (n == 0 || n > kFlashDumpMax || addr < kFla
 include/k2/core/ringlog.hpp       void scan(std::uint64_t skip = 0);
 src/core/main_loop.cpp            const uint64_t pass_px0 = k2::paint::meter.px_count();
 src/core/math_selftest.cpp        const long long v = keep(static_cast<std::uint32_t>(350u + i * 4321u));
-src/core/remote_proto.cpp         const auto u16c = [](std::int64_t x) { return static_cast<uint16_t>(x < 0 ? 0 : x > 0xFFFF ? 0xFFFF : x); };
+src/core/remote_proto.cpp         const auto u16c = [](std::int64_t x) __attribute__((noinline)) { return static_cast<uint16_t>(x < 0 ? 0 : x > 0xFFFF ? 0xFFFF : x); };
 src/core/ringlog.cpp              void Ring::scan(std::uint64_t skip) {
 
 # Drivers: compile-time LCD timing math and power_calc shunt/running-average arithmetic

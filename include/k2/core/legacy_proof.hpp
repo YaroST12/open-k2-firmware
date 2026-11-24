@@ -48,7 +48,7 @@ namespace detail {
 constexpr std::uint16_t pair(char a, char b) { return static_cast<std::uint16_t>(static_cast<unsigned char>(a) | (static_cast<unsigned char>(b) << 8)); }
 
 template <class Rd>
-bool magic(std::uint32_t addr, Rd&& rd, char a, char b, char c, char d) {
+[[gnu::noinline]] bool magic(std::uint32_t addr, Rd&& rd, char a, char b, char c, char d) {
     return rd(addr) == pair(a, b) && rd(addr + 2) == pair(c, d);
 }
 
