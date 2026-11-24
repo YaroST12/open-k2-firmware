@@ -128,10 +128,10 @@ void Curve::add(std::uint32_t dt_ms, std::int32_t mv, std::int32_t ma) {
 }
 
 namespace {
-// A run read back while waiting between its phases: every curve point is the charge's; their sign sum is its direction.
-bool charge_was_reverse(const Curve &c) {
+// A version 1 record keeps no direction: the sign sum of a phase's curve points [from, to) is its current's direction.
+bool curve_reverse(const Curve &c, int from, int to) {
     std::int32_t sum = 0, mv, ma;
-    for (int i = 0; i < c.n; i++) {
+    for (int i = from; i < to && i < c.n; i++) {
         c.point(i, mv, ma);
         sum += ma;
     }
@@ -329,15 +329,20 @@ bool Recorder::restore(const Record &r) {
     case RunState::Between:
         state_ = State::Between;
         ph_[1] = Phase{.kind = Kind::Discharge};
-        if (r.version == 1) ph_[0].in_rev = charge_was_reverse(curve_);   // version 1 kept no direction: the curve has it
+        if (r.version == 1) ph_[0].in_rev = curve_reverse(curve_, 0, curve_.n) != (ph_[0].kind == Kind::Discharge);
         armed_ = wiring_ == Wiring::Moved;   // a moved bank has been unplugged by the time the K2 boots again
         if (resumes_ < 63) resumes_++;
         break;
     case RunState::Measuring:
-        if (r.version != 1 && r.ph[current()].end == End::Running) {   // the last progress save: the phase goes on
+        if (r.ph[current()].end == End::Running && (r.version != 1 || !battery::empty(sums(r)))) {   // the phase goes on
             state_ = State::Measuring;
-            ph_[current()].end = End::Running;
             armed_ = r.armed;
+            if (r.version == 1) {   // an older firmware's file: each phase's direction from its curve, the end rule armed
+                const int split = curve_.split == 0xFF ? curve_.n : curve_.split;
+                for (int i = 0; i < phases_; i++)
+                    ph_[i].in_rev = curve_reverse(curve_, i ? split : 0, i ? curve_.n : split) != (ph_[i].kind == Kind::Discharge);
+                armed_ = true;
+            }
             resumed();
             break;
         }

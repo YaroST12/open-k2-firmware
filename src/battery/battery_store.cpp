@@ -12,35 +12,41 @@ namespace k2::battery {
 
 namespace store {
 
-Path path_of(std::uint16_t id) {
-    Path p{'/', 'b', 't'};
+namespace {
+// prefix + the id's digits + ".rec"
+Path make_path(const char *prefix, std::uint16_t id) {
+    Path p{};
+    std::size_t i = 0;
+    while (*prefix) p[i++] = *prefix++;
     char d[5];
     int n = 0;
     do { d[n++] = char('0' + id % 10); id /= 10; } while (id);
-    std::size_t i = 3;
     while (n) p[i++] = d[--n];
     for (const char c : {'.', 'r', 'e', 'c'}) p[i++] = c;
     p[i] = 0;
     return p;
 }
+}  // namespace
+
+Path path_of(std::uint16_t id) { return make_path("/bt/", id); }
+Path old_path_of(std::uint16_t id) { return make_path("/bt", id); }
 
 namespace {
-// "bt<digits>.rec" -> the id; 0 for any other name (the other root files, a write's .tmp).
-std::uint16_t id_of(const char *name) {
-    if (name[0] != 'b' || name[1] != 't') return 0;
-    name += 2;
+// "<prefix><digits>.rec" -> the id; 0 for any other name (another file, a write's .tmp).
+std::uint16_t id_of(const char *name, const char *prefix) {
+    while (*prefix) if (*name++ != *prefix++) return 0;
     std::uint32_t v = 0;
     int digits = 0;
     for (; *name >= '0' && *name <= '9'; name++, digits++) v = v * 10 + std::uint32_t(*name - '0');
     if (digits == 0 || digits > 5 || v > 0xFFFF || std::strcmp(name, ".rec") != 0) return 0;
     return std::uint16_t(v);
 }
-}  // namespace
 
-int list(fs::Fs &f, std::uint16_t *ids, int max) {
+// The ids of dir's files named <prefix><id>.rec, newest (highest) first.
+int list_in(fs::Fs &f, const char *dir, const char *prefix, std::uint16_t *ids, int max) {
     int n = 0;
-    f.list(kDir, [&](const fs::Info &i) {
-        const std::uint16_t id = i.dir ? 0 : id_of(i.name);
+    f.list(dir, [&](const fs::Info &i) {
+        const std::uint16_t id = i.dir ? 0 : id_of(i.name, prefix);
         if (id == 0) return true;
         int at = n < max ? n : max;               // insertion into the newest-first window
         while (at > 0 && ids[at - 1] < id) at--;
@@ -51,6 +57,20 @@ int list(fs::Fs &f, std::uint16_t *ids, int max) {
         return true;
     });
     return n;
+}
+}  // namespace
+
+int list(fs::Fs &f, std::uint16_t *ids, int max) { return list_in(f, kDir, "", ids, max); }
+
+int migrate(fs::Fs &f) {
+    constexpr int kWindow = kKeep + 8;
+    std::uint16_t ids[kWindow];
+    const int n = list_in(f, "/", "bt", ids, kWindow);
+    if (n == 0 || f.mkdir(kDir) != fs::Err::Ok) return 0;
+    int moved = 0;
+    for (int i = 0; i < n; i++)
+        if (f.rename(old_path_of(ids[i]).data(), path_of(ids[i]).data()) == fs::Err::Ok) moved++;
+    return moved;
 }
 
 bool load(fs::Fs &f, std::uint16_t id, Record &r) {
@@ -63,6 +83,7 @@ bool load(fs::Fs &f, std::uint16_t id, Record &r) {
 bool save(fs::Fs &f, const Record &r) {
     std::uint8_t buf[kRecordBytes];
     if (encode(r, buf) != kRecordBytes) return false;
+    if (!f.exists(path_of(r.id).data()) && f.mkdir(kDir) != fs::Err::Ok) return false;   // the first run makes the directory
     return f.rewrite_file(path_of(r.id).data(), buf) == fs::Err::Ok;   // one commit in place: the progress saves repeat it
 }
 
@@ -107,6 +128,7 @@ Service::Boot Service::boot(fs::Fs *f, Checkpoint *ckpt, bool warm) {
         }
     }
     if (!fs_) return Boot::Nothing;
+    store::migrate(*fs_);
     std::uint16_t id = 0;
     Record r;
     if (store::list(*fs_, &id, 1) == 0 || !store::load(*fs_, id, r) || r.state == RunState::Done) return Boot::Nothing;

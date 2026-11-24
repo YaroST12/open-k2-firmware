@@ -483,13 +483,13 @@ void test_store_list_prune() {
     CHECK_EQ(r.ph[0].uwh_in, 3000u);
     CHECK_EQ(store::load(v.fs, 1, r), false);
     CHECK_EQ(store::next_id(v.fs), 7);
-    CHECK_COND(std::string(store::path_of(65535).data()) == "/bt65535.rec");
-    // the runs share the root with the settings files and the other stores' directories: only bt<id>.rec counts
+    CHECK_COND(std::string(store::path_of(65535).data()) == "/bt/65535.rec");
+    CHECK_EQ(v.fs.exists("/bt6.rec"), false);                // the runs live in their own directory, not the root
+    // only <id>.rec counts in it
     const std::uint8_t b[4] = {1, 2, 3, 4};
-    CHECK_EQ(int(v.fs.write_file("/usb.cfg", b)), int(k2::fs::Err::Ok));
-    CHECK_EQ(int(v.fs.write_file("/bt9.rec.tmp", b)), int(k2::fs::Err::Ok));
-    CHECK_EQ(int(v.fs.write_file("/bt.rec", b)), int(k2::fs::Err::Ok));
-    CHECK_EQ(int(v.fs.mkdir("/bt8")), int(k2::fs::Err::Ok));
+    CHECK_EQ(int(v.fs.write_file("/bt/9.rec.tmp", b)), int(k2::fs::Err::Ok));
+    CHECK_EQ(int(v.fs.write_file("/bt/x.rec", b)), int(k2::fs::Err::Ok));
+    CHECK_EQ(int(v.fs.mkdir("/bt/8")), int(k2::fs::Err::Ok));
     CHECK_EQ(store::list(v.fs, ids, 8), 4);
     CHECK_EQ(ids[0], 6);
 }
@@ -716,8 +716,8 @@ void test_service_save_cadence() {
     CHECK_COND(v.disk.progs > 0);
     CHECK_EQ(store::load(v.fs, 1, r), true);
     CHECK_COND(r.ph[0].secs + 2 >= s.rec().phase(0).ms / 1000u);
-    // the run's file stays one inline entry of the root pair: no data block, no split
-    CHECK_EQ(v.fs.used_blocks(), 2u);
+    // the run's file stays one inline entry of the /bt pair: the root pair and the /bt pair, no data block, no split
+    CHECK_EQ(v.fs.used_blocks(), 4u);
 }
 
 // A cold boot mid-phase resumes the same phase from the last save: the totals within kSaveMs of the cut, the direction kept
@@ -868,11 +868,23 @@ void test_service_warm_quiet_restarts() {
     CHECK_COND(s.rec().phase(0).ms >= 299'000);
 }
 
-// The wear an hour of progress saves costs on a volume like the device's (the settings files and two kept runs share the
-// root pair with the running one): the run's file stays inline (no block, no split); measured 90 erases of the pair (45 per
-// 2 KB block) and 446 B programmed per save. Past ~500 erases littlefs expands the superblock pair {0,1} once (docs).
-void test_service_hour_of_saves_wear() {
-    k2test::RamDisk disk{111};
+// The wear a day of progress saves costs on a volume like the device's: the root holds the settings, the stores'
+// directories and /log.txt; /bt holds two kept runs and the running one. The saves land in the /bt pair, never the root
+// (superblock) pair, so littlefs relocates that pair every block_cycles erases instead of expanding the superblock: the
+// blocks in use stay put, the erases spread. Measured: 72 erases/h, 380 B programmed per save.
+struct CountingDisk final : k2::fs::BlockDevice {
+    k2test::RamDisk d;
+    std::vector<std::uint32_t> per;
+    explicit CountingDisk(std::uint32_t n) : d(n), per(n) {}
+    int read(std::uint32_t b, std::uint32_t o, void *p, std::uint32_t n) override { return d.read(b, o, p, n); }
+    int prog(std::uint32_t b, std::uint32_t o, const void *p, std::uint32_t n) override { return d.prog(b, o, p, n); }
+    int erase(std::uint32_t b) override {
+        per[b]++;
+        return d.erase(b);
+    }
+};
+void test_service_day_of_saves_wear() {
+    CountingDisk disk{111};
     k2::fs::Fs fs{disk, 111};
     bool fm = false;
     fs.mount_or_format(fm);
@@ -880,21 +892,35 @@ void test_service_hour_of_saves_wear() {
     for (const char *p : {"/usb.cfg", "/cable.cfg", "/prefs.cfg"}) fs.write_file(p, {cfg, 8});
     fs.write_file("/rd.rec", cfg);
     fs.write_file("/.legacy", {cfg, 1});
+    for (const char *d : {"/lp", "/ps", "/twin", "/tcap", "/emk", "/jr"}) fs.mkdir(d);
+    const std::vector<std::uint8_t> log(512, 0x55);
+    fs.write_file("/log.txt", log);
     for (std::uint16_t id = 1; id <= 2; id++) store::save(fs, done_record(id));
     const std::uint32_t used = fs.used_blocks();
     Service::Checkpoint ck{};
     Service s;
     s.boot(&fs, &ck, false);
     s.start(Mode::Discharge, Wiring::SamePort, true);
-    disk.reset_counters();
-    serve(s, 0, 3'600'000, 5000, -2000);
-    const std::uint64_t saves = 3'600'000 / kSaveMs;
-    std::printf("battery saves: %llu/h, %llu erases/h, %llu B programmed/save, %.0f ms flash time/h\n",
-                (unsigned long long)saves, (unsigned long long)disk.erases, (unsigned long long)(disk.halfwords * 2 / saves),
-                disk.cost_ms());
-    CHECK_COND(disk.erases <= 100);
-    CHECK_COND(disk.halfwords * 2 / saves <= 480);
-    CHECK_EQ(fs.used_blocks(), used);
+    disk.d.reset_counters();
+    std::fill(disk.per.begin(), disk.per.end(), 0u);
+    std::uint32_t t = serve(s, 0, 3'600'000, 5000, -2000);
+    const std::uint64_t saves = 3'600'000 / kSaveMs, hour_erases = disk.d.erases, hour_hw = disk.d.halfwords;
+    t = serve(s, t, 23 * 3'600'000u, 5000, -2000);
+    std::uint32_t touched = 0, most = 0;
+    for (const std::uint32_t n : disk.per) { touched += n != 0; most = n > most ? n : most; }
+    std::printf("battery saves: %llu/h, %llu erases in the first hour, %llu B programmed/save, %.0f ms flash time/h; "
+                "24 h: %llu erases over %u blocks (at most %u on one), blocks used %u -> %u\n",
+                (unsigned long long)saves, (unsigned long long)hour_erases, (unsigned long long)(hour_hw * 2 / saves),
+                0.2 * double(hour_hw) + 35.0 * double(hour_erases), (unsigned long long)disk.d.erases, touched, most, used,
+                fs.used_blocks());
+    CHECK_COND(hour_erases <= 100);
+    CHECK_COND(hour_hw * 2 / saves <= 450);
+    CHECK_EQ(fs.used_blocks(), used);       // no superblock expansion, no split
+    CHECK_COND(touched >= 4);               // the /bt pair moved at least once
+    CHECK_COND(most <= 520);                // no block takes more than one block_cycles round
+    CHECK_EQ(disk.per[0] + disk.per[1], 0u);   // the root (superblock) pair is never erased by the saves
+    CHECK_EQ(int(s.rec().state()), int(State::Measuring));
+    (void)t;
 }
 
 // What cannot resume falls back to the old rule: a record that does not decode is no run; a version 1 measuring record (no
@@ -910,9 +936,9 @@ void test_service_unreadable_progress() {
     }
     std::uint8_t b[kRecordBytes];
     std::size_t n = 0;
-    CHECK_EQ(int(v.fs.read_file("/bt1.rec", b, n)), int(k2::fs::Err::Ok));
+    CHECK_EQ(int(v.fs.read_file(store::path_of(1).data(), b, n)), int(k2::fs::Err::Ok));
     b[30] ^= 0x40;
-    CHECK_EQ(int(v.fs.write_file("/bt1.rec", {b, n})), int(k2::fs::Err::Ok));
+    CHECK_EQ(int(v.fs.write_file(store::path_of(1).data(), {b, n})), int(k2::fs::Err::Ok));
     {
         Service s;
         CHECK_EQ(int(s.boot(&v.fs, &ck, false)), int(Service::Boot::Nothing));
@@ -921,9 +947,10 @@ void test_service_unreadable_progress() {
     Record old = done_record(2);
     old.state = RunState::Measuring;
     old.ph[0].end = End::Running;
+    old.ph[0].uwh_in = old.ph[0].uah_in = 0;
     const auto v1 = v1_bytes(old);
-    CHECK_EQ(int(v.fs.write_file("/bt2.rec", v1)), int(k2::fs::Err::Ok));
-    {
+    CHECK_EQ(int(v.fs.write_file(store::path_of(2).data(), v1)), int(k2::fs::Err::Ok));
+    {   // a version 1 measuring record with no energy (an older firmware's start write): closed, nothing to go on with
         Service s;
         CHECK_EQ(int(s.boot(&v.fs, &ck, false)), int(Service::Boot::Lost));
         CHECK_EQ(int(s.rec().state()), int(State::Done));
@@ -937,6 +964,89 @@ void test_service_unreadable_progress() {
     CHECK_EQ(int(s.boot(&v.fs, &ck, false)), int(Service::Boot::Lost));
     CHECK_EQ(int(s.rec().state()), int(State::Done));
     CHECK_EQ(int(s.rec().phase(0).end), int(End::Lost));
+}
+
+// Runs an older firmware left in the root (/bt<id>.rec, version 1) move into /bt at boot, one rename each: they list and
+// read as before, and a measuring one with energy resumes (its direction from its curve, its end rule armed).
+void test_store_migrates_root_runs() {
+    Vol v;
+    for (std::uint16_t id = 3; id <= 5; id++) {
+        const auto b = v1_bytes(done_record(id));
+        CHECK_EQ(int(v.fs.write_file(store::old_path_of(id).data(), b)), int(k2::fs::Err::Ok));
+    }
+    Record live = done_record(6);
+    live.mode = Mode::Discharge;
+    live.state = RunState::Measuring;
+    live.ph[0] = PhaseRec{Kind::Discharge, End::Running, 0, 600, 0, 800'000, 0, 160'000};
+    live.points = 2;
+    Curve::pack(&live.pts[0], 5000, -1000);
+    Curve::pack(&live.pts[3], 5000, -1000);
+    CHECK_EQ(int(v.fs.write_file("/bt6.rec", v1_bytes(live))), int(k2::fs::Err::Ok));
+    CHECK_COND(std::string(store::old_path_of(6).data()) == "/bt6.rec");
+    Service::Checkpoint ck{};
+    Service s;
+    CHECK_EQ(int(s.boot(&v.fs, &ck, false)), int(Service::Boot::ResumedFlash));
+    for (std::uint16_t id = 3; id <= 6; id++) CHECK_EQ(v.fs.exists(store::old_path_of(id).data()), false);
+    std::uint16_t ids[8];
+    CHECK_EQ(store::list(v.fs, ids, 8), 4);
+    CHECK_EQ(ids[0], 6);
+    CHECK_EQ(ids[3], 3);
+    Record r;
+    CHECK_EQ(store::load(v.fs, 4, r), true);
+    CHECK_EQ(r.ph[0].uwh_in, 4000u);
+    CHECK_EQ(int(s.rec().state()), int(State::Measuring));
+    CHECK_EQ(s.rec().id(), 6);
+    CHECK_EQ(s.rec().resumes(), 1);
+    std::uint32_t t = serve(s, 1000, 30'000, 5000, -1000);   // same port: the reverse current is out of the bank
+    CHECK_COND(s.rec().phase(0).uj_out > 800'000ull * 3600u + 5ull * 25'000 * 1000);
+    CHECK_EQ(s.rec().phase(0).uj_in, 0u);
+    t = serve(s, t, 62'000, 5000, 0);                          // armed: a bank that stopped ends the phase
+    CHECK_EQ(int(s.rec().state()), int(State::Done));
+    serve(s, t, 1000, 5000, 0);
+    CHECK_EQ(store::list(v.fs, ids, 8), 4);                    // the migration deletes nothing: the next new run prunes
+    CHECK_EQ(int(s.start(Mode::Charge, Wiring::SamePort, true)), int(Recorder::Start::Ok));
+    t = serve(s, t, 30'000, 5000, 1000);
+    CHECK_EQ(store::list(v.fs, ids, 8), store::kKeep);
+    CHECK_EQ(ids[0], 7);
+}
+
+// A power cut anywhere in the migration leaves every run readable in exactly one place, and the next boot finishes it.
+void test_store_migration_power_cut() {
+    const auto setup = [](k2::fs::Fs &f) {
+        bool fm;
+        f.mount_or_format(fm);
+        for (std::uint16_t id = 3; id <= 5; id++) f.write_file(store::old_path_of(id).data(), v1_bytes(done_record(id)));
+    };
+    int total = 0;
+    {
+        Vol v;
+        setup(v.fs);
+        v.disk.reset_counters();
+        store::migrate(v.fs);
+        total = v.disk.ops_done();
+    }
+    CHECK_COND(total > 3);
+    for (int cut = 0; cut <= total; ++cut) {
+        k2test::RamDisk d(32);
+        {
+            k2::fs::Fs f(d, 32);
+            setup(f);
+            d.cut_after(cut);
+            store::migrate(f);
+        }
+        d.revive();
+        k2::fs::Fs g(d, 32);
+        CHECK_EQ(int(g.mount()), int(k2::fs::Err::Ok));
+        for (std::uint16_t id = 3; id <= 5; id++) {
+            const bool old = g.exists(store::old_path_of(id).data()), now = g.exists(store::path_of(id).data());
+            CHECK_EQ(old != now, true);
+        }
+        store::migrate(g);
+        std::uint16_t ids[4];
+        CHECK_EQ(store::list(g, ids, 4), 3);
+        Record r;
+        for (std::uint16_t id = 3; id <= 5; id++) CHECK_EQ(store::load(g, id, r), true);
+    }
 }
 
 // ---- the remote protocol (Cmd::Battery) -----------------------------------------------------------------------------------
@@ -1109,7 +1219,7 @@ void test_service_empty_run_not_saved() {
     old.state = RunState::Measuring;
     old.phases = 1;
     old.id = 60;
-    CHECK_EQ(int(v.fs.write_file("/bt60.rec", v1_bytes(old))), int(k2::fs::Err::Ok));
+    CHECK_EQ(int(v.fs.write_file(store::old_path_of(60).data(), v1_bytes(old))), int(k2::fs::Err::Ok));   // the root: migrated
     Service b;
     CHECK_EQ(int(b.boot(&v.fs, &ck, false)), int(Service::Boot::Lost));
     serve(b, 0, 1000, 0, 0);
@@ -1156,7 +1266,9 @@ int main() {
     test_service_warm_prefers_checkpoint();
     test_service_end_rule_after_resume();
     test_service_warm_quiet_restarts();
-    test_service_hour_of_saves_wear();
+    test_service_day_of_saves_wear();
+    test_store_migrates_root_runs();
+    test_store_migration_power_cut();
     test_service_unreadable_progress();
     test_wire();
     return test_report("test_battery");

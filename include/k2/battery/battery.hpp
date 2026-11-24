@@ -207,15 +207,19 @@ private:
 };
 static_assert(std::is_trivially_copyable_v<Recorder>);
 
-// ---- the stored runs: /bt<id>.rec, the newest kKeep kept ------------------------------------------------------------------
-// Inline files (246 B each) in the root directory: three of them fit the root metadata pair's slack beside the settings files,
-// so the runs cost no block of their own; a /bt directory would cost its own pair (2 blocks) and a fourth run splits the
-// pair (4 blocks), more than the PD Stress build has left (tests/test_volume_budget.cpp, docs/ARCHITECTURE.md).
+// ---- the stored runs: /bt/<id>.rec, the newest kKeep kept ---------------------------------------------------------------
+// Inline files (250 B each) in their own directory: its pair (2 blocks) takes the progress saves, so the root (the superblock
+// pair, which littlefs never relocates) stays quiet and the /bt pair is levelled every block_cycles erases
+// (tests/test_volume_budget.cpp, docs/ARCHITECTURE.md).
 namespace store {
-inline constexpr const char *kDir = "/";
+inline constexpr const char *kDir = "/bt";
 inline constexpr int kKeep = 3;
 using Path = std::array<char, 16>;
 Path path_of(std::uint16_t id);
+Path old_path_of(std::uint16_t id);       // /bt<id>.rec: where firmware before 2026-11-24 kept a run (the root)
+// Moves every old root run into kDir, one rename each (littlefs renames atomically, across directories too: a power cut
+// leaves a run in one place or the other; the next boot moves the rest). Returns how many moved.
+int migrate(fs::Fs &f);
 // The ids on the volume, newest (highest) first; returns how many (at most `max`).
 int list(fs::Fs &f, std::uint16_t *ids, int max);
 bool load(fs::Fs &f, std::uint16_t id, Record &r);
