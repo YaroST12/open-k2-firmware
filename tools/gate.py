@@ -9,7 +9,8 @@
             the [FAULT] handler) must fit the PSP / MSP stacks with margin; no interrupt priorities set
   4 map     no malloc / operator new / __cxa_ / 64-bit divmod linked
   5 hot     the hot block (K2_HOT code and K2_HOT_DATA, link.ld __hot_start..__hot_end) ends inside the zero-wait
-            flash window (below 0x08040000); prints its size and headroom; SKIPPED with K2_HOT_BLOCK=0
+            flash window (below 0x08040000); prints its size and headroom; fails on a lambda of a hot-block function
+            that landed past the window (pins and K2_HOT do not carry over to lambdas); SKIPPED with K2_HOT_BLOCK=0
   6 ids     remote command ids unique across remote_proto.hpp, k2_remote.py, k2proto.js
   7 64bit   no unallowlisted 64-bit integer types in src/ or include/k2/ (tools/check_64bit.py)
   8 tests   make test (C++, Python; node only with K2_WEB=1), then make test-specrows (the K2_SPECROWS=1 host pass: the
@@ -195,7 +196,36 @@ def check_hot(nm_text):
             f"{room} B left in the zero-wait window (ends 0x{FAST_FLASH_END:08x})"]
     errs = [f"hot block ends at 0x{sym['__hot_end']:08x}, past the zero-wait flash window "
             f"(0x{FAST_FLASH_END:08x}): trim the K2_HOT set"] if room < 0 else []
+    slow = slow_hot_lambdas(nm_text, sym["__hot_start"], sym["__hot_end"])
+    if slow:
+        errs.append(f"{len(slow)} lambdas of hot-block functions lie past 0x{FAST_FLASH_END:08x} (mark them K2_HOT "
+                    "or add a .text._ZZ pin next to the enclosing pin in link.ld):\n    "
+                    + "\n    ".join(f"0x{a:08x} {n}" for a, n in slow))
     return info, errs
+
+
+def slow_hot_lambdas(nm_text, hot_start, hot_end):
+    """Lambdas and local-class methods (`_ZZ<encoding>EUl...` / `EN...`) whose enclosing function `_Z<encoding>` sits
+    in the hot block but which themselves lie in slow flash: a K2_HOT or link.ld pin does not carry over to them.
+    Function-local statics (`E<len><name>`) are data, not counted. Nested lambdas count when their enclosing lambda
+    does. Returns sorted (address, name)."""
+    funcs = []
+    for line in nm_text.splitlines():
+        f = line.split()
+        if len(f) == 3 and f[1] in "tTwW" and f[2].startswith("_Z"):
+            funcs.append((int(f[0], 16), f[2].split(".")[0]))     # drop .isra/.constprop/.lto_priv suffixes
+    hot = {n for a, n in funcs if hot_start <= a < hot_end}
+    lambdas = [(a, n) for a, n in funcs if n.startswith("_ZZ") and FAST_FLASH_END <= a < 0x08100000]
+    slow, grown = {}, True
+    while grown:              # fixpoint: a flagged lambda encloses its own nested lambdas
+        grown = False
+        for a, n in lambdas:
+            if n not in slow and any(n[i] == "E" and n[i + 1:i + 2] in ("U", "N") and "_Z" + n[3:i] in hot
+                                     for i in range(4, len(n) - 1)):
+                slow[n] = a
+                hot.add(n)
+                grown = True
+    return sorted((a, n) for n, a in slow.items())
 
 
 def parse_baseline(text):

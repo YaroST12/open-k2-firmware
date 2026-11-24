@@ -363,6 +363,30 @@ class HotBlock(unittest.TestCase):
     def test_missing_symbols_fail(self):
         self.assertEqual(len(g.check_hot("08003800 R g_pfnVectors\n")[1]), 1)
 
+    def test_lambda_of_a_hot_function_in_slow_flash_fails(self):
+        nm = NM_HOT + """08005000 T _ZN2k27ctsweep9summarizeESt4spanIKsLj4294967295EEjS3_j
+08092b36 t _ZZN2k27ctsweep9summarizeESt4spanIKsLj4294967295EEjS3_jENKUljE0_clEj
+08006000 t _ZN2k27cable_r8fmt_mohmESt4spanIcLj4294967295EEm.isra.0
+0809cf1e t _ZZN2k27cable_r8fmt_mohmESt4spanIcLj4294967295EEmENKUlmE_clEm.isra.0
+08099000 t _ZZZN2k27cable_r8fmt_mohmESt4spanIcLj4294967295EEmENKUlmE_clEmENKUlvE_clEv
+080a29e4 t _ZZN2k27ctsweep9summarizeESt4spanIKsLj4294967295EEjS3_jE10kBoxTitles
+200001ec t _ZZN2k27ctsweep9summarizeESt4spanIKsLj4294967295EEjS3_jE5first
+"""
+        errs = g.check_hot(nm)[1]
+        self.assertEqual(len(errs), 1)
+        self.assertIn("3 lambdas", errs[0])
+        self.assertIn("0x08092b36", errs[0])
+        self.assertIn("_ZZN2k27cable_r8fmt_mohmESt4spanIcLj4294967295EEmENKUlmE_clEm", errs[0])
+        self.assertIn("_ZZZN2k27cable_r8fmt_mohm", errs[0])     # nested: its enclosing lambda belongs in the block
+
+    def test_lambdas_of_cold_functions_and_placed_lambdas_pass(self):
+        nm = NM_HOT + """08005000 T _ZN2k27ctsweep9summarizeESt4spanIKsLj4294967295EEjS3_j
+08005100 t _ZZN2k27ctsweep9summarizeESt4spanIKsLj4294967295EEjS3_jENKUljE0_clEj
+08060000 T _ZN2k24menu4openEv
+08060100 t _ZZN2k24menu4openEvENKUlvE_clEv
+"""
+        self.assertEqual(g.check_hot(nm)[1], [])
+
 
 import contextlib
 import json
