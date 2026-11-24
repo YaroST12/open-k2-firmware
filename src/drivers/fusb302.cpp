@@ -189,7 +189,7 @@ std::uint8_t g_sw0 = 0;          // the last SWITCHES0 written: whether the K2 i
 std::array<pd::CcSample, 6> g_scan_samples{};   // the last attach scan's comparator samples, for the Rd-window re-check
 unsigned g_scan_sample_n = 0;
 std::uint32_t g_cc_recheck_at = 0;   // rate limit of the Rd-window re-check (kCcRecheckMinMs)
-constexpr std::uint32_t kCcRecheckMinMs = 500;
+constexpr std::uint32_t kCcRecheckMinMs = 40;   // caps follow the sink's Rd by ~100 ms: the re-pick must land first
 pd::ContractLinger g_contract_linger;   // a contract nobody holds times out after kSinkIdleLingerMs
 #if !K2_HOST_REPORT
 constexpr LoopHost* g_lh = nullptr;
@@ -577,6 +577,9 @@ void update_crc(bool crc_busy, bool rd_busy) {
 
 }  // namespace
 
+// The Ra rule (pd::ra_rule_line) reads the nets as the far ends drive them: only with no Rd, VCONN or Ra mode of the K2's own.
+bool ra_rule_ok() { return (g_sw0 & (kPdwn1 | kPdwn2 | kVconnCc1 | kVconnCc2)) == 0 && !g_ra && !g_lh; }
+
 namespace detail {
 
 std::uint8_t idle_rd() {
@@ -737,7 +740,8 @@ void detect_cc_orientation() {
     // lands here again with the fresh levels, so a VBUS collapse mid-negotiation cannot leave a wrong
     // line latched from a bad first sample.
     if (!pinned && g_force_cc == 0 && held == 0) {   // a hold's line is explicit too: the ADC window must not move it
-        const std::uint8_t rd_line = pd::rd_window_line(g_cc1_mv, g_cc2_mv);
+        std::uint8_t rd_line = pd::rd_window_line(g_cc1_mv, g_cc2_mv);
+        if (rd_line == 0 && (rd_both & (kPdwn1 | kPdwn2)) == 0 && ra_rule_ok()) rd_line = pd::ra_rule_line(g_cc1_mv, g_cc2_mv);
         if (rd_line != 0 && rd_line != c.line) {
             const pd::CcChoice alt = pd::choose_cc_forced(samples, rd_line);
             if (alt.found) {
@@ -786,11 +790,15 @@ void cc_window_recheck() {
     if (g_active_cc == 0 || g_pd_traffic || g_force_cc != 0 || g_pin_rd != 0) return;
     if (rdseek().moves() != 0) return;   // the Rd seek found the line by the Rp itself: the ADC levels do not overrule that
     if (g_linefb.moves() != 0) return;   // a direct plug: both lines read high by design, the fallback chose the line
-    if (g_rxhunt.moves() != 0) return;   // the listen hunt moved the receiver off the line the levels named
     const std::uint32_t now = systick::millis();
-    if (std::int32_t(now - g_cc_recheck_at) < std::int32_t(kCcRecheckMinMs)) return;
+    if (now - g_cc_recheck_at < kCcRecheckMinMs) return;
     g_cc_recheck_at = now;
-    const std::uint8_t rd_line = pd::rd_window_override(g_cc1_mv, g_cc2_mv, g_active_cc);
+    // After a hunt move only the Ra rule may re-pick: the hunt never leaves a line that rule names, so the two cannot ping-pong.
+    const bool ra = ra_rule_ok();
+    std::uint8_t rd_line = g_rxhunt.moves() == 0 ? pd::rd_window_override(g_cc1_mv, g_cc2_mv, g_active_cc, ra)
+                           : ra                  ? pd::ra_rule_line(g_cc1_mv, g_cc2_mv)
+                                                 : std::uint8_t(0);
+    if (rd_line == g_active_cc) rd_line = 0;
     if (rd_line == 0) return;
     pd::CcChoice alt = pd::choose_cc_forced({g_scan_samples.data(), g_scan_sample_n}, rd_line);
     if (!alt.found) {
@@ -1664,7 +1672,8 @@ K2_HOT void poll() {
         else if (got && g_linefb.update(now_ms, line_fallback_eligible(), (status0 & kComp) != 0, g_vbus_mv < pd::kDarkVbusMv,
                                         line_fallback_other_rp()))
             line_fallback_move();
-        else if (got && g_rxhunt.update(now_ms, rx_hunt_eligible(), g_pd_traffic, g_vbus_mv, g_active_cc == 1 ? g_cc2_mv : g_cc1_mv))
+        else if (got && g_rxhunt.update(now_ms, rx_hunt_eligible(), g_pd_traffic, g_vbus_mv, g_active_cc == 1 ? g_cc2_mv : g_cc1_mv,
+                                         g_active_cc == 1 ? g_cc1_mv : g_cc2_mv))
             rx_hunt_move();
         else if (got && g_detach.update(systick::millis(), (g_iq_inited && iq().resetting()) ? -1 : g_vbus_mv,   // an interrogation's reset drops VBUS on purpose
                                         (status0 & kComp) != 0 || rdseek().holding_slow(systick::millis(), g_active_cc) ||

@@ -705,6 +705,29 @@ void test_inline_drops_rd_and_detects_the_sink_leaving() {
 
 // The inline listen hunt (pd::RxHunt): the scan latched CC2 by its levels, the BMC runs on CC1. VBUS is up (a PPS contract) and
 // nothing decodes on CC2: the receiver moves to CC1 (MEAS only: no Rd, no VCONN, nothing sent) and stays once frames decode.
+// Inline, the far end plugs in after the attach: the scan took the cable's Ra net (CC1) while CC2 read open Rp. The sink's Rd
+// pulls CC2 into the window next to the Ra level: the Ra rule re-picks CC2 well before the caps (hardware 2026-11-24).
+void test_inline_ra_net_repicked_when_the_sink_appears() {
+    reset_world();
+    fusb302::init();
+    fusb302::set_inline(true);
+    fusb302::sink_cc(558, 3300);
+    g_reg[0x40] = 0x23;
+    g_line_mv_cc[1] = 100;                               // at scan time the comparator sees CC1 only
+    for (int i = 0; i < 60 && !usb_has("Active CC detected"); i++) { g_ms += 20; fusb302::sink_cc(558, 3300); fusb302::poll(); }
+    CHECK_EQ(usb_has("Active CC detected: CC1"), true);
+    g_line_mv_cc[1] = 1702;
+    int at = -1;
+    for (int i = 0; i < 10 && at < 0; i++) {
+        g_ms += 10;
+        fusb302::sink_cc(558, 1702);
+        fusb302::poll();
+        if (fusb302::active_cc() == 2) at = (i + 1) * 10;
+    }
+    CHECK_EQ(at > 0 && at <= 60, true);
+    fusb302::set_inline(false);
+}
+
 void test_inline_listen_moves_to_the_line_that_carries_bmc() {
     reset_world();
     fusb302::init();
@@ -5599,6 +5622,7 @@ int main() {
     test_failed_scan_restores_the_pre_scan_state();
     test_detach_on_cc_loss_after_500ms();
     test_inline_listen_moves_to_the_line_that_carries_bmc();
+    test_inline_ra_net_repicked_when_the_sink_appears();
     test_inline_listen_keeps_a_right_line_with_slow_caps();
     test_detach_on_low_vbus_after_1s();
     test_vbus_zero_throughout_is_no_detach();
