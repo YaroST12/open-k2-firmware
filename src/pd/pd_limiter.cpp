@@ -68,17 +68,6 @@ struct LabelOut {
 };
 bool tech_constrained(const LimTech& t) { return !t.enabled || t.max_mv != 0 || t.max_ma != 0; }
 
-// A forged word forge_caps neutered: its current (power) field cleared, the masks it clears.
-bool placeholder(std::uint32_t w) {
-    switch (w >> 30) {
-        case 0: case 1: case 2: return (w & 0x3FFu) == 0;
-        default: {
-            const unsigned apdo = (w >> 28) & 3u;
-            return apdo == 0 ? (w & 0x7Fu) == 0 : apdo == 2 && (w & 0xFFFFFu) == 0;
-        }
-    }
-}
-
 }  // namespace
 
 bool lim_config_valid(const LimConfig& c) {
@@ -137,6 +126,7 @@ const char* lim_why_name(LimWhy w) {
         case LimWhy::ChargerResets: return "the charger resets";
         case LimWhy::SinkResets: return "the sink resets";
         case LimWhy::SinkIgnores: return "the sink ignores it";
+        case LimWhy::NoFit: return "not on this charger";
     }
     return "?";
 }
@@ -299,11 +289,12 @@ bool request_complies(std::uint32_t rdo, std::span<const std::uint32_t> real_pdo
 
 std::size_t forge_caps(std::span<const std::uint32_t> real, const LimConfig& cfg, std::span<std::uint32_t> out) {
     const std::size_t n = std::min(std::min(real.size(), out.size()), kMaxPdos);
-    std::array<std::uint32_t, kMaxPdos> words{};
-    std::size_t out_n = 0;   // up to the last kept object: a disabled one before it stays as a 0 mA placeholder
+    // The list ends before the first object outside the limit: a sink may request any object it is offered, a 0 mA one too, and
+    // the charger serves that position at its real voltage (the Request reaches it unchanged).
+    std::size_t out_n = 0;
     for (std::size_t i = 0; i < n; i++) {
         std::uint32_t w = real[i];
-        if (w == 0) continue;
+        if (w == 0) break;
         const Pdo p = decode_pdo(w);
         auto clamp10 = [](std::uint32_t cur, std::uint32_t shift, std::uint32_t max_ma) {
             const std::uint32_t orig = (cur >> shift) & 0x3FFu;
@@ -330,13 +321,10 @@ std::size_t forge_caps(std::span<const std::uint32_t> real, const LimConfig& cfg
                 }
                 [[fallthrough]];
             case 2:   // Variable
-                if (!fx_ok) w &= ~0x3FFu;   // neutered placeholder (0 mA) if followed by an enabled slot
-                else if (cfg.fixed.max_ma) w = clamp10(w, 0, cfg.fixed.max_ma);
+                if (fx_ok && cfg.fixed.max_ma) w = clamp10(w, 0, cfg.fixed.max_ma);
                 break;
             case 1:   // Battery
-                if (!fx_ok) {
-                    w &= ~0x3FFu;
-                } else if (cfg.fixed.max_ma && p.max_mv) {
+                if (fx_ok && cfg.fixed.max_ma && p.max_mv) {
                     const std::uint32_t lim_mw = std::uint32_t(p.max_mv) * cfg.fixed.max_ma / 1000u;
                     const std::uint32_t lim = lim_mw / 250u;
                     if ((w & 0x3FFu) > lim) w = (w & ~0x3FFu) | lim;
@@ -346,9 +334,7 @@ std::size_t forge_caps(std::span<const std::uint32_t> real, const LimConfig& cfg
                 const unsigned apdo = (w >> 28) & 3u;
                 if (apdo == 0) {   // PPS
                     keep = cfg.pps.enabled && (cfg.pps.max_mv == 0 || cfg.pps.max_mv >= p.min_mv) && within_w;
-                    if (!keep) {
-                        w &= ~0x7Fu;
-                    } else {
+                    if (keep) {
                         if (cfg.pps.max_mv && cfg.pps.max_mv < p.max_mv)
                             w = (w & ~(0xFFu << 17)) | (std::uint32_t(cfg.pps.max_mv / 100u) << 17);
                         if (cfg.pps.max_ma) {
@@ -358,9 +344,7 @@ std::size_t forge_caps(std::span<const std::uint32_t> real, const LimConfig& cfg
                     }
                 } else if (apdo == 2) {   // SPR AVS
                     keep = cfg.avs.enabled && (cfg.avs.max_mv == 0 || cfg.avs.max_mv >= 15000) && within_w;
-                    if (!keep) {
-                        w &= ~0xFFFFFu;
-                    } else {
+                    if (keep) {
                         if (cfg.avs.max_mv && cfg.avs.max_mv < 20000) w &= ~0x3FFu;   // leaves valid 9..15 V range
                         if (cfg.avs.max_ma) {
                             w = clamp10(w, 10, cfg.avs.max_ma);
@@ -373,15 +357,20 @@ std::size_t forge_caps(std::span<const std::uint32_t> real, const LimConfig& cfg
                 break;
             }
         }
-        words[i] = w;
-        if (keep) out_n = i + 1;
+        if (!keep) break;
+        out[i] = w;
+        out_n = i + 1;
     }
-    for (std::size_t i = 0; i < out_n; i++) out[i] = words[i];
     return out_n;
 }
 
 std::size_t forge_caps(std::span<const std::uint32_t> real, std::uint32_t limit_mw, std::span<std::uint32_t> out) {
     return forge_caps(real, lim_config_watts(limit_mw), out);
+}
+
+bool lim_fits(std::span<const std::uint32_t> real, const LimConfig& cfg) {
+    std::array<std::uint32_t, 7> f{};
+    return cfg.fixed.enabled || forge_caps(real, cfg, f) >= 2;
 }
 
 bool forge_differs(std::span<const std::uint32_t> real, std::span<const std::uint32_t> forged) {
@@ -391,14 +380,13 @@ bool forge_differs(std::span<const std::uint32_t> real, std::span<const std::uin
     return false;
 }
 
-std::size_t Limiter::forge(std::array<std::uint32_t, 7>& f) const {
+bool Limiter::plan(std::array<std::uint32_t, 7>& f, std::size_t& cnt) {
     const auto real = watch_.pdos();
-    return forge_caps(real.first(std::min<std::size_t>(real.size(), cut_)), st_.cfg, f);
-}
-
-bool Limiter::forged_differs_from_watch(std::array<std::uint32_t, 7>& f, std::size_t& cnt) const {
-    const auto real = watch_.pdos();
-    cnt = forge(f);
+    cnt = forge_caps(real, st_.cfg, f);
+    if (!real.empty() && !lim_fits(real, st_.cfg)) {
+        stop(LimWhy::NoFit);
+        return false;
+    }
     return cnt > 0 && forge_differs(real, {f.data(), cnt});
 }
 
@@ -412,7 +400,6 @@ bool Limiter::arm(const LimConfig& cfg, std::uint32_t now, const IqWatch* seed) 
     last_at_ = now;
     inj_streak_ = 0;
     sink_asked_caps_ = false;
-    cut_ = 0xFF;
     if (seed && seed->contract().ready) {   // armed mid-contract: the list, the Request and the MessageID are already known
         watch_ = *seed;
         last_at_ = watch_.last_frame_at();
@@ -422,8 +409,10 @@ bool Limiter::arm(const LimConfig& cfg, std::uint32_t now, const IqWatch* seed) 
         st_.req_mw = request_mw(c.rdo, watch_.pdos());
         std::array<std::uint32_t, 7> f{};
         std::size_t cnt = 0;
+        const bool differs = plan(f, cnt);
+        if (!armed()) return true;   // stopped: this charger's list cannot carry the limit
         // an old forged list still with the sink is replaced even when the new one equals the charger's
-        if (forged_differs_from_watch(f, cnt) || (held_ && cnt > 0)) {
+        if (differs || (held_ && cnt > 0)) {
             st_.state = LimState::Pending;
             ready_at_ = now;
         } else {
@@ -446,7 +435,6 @@ void Limiter::stop(LimWhy why) {
 
 void Limiter::on_detach() {
     held_ = false;
-    cut_ = 0xFF;
     if (!armed()) return;   // an off limiter's last status stays as the stop left it
     restart();
     st_.req_pos = 0;
@@ -481,13 +469,8 @@ void Limiter::saw_request(std::uint32_t rdo, std::uint32_t now) {
         st_.state = LimState::Negotiating;
         neg_at_ = now;
     };
-    // The sink took a placeholder of the list it holds: cut it and offer again (no ignore: a 0 mA object is a legal ask).
-    if (held_ && st_.req_pos >= 2 && st_.req_pos <= st_.forged_n && placeholder(st_.forged[st_.req_pos - 1])) {
-        cut_ = std::uint8_t(st_.req_pos - 1);
-        return restart_neg();
-    }
     std::array<std::uint32_t, 7> f{};
-    const std::size_t cnt = forge(f);
+    const std::size_t cnt = forge_caps(watch_.pdos(), st_.cfg, f);
     const bool ok = cnt > 0 && request_complies(rdo, watch_.pdos(), {f.data(), cnt}, st_.cfg);
     switch (st_.state) {
         case LimState::Armed:
@@ -550,7 +533,9 @@ void Limiter::on_message(Sop sop, std::uint16_t h, std::span<const std::uint8_t>
     } else if (src && t == kCtlPsRdy && st_.state == LimState::Negotiating && watch_.contract().ready) {
         std::array<std::uint32_t, 7> f{};
         std::size_t cnt = 0;
-        if (forged_differs_from_watch(f, cnt)) {
+        const bool differs = plan(f, cnt);
+        if (!armed()) return;
+        if (differs) {
             st_.state = LimState::Pending;
             ready_at_ = now;
         } else {
@@ -603,7 +588,8 @@ bool Limiter::take_tx(TxMsg& m, std::uint32_t now) {
     if (st_.injections > 0 && !due(now, inj_at_, kLimGapMs)) return false;
     std::array<std::uint32_t, 7> f{};
     std::size_t cnt = 0;
-    const bool differs = forged_differs_from_watch(f, cnt);
+    const bool differs = plan(f, cnt);
+    if (!armed()) return false;
     if (!differs && !(held_ && cnt > 0)) {
         st_.state = cnt == 0 ? LimState::Armed : LimState::Limited;
         if (cnt > 0) inj_at_ = now - kLimBlameMs - 1;

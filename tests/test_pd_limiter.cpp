@@ -118,10 +118,9 @@ int main() {
         CHECK_EQ(out[0], fixed(5000, 3000, kFlags1));      // EPR-capable bit cleared
         CHECK_EQ(out[1], fixed(9000, 3000));
 
-        // Non-trailing gap in watt-cap keeps position alignment via 0 mA placeholder.
-        CHECK_EQ(int(forge_caps(kCaps, 60000, out)), 6);   // 20V 5A (100W) neutered in-place so PPS (55W) stays at pos 6
-        CHECK_EQ(out[4], fixed(20000, 0));
-        CHECK_EQ(out[5], kCaps[5]);
+        // The list ends before the first object over the limit: 20V 5A (100W) and the PPS (55W) after it go.
+        CHECK_EQ(int(forge_caps(kCaps, 60000, out)), 4);
+        CHECK_EQ(out[3], kCaps[3]);
 
         // 10 W clamps mandatory PDO 1 to 2 A and removes everything higher.
         CHECK_EQ(int(forge_caps(kCaps, 10000, out)), 1);
@@ -151,22 +150,23 @@ int main() {
         CHECK_EQ(out[0], fixed(5000, 2500, kFlags1));
         CHECK_EQ(out[1], fixed(9000, 2500));
 
-        // 2. PPS 5-21V -> 5-11V at 3.0A, Fixed & AVS off -> Fixed PDO1 clamped to 100 mA, PDO2..5 neutered at 0 mA, PPS at pos 6.
+        // 2. PPS 5-21V -> 5-11V at 3.0A, Fixed & AVS off: Fixed PDO1 clamped to 100 mA, the 9 V object ends the list (no fit).
         LimConfig pps11{};
         pps11.fixed.enabled = false;
         pps11.pps = {true, 11000, 3000};
         pps11.avs.enabled = false;
-        CHECK_EQ(int(forge_caps(charger, pps11, out)), 6);
+        CHECK_EQ(int(forge_caps(charger, pps11, out)), 1);
         CHECK_EQ(out[0], fixed(5000, 100, kFlags1));
-        CHECK_EQ(out[1], fixed(9000, 0));
-        CHECK_EQ(out[4], fixed(20000, 0));
-        CHECK_EQ(out[5], pps(11000, 5000, 3000));
-        CHECK_COND(request_complies(rq_pps(6, 11000, 3000), charger, {out, 6}, pps11));
-        CHECK_COND(!request_complies(rq_pps(6, 12000, 3000), charger, {out, 6}, pps11));
-        CHECK_COND(!request_complies(rq_fixed(5, 1000, 1000), charger, {out, 6}, pps11));
-        CHECK_COND(!request_complies(rq_fixed(1, 500, 500), charger, {out, 6}, pps11));
+        CHECK_COND(!lim_fits(charger, pps11));
+        CHECK_COND(!request_complies(rq_fixed(1, 500, 500), charger, {out, 1}, pps11));
+        // the same PPS straight after 5 V: clamped in place
+        const std::uint32_t lead[2] = {charger[0], charger[5]};
+        CHECK_EQ(int(forge_caps(lead, pps11, out)), 2);
+        CHECK_EQ(out[1], pps(11000, 5000, 3000));
+        CHECK_COND(request_complies(rq_pps(2, 11000, 3000), lead, {out, 2}, pps11));
+        CHECK_COND(!request_complies(rq_pps(2, 12000, 3000), lead, {out, 2}, pps11));
 
-        // 3. PPS max_mv below PPS vmin -> drops/neuters PPS cleanly.
+        // 3. PPS max_mv below PPS vmin -> drops PPS cleanly.
         LimConfig pps_drop{};
         pps_drop.fixed.max_mv = 9000;
         pps_drop.pps = {true, 4000, 0};   // < 5000 mV vmin -> dropped
@@ -470,14 +470,12 @@ int main() {
         CHECK_EQ(int(lim_gate({true}, 30000)), int(LimRefusal::Busy));
     }
 
-    // ---- a sink that takes a 0 mA placeholder (hardware 2026-11-24, 100 W charger -> K2 -> power bank) ----
-    // From a 9 V contract, re-armed Fixed 15V/3A: the forged list kept 20 V as a 0 mA placeholder (PDO 0x00064000) for the PPS
-    // behind it; the bank asked position 4 at 0 mA (RDO 0x41000000) twice, the limiter counted it ignored and gave up at 20 V.
-    // A placeholder the sink takes is cut: the list is offered again ending before it, and that is no ignore.
+    // ---- the forged list ends before the first object above the limit (hardware 2026-11-24, 100 W charger -> K2 -> bank) ----
+    // From a 9 V contract, re-armed Fixed 15V/3A: a 0 mA placeholder kept 20 V at position 4 for the PPS behind it, and the bank
+    // asked for it at 0 mA (RDO 0x41000000): the charger served 20 V. No placeholder is ever offered now; the PPS goes with the cut.
     {
         const std::uint32_t bank[5] = {fixed(5000, 3000, kFlags1), fixed(9000, 3000), fixed(15000, 3000), fixed(20000, 5000),
                                        pps(21000, 3300, 5000)};
-        constexpr std::uint32_t kRdo0mA = 0x41000000u;   // position 4, no USB suspend, 0 mA
         LimConfig f15{};
         f15.fixed.max_mv = 15000;
         f15.fixed.max_ma = 3000;
@@ -486,39 +484,42 @@ int main() {
         CHECK_COND(r.lim.arm(f15, r.now, &r.watch));
         TxMsg m;
         CHECK_COND(r.tx(m));
-        CHECK_EQ(unsigned(m.len / 4), 5u);
-        CHECK_EQ(word(m, 3), 0x00064000u);                // 20 V neutered: the PPS after it keeps position 5
-        r.request(kRdo0mA);
-        CHECK_COND(r.lim.armed());
-        CHECK_EQ(r.lim.status().ignores, 0);
-        r.accept_ready(3);                                // the charger accepts its real 20 V object
-        CHECK_COND(r.tx(m, kLimGapMs));
-        CHECK_EQ(unsigned(m.len / 4), 3u);                // 5 / 9 / 15 V: nothing above the limit left to take
+        CHECK_EQ(unsigned(m.len / 4), 3u);                // 5 / 9 / 15 V: nothing above the limit to take
         CHECK_EQ(word(m, 2), fixed(15000, 3000));
         r.request(rq_fixed(3, 3000, 3000));
         CHECK_EQ(int(r.lim.status().state), int(LimState::Limited));
-        CHECK_EQ(r.lim.status().ignores, 0);
-        // a sink that asks position 4 again asks outside its list: offered again, then counted (two answers like it end the limit)
-        {
-            Rig x = r;
-            x.request(kRdo0mA);
-            CHECK_EQ(int(x.lim.status().state), int(LimState::Negotiating));
-            x.accept_ready(5);
-            CHECK_COND(x.tx(m, kLimGapMs));
-            CHECK_EQ(unsigned(m.len / 4), 3u);
-            x.request(kRdo0mA);
-            CHECK_EQ(x.lim.status().ignores, 1);
-            CHECK_COND(x.lim.armed());
-        }
-        // the cut holds across a Hard Reset (same charger) and ends with the attach
-        r.lim.on_hard_reset(r.now += 1000);
-        r.negotiate(0, rq_fixed(4, 0, 0, 1u << 24), bank);
-        CHECK_COND(r.tx(m));
-        CHECK_EQ(unsigned(m.len / 4), 3u);
-        r.lim.on_detach();
-        r.negotiate(0, rq_fixed(2, 3000, 3000), bank);
+        // position 4 is outside the list the sink holds: never compliant, re-offered, then counted
+        r.request(0x41000000u);
+        CHECK_EQ(int(r.lim.status().state), int(LimState::Negotiating));
+        r.accept_ready(3);
         CHECK_COND(r.tx(m, kLimGapMs));
-        CHECK_EQ(unsigned(m.len / 4), 5u);
+        CHECK_EQ(unsigned(m.len / 4), 3u);
+        r.request(0x41000000u);
+        CHECK_EQ(r.lim.status().ignores, 1);
+    }
+
+    // ---- Fixed off on a charger whose fixed objects come before its APDOs: no list without placeholders, so the limit stops ----
+    {
+        const std::uint32_t lead5[3] = {fixed(5000, 3000, kFlags1), pps(11000, 3300, 5000), fixed(9000, 3000)};
+        const std::uint32_t ord[3] = {fixed(5000, 3000, kFlags1), fixed(9000, 3000), pps(11000, 3300, 5000)};
+        LimConfig ppsonly{};
+        ppsonly.fixed.enabled = false;
+        ppsonly.pps = {true, 9000, 0};
+        CHECK_COND(lim_fits(lead5, ppsonly));             // 5 V then the APDO: PPS only works
+        CHECK_COND(!lim_fits(ord, ppsonly));              // 9 V before it: only 5 V 100 mA would be left
+        CHECK_COND(lim_fits(ord, lim_config_watts(10000)));   // a low Fixed limit leaving 5 V alone is still a limit
+        Rig r;
+        r.lim.arm(ppsonly, r.now);
+        r.negotiate(0, rq_fixed(2, 3000, 3000), ord);
+        CHECK_COND(!r.lim.armed());
+        CHECK_EQ(int(r.lim.status().why), int(LimWhy::NoFit));
+        TxMsg m;
+        CHECK_COND(!r.tx(m));
+        Rig s;                                            // seeded on that list: stops at once
+        s.negotiate(0, rq_fixed(2, 3000, 3000), ord);
+        CHECK_COND(s.lim.arm(ppsonly, s.now, &s.watch));
+        CHECK_EQ(int(s.lim.status().why), int(LimWhy::NoFit));
+        CHECK_COND(!s.lim.sink_holds_forged());
     }
 
     // ---- the sink keeps a forged list past a stop: only a real list, a Hard Reset or a detach hands the charger's back ----

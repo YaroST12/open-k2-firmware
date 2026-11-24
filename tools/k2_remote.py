@@ -4269,7 +4269,7 @@ def cmd_ufcs(link, a):
 # Same order as pd::LimState / LimWhy / LimRefusal; tests/test_k2_remote.py checks the sync.
 LIM_STATES = ["off", "armed", "negotiating", "pending", "injected", "limited"]
 LIM_WHYS = ["none", "turned off", "detached", "EPR is not covered", "too many lists", "the charger resets", "the sink resets",
-            "the sink ignores it"]
+            "the sink ignores it", "not on this charger"]
 LIM_REFUSALS = ["none", "limit outside 5..100 W", "another feature is running"]
 LIM_OP_STATUS, LIM_OP_ARM, LIM_OP_OFF, LIM_OP_ARM_CFG = 0, 1, 2, 3
 

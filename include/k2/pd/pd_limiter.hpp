@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Yaraslau Furman
 // PD limiter, pure logic (host-tested in tests/test_pd_limiter.cpp). The K2 sits inline between a charger and a sink. Armed with a
 // power / per-technology limit, it sniffs the negotiation and sends the sink a forged Source_Capabilities, speaking AS THE SOURCE:
-// keeping original PDO positions, removing or neutering objects outside the limit and clamping kept currents/ranges. The charger
+// keeping original PDO positions, ending the list before the first object outside the limit and clamping kept currents/ranges. The charger
 // judges the sink's Request by position against its REAL list, so a Request for a kept/clamped object is always acceptable to it.
 // SPR only: any sign of EPR stops it.
 //
@@ -15,8 +15,8 @@
 // The forged list takes a fresh MessageID past the charger's newest (skipping at least +1 ID so the charger's Accept uses a
 // distinct ID, advancing further on retries so the sink's duplicate filter never drops it). Our frame and the charger's GoodCRC
 // collide with the sink's: the transmit result means nothing, the Request is the proof.
-// A forged object neutered to 0 mA that the sink asks for anyway is cut: the list is offered again ending before it (the charger
-// would serve that position at its real voltage, a 0 mA Request included). The cut lasts for the attach.
+// Never a 0 mA placeholder: a sink may request it, and the charger serves that position at its real voltage. A limit the list
+// cannot carry without one (Fixed off, a fixed object before the APDOs) stops (LimWhy::NoFit).
 // Give-up: a Hard or Soft Reset within kLimBlameMs of our list counts against us (kLimMaxRejects, attributed to the side that
 // reset: LimWhy::ChargerResets / SinkResets), as does a list the sink answers with a non-compliant Request or not at all
 // (SinkIgnores). kLimMaxInjections per arm caps the rate. Nothing loops; the runtime state lives in RAM only (except the short-lived
@@ -110,7 +110,7 @@ std::size_t lim_picks(std::span<const Pdo> pdos, std::span<LimPick> out);   // c
 constexpr std::uint32_t lim_watts(std::uint32_t mw) { return mw / 1000; }   // every label floors
 
 enum class LimState : std::uint8_t { Off, Armed, Negotiating, Pending, Injected, Limited };
-enum class LimWhy : std::uint8_t { None, User, Detached, Epr, Rate, ChargerResets, SinkResets, SinkIgnores };
+enum class LimWhy : std::uint8_t { None, User, Detached, Epr, Rate, ChargerResets, SinkResets, SinkIgnores, NoFit };
 const char* lim_state_name(LimState s);
 const char* lim_why_name(LimWhy w);
 
@@ -118,15 +118,18 @@ const char* lim_why_name(LimWhy w);
 // current, battery = the operating power. 0 when the position is not in `pdos` (unknown is never "over").
 std::uint32_t request_mw(std::uint32_t rdo, std::span<const std::uint32_t> pdos);
 
-// True when `rdo` stays inside the forged PDO at its position (and `cfg.limit_mw` if set). Never accepts neutered 0 mA slots.
+// True when `rdo` stays inside the forged PDO at its position (and `cfg.limit_mw` if set). Never accepts a 0 mA object.
 bool request_complies(std::uint32_t rdo, std::span<const std::uint32_t> real_pdos,
                       std::span<const std::uint32_t> forged_pdos, const LimConfig& cfg);
 
-// `real` transformed to `cfg`, keeping exact PDO positions up to the highest enabled/kept object (trailing disabled objects are
-// truncated; non-trailing disabled objects are neutered in-place to 0 mA/0 mW). The EPR-capable bit of object 1 is cleared.
+// `real` transformed to `cfg`, positions kept: the list ends before the first object outside the limit (object 1 always stays,
+// clamped). The EPR-capable bit of object 1 is cleared.
 std::size_t forge_caps(std::span<const std::uint32_t> real, const LimConfig& cfg, std::span<std::uint32_t> out);
 std::size_t forge_caps(std::span<const std::uint32_t> real, std::uint32_t limit_mw, std::span<std::uint32_t> out);
 bool forge_differs(std::span<const std::uint32_t> real, std::span<const std::uint32_t> forged);
+// False when `cfg` turns Fixed off yet the list it forges from `real` keeps nothing past the 5 V object (a fixed object sits
+// before the APDOs): that limit needs placeholders, which are never offered.
+bool lim_fits(std::span<const std::uint32_t> real, const LimConfig& cfg);
 
 struct LimStatus {
     LimState state = LimState::Off;
@@ -169,8 +172,7 @@ private:
     void reject(LimWhy cause);
     void blame_check(LimWhy cause, std::uint32_t now);  // a reset or a new list right after our list
     void saw_request(std::uint32_t rdo, std::uint32_t now);
-    bool forged_differs_from_watch(std::array<std::uint32_t, 7>& f, std::size_t& cnt) const;
-    std::size_t forge(std::array<std::uint32_t, 7>& f) const;   // forge_caps on the real list up to the cut
+    bool plan(std::array<std::uint32_t, 7>& f, std::size_t& cnt);   // the list to send (true: it differs); stops on NoFit
 
     LimStatus st_{};
     IqWatch watch_{};
@@ -178,7 +180,6 @@ private:
     std::uint8_t inj_streak_ = 0;
     bool sink_asked_caps_ = false;
     bool held_ = false;
-    std::uint8_t cut_ = 0xFF;   // the forged list ends before this position (0-based); 0xFF = no cut
 };
 
 }  // namespace k2::pd
