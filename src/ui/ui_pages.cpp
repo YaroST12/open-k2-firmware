@@ -2130,6 +2130,7 @@ enum class SettingRow : uint8_t {
     LegacyUnits,
     SweepDepth,
     LongBack,
+    HomeBoxes,
     Display,
     SystemState,
     Memory,
@@ -2141,6 +2142,7 @@ constexpr int kSettingsRows = static_cast<int>(SettingRow::Count);
 static_assert(kSettingsRows == SettingsPage::kRows);
 static_assert(static_cast<int>(SettingRow::LegacyUnits) == SettingsPage::kUnitsRow);
 static_assert(static_cast<int>(SettingRow::SweepDepth) == SettingsPage::kSweepRow);
+static_assert(static_cast<int>(SettingRow::HomeBoxes) == SettingsPage::kHomeBoxesRow);
 static_assert(static_cast<int>(SettingRow::Display) == SettingsPage::kDisplayRow);
 static_assert(static_cast<int>(SettingRow::SystemState) == SettingsPage::kSystemRow);
 static_assert(static_cast<int>(SettingRow::Memory) == SettingsPage::kMemoryRow);
@@ -2227,13 +2229,13 @@ void SettingsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
 #if K2_SCREENSHOT
         "Screenshot",
 #endif
-        "Smoothing", "Wake port", "Test level", "Huawei/Samsung", "Sweep depth", "Long Back", "Display", "System state", "Memory", "Boot info"};
+        "Smoothing", "Wake port", "Test level", "Huawei/Samsung", "Sweep depth", "Long Back", "Home boxes", "Display", "System state", "Memory", "Boot info"};
     static constexpr Icon kIcons[kSettingsRows] = {
         Icon::Usb, Icon::Rotate, Icon::Keys,
 #if K2_SCREENSHOT
         Icon::Camera,
 #endif
-        Icon::Wave, Icon::Plug, Icon::Bolt, Icon::Brick, Icon::Ohm, Icon::Clock, Icon::Meter, Icon::Chip, Icon::Chip, Icon::Report};
+        Icon::Wave, Icon::Plug, Icon::Bolt, Icon::Brick, Icon::Ohm, Icon::Clock, Icon::Meter, Icon::Meter, Icon::Chip, Icon::Chip, Icon::Report};
     static constexpr const char *kPresets[smoothing::kPresetCount] = {"Off", "Low", "Medium", "High"};
     static constexpr const char *kPresetNotes[smoothing::kPresetCount] = {"Raw readings", "Light calming", "Balanced", "Steady, slower"};
     // charger_test::Level order (Medium 0, Light 1, Deep 2): the charger test's default level and what it runs.
@@ -2304,6 +2306,10 @@ void SettingsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
     case SettingRow::LongBack:   // the ring view's long Back target (ring::view_key)
         out.tail = ring::name(ring::sanitize_target(self->ctx_.keep.long_back));
         out.note = "Where Long Back jumps";
+        break;
+    case SettingRow::HomeBoxes:
+        out.chevron = true;
+        out.note = "Configure 3 Home info boxes";
         break;
     case SettingRow::Display:
         out.tail = {self->display_tail_, uidisp::format_summary(self->display_tail_, idle_hw::config())};
@@ -2394,6 +2400,9 @@ bool SettingsPage::on_event(Event e) {
             ctx_.ui->set_rotate_buttons(!ctx_.ui->rotate_buttons());
             update(ctx_.now);
             break;
+        case SettingRow::HomeBoxes:
+            ctx_.ui->push_menu(Menu::HomeBoxes, ctx_.now);
+            break;
         case SettingRow::Display:
             ctx_.ui->push_menu(Menu::Display, ctx_.now);
             break;
@@ -2466,6 +2475,66 @@ bool AutorotatePage::on_event(Event e) {
 }
 
 Strip AutorotatePage::labels() const { return setting_labels(base_labels(), sl::Apply); }
+
+// ---------------------------------------------------------------------------------------
+// Home boxes submenu (configure the 3 Home info boxes: static metric, Rotating, or Off)
+// ---------------------------------------------------------------------------------------
+
+void HomeBoxesPage::draw_static() {
+    title_bar();
+    ctx_.rows.init(ctx_.content, kit::kBodyY, row_fn, this);
+    ctx_.rows.set_count(kRows);
+    ctx_.rows.select(sel_);
+}
+
+void HomeBoxesPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
+    static constexpr const char *kTitles[kRows] = {"Box 1", "Box 2", "Box 3", "Reset defaults"};
+    const auto *self = static_cast<const HomeBoxesPage *>(ctx);
+    out.marker = kit::Marker::Icon;
+    out.icon = i < home::kBoxCount ? Icon::Meter : Icon::Rotate;
+    out.text = kTitles[i];
+    if (i < home::kBoxCount) {
+        const home::BoxKind b = self->ctx_.keep.home_boxes[static_cast<std::size_t>(i)];
+        out.tail = home::box_short_name(b);
+        out.tail_color = b == home::BoxKind::Off ? kDim : kAccent;
+        out.note = home::box_note(b);
+    } else {
+        out.note = "PD Req, Energy, Rotating";
+    }
+}
+
+void HomeBoxesPage::update(uint32_t) {
+    title_badge(false);
+    ctx_.rows.select(sel_);
+    ctx_.rows.draw(ctx_.now, ctx_.budget);
+}
+
+bool HomeBoxesPage::on_event(Event e) {
+    if (e.press == Press::Short && (e.button == Button::Plus || e.button == Button::Minus)) {
+        sel_ = std::clamp(sel_ + (e.button == Button::Plus ? 1 : -1), 0, kRows - 1);
+        update(ctx_.now);
+        return true;
+    }
+    if (e.press == Press::Short && e.button == Button::Ok) {
+        auto boxes = ctx_.keep.home_boxes;
+        if (sel_ < home::kBoxCount) {
+            boxes[static_cast<std::size_t>(sel_)] = home::next_box(boxes[static_cast<std::size_t>(sel_)]);
+        } else {
+            boxes = home::kDefaultBoxes;
+        }
+        ctx_.ui->set_home_boxes(boxes);
+        ctx_.rows.invalidate();
+        update(ctx_.now);
+        return true;
+    }
+    return false;
+}
+
+Strip HomeBoxesPage::labels() const {
+    Strip l = list_strip(base_labels());
+    l[Button::Ok] = sel_ < home::kBoxCount ? sl::Cycle : sl::Reset;
+    return l;
+}
 
 // ---------------------------------------------------------------------------------------
 // Display submenu (backlight level, dim and screen-off timeouts)

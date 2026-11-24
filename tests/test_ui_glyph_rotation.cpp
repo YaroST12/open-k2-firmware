@@ -34,7 +34,7 @@ using namespace k2;
 
 namespace {
 
-constexpr int kHeroX = 38, kHeroTop = 25;            // Home hero digits, logical content coords (ui_home.cpp)
+constexpr int kHeroX = 72, kHeroTop = 21;            // Home hero digits, logical content coords (ui_home.cpp)
 constexpr int kHeroChars = 5;                        // DigitField of 5 chars
 constexpr home::CellGeom kHeroCell = home::cell_geom(home::kHeroY0, home::kHeroY1, true);   // the Home hero cell
 
@@ -183,7 +183,7 @@ static void test_home_page_hero_glyphs() {
         // Some hero ink must actually be there (the fixture reads 36.75 W, the default W hero).
         unsigned ink = 0;
         for (uint8_t v : mask[r]) ink += v;
-        CHECK_EQ(ink > 500u, true);
+        CHECK_EQ(ink > 300u, true);
     }
     for (uint8_t r = 1; r < 4; ++r) {
         bool ok = mask[r] == mask[0];

@@ -114,10 +114,10 @@ int link_hit(uint8_t state, int x, int y) {
 }
 
 uint16_t bg_at(const Cell &c, int x, int y) {
-    if (!c.sweep || !c.sw || y < c.geom.t0 || y > c.geom.t1 || x < kColX0) return c.bg;
-    const int col = col_of_x(x);
+    if (!c.sweep || !c.sw || y < c.geom.t0 || y > c.geom.t1 || x < c.sweep_x0) return c.bg;
+    const int col = col_of_x(x, c.sweep_x0);
     if (col >= c.sw->n) return c.bg;
-    if (col == c.sw->cursor && x == x_of_col(col)) return c.cursor_line;   // the thin cursor line; the old trace stays beside it
+    if (col == c.sw->cursor && x == x_of_col(col, c.sweep_x0)) return c.cursor_line;   // the thin cursor line; the old trace stays beside it
     const int r = c.sw->rows[col];
     if (r == 0) return c.bg;
     const int k = c.geom.t1 - y + 1;     // 1 at the bottom sweep row

@@ -130,9 +130,11 @@ static int frame_damage(Ui &ui, const char *what) {
     struct Line { const char *name; int x, y, w, h; uint16_t color; };
     const Line lines[] = {
         {"rule1", 0, hm::kRule1Y, hm::kW, 2, kRule},
+        {"rule2", 0, hm::kRule2Y, hm::kW, 2, kRule},
         {"rule3", 0, hm::kRule3Y, hm::kW, 2, kRule},
-        {"vrule", hm::kVRuleX, hm::kRowY0[0], 1, hm::kRowY1[1] - hm::kRowY0[0] + 1, kRule},
-        {"rowrule", 0, hm::kRowRuleY, hm::kW, 1, kRule},
+        {"subvrule", hm::kSubVRuleX, hm::kSubY0, 1, hm::kSubY1 - hm::kSubY0 + 1, kRule},
+        {"boxvrule0", hm::kBoxVRuleX[0], hm::kBoxY0, 1, hm::kBoxY1 - hm::kBoxY0 + 1, kRule},
+        {"boxvrule1", hm::kBoxVRuleX[1], hm::kBoxY0, 1, hm::kBoxY1 - hm::kBoxY0 + 1, kRule},
     };
     int bad = 0;
     for (const Line &l : lines) {

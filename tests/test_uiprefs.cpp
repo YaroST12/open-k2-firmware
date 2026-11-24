@@ -222,9 +222,14 @@ void test_long_back_byte() {
     CHECK_EQ(uiprefs::record_len(Prefs{.long_back = 5}), 9u);
     const auto r = uiprefs::encode_ext(Prefs{.qc_after_pd = true, .long_back = 5});
     const std::array<std::uint8_t, 9> want{'K', '2', 'U', 'P', 1, 0xFE, 0, 0, 5};
-    CHECK_EQ(r == want, 1);
+    CHECK_EQ(std::equal(want.begin(), want.end(), r.begin()), 1);
+    CHECK_EQ(uiprefs::decode(std::span<const std::uint8_t>(r.data(), 9)).long_back, 5);
     CHECK_EQ(uiprefs::decode(r).long_back, 5);
     CHECK_EQ(uiprefs::decode(r).qc_after_pd, 1);
+    // Home boxes (bytes 9..10) written only when non-default; round-trip preserves them.
+    CHECK_EQ(uiprefs::record_len(Prefs{.home_boxes = {3, 4, 5}}), 11u);
+    const Prefs custom_boxes{.home_boxes = {3, 4, 5}};
+    CHECK_EQ(uiprefs::decode(uiprefs::encode_ext(custom_boxes)) == custom_boxes, 1);
     // an old 8-byte record has no ring target
     const std::array<std::uint8_t, 8> old{'K', '2', 'U', 'P', 1, 0xFE, 0, 0};
     CHECK_EQ(uiprefs::decode(old).long_back, 0);

@@ -100,7 +100,7 @@ inline constexpr std::size_t kLongestMenuChain =
               arena_bytes<DiagnosisPage, BlackBoxPage, SharePage>(), arena_bytes<BlackBoxPage, SharePage>(),
               arena_bytes<BatteryPage, SharePage>(), arena_bytes<QrTestPage>(),
               arena_bytes<DiagPage, SharePage>(), arena_bytes<UsbLinkPage>(), arena_bytes<AutorotatePage>(), arena_bytes<MemoryPage>(),
-              arena_bytes<DisplayPage>(), arena_bytes<ToolsPage, TriggerPage>(), arena_bytes<ToolsPage, PdTriggerPage>(),
+              arena_bytes<DisplayPage>(), arena_bytes<HomeBoxesPage>(), arena_bytes<ToolsPage, TriggerPage>(), arena_bytes<ToolsPage, PdTriggerPage>(),
               arena_bytes<ToolsPage, CardsPage, SharePage>(), arena_bytes<ToolsPage, BlackBoxPage, SharePage>(),
               arena_bytes<ToolsPage, SpoofPage>(), arena_bytes<ToolsPage, CableRPage>()
 #if K2_TWIN
@@ -134,6 +134,7 @@ static_assert(kPageArenaBytes >= arena_bytes<LinesPage, QrTestPage>(), "the qrte
 static_assert(kPageArenaBytes >= arena_bytes<SettingsPage, DiagPage, SharePage>(), "settings > diag > share fits");
 static_assert(kPageArenaBytes >= arena_bytes<SettingsPage, MemoryPage>(), "settings > memory fits");
 static_assert(kPageArenaBytes >= arena_bytes<SettingsPage, DisplayPage>(), "settings > display fits");
+static_assert(kPageArenaBytes >= arena_bytes<SettingsPage, HomeBoxesPage>(), "settings > home boxes fits");
 static_assert(kMaxMenuDepth == 3, "the chain lists above are at most three menus deep");
 
 class Ui {
@@ -158,6 +159,10 @@ public:
     // stores it in the uiprefs record; restore_home_hero is the boot-time half (the stored byte, writes nothing).
     void set_home_hero(home::Qty q);
     void restore_home_hero(uint8_t stored) { ctx_.keep.home_hero = home::qty_from(stored); }
+    void set_home_boxes(const std::array<home::BoxKind, home::kBoxCount> &boxes);
+    void restore_home_boxes(const std::array<uint8_t, 3> &stored) {
+        for (int i = 0; i < home::kBoxCount; i++) ctx_.keep.home_boxes[i] = home::box_from(stored[i]);
+    }
     // The ring position long Back jumps to (Settings > Long Back): set_long_back puts it in force and stores it in the uiprefs
     // record; restore_long_back is the boot-time half. Anything past the ring is Home.
     void set_long_back(uint8_t pos);

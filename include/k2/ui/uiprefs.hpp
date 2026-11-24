@@ -41,6 +41,8 @@ inline constexpr std::uint32_t kLegacyAddr = 0x080E6800;   // pre-littlefs raw p
 inline constexpr const char* kPath = "/prefs.cfg";
 inline constexpr std::array<std::uint8_t, 4> kMagic{'K', '2', 'U', 'P'};
 
+inline constexpr std::array<std::uint8_t, 3> kDefaultHomeBoxes{1, 2, 0};   // Pd, Energy, Rotating
+
 struct Prefs {
     bool qc_after_pd = false;   // obsolete: the charger test always runs the legacy units (no option row any more); kept so stored prefs files stay valid
     bool screenshot = true;     // Settings > Screenshot: remote and web screenshots render the page
@@ -54,6 +56,7 @@ struct Prefs {
     std::uint8_t long_back = 0;        // Settings > Long Back: the ring::Pos long Back jumps to (0 Home)
     bool legacy_units = false;         // Settings > Huawei/Samsung tests: FCP, SCP and AFC in the charger test (off = hidden)
     std::uint8_t sweep_depth = 1;      // Settings > Sweep depth: ctsweep::Depth of the deep sweeps (1 = Step200, the default)
+    std::array<std::uint8_t, 3> home_boxes = kDefaultHomeBoxes;   // Settings > Home boxes (home::BoxKind per slot)
     bool operator==(const Prefs&) const = default;
 };
 
@@ -73,30 +76,43 @@ constexpr std::array<std::uint8_t, 8> encode(Prefs p) {
     return {kMagic[0], kMagic[1], kMagic[2], kMagic[3], f, static_cast<std::uint8_t>(~f), s, o};
 }
 
-// The record with its optional 9th byte; record_len says how much of it is written.
-constexpr std::array<std::uint8_t, 9> encode_ext(Prefs p) {
+// The record with optional bytes 8 (long_back + sweep_depth) and 9..10 (home_boxes); record_len says how much is written.
+constexpr std::array<std::uint8_t, 11> encode_ext(Prefs p) {
     const auto r = encode(p);
     const std::uint8_t lb = p.long_back < ring::kCount ? p.long_back : std::uint8_t{0};
-    return {r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], static_cast<std::uint8_t>(lb | (((p.sweep_depth - 1u) & 3u) << 6))};
+    const std::uint8_t b0 = p.home_boxes[0] < 10 ? p.home_boxes[0] : kDefaultHomeBoxes[0];
+    const std::uint8_t b1 = p.home_boxes[1] < 10 ? p.home_boxes[1] : kDefaultHomeBoxes[1];
+    const std::uint8_t b2 = p.home_boxes[2] < 10 ? p.home_boxes[2] : kDefaultHomeBoxes[2];
+    return {r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7],
+            static_cast<std::uint8_t>(lb | (((p.sweep_depth - 1u) & 3u) << 6)),
+            static_cast<std::uint8_t>(b0 | (b1 << 4)), b2};
 }
-constexpr std::size_t record_len(Prefs p) { return encode_ext(p)[8] != 0 ? 9 : 8; }
+constexpr std::size_t record_len(Prefs p) {
+    if (p.home_boxes != kDefaultHomeBoxes) return 11;
+    return encode_ext(p)[8] != 0 ? 9 : 8;
+}
 
-// 8 bytes (the record) or 9 (with the ring target); any other length is no record.
+// 8 bytes (base record), 9 (with ring target / sweep depth), or 11 (with home boxes); any other length is no record.
 constexpr Prefs decode(std::span<const std::uint8_t> r) {
-    if (r.size() != 8 && r.size() != 9) return {};
+    if (r.size() != 8 && r.size() != 9 && r.size() != 11) return {};
     for (std::size_t i = 0; i < kMagic.size(); i++) if (r[i] != kMagic[i]) return {};
     if (static_cast<std::uint8_t>(r[4] ^ r[5]) != 0xFF || (r[4] & ~3u)) return {};
     const unsigned preset = r[6] & 0x0Fu;   // bits 4..5: the retired theme, ignored
     const smoothing::Preset sm = preset == 0 ? smoothing::kDefault : smoothing::preset_from_index(preset - 1u);
+    std::array<std::uint8_t, 3> hb = kDefaultHomeBoxes;
+    if (r.size() == 11) {
+        const std::uint8_t b0 = r[9] & 0x0Fu, b1 = (r[9] >> 4) & 0x0Fu, b2 = r[10] & 0x0Fu;
+        hb = {b0 < 10 ? b0 : kDefaultHomeBoxes[0], b1 < 10 ? b1 : kDefaultHomeBoxes[1], b2 < 10 ? b2 : kDefaultHomeBoxes[2]};
+    }
     return {(r[4] & 1) != 0, (r[4] & 2) == 0, sm, (r[7] & 4) != 0, static_cast<std::uint8_t>(r[7] & 3), (r[7] & 8) != 0, (r[7] & 16) != 0,
             static_cast<std::uint8_t>(((r[7] >> 5) & 3) == 3 ? 0 : (r[7] >> 5) & 3),
             static_cast<std::uint8_t>((r[6] >> 6) == 3 ? 0 : r[6] >> 6),
-            static_cast<std::uint8_t>(r.size() == 9 && (r[8] & 0x3Fu) < ring::kCount ? r[8] & 0x3Fu : 0), (r[7] & 128) != 0,
-            static_cast<std::uint8_t>(r.size() == 9 ? ((r[8] >> 6) + 1u) & 3u : 1u)};
+            static_cast<std::uint8_t>(r.size() >= 9 && (r[8] & 0x3Fu) < ring::kCount ? r[8] & 0x3Fu : 0), (r[7] & 128) != 0,
+            static_cast<std::uint8_t>(r.size() >= 9 ? ((r[8] >> 6) + 1u) & 3u : 1u), hb};
 }
 
 inline Prefs load(fs::Fs& f) {
-    std::array<std::uint8_t, 9> r{};
+    std::array<std::uint8_t, 11> r{};
     std::size_t n = 0;
     if (f.read_file(kPath, r, n) != fs::Err::Ok) return {};
     return decode(std::span<const std::uint8_t>(r.data(), n));

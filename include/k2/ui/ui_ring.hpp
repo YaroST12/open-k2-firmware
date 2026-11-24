@@ -56,7 +56,7 @@ constexpr Pos owner(Page base, Menu first, uint8_t /*tab*/) {
     case Menu::Twin: case Menu::Connection: return Pos::Link;
     case Menu::Battery: return Pos::Battery;
     case Menu::BlackBox: case Menu::Diagnosis: return Pos::Log;
-    case Menu::Diag: case Menu::UsbLink: case Menu::Autorotate: case Menu::Memory: case Menu::Display: return Pos::K2;
+    case Menu::Diag: case Menu::UsbLink: case Menu::Autorotate: case Menu::Memory: case Menu::Display: case Menu::HomeBoxes: return Pos::K2;
     case Menu::Share: case Menu::QrTest: case Menu::Count: break;
     }
     return own;

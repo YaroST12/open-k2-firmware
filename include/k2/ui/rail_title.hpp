@@ -32,7 +32,7 @@ inline constexpr Title kMeter{"METR"}, kCharger{"CHRG"}, kCable{"CABL"}, kDevice
 // Menus and tool pages.
 inline constexpr Title kSys{"SYS"}, kDiagnosis{"DIAG"}, kFcTrig{"FC"}, kPdTrig{"PD"}, kCableR{"CBLR"}, kBlackBox{"BBOX"}, kSpoof{"SPOF"},
     kUsb{"USB"}, kRotate{"ROT"}, kCards{"CARD"}, kShare{"SHAR"}, kTwin{"TWIN"}, kTwins{"TWNS"}, kProbe{"PROB"}, kStress{"STRS"},
-    kMemory{"MEM"}, kDisplay{"DISP"}, kDim{"DIM"}, kOff{"OFF"}, kTools{"TOOL"}, kLimit{"LIM"}, kQr{"QR"}, kEmarker{"CBLS"};
+    kMemory{"MEM"}, kDisplay{"DISP"}, kHomeBoxes{"BOX"}, kDim{"DIM"}, kOff{"OFF"}, kTools{"TOOL"}, kLimit{"LIM"}, kQr{"QR"}, kEmarker{"CBLS"};
 
 // The Bench places in Place order (ui_tools.hpp; src/ui/ui_tools.cpp pins the count).
 inline constexpr size_t kPlaceCount = 7;
@@ -41,7 +41,7 @@ constexpr const Title &place(unsigned i) { return kPlace[i < kPlaceCount ? i : 0
 
 inline constexpr std::array kAll = {kHome, kNum, kTest, kLine, kK2, kGraph, kRipple, kWait, kResult, kSteps, kDetail, kMeter, kCharger, kCable,
                                     kDevice, kBattery, kLog, kLink, kSys, kDiagnosis, kFcTrig, kPdTrig, kCableR, kBlackBox, kSpoof, kUsb,
-                                    kRotate, kCards, kShare, kTwin, kTwins, kProbe, kStress, kMemory, kDisplay, kDim, kOff, kTools, kLimit,
+                                    kRotate, kCards, kShare, kTwin, kTwins, kProbe, kStress, kMemory, kDisplay, kHomeBoxes, kDim, kOff, kTools, kLimit,
                                     kQr, kEmarker};
 
 // Every name is present and unique: two pages never share a name.

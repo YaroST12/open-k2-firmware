@@ -62,7 +62,7 @@ class PageNames(unittest.TestCase):
         js = (ROOT / "tools" / "web" / "k2proto.js").read_text()
         html = (ROOT / "tools" / "web" / "k2.html").read_text()
         for k, m in enumerate(self.menus):
-            parent = "settings/" if m in ("usblink", "autorotate", "memory", "display") else "tools/"
+            parent = "settings/" if m in ("usblink", "autorotate", "memory", "display", "homeboxes") else "tools/"
             self.assertEqual(kr.page_name(base + k), parent + m)
         for text in ((js, html) if WEB else ()):
             self.assertEqual(js_array(text, "MENUS"), self.menus)

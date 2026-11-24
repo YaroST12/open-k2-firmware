@@ -24,8 +24,10 @@ namespace k2::home {
 // ---- geometry ---------------------------------------------------------------------------------
 constexpr int16_t kW = 224;                 // logical content width
 constexpr int kCols = 110;                  // hero sweep columns, 2 px each: x 4..223
-constexpr int kLedgerCols = 66;             // ledger sweep columns: x 4..135
+constexpr int kSubCols = 52;                // sub-hero sweep columns, 2 px each (104 px)
+constexpr int kLedgerCols = kSubCols;       // alias for legacy callers
 constexpr int16_t kColX0 = 4;
+constexpr int16_t kSubColX0[2] = {4, 116};
 
 // A measurement cell: the full cell rows (status edge, inversion), the sweep rows inside it.
 struct CellGeom {
@@ -35,24 +37,36 @@ struct CellGeom {
 };
 // The sweep runs from 14 rows under the cell top (clear of the label line) to the bar, or 2 rows above the bottom.
 constexpr CellGeom cell_geom(int16_t top, int16_t bottom, bool bar) {
-    return {top, bottom, static_cast<int16_t>(top + 14), static_cast<int16_t>(bottom - (bar ? 7 : 2))};
+    return {top, bottom, static_cast<int16_t>(top + 14), static_cast<int16_t>(bottom - (bar ? 8 : 2))};
 }
 
-constexpr int16_t kHeroY0 = 0, kHeroY1 = 73;
-constexpr int16_t kRule1Y = 74, kRule3Y = 194;                 // 2 px rules under the hero and above the info block
-// The 1 px rule between the rows sits on y136, not y135: the landscape mapping squeezes 240 logical rows into 224 and
-// drops y135 entirely (test_ui_home_landscape checks every rule keeps a physical row).
-constexpr int16_t kRowY0[2] = {76, 137}, kRowY1[2] = {135, 193};   // ledger rows and card cells
-constexpr int16_t kRowRuleY = 136;                             // 1 px rule between the rows (both columns)
-constexpr int16_t kLedgerX1 = 139, kVRuleX = 140, kCardX0 = 141;
+constexpr int16_t kHeroY0 = 0, kHeroY1 = 69;
+constexpr int16_t kRule1Y = 70;                                  // 2 px rule under hero (y70..71)
+constexpr int16_t kSubY0 = 72, kSubY1 = 125;                     // side-by-side sub-hero cells
+constexpr int16_t kSubX0[2] = {0, 112}, kSubX1[2] = {110, 223};
+constexpr int16_t kSubVRuleX = 111;                              // 1 px vertical rule between sub-heroes
+constexpr int16_t kRule2Y = 126;                                 // 2 px rule under sub-heroes (y126..127)
+constexpr int16_t kBoxY0 = 128, kBoxY1 = 193;                    // 3 configurable 74x66 static/rotating boxes
+constexpr int16_t kBoxW = 74;
+constexpr int16_t kBoxX0[3] = {0, 75, 150}, kBoxX1[3] = {73, 148, 223};
+constexpr int16_t kBoxVRuleX[2] = {74, 149};                     // 1 px vertical rules between boxes
+constexpr int16_t kRule3Y = 194;                                 // 2 px rule above info block (y194..195)
+// Legacy aliases kept for host tests referencing old names
+constexpr int16_t kRowY0[2] = {kSubY0, kBoxY0}, kRowY1[2] = {kSubY1, kBoxY1};
+constexpr int16_t kRowRuleY = kRule2Y;
+constexpr int16_t kLedgerX1 = kSubX1[0], kVRuleX = kSubVRuleX, kCardX0 = kBoxX0[2];
 constexpr int16_t kInfoTagX = 4, kInfoValX = 52, kInfoRightX = 220, kInfoRow1Base = 213, kInfoRow2Base = 235;
 
 // ---- contract bar ------------------------------------------------------------------------------
-// 3 px against the contract maximum, 90 % tick: hero x10..214 at its row 68, a ledger row x6..133, 3 rows over its bottom.
+// 3 px against the contract maximum, 90 % tick: hero x10..214 at row 63, sub-hero cells at row 119.
 struct BarGeom { int16_t x0, x1, y; };
 constexpr int16_t kBarH = 3;
-constexpr BarGeom kHeroBar{10, 214, static_cast<int16_t>(kHeroY1 - 5)};
-constexpr BarGeom ledger_bar(int row) { return {6, 133, static_cast<int16_t>(kRowY1[row] - 3)}; }
+constexpr BarGeom kHeroBar{10, 214, static_cast<int16_t>(kHeroY1 - 6)};
+constexpr BarGeom sub_bar(int col) {
+    return col == 0 ? BarGeom{6, 104, static_cast<int16_t>(kSubY1 - 6)}
+                    : BarGeom{118, 217, static_cast<int16_t>(kSubY1 - 6)};
+}
+constexpr BarGeom ledger_bar(int row) { return sub_bar(row); }
 
 // ---- alarms ------------------------------------------------------------------------------------
 enum class Alarm : uint8_t { None, Near, Over };
@@ -97,8 +111,8 @@ constexpr int sweep_rows(uint32_t v10, uint32_t scale10, int span) {
                                              : math::div_u64_to_u32(num + scale10 / 2u, scale10);
     return static_cast<int>(q) + 1;
 }
-constexpr int col_of_x(int x) { return (x - kColX0) / 2; }              // valid for x in 4..223
-constexpr int16_t x_of_col(int col) { return static_cast<int16_t>(kColX0 + col * 2); }
+constexpr int col_of_x(int x, int16_t x0 = kColX0) { return (x - x0) / 2; }
+constexpr int16_t x_of_col(int col, int16_t x0 = kColX0) { return static_cast<int16_t>(x0 + col * 2); }
 // Milliseconds between sweep steps per window (a window spans kCols steps): 10 s -> 91 ms, 60 s -> 545 ms,
 // 10 min -> 5455 ms.
 constexpr uint32_t step_ms(int window_index) { return window_index == 0 ? 91u : window_index == 1 ? 545u : 5455u; }

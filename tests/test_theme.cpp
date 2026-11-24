@@ -68,7 +68,7 @@ void test_settings_has_no_theme_row() {
     std::uint32_t t = 1200;
     ui->goto_page(static_cast<uint8_t>(Page::Settings), t);
     while (ui->painting()) ui->tick(t += 20);
-    CHECK_EQ(SettingsPage::kRows, 13 + SettingsPage::kScreenshotRows);
+    CHECK_EQ(SettingsPage::kRows, 14 + SettingsPage::kScreenshotRows);
     CHECK_EQ(ui->list_state().count, SettingsPage::kRows);
     for (int i = 0; i < 20; i++) ui->on_button(Button::Plus, ButtonEvent::Short, 1300 + i * 10);
     CHECK_EQ(ui->context().keep.settings_sel, SettingsPage::kRows - 1);   // clamps at Boot info

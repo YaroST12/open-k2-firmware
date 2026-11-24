@@ -43,13 +43,14 @@ public:
     void reset() { *this = Extremes{}; }
     void sample(int32_t vbus_mv, int32_t ibus_ma, int32_t power_mw, uint32_t level_mv);
     uint32_t peak_mw() const { return peak_mw_; }
+    uint32_t peak_mv() const { return peak_mv_; }
     uint32_t peak_ma() const { return peak_ma_; }
     bool has_sag() const { return has_sag_; }
     uint32_t sag_bp() const { return sag_bp_; }             // 0.01 % of the level
     uint32_t sag_level_mv() const { return sag_level_mv_; }  // the level the worst dip was measured against
 private:
     // The one instance is UiContext::extremes in the .bss global Ui (reset() value-initialises, which zeroes).
-    uint32_t peak_mw_ K2_BSS_ZERO, peak_ma_ K2_BSS_ZERO;
+    uint32_t peak_mw_ K2_BSS_ZERO, peak_mv_ K2_BSS_ZERO, peak_ma_ K2_BSS_ZERO;
     uint32_t sag_bp_ K2_BSS_ZERO, sag_level_mv_ K2_BSS_ZERO;
     bool has_sag_ K2_BSS_ZERO;
 };
@@ -139,6 +140,64 @@ private:
     uint32_t peak_ref_mw_ K2_BSS_ZERO, start_ms_ K2_BSS_ZERO, last_ms_ K2_BSS_ZERO, until_ms_ K2_BSS_ZERO;
     bool primed_ K2_BSS_ZERO;
     Card card_ = Card::Count;
+};
+
+// ---- configurable Home boxes (3 x 74 px row) ---------------------------------------------------
+// Each of the three boxes is configured in Settings > Home boxes to either a fixed metric, Off, or
+// Rotating (cycles through unpinned metrics that have data and prioritizes whichever is active).
+enum class BoxKind : uint8_t {
+    Rotating = 0,
+    Pd,
+    Energy,
+    Drop,
+    Cable,
+    Cc,
+    Dpdm,
+    Battery,
+    LoadR,
+    Off,
+    Count
+};
+inline constexpr int kBoxCount = 3;
+inline constexpr std::array<BoxKind, kBoxCount> kDefaultBoxes = {BoxKind::Pd, BoxKind::Energy, BoxKind::Rotating};
+using BoxMask = uint16_t;
+constexpr BoxMask box_bit(BoxKind b) { return static_cast<BoxMask>(1u << static_cast<unsigned>(b)); }
+constexpr BoxKind box_from(uint8_t v) {
+    return v < static_cast<uint8_t>(BoxKind::Count) ? static_cast<BoxKind>(v) : BoxKind::Rotating;
+}
+constexpr BoxKind next_box(BoxKind b) {
+    return static_cast<BoxKind>((static_cast<uint8_t>(b) + 1u) % static_cast<uint8_t>(BoxKind::Count));
+}
+const char *box_short_name(BoxKind b);   // Settings tail: "Rotating", "PD Req", "Energy", ...
+const char *box_note(BoxKind b);         // Settings note: "Cycles unpinned metrics", ...
+
+// Cycler & 3-second fading cyan attention highlight for the three Home boxes.
+class BoxCycler {
+public:
+    static constexpr uint32_t kDwellMs = 5000, kMaxStepMs = 1000;
+    static constexpr uint32_t kGlowMs = 3000;
+    static constexpr uint8_t kGlowSteps = 6;   // 6 discrete 500 ms steps (low SPI traffic)
+
+    void reset();
+    void tick(uint32_t now_ms, bool live, const std::array<BoxKind, kBoxCount> &cfg, BoxMask ok);
+    // Highlight `metric` (from Attention): if pinned in box i, glows box i; else pulls it into the
+    // first Rotating box (if it has data) and glows it for kGlowMs.
+    void trigger_attention(uint32_t now_ms, BoxKind metric, const std::array<BoxKind, kBoxCount> &cfg, BoxMask ok);
+    BoxKind shown(int i) const { return shown_[i]; }
+    bool is_rotating(int i) const { return rotating_[i]; }
+    // 0 = no border, 1..kGlowSteps = fading cyan border intensity (kGlowSteps = brightest).
+    uint8_t glow_level(int i, uint32_t now_ms) const;
+
+private:
+    BoxKind shown_[kBoxCount] = {BoxKind::Pd, BoxKind::Energy, BoxKind::Drop};
+    bool rotating_[kBoxCount] = {false, false, true};
+    bool live_ K2_BSS_ZERO, primed_ K2_BSS_ZERO;
+    uint32_t act_ms_ K2_BSS_ZERO, last_ms_ K2_BSS_ZERO;
+    uint32_t glow_start_[kBoxCount] K2_BSS_ZERO;
+    bool glow_on_[kBoxCount] K2_BSS_ZERO;
+    int8_t attn_slot_ = -1;
+    BoxKind attn_metric_ = BoxKind::Off;
+    uint32_t attn_until_ K2_BSS_ZERO;
 };
 
 }  // namespace k2::home

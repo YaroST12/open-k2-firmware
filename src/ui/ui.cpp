@@ -117,6 +117,7 @@ PageIf *Ui::build_menu(Menu m) {
     case Menu::Battery: return pages_.push<BatteryPage>(ctx_);
     case Menu::Memory: return pages_.push<MemoryPage>(ctx_);
     case Menu::Display: return pages_.push<DisplayPage>(ctx_);
+    case Menu::HomeBoxes: return pages_.push<HomeBoxesPage>(ctx_);
     case Menu::Tools: return pages_.push<ToolsPage>(ctx_);
     default: return pages_.push<PdTriggerPage>(ctx_);
     }
@@ -140,6 +141,7 @@ ListState Ui::list_state() {
         case Menu::Battery: return top_as<BatteryPage>().list_state();
         case Menu::Memory: return top_as<MemoryPage>().list_state();
         case Menu::Display: return top_as<DisplayPage>().list_state();
+        case Menu::HomeBoxes: return top_as<HomeBoxesPage>().list_state();
         case Menu::Tools: return top_as<ToolsPage>().list_state();
         default: return ListState{};
         }
@@ -255,6 +257,15 @@ void Ui::set_home_hero(home::Qty q) {
     uiprefs::Prefs p = uiprefs::stored();
     const uiprefs::Prefs before = p;
     p.home_hero = home::qty_byte(q);
+    if (p != before) uiprefs::set(p);
+}
+
+void Ui::set_home_boxes(const std::array<home::BoxKind, home::kBoxCount> &boxes) {
+    ctx_.keep.home_boxes = boxes;
+    ctx_.keep.boxes.reset();
+    uiprefs::Prefs p = uiprefs::stored();
+    const uiprefs::Prefs before = p;
+    for (int i = 0; i < home::kBoxCount; i++) p.home_boxes[i] = static_cast<uint8_t>(boxes[i]);
     if (p != before) uiprefs::set(p);
 }
 
@@ -605,7 +616,7 @@ Ui::Session Ui::session() {
         case Menu::Battery:
             rows = list_state().count > 0;
             break;
-        case Menu::Spoof: case Menu::UsbLink: case Menu::Autorotate: case Menu::BlackBox: case Menu::Display: case Menu::Tools: rows = true; break;
+        case Menu::Spoof: case Menu::UsbLink: case Menu::Autorotate: case Menu::BlackBox: case Menu::Display: case Menu::HomeBoxes: case Menu::Tools: rows = true; break;
         case Menu::Connection: {
             const ConnectionPage &cp = connection_page();
             s.sub = static_cast<uint8_t>(static_cast<uint8_t>(cp.tab()) & kSubTabMask);
@@ -1440,7 +1451,7 @@ bool Ui::run_action(Action a, uint32_t now_ms, bool confirm) {
         ctx_.meter.reset(now_ms);
         ctx_.trend.clear();
         ctx_.extremes.reset();     // and Home's PEAK / SAG and the card cycle
-        ctx_.keep.cards.reset();
+        ctx_.keep.boxes.reset();
         ctx_.keep.attention.reset();
         ctx_.live.clear();   // OK on Home also drops the frozen LAST state
         K2LOG("[UI] energy meter reset\n");

@@ -92,11 +92,12 @@ uint32_t sag_level_mv(const ProtoInfo &p, uint32_t qc3_target_mv) {
 }
 
 void Extremes::sample(int32_t vbus_mv, int32_t ibus_ma, int32_t power_mw, uint32_t level_mv) {
+    const uint32_t v = vbus_mv < 0 ? 0 : static_cast<uint32_t>(vbus_mv);
     const uint32_t a = mag(ibus_ma), w = mag(power_mw);
     if (w > peak_mw_) peak_mw_ = w;
+    if (v > peak_mv_) peak_mv_ = v;
     if (a > peak_ma_) peak_ma_ = a;
     if (a <= kSagMinMa || level_mv == 0) return;
-    const uint32_t v = vbus_mv < 0 ? 0 : static_cast<uint32_t>(vbus_mv);
     const uint32_t dip = v < level_mv ? level_mv - v : 0;
     const uint32_t bp = math::div_u64_to_u32(static_cast<uint64_t>(dip) * 10000u + level_mv / 2u, level_mv);
     if (!has_sag_ || bp > sag_bp_) {
@@ -264,6 +265,139 @@ Card Attention::update(uint32_t now_ms, bool live, int32_t vbus_mv, int32_t cc1_
 
     if (card_ != Card::Count && static_cast<int32_t>(now_ms - until_ms_) >= 0) card_ = Card::Count;
     return card_;
+}
+
+// ---- BoxCycler ---------------------------------------------------------------------------------
+const char *box_short_name(BoxKind b) {
+    static constexpr const char *kNames[static_cast<unsigned>(BoxKind::Count)] = {
+        "Rotating", "PD Req", "Energy", "Drop", "E-Marker", "CC1/2", "D+/D-", "Battery", "Load R", "Off"
+    };
+    const unsigned i = static_cast<unsigned>(b);
+    return kNames[i < static_cast<unsigned>(BoxKind::Count) ? i : 0];
+}
+
+const char *box_note(BoxKind b) {
+    static constexpr const char *kNotes[static_cast<unsigned>(BoxKind::Count)] = {
+        "Cycles unpinned + active", "PD charger max & sink req", "Session Wh and Ah", "Cable drop & VBUS sag %",
+        "E-Marker rating & speed", "CC1 and CC2 voltages", "D+ and D- voltages", "PD battery state of charge",
+        "Apparent load resistance", "Leave box blank"
+    };
+    const unsigned i = static_cast<unsigned>(b);
+    return kNotes[i < static_cast<unsigned>(BoxKind::Count) ? i : 0];
+}
+
+namespace {
+constexpr BoxKind kBoxDeck[] = {BoxKind::Pd, BoxKind::Energy, BoxKind::Drop, BoxKind::Cable,
+                                BoxKind::Cc, BoxKind::Dpdm, BoxKind::Battery, BoxKind::LoadR};
+constexpr int kBoxDeckN = static_cast<int>(sizeof(kBoxDeck) / sizeof(kBoxDeck[0]));
+
+int box_deck_idx(BoxKind b) {
+    for (int i = 0; i < kBoxDeckN; i++)
+        if (kBoxDeck[i] == b) return i;
+    return 0;
+}
+
+BoxKind next_unpinned(BoxKind cur, BoxMask used, BoxMask ok) {
+    const int at = box_deck_idx(cur);
+    for (int i = 1; i <= kBoxDeckN; i++) {
+        const BoxKind c = kBoxDeck[(at + i) % kBoxDeckN];
+        const BoxMask bit = box_bit(c);
+        if ((used & bit) == 0 && (ok & bit) != 0) return c;
+    }
+    return BoxKind::Off;
+}
+}  // namespace
+
+void BoxCycler::reset() { *this = BoxCycler{}; }
+
+void BoxCycler::tick(uint32_t now_ms, bool live, const std::array<BoxKind, kBoxCount> &cfg, BoxMask ok) {
+    BoxMask pinned = 0;
+    for (int i = 0; i < kBoxCount; i++) {
+        rotating_[i] = cfg[i] == BoxKind::Rotating;
+        if (!rotating_[i]) {
+            shown_[i] = cfg[i];
+            if (cfg[i] != BoxKind::Off) pinned |= box_bit(cfg[i]);
+        }
+    }
+    if (!live) {
+        live_ = primed_ = false;
+        attn_slot_ = -1;
+        for (bool &g : glow_on_) g = false;
+        // When idle/stale, give each Rotating slot a deterministic unpinned default from the deck.
+        BoxMask used = pinned;
+        for (int i = 0; i < kBoxCount; i++) {
+            if (!rotating_[i]) continue;
+            const BoxKind c = next_unpinned(BoxKind::LoadR, used, static_cast<BoxMask>(~0u));
+            shown_[i] = c;
+            if (c != BoxKind::Off) used |= box_bit(c);
+        }
+        return;
+    }
+    uint32_t dt = primed_ ? now_ms - last_ms_ : 0;
+    if (dt > kMaxStepMs) dt = kMaxStepMs;
+    last_ms_ = now_ms;
+    primed_ = live_ = true;
+    const uint32_t old = act_ms_;
+    act_ms_ += dt;
+
+    if (attn_slot_ >= 0 && static_cast<int32_t>(now_ms - attn_until_) >= 0) attn_slot_ = -1;
+    for (int i = 0; i < kBoxCount; i++)
+        if (glow_on_[i] && now_ms - glow_start_[i] >= kGlowMs) glow_on_[i] = false;
+
+    // Step rotating slots (staggered by kDwellMs / 3 so only one changes at a time).
+    BoxMask used = pinned;
+    for (int i = 0; i < kBoxCount; i++) {
+        if (!rotating_[i]) continue;
+        if (attn_slot_ == i && (ok & box_bit(attn_metric_)) != 0) {
+            shown_[i] = attn_metric_;
+            used |= box_bit(shown_[i]);
+            continue;
+        }
+        const uint32_t off = static_cast<uint32_t>(i) * (kDwellMs / 3);
+        const bool step_now = step_index(act_ms_, off + kDwellMs) != step_index(old, off + kDwellMs);
+        const bool cur_ok = shown_[i] != BoxKind::Off && shown_[i] != BoxKind::Rotating &&
+                            (ok & box_bit(shown_[i])) != 0 && (used & box_bit(shown_[i])) == 0;
+        if (!cur_ok || step_now) {
+            const BoxKind nxt = next_unpinned(cur_ok ? shown_[i] : BoxKind::LoadR, used, ok);
+            if (nxt != BoxKind::Off) shown_[i] = nxt;
+            else if (!cur_ok) shown_[i] = next_unpinned(BoxKind::LoadR, used, static_cast<BoxMask>(~0u));
+        }
+        if (shown_[i] != BoxKind::Off) used |= box_bit(shown_[i]);
+    }
+}
+
+void BoxCycler::trigger_attention(uint32_t now_ms, BoxKind metric, const std::array<BoxKind, kBoxCount> &cfg, BoxMask ok) {
+    if (!live_ || metric == BoxKind::Off || metric == BoxKind::Rotating) return;
+    // 1. If already pinned in a box, glow that box directly.
+    for (int i = 0; i < kBoxCount; i++) {
+        if (cfg[i] == metric) {
+            glow_on_[i] = true;
+            glow_start_[i] = now_ms;
+            return;
+        }
+    }
+    // 2. Otherwise pull into the first Rotating slot (when data is present) and glow it.
+    if ((ok & box_bit(metric)) == 0) return;
+    for (int i = 0; i < kBoxCount; i++) {
+        if (cfg[i] == BoxKind::Rotating) {
+            shown_[i] = metric;
+            attn_slot_ = static_cast<int8_t>(i);
+            attn_metric_ = metric;
+            attn_until_ = now_ms + kDwellMs;
+            glow_on_[i] = true;
+            glow_start_[i] = now_ms;
+            return;
+        }
+    }
+}
+
+uint8_t BoxCycler::glow_level(int i, uint32_t now_ms) const {
+    if (i < 0 || i >= kBoxCount || !glow_on_[i]) return 0;
+    const uint32_t el = now_ms - glow_start_[i];
+    if (el >= kGlowMs) return 0;
+    const uint32_t rem = kGlowMs - el;
+    const uint32_t step = (rem * kGlowSteps + kGlowMs - 1) / kGlowMs;
+    return static_cast<uint8_t>(step > kGlowSteps ? kGlowSteps : step);
 }
 
 }  // namespace k2::home

@@ -1855,8 +1855,8 @@ static void test_settings_long_back_row() {
     ui.context().keep.settings_sel = 0;
     ui.context().keep.long_back = 0;
     ui.open_place(bench::Place::K2, kT0);
-    for (int i = 0; i < SettingsPage::kDisplayRow - 1; i++) press(ui, Button::Plus, ButtonEvent::Short, kT0 + 10 + i);   // Long Back sits above Display
-    CHECK_EQ(ui.context().keep.settings_sel, SettingsPage::kDisplayRow - 1);
+    for (int i = 0; i < SettingsPage::kHomeBoxesRow - 1; i++) press(ui, Button::Plus, ButtonEvent::Short, kT0 + 10 + i);   // Long Back sits above Home boxes
+    CHECK_EQ(ui.context().keep.settings_sel, SettingsPage::kHomeBoxesRow - 1);
     CHECK_STR(label(ui, Button::Ok), "Cycle");
     const int sets = g_stub.prefs_sets;
     press(ui, Button::Ok, ButtonEvent::Short, kT0 + 40);
@@ -1874,7 +1874,7 @@ static void test_settings_long_back_row() {
     CHECK_EQ(ui.ring_view(), true);
     // The full circle ends back on Home, which the record stores as no target at all.
     ui.open_place(bench::Place::K2, kT0 + 100);
-    ui.context().keep.settings_sel = SettingsPage::kDisplayRow - 1;
+    ui.context().keep.settings_sel = SettingsPage::kHomeBoxesRow - 1;
     for (int i = 0; i < ring::kCount - 3; i++) press(ui, Button::Ok, ButtonEvent::Short, kT0 + 110 + i * 10);
     CHECK_EQ(int(ui.context().keep.long_back), 0);
     CHECK_EQ(int(g_stub.prefs.long_back), 0);
@@ -1884,6 +1884,22 @@ static void test_settings_long_back_row() {
     CHECK_EQ(int(again.context().keep.long_back), int(ring::Pos::Log));
     again.restore_long_back(200);
     CHECK_EQ(int(again.context().keep.long_back), 0);
+    // Settings > Home boxes: opens submenu, OK cycles box 1 and persists to uiprefs, Reset defaults restores {Pd, Energy, Rotating}.
+    ui.open_place(bench::Place::K2, kT0 + 180);
+    ui.context().keep.settings_sel = SettingsPage::kHomeBoxesRow;
+    press(ui, Button::Ok, ButtonEvent::Short, kT0 + 190);
+    CHECK_EQ(ui.menu() == Menu::HomeBoxes, 1);
+    CHECK_EQ(ui.list_state().count, HomeBoxesPage::kRows);
+    press(ui, Button::Ok, ButtonEvent::Short, kT0 + 200);   // Box 1: Pd -> Energy
+    CHECK_EQ(int(ui.context().keep.home_boxes[0]), int(home::BoxKind::Energy));
+    CHECK_EQ(int(g_stub.prefs.home_boxes[0]), int(home::BoxKind::Energy));
+    for (int i = 0; i < 3; i++) press(ui, Button::Plus, ButtonEvent::Short, kT0 + 210 + i);   // Reset defaults
+    press(ui, Button::Ok, ButtonEvent::Short, kT0 + 220);
+    CHECK_EQ(int(ui.context().keep.home_boxes[0]), int(home::BoxKind::Pd));
+    CHECK_EQ(int(ui.context().keep.home_boxes[1]), int(home::BoxKind::Energy));
+    CHECK_EQ(int(ui.context().keep.home_boxes[2]), int(home::BoxKind::Rotating));
+    press(ui, Button::Back, ButtonEvent::Short, kT0 + 230);
+    CHECK_EQ(ui.menu_depth(), 0u);
     again.context().keep.settings_sel = 0;
 }
 
@@ -1935,8 +1951,8 @@ static void test_home_flow_arrow() {
             for (int x = x0; x < x0 + w; x++) n += g_panel[yy * 240 + x] == col;
         return n;
     };
-    auto hero_ink = [&](uint16_t col) { return ink(col, 38, 25, 160, 39); };   // Home 2c: the 64 px hero
-    auto amps_ink = [&](uint16_t col) { return ink(col, 8, 156, 120, 30); };   // the 48 px IBUS ledger row
+    auto hero_ink = [&](uint16_t col) { return ink(col, 72, 21, 120, 30); };   // 48 px hero
+    auto amps_ink = [&](uint16_t col) { return ink(col, 148, 91, 60, 24); };   // right side-by-side 24 px A sub-hero
     CHECK_EQ(hero_ink(kWatt) > 60, 1);
     CHECK_EQ(amps_ink(kAmp) > 60, 1);
     CHECK_EQ(hero_ink(kVolt) + hero_ink(kAmp), 0);   // V and A live in the ledger below
@@ -2008,8 +2024,8 @@ static void test_home_stale() {
     CHECK_EQ(ui.context().stale() ? 1 : 0, 1);
     CHECK_EQ(count(38, 25, 198, 64, kStale) > 50, 1);   // the last power, frozen in grey
     CHECK_EQ(count(38, 25, 198, 64, kWatt), 0);
-    CHECK_EQ(count(8, 99, 128, 129, kStale) > 50, 1);   // the volts row too
-    CHECK_EQ(count(8, 156, 128, 186, kStale) > 50, 1);  // and the amps row
+    CHECK_EQ(count(35, 91, 95, 115, kStale) > 40, 1);   // left sub-hero (volts)
+    CHECK_EQ(count(148, 91, 208, 115, kStale) > 40, 1); // right sub-hero (amps)
     CHECK_EQ(count(150, 1, 222, 18, kStale) > 100, 1);   // the LAST pill: a kStale plate in the hero cell's corner
     ui.tick(84200);
     ui.tick(84300);

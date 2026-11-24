@@ -93,7 +93,7 @@ constexpr int kContentChars = 220 / kSmallAdvPx;   // 220 px / advance of the 16
 inline const Font &kSmall = font_16;
 inline const Font &kMid = font_24;
 inline const Font &kBig = font_48;
-inline const Font &kHero = font_64;   // Home VBUS / IBUS digits (digits, '.', '-', ' ' only)
+inline const Font &kHero = font_48;   // Home hero digits (48 px; frees font_64 from firmware flash)
 inline const Font &kLabelFont = font_12;
 
 }  // namespace k2

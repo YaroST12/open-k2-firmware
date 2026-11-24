@@ -246,7 +246,7 @@ K2_HOT UiAction Ui::tick(uint32_t now_ms) {
     const bool live_now = ctx_.pm_online && ctx_.pm.vbus_mv >= 1000;
     if (live_now && !extremes_live_) {   // an attach: Home's peaks, sag and card cycle start over (they stay frozen while stale)
         ctx_.extremes.reset();
-        ctx_.keep.cards.reset();
+        ctx_.keep.boxes.reset();
         ctx_.keep.attention.reset();
         sag_settle_.reset();
     }

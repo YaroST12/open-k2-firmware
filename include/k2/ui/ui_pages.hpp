@@ -113,8 +113,9 @@ struct UiContext {
     struct Remembered {
         trend::Window home_window K2_BSS_INIT(trend::Window::S10);   // Home: the trend window OK short cycles (S10 = 0)
         home::Qty home_hero K2_BSS_INIT(home::Qty::W);               // Home: the hero quantity Long Back cycles (uiprefs, restored at boot; W = 0)
-        home::CardCycler cards;                           // Home: the right-column cards (reset on attach and long OK)
-        home::Attention attention;                        // Home: what is changing now, for the upper card and its dot
+        std::array<home::BoxKind, home::kBoxCount> home_boxes = home::kDefaultBoxes;   // Settings > Home boxes (uiprefs, restored at boot)
+        home::BoxCycler boxes;                            // Home: the 3 configurable 74x66 boxes + 3s fading cyan glow
+        home::Attention attention;                        // Home: what is changing now, drives box highlight/pull
         home::DiagDwell diag_dwell;                       // Home: when row 1 first showed each event finding
         uint8_t long_back K2_BSS_INIT(0);                // Settings: the ring position long Back jumps to (ring::Pos; Home = 0; uiprefs)
         int settings_sel K2_BSS_INIT(0);                  // Settings: the highlighted row
@@ -830,7 +831,7 @@ private:
     // `it` at `n`; returns the head's signature. Kept out of paint_qty so its text helpers' locals are not on the
     // stack while the cell paints.
     [[gnu::noinline]] uint32_t qty_head(int slot, home::Qty q, const Frame &f, QtyHead &h, home::Item *it, int &n);
-    [[gnu::noinline]] void paint_card(int cell, const Frame &f);   // 0 upper, 1 lower right-column card
+    [[gnu::noinline]] void paint_box(int cell, const Frame &f);    // 0 left, 1 middle, 2 right (3 x 74 px boxes)
     [[gnu::noinline]] void paint_info(const Frame &f);      // the info block: one compositor cell, three repaint zones
     [[gnu::noinline]] bool paint_cell_sliced(int slot_id, uint32_t base_sig, const home::Cell &cell,
                                              int16_t x0, int16_t y0, int16_t x1, int16_t y1);
@@ -842,12 +843,12 @@ private:
                                              uint32_t *saved_base = nullptr);
     struct QtyCommit;
     [[gnu::noinline]] void commit_qty_cell(int si, const QtyCommit &q, const home::Cell &cell);
-    // Display filter: V, A, W digits and the card values change at most 4 times a second (one throttle, one set).
+    // Display filter: V, A, W digits and the box values change at most 4 times a second (one throttle, one set).
     Throttle thr_{250};
     int32_t v_mv_ = 0, a_ma_ = 0, w_mw_ = 0;         // |values| as shown
     power::Flow flow_ = power::Flow::Idle;
-    struct CardData {                                 // the card values as shown (snapshot with the digits)
-        uint32_t peak_mw = 0, peak_ma = 0, sag_bp = 0, sag_level_mv = 0;
+    struct CardData {                                 // the box & peak values as shown (snapshot with the digits)
+        uint32_t peak_mw = 0, peak_mv = 0, peak_ma = 0, sag_bp = 0, sag_level_mv = 0;
         bool has_sag = false;
         home::Drop drop{};
         int32_t lines[4] = {-1, -1, -1, -1};          // CC1, CC2, D+, D- in mV (-1 = no reading)
@@ -860,7 +861,7 @@ private:
     trend::Window &window_ = ctx_.keep.home_window;   // remembered across page switches
     // The sweeps survive invalidate() (a capture re-renders strips of one frame); they are reloaded from the
     // trend after a mode or hero change, a window or scale change, or a long gap (page left, stalled loop).
-    home::Sweep sw_[3];                               // per slot: hero (110 columns), ledger rows (66)
+    home::Sweep sw_[3];                               // per slot: hero (110 columns), sub-heroes (52 each)
     bool sweep_ok_ = false;
     uint32_t sweep_t_ = 0;
     uint32_t sweep_seen_ = 0;                         // the `now` of the last update: a replay of one frame never steps
@@ -869,17 +870,17 @@ private:
     home::DigitField hd_[3];                          // per slot
     uint32_t cell_sig_[3][4] = {};                    // per slot: base, head, arrow, bar signatures
     bool cell_valid_[3] = {false, false, false};
-    uint32_t card_base_[2] = {};                      // per card cell: card, mode, dot
-    uint32_t card_sig_[2][4] = {};                    // per card cell: one signature per text row
-    bool card_valid_[2] = {false, false};
-    // Row cursor & base signature per sliced compositor cell (0..2 qty, 3..4 cards, 5 info).
-    int16_t slice_y_[6] = {-1, -1, -1, -1, -1, -1};
-    uint32_t slice_sig_[6] = {};
+    uint32_t box_base_[3] = {};                       // per box cell: kind, mode, glow, rotation
+    uint32_t box_sig_[3][3] = {};                     // per box cell: zone signatures (label, row1, row2)
+    bool box_valid_[3] = {false, false, false};
+    // Row cursor & base signature per sliced compositor cell (0..2 qty, 3..5 boxes, 6 info).
+    int16_t slice_y_[7] = {-1, -1, -1, -1, -1, -1, -1};
+    uint32_t slice_sig_[7] = {};
     int8_t painted_cursor_[3] = {-1, -1, -1};
     uint8_t slice_dirty_ = 0;
-    uint8_t rr_slot_ = 0;                             // round-robin cursor across 6 home surfaces (prevents starvation)
+    uint8_t rr_slot_ = 0;                             // round-robin cursor across 7 home surfaces (prevents starvation)
     uint32_t slice_parts_[3][3] = {};                 // head, arrow, bar signatures when qty slice started
-    uint32_t slice_card_[2][4] = {};                  // zone signatures when card slice started
+    uint32_t slice_box_[3][3] = {};                   // zone signatures when box slice started
     uint32_t slice_info_[3] = {};                     // zone signatures when info slice started
 };
 
@@ -1335,11 +1336,12 @@ public:
     // The row count follows the build: the Screenshot row exists only with K2_SCREENSHOT=1 (the default is 0). ui_pages.cpp
     // static_asserts these against its SettingRow enum, and test_settings_rows0 pins the K2_SCREENSHOT=0 values.
     static constexpr int kScreenshotRows = K2_SCREENSHOT ? 1 : 0;
-    static constexpr int kRows = 13 + kScreenshotRows;
+    static constexpr int kRows = 14 + kScreenshotRows;
     static constexpr int kUnitsRow = 6 + kScreenshotRows;   // Huawei/Samsung: FCP, SCP, AFC in the charger test
     static constexpr int kSweepRow = 7 + kScreenshotRows;   // Sweep depth of the deep sweeps
-    static constexpr int kDisplayRow = 9 + kScreenshotRows;
-    static constexpr int kSystemRow = 10 + kScreenshotRows, kMemoryRow = 11 + kScreenshotRows, kBootRow = 12 + kScreenshotRows;
+    static constexpr int kHomeBoxesRow = 9 + kScreenshotRows;
+    static constexpr int kDisplayRow = 10 + kScreenshotRows;
+    static constexpr int kSystemRow = 11 + kScreenshotRows, kMemoryRow = 12 + kScreenshotRows, kBootRow = 13 + kScreenshotRows;
     static constexpr int16_t kIdHeadY = 3, kIdLineY = 24, kIdDashY = 41, kListY = 44;   // identity y0..43, the list under it
 private:
     static void row_fn(void *ctx, int index, bool focused, kit::RowSpec &out);   // reads the live settings: no value cache
@@ -1352,6 +1354,23 @@ private:
     uint8_t sweep_depth_ = 1;             // Sweep depth: the stored one (uiprefs::Prefs::sweep_depth), read once in enter()
     mutable usbcfg::LinkNote usb_note_;   // the USB Link row's note, filled by row_fn and drawn at once
     mutable char display_tail_[16];       // the Display row's summary ("100%, 60s/5m")
+};
+
+// Settings > Home boxes: pick the metric (or Rotating / Off) for each of the 3 Home info boxes.
+class HomeBoxesPage final : public PageBase {
+public:
+    explicit HomeBoxesPage(UiContext &c) : PageBase(c, Page::Count, rail::kHomeBoxes, Icon::Meter) {}
+    void enter() override { sel_ = 0; ctx_.rows.set_count(kRows); ctx_.rows.select(0); }
+    void draw_static() override;
+    void update(uint32_t now_ms) override;
+    bool on_event(Event e) override;
+    Strip labels() const override;
+    void invalidate() override { ctx_.rows.invalidate(); }
+    ListState list_state() const { return ctx_.rows.state(); }
+    static constexpr int kRows = 4;   // Box 1, Box 2, Box 3, Reset defaults
+private:
+    static void row_fn(void *ctx, int index, bool focused, kit::RowSpec &out);
+    int sel_ = 0;
 };
 
 // Settings > Display: the backlight level and the two idle timeouts (k2/core/idle_hw.hpp, remembered in flash). OK on

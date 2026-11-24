@@ -30,31 +30,36 @@ static void test_limit_bar() {
     CHECK_EQ(bar_fill_w(9000, 5000, kHeroBar), 205);   // over the limit: full track, never past it
     CHECK_EQ(bar_fill_w(2500, 5000, kHeroBar), 103);   // round(204 / 2) + 1
     CHECK_EQ(bar_tick_x(kHeroBar), 194);
-    CHECK_EQ(kHeroBar.y, 68);                          // 3 rows inside the hero cell, clear of the 64 px digits (baseline 63)
-    const BarGeom l = ledger_bar(0);
-    CHECK_EQ(bar_track(l), 128);
-    CHECK_EQ(bar_fill_w(2500, 5000, l), 65);           // round(127 / 2) + 1
-    CHECK_EQ(bar_tick_x(l), 120);
-    CHECK_EQ(l.y, 132);
-    CHECK_EQ(ledger_bar(1).y, 190);
+    CHECK_EQ(kHeroBar.y, 63);                          // 3 rows inside the hero cell, clear of the 48 px digits (baseline 51)
+    const BarGeom l = sub_bar(0);
+    CHECK_EQ(bar_track(l), 99);
+    CHECK_EQ(bar_fill_w(2500, 5000, l), 50);           // round(98 / 2) + 1
+    CHECK_EQ(bar_tick_x(l), 94);
+    CHECK_EQ(l.y, 119);
+    CHECK_EQ(sub_bar(1).y, 119);
 }
 
-// 2c geometry: hero y0..73, 2 px rule, ledger rows y76..135 / y137..193 with a 1 px rule between, the vertical rule
-// at x140, the info block under the rule at y194. Every row of the content belongs to exactly one band.
+// Reorganized Home geometry: hero y0..69, 2 px rule y70..71, side-by-side sub-heroes y72..125 (vrule x111),
+// 2 px rule y126..127, 3 x 74 px boxes y128..193 (vrules x74, x149), 2 px rule y194..195, info block y196..239.
 static void test_layout() {
     CHECK_EQ(kRule1Y, kHeroY1 + 1);
-    CHECK_EQ(kRowY0[0], kRule1Y + 2);
-    CHECK_EQ(kRowRuleY, kRowY1[0] + 1);
-    CHECK_EQ(kRowY0[1], kRowRuleY + 1);
-    CHECK_EQ(kRule3Y, kRowY1[1] + 1);
-    CHECK_EQ(kVRuleX, kLedgerX1 + 1);
-    CHECK_EQ(kCardX0, kVRuleX + 1);
-    CHECK_EQ(x_of_col(kLedgerCols - 1) + 1, 135);      // the ledger sweep ends inside its column
+    CHECK_EQ(kSubY0, kRule1Y + 2);
+    CHECK_EQ(kRule2Y, kSubY1 + 1);
+    CHECK_EQ(kBoxY0, kRule2Y + 2);
+    CHECK_EQ(kRule3Y, kBoxY1 + 1);
+    CHECK_EQ(kSubVRuleX, kSubX1[0] + 1);
+    CHECK_EQ(kSubX0[1], kSubVRuleX + 1);
+    CHECK_EQ(kBoxVRuleX[0], kBoxX1[0] + 1);
+    CHECK_EQ(kBoxX0[1], kBoxVRuleX[0] + 1);
+    CHECK_EQ(kBoxVRuleX[1], kBoxX1[1] + 1);
+    CHECK_EQ(kBoxX0[2], kBoxVRuleX[1] + 1);
+    CHECK_EQ(x_of_col(kSubCols - 1, kSubColX0[0]) + 1, 107);
+    CHECK_EQ(x_of_col(kSubCols - 1, kSubColX0[1]) + 1, 219);
     const CellGeom h = cell_geom(kHeroY0, kHeroY1, true);
     CHECK_EQ(h.t0, 14);
-    CHECK_EQ(h.t1, 66);
-    CHECK_EQ(cell_geom(kHeroY0, kHeroY1, false).t1, 71);
-    CHECK_EQ(cell_geom(kRowY0[1], kRowY1[1], true).t1, 186);
+    CHECK_EQ(h.t1, 61);
+    CHECK_EQ(cell_geom(kHeroY0, kHeroY1, false).t1, 67);
+    CHECK_EQ(cell_geom(kSubY0, kSubY1, true).t1, 117);
 }
 
 static void test_sweep_maths() {
@@ -64,16 +69,16 @@ static void test_sweep_maths() {
     CHECK_EQ(scale_w10(100000), 11500);               // 100 W x 1.15 in 10 mW
     CHECK_EQ(scale_w10(0), 6900);                     // unknown: 60 W
     const int span = cell_geom(kHeroY0, kHeroY1, false).span();
-    CHECK_EQ(span, 57);
+    CHECK_EQ(span, 53);
     CHECK_EQ(sweep_rows(0, 2300, span), 0);
     CHECK_EQ(sweep_rows(1, 2300, span), 0);           // 10 mV or less: no column, like the mockup
     CHECK_EQ(sweep_rows(0xFFFF, 2300, span), 0);      // kNone
     CHECK_EQ(sweep_rows(2300, 2300, span), span + 1);
     CHECK_EQ(sweep_rows(9999, 2300, span), span + 1); // clipped at full scale
-    CHECK_EQ(sweep_rows(1150, 2300, span), 30);       // half scale: round(28.5) + 1
-    const int ls = cell_geom(kRowY0[0], kRowY1[0], true).span();
-    CHECK_EQ(ls, 38);
-    CHECK_EQ(sweep_rows(575, 575, ls), 39);
+    CHECK_EQ(sweep_rows(1150, 2300, span), 28);       // half scale: round(26.5) + 1
+    const int ls = cell_geom(kSubY0, kSubY1, true).span();
+    CHECK_EQ(ls, 31);
+    CHECK_EQ(sweep_rows(575, 575, ls), 32);
 }
 
 static void test_sweep_columns() {

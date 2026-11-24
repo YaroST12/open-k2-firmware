@@ -114,22 +114,22 @@ struct Sweep {
 // Pixel x ranges (inclusive) of the strip a step() touched, as one or two pieces when it wraps (`cols` = the sweep's n).
 struct XRange { int16_t x0, x1; };
 struct Strip { XRange r[2]; int n; };
-constexpr Strip strip_of(int first_col, int steps = 1, int cols = kCols) {
+constexpr Strip strip_of(int first_col, int steps = 1, int cols = kCols, int16_t x0 = kColX0) {
     Strip s{{{0, 0}, {0, 0}}, 0};
     const int last = first_col + steps;   // the new cursor column (after `steps` steps in a row)
     if (last < cols) {
-        s.r[0] = {x_of_col(first_col), static_cast<int16_t>(x_of_col(last) + 1)};
+        s.r[0] = {x_of_col(first_col, x0), static_cast<int16_t>(x_of_col(last, x0) + 1)};
         s.n = 1;
     } else {
-        s.r[0] = {x_of_col(first_col), static_cast<int16_t>(x_of_col(cols - 1) + 1)};
-        s.r[1] = {x_of_col(0), static_cast<int16_t>(x_of_col(last - cols) + 1)};
+        s.r[0] = {x_of_col(first_col, x0), static_cast<int16_t>(x_of_col(cols - 1, x0) + 1)};
+        s.r[1] = {x_of_col(0, x0), static_cast<int16_t>(x_of_col(last - cols, x0) + 1)};
         s.n = 2;
     }
     return s;
 }
 
 // ---- cell ------------------------------------------------------------------------------------
-// A cell owns the rows geom.top..geom.bottom and the columns x0..x1 (the full width by default; a ledger row or a card
+// A cell owns the rows geom.top..geom.bottom and the columns x0..x1 (the full width by default; a sub-hero or box
 // cell is narrower). paint() never writes outside it.
 struct Cell {
     CellGeom geom{};
@@ -139,6 +139,7 @@ struct Cell {
     const Sweep *sw = nullptr;
     std::span<const Item> items;
     int16_t x0 = 0, x1 = kW - 1;
+    int16_t sweep_x0 = kColX0;
 };
 
 // Pixel under the items at (x, y): base colour, or the sweep column state.

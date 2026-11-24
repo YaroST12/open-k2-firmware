@@ -198,6 +198,7 @@ k2::mainloop::Context g_loop{g_ui, g_remote, g_bootscreen, g_accelerometer, rebo
         k2::fusb302::set_vbus_source(&cable_probe_vbus_mv);   // the Ra probe at the end of a silent alone cable read
         g_ui.restore_orientation(prefs.rotation_manual, prefs.rotation, prefs.rotate_buttons);   // before g_ui.init draws the first frame
         g_ui.restore_home_hero(prefs.home_hero);
+        g_ui.restore_home_boxes(prefs.home_boxes);
         g_ui.restore_long_back(prefs.long_back);
         g_ui.charger_test_set_level(prefs.ct_level);   // Settings > Test level: the charger test's draft level (Medium by default)
         g_ui.charger_test_set_sweep_depth(prefs.sweep_depth);   // Settings > Sweep depth: 200 mV by default

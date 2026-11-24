@@ -144,7 +144,7 @@ void walk_pages(Ui &ui, int rot, const Scenario &sc) {
     }
     static const char *const kMenuNames[] = {"trigger", "emarker", "pd-trigger", "cable-r", "black-box", "spoof", "usb-link",
                                              "autorotate", "cards", "share", "connection", "diag", "qrtest", "twin", "loop-probe",
-                                             "pd-stress", "diagnosis", "battery", "memory", "display", "tools"};
+                                             "pd-stress", "diagnosis", "battery", "memory", "display", "tools", "home-boxes"};
     static_assert(std::size(kMenuNames) == static_cast<std::size_t>(Menu::Count), "a menu without a name here is walked under another's label");
     for (uint8_t m = 0; m < static_cast<uint8_t>(Menu::Count); ++m) {
         enter(kMenuNames[m], rot, sc.name);
