@@ -315,7 +315,7 @@ K2_HOT bool Sink::take_tx(TxMsg& out) {
     return true;
 }
 
-K2_HOT void Sink::fail(SinkResult r, SinkState to) {
+[[gnu::noinline]] K2_HOT void Sink::fail(SinkResult r, SinkState to) {
     st_.result = r;
     st_.held = false;
     st_.auto_hold = false;
