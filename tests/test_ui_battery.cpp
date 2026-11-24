@@ -241,9 +241,9 @@ static void test_page() {
     CHECK_EQ(int(ui.menu()), int(Menu::Battery));
 }
 
-// Every row of the list carries a marker (RowList: the settings rows had none beside the icon rows). A text line is a band of
-// rows with ink at x28.. at least 10 px tall (a font 12 note is shorter); its marker box x8..19 must hold ink too.
-static int rows_without_marker() {
+// The rows are marker-less like the Tools and Settings menus: text at x28, nothing in the marker box. A text line is a band of
+// rows with ink at x28.. at least 10 px tall (a font 12 note is shorter); its marker box x8..19 must stay empty.
+static int rows_with_marker() {
     const int x0 = kOppRailThickness;
     int bad = 0;
     for (int y = kit::kIdDashY + 2; y < 240;) {
@@ -259,15 +259,15 @@ static int rows_without_marker() {
         if (y1 - y >= 10) {
             bool marker = false;
             for (int yy = y; yy < y1 && !marker; yy++) marker = ink_row(yy, 8, 20);
-            if (!marker) std::printf("  a row at y%d..%d has no marker\n", y, y1 - 1);
-            bad += !marker;
+            if (marker) std::printf("  a row at y%d..%d has a marker\n", y, y1 - 1);
+            bad += marker;
         }
         y = y1;
     }
     return bad;
 }
 
-static void test_every_row_has_a_marker() {
+static void test_rows_have_no_marker() {
     Ui &ui = fresh_ui();
     std::uint32_t t = 1000;
     ui.tick(t);
@@ -276,11 +276,11 @@ static void test_every_row_has_a_marker() {
     CHECK(p != nullptr);
     if (!p) return;
     for (int i = 0; i < 20 && p->selected() > 0; i++) press(ui, Button::Minus, t);
-    int bad = rows_without_marker(), seen = 1;
+    int bad = rows_with_marker(), seen = 1;
     while (p->selected() < p->list_state().count - 1 && seen < 20) {
         ++seen;
         press(ui, Button::Plus, t);
-        bad += rows_without_marker();
+        bad += rows_with_marker();
     }
     CHECK_EQ(seen >= 6, true);   // walked the whole list: three starts, three settings
     CHECK_EQ(bad, 0);
@@ -303,7 +303,7 @@ int main() {
     test_rows();
     test_ident_and_footer();
     test_page();
-    test_every_row_has_a_marker();
+    test_rows_have_no_marker();
     test_classic();
     return test_report("test_ui_battery");
 }
