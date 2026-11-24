@@ -30,7 +30,9 @@
 namespace k2::pd {
 
 inline constexpr std::uint32_t kLimMinMw = 5000, kLimMaxMw = 100000;   // SPR: 5 V x 1 A up to 20 V x 5 A
-inline constexpr std::uint16_t kLimStepMa = 100;       // 100 mA current ceiling granularity (divides both 10 mA and 50 mA PDO units)
+inline constexpr std::uint16_t kLimStepMa = 250;       // the UI's Fixed / PPS current step (divides both 10 mA and 50 mA PDO units)
+inline constexpr std::uint16_t kLimAmpFloorMa = 1000;  // the first stepped current row
+inline constexpr std::uint16_t kLimUnitMa = 10;        // a stored ceiling's granularity: the steps plus an offer's exact maximum
 inline constexpr std::uint16_t kLimPpsStepMv = 1000;   // 1 V step in the UI PPS ceiling picker
 inline constexpr std::uint16_t kLimMinMv = 3300, kLimMaxMv = 21000;
 inline constexpr std::uint16_t kLimMaxMa = 5000;
@@ -47,7 +49,7 @@ inline constexpr std::uint8_t kLimMaxInjections = 20;
 struct LimTech {
     bool enabled = true;
     std::uint16_t max_mv = 0;   // 0 = uncapped for this tech
-    std::uint16_t max_ma = 0;   // 0 = uncapped for this tech (kLimStepMa steps)
+    std::uint16_t max_ma = 0;   // 0 = uncapped for this tech (kLimUnitMa granularity, 100 mA..kLimMaxMa)
     constexpr bool operator==(const LimTech&) const = default;
 };
 
@@ -80,7 +82,18 @@ LimRefusal lim_gate(const LimFacts& f, const LimConfig& cfg);
 LimRefusal lim_gate(const LimFacts& f, std::uint32_t limit_mw);
 const char* lim_refusal_name(LimRefusal r);
 
-// Compact human label (at most kLimLabelMax chars, e.g. "27W", "9V3A", "PPS11", "AVS15"). Returns length written.
+// The Max A picker for an offer current: row 0 is Max (0), then kLimAmpFloorMa up in kLimStepMa steps to the offer, and the
+// offer's exact maximum last when it is off that grid. Nothing above the offer.
+int lim_amp_count(std::uint16_t offer_ma);
+std::uint16_t lim_amp_at(std::uint16_t offer_ma, int index);
+// The offer current behind a picked voltage (0 = no such offer). Fixed: that voltage's object; PPS: the highest current
+// among the APDOs whose range covers mv. mv 0 (Max): the highest current of that kind.
+std::uint16_t lim_fixed_offer_ma(std::span<const Pdo> pdos, std::uint16_t mv);
+std::uint16_t lim_pps_offer_ma(std::span<const Pdo> pdos, std::uint16_t mv);
+// SPR AVS: 15 V takes the 9-15 V current field, 0 (Max) the 15-20 V one (p.max_ma); the highest over the APDOs.
+std::uint16_t lim_avs_offer_ma(std::span<const Pdo> pdos, std::uint16_t mv);
+
+// Compact human label (at most kLimLabelMax chars, e.g. "27W", "9V3A", "3.25A", "PPS11", "AVS15"). Returns length written.
 inline constexpr std::size_t kLimLabelMax = 5;
 std::size_t lim_label(const LimConfig& cfg, std::span<char> out);
 

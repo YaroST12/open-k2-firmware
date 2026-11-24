@@ -19,7 +19,7 @@ constexpr std::uint8_t kEprActionAck = 2, kEprActionSucceeded = 3;   // EPR_Mode
 bool due(std::uint32_t now, std::uint32_t t, std::uint32_t span) { return std::uint32_t(now - t) >= span; }
 
 bool valid_tech(const LimTech& t, std::uint16_t min_mv, std::uint16_t mv_unit, bool avs) {
-    if (t.max_ma != 0 && (t.max_ma < kLimStepMa || t.max_ma > kLimMaxMa || t.max_ma % kLimStepMa != 0)) return false;
+    if (t.max_ma != 0 && (t.max_ma < kLimMinFixedMa || t.max_ma > kLimMaxMa || t.max_ma % kLimUnitMa != 0)) return false;
     if (t.max_mv == 0) return true;
     if (avs) return t.max_mv == 15000 || t.max_mv == 20000;
     return t.max_mv >= min_mv && t.max_mv <= kLimMaxMv && (t.max_mv % mv_unit) == 0;
@@ -50,9 +50,19 @@ struct LabelOut {
         }
         ch(unit);
     }
+    void amps(std::uint16_t ma) {   // exact to 10 mA, never rounded up: "3A", "4.8A", "3.25A"
+        u(ma / 1000u);
+        const unsigned c = ma % 1000u / 10u;
+        if (c) {
+            ch('.');
+            ch(static_cast<char>('0' + c / 10u));
+            if (c % 10u) ch(static_cast<char>('0' + c % 10u));
+        }
+        ch('A');
+    }
     void volt_or_amp(const LimTech& t, const char* none) {
         if (t.max_mv) tenth(t.max_mv, 'V');
-        else if (t.max_ma) tenth(t.max_ma, 'A');
+        else if (t.max_ma) amps(t.max_ma);
         else str(none);
     }
 };
@@ -154,7 +164,7 @@ std::size_t lim_label(const LimConfig& cfg, std::span<char> out) {
             char b[8];
             LabelOut x{b};
             x.tenth(f.max_mv, 'V');
-            x.tenth(f.max_ma, 'A');
+            x.amps(f.max_ma);
             if (x.n <= o.d.size() + 1) {   // one over drops the trailing 'A' ("9V1.5"): both numbers stay
                 for (std::size_t i = 0; i < x.n; i++) o.ch(b[i]);
                 return o.n;
@@ -179,6 +189,40 @@ std::size_t lim_label(const LimConfig& cfg, std::span<char> out) {
         o.str("LIMIT");
     }
     return o.n;
+}
+
+int lim_amp_count(std::uint16_t offer_ma) {
+    if (offer_ma == 0) return 1;
+    if (offer_ma < kLimAmpFloorMa) return 2;
+    const int grid = (offer_ma - kLimAmpFloorMa) / kLimStepMa + 1;
+    return 1 + grid + int((offer_ma - kLimAmpFloorMa) % kLimStepMa != 0);
+}
+
+std::uint16_t lim_amp_at(std::uint16_t offer_ma, int index) {
+    if (index <= 0) return 0;
+    const std::uint32_t v = kLimAmpFloorMa + std::uint32_t(index - 1) * kLimStepMa;
+    return v < offer_ma ? std::uint16_t(v) : offer_ma;
+}
+
+std::uint16_t lim_fixed_offer_ma(std::span<const Pdo> pdos, std::uint16_t mv) {
+    std::uint16_t best = 0;
+    for (const Pdo& p : pdos)
+        if (p.type == PdoType::Fixed && (mv == 0 || p.max_mv == mv)) best = std::max(best, p.max_ma);
+    return best;
+}
+
+std::uint16_t lim_pps_offer_ma(std::span<const Pdo> pdos, std::uint16_t mv) {
+    std::uint16_t best = 0;
+    for (const Pdo& p : pdos)
+        if (p.type == PdoType::Pps && (mv == 0 || (p.min_mv <= mv && mv <= p.max_mv))) best = std::max(best, p.max_ma);
+    return best;
+}
+
+std::uint16_t lim_avs_offer_ma(std::span<const Pdo> pdos, std::uint16_t mv) {
+    std::uint16_t best = 0;
+    for (const Pdo& p : pdos)
+        if (p.type == PdoType::Avs && (p.raw >> 28) == 0xE) best = std::max(best, mv == 15000 ? current_limit_ma(p, mv) : p.max_ma);
+    return best;
 }
 
 std::size_t lim_picks(std::span<const Pdo> pdos, std::span<LimPick> out) {

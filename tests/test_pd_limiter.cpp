@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
 // The PD limiter (k2/pd/pd_limiter.hpp) and comeback store (k2/core/lim_comeback.hpp): per-tech Fixed/PPS/SPR-AVS filtering,
-// 100 mA steps, PPS range reduction, Request compliance, state-machine recovery, and wire-replayed trigger behavior.
+// 0.25 A picker rows, PPS range reduction, Request compliance, state-machine recovery, and wire-replayed trigger behavior.
 #include <vector>
 
 #include "k2/core/lim_comeback.hpp"
@@ -195,8 +195,16 @@ int main() {
         CHECK_COND(!lim_config_valid(c));   // inactive
         c.fixed.enabled = false; c.pps.enabled = false; c.avs.enabled = false;
         CHECK_COND(!lim_config_valid(c));   // all off
-        c = {}; c.fixed.max_ma = 250;       // not 100 mA multiple
+        c = {}; c.fixed.max_ma = 255;       // not a 10 mA multiple
         CHECK_COND(!lim_config_valid(c));
+        c = {}; c.fixed.max_ma = 50;        // under 100 mA
+        CHECK_COND(!lim_config_valid(c));
+        c = {}; c.fixed.max_ma = 5010;      // over 5 A
+        CHECK_COND(!lim_config_valid(c));
+        c = {}; c.fixed.max_ma = 3250;      // a 0.25 A step
+        CHECK_COND(lim_config_valid(c));
+        c = {}; c.pps.max_ma = 4800;        // an offer's exact maximum
+        CHECK_COND(lim_config_valid(c));
         c = {}; c.fixed.max_ma = 2500;
         CHECK_COND(lim_config_valid(c));
         c = {}; c.avs.max_mv = 18000;       // only 15V/20V valid
@@ -225,6 +233,9 @@ int main() {
         CHECK_STR(fixed_label(9000, 3000).c_str(), "9V3A");
         CHECK_STR(fixed_label(9000, 1500).c_str(), "9V1.5");
         CHECK_STR(fixed_label(20000, 1500).c_str(), "20V");
+        CHECK_STR(fixed_label(9000, 3250).c_str(), "9V");      // 3.25 A does not fit beside the volts and is never rounded up
+        CHECK_STR(fixed_label(0, 3250).c_str(), "3.25A");
+        CHECK_STR(fixed_label(0, 4800).c_str(), "4.8A");
         LimConfig l4{}; l4.fixed.enabled = false;
         CHECK_STR(std::string(buf, lim_label(l4, buf)).c_str(), "FIX");   // Fixed off: the one constrained
         l4.avs.enabled = false;
@@ -457,6 +468,48 @@ int main() {
         CHECK_EQ(int(lim_gate({false}, 30000)), int(LimRefusal::None));
         CHECK_EQ(int(lim_gate({false}, kLimMinMw - 1)), int(LimRefusal::BadLimit));
         CHECK_EQ(int(lim_gate({true}, 30000)), int(LimRefusal::Busy));
+    }
+
+    // ---- the Max A picker: Max, then 1 A up in 0.25 A steps to the offer, the offer's exact maximum last ----
+    {
+        const auto amps = [](std::uint16_t offer) {
+            std::string s;
+            for (int i = 0; i < lim_amp_count(offer); i++) s += std::to_string(lim_amp_at(offer, i)) + " ";
+            return s;
+        };
+        CHECK_STR(amps(3000).c_str(), "0 1000 1250 1500 1750 2000 2250 2500 2750 3000 ");
+        CHECK_STR(amps(3250).c_str(), "0 1000 1250 1500 1750 2000 2250 2500 2750 3000 3250 ");
+        CHECK_STR(amps(4800).c_str(), "0 1000 1250 1500 1750 2000 2250 2500 2750 3000 3250 3500 3750 4000 4250 4500 4750 4800 ");
+        CHECK_STR(amps(1000).c_str(), "0 1000 ");
+        CHECK_STR(amps(500).c_str(), "0 500 ");   // under the 1 A floor: the offer alone
+        CHECK_STR(amps(0).c_str(), "0 ");
+        CHECK_EQ(lim_amp_count(5000), 18);
+
+        // The offer current behind a voltage. Fixed: that voltage's object (0 V: the highest fixed current).
+        const std::uint32_t raw[] = {fixed(5000, 3000), fixed(9000, 3000), fixed(15000, 3250), fixed(20000, 5000),
+                                     pps(11000, 5000, 5000), pps(21000, 3300, 3000)};
+        Pdo p[std::size(raw)];
+        for (std::size_t i = 0; i < std::size(raw); i++) p[i] = decode_pdo(raw[i]);
+        CHECK_EQ(lim_fixed_offer_ma(p, 5000), 3000);
+        CHECK_EQ(lim_fixed_offer_ma(p, 15000), 3250);
+        CHECK_EQ(lim_fixed_offer_ma(p, 20000), 5000);
+        CHECK_EQ(lim_fixed_offer_ma(p, 0), 5000);
+        CHECK_EQ(lim_fixed_offer_ma(p, 12000), 0);   // no such offer
+        // PPS: the highest current among the APDOs whose range covers the voltage (0 V: the highest PPS current).
+        CHECK_EQ(lim_pps_offer_ma(p, 5000), 5000);
+        CHECK_EQ(lim_pps_offer_ma(p, 11000), 5000);
+        CHECK_EQ(lim_pps_offer_ma(p, 4000), 3000);    // only the 3.3-21 V object covers 4 V
+        CHECK_EQ(lim_pps_offer_ma(p, 15000), 3000);
+        CHECK_EQ(lim_pps_offer_ma(p, 0), 5000);
+        CHECK_EQ(lim_pps_offer_ma(std::span<const Pdo>(p, 4), 9000), 0);   // no PPS at all
+        // SPR AVS: 15 V the 9-15 V field, Max the 15-20 V field, the highest over two APDOs; an EPR AVS never counts.
+        const Pdo a[] = {decode_pdo(spr_avs(3000, 2250)), decode_pdo(spr_avs(3250, 0)), decode_pdo(0xD0000000u | (280u << 17) | (150u << 8) | 140u),
+                         decode_pdo(fixed(5000, 3000))};
+        CHECK_EQ(lim_avs_offer_ma(a, 15000), 3250);
+        CHECK_EQ(lim_avs_offer_ma(std::span<const Pdo>(a, 1), 15000), 3000);
+        CHECK_EQ(lim_avs_offer_ma(std::span<const Pdo>(a, 1), 0), 2250);
+        CHECK_EQ(lim_avs_offer_ma(a, 0), 3250);      // the 15 V-only object's Max is its 15 V current
+        CHECK_EQ(lim_avs_offer_ma(std::span<const Pdo>(a + 2, 2), 0), 0);
     }
     return test_report("test_pd_limiter");
 }

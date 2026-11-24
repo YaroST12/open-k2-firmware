@@ -4275,7 +4275,7 @@ LIM_OP_STATUS, LIM_OP_ARM, LIM_OP_OFF, LIM_OP_ARM_CFG = 0, 1, 2, 3
 
 
 def _parse_tech_limit(spec, *, avs=False):
-    """Parse 'off', '<V>V', '<A>A', or '<V>V/<A>A' -> (enabled, mv, ma) with 100 mA steps."""
+    """Parse 'off', '<V>V', '<A>A', or '<V>V/<A>A' -> (enabled, mv, ma); currents to 10 mA (0.25 A steps or an offer's maximum)."""
     s = spec.strip().lower()
     if s == "off":
         return False, 0, 0
@@ -4304,8 +4304,8 @@ def _parse_tech_limit(spec, *, avs=False):
             except ValueError:
                 raise SystemExit(f"pd-limit: bad current '{part}'")
             val = int(round(a * 1000))
-            if not (100 <= val <= 5000 and val % 100 == 0):
-                raise SystemExit("pd-limit: current must be 0.1..5.0 A in 0.1 A steps")
+            if not (100 <= val <= 5000 and val % 10 == 0):
+                raise SystemExit("pd-limit: current must be 0.1..5.0 A in 0.01 A steps")
             ma = val
         else:
             raise SystemExit(f"pd-limit: expected V or A suffix in '{part}'")

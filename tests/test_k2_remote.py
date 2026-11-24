@@ -2093,7 +2093,7 @@ class PdLimitCli(unittest.TestCase):
 
     def test_limit_range_and_words_are_checked_before_sending(self):
         for bad in (["4"], ["101"], ["abc"], ["set", "--fixed", "3.3V", "--avs", "15V"],
-                    ["set", "--fixed", "2.25A"],
+                    ["set", "--fixed", "2.255A"], ["set", "--fixed", "5.25A"],
                     ["set", "--fixed", "off", "--pps", "off", "--avs", "off"], ["set", "--avs", "12V"]):
             sent = []
             with self.assertRaises(SystemExit):
