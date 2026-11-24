@@ -3,14 +3,16 @@
 """The battery efficiency recorder's run record (include/k2/battery/battery.hpp, docs/BATTERY_RECORDER.md) -> JSON-ready
 dict, and the remote status block (CMD_BATTERY 0x58, include/k2/core/remote_proto.hpp).
 
-The 246-byte record is what /bt<id>.rec holds, what `k2_remote.py battery read` fetches and what a BATT QR share
+The record (version 2: 250 bytes; version 1: 246, still read) is what /bt<id>.rec holds, what `k2_remote.py battery read` fetches and what a BATT QR share
 carries. Every value keeps its unit in the key name (_uwh microwatt-hours, _uah microamp-hours, _s seconds, _mv, _ma).
 Raw numbers only, no verdicts. Curve current keeps the power monitor's sign: positive = bottom port -> top port.
 """
 import struct
 
-VERSION = 1
-RECORD_BYTES = 246
+VERSION = 2
+RECORD_BYTES = 250
+SIZES = {1: 246, 2: 250}                               # record bytes by version (version 1: no flags, no gap)
+SAVE_S = 10                                            # battery::kSaveMs: a measuring phase's record is saved this often
 HEAD_BYTES = 64
 PHASE_BYTES = 24
 POINTS = 60
@@ -63,18 +65,24 @@ def unpack_point(b):
 
 def decode_record(rec):
     rec = bytes(rec)
-    if len(rec) != RECORD_BYTES:
-        raise BadRecord(f"record is {len(rec)} bytes, not {RECORD_BYTES}")
-    if rec[0:2] != b"BR":
+    if len(rec) < 3 or rec[0:2] != b"BR":
         raise BadRecord("not a battery record (magic)")
-    if rec[2] != VERSION:
-        raise BadRecord(f"record version {rec[2]}, this reader knows {VERSION}")
-    want = struct.unpack_from("<H", rec, RECORD_BYTES - 2)[0]
-    if crc16(rec[:RECORD_BYTES - 2]) != want:
+    ver = rec[2]
+    if ver not in SIZES:
+        raise BadRecord(f"record version {ver}, this reader knows {sorted(SIZES)}")
+    size = SIZES[ver]
+    if len(rec) != size:
+        raise BadRecord(f"version {ver} record is {len(rec)} bytes, not {size}")
+    want = struct.unpack_from("<H", rec, size - 2)[0]
+    if crc16(rec[:size - 2]) != want:
         raise BadRecord("CRC mismatch")
+    flag = 0 if ver == 1 else 0x80                     # version 2: state | armed << 7, kind | in_rev << 7
+    if ver == 1 and rec[4] & 0x80:
+        raise BadRecord("flag bits in a version 1 record")
     mode = _name(MODES, rec[3] & 0xF, "mode")
     wiring = _name(WIRINGS, rec[3] >> 4, "wiring")
-    state = _name(RUN_STATES, rec[4], "state")
+    state = _name(RUN_STATES, rec[4] & ~flag, "state")
+    gap_s = struct.unpack_from("<I", rec, size - 6)[0] if ver >= 2 else 0
     nphases, resumes = rec[5] & 3, rec[5] >> 2
     rid, end_ma, end_s, interval_s = struct.unpack_from("<4H", rec, 6)
     points, split = rec[14], rec[15]
@@ -84,7 +92,7 @@ def decode_record(rec):
     for i in range(nphases):
         o = 16 + i * PHASE_BYTES
         kind, end, gaps, secs, uwh_in, uwh_out, uah_in, uah_out = struct.unpack_from("<BBHIIIII", rec, o)
-        phases.append({"kind": _name(KINDS, kind, "kind"), "end": _name(ENDS, end, "end"), "gaps": gaps, "time_s": secs,
+        phases.append({"kind": _name(KINDS, kind & ~flag, "kind"), "end": _name(ENDS, end, "end"), "gaps": gaps, "time_s": secs,
                        "in_uwh": uwh_in, "out_uwh": uwh_out, "in_uah": uah_in, "out_uah": uah_out})
     curve = []
     for i in range(points):
@@ -94,6 +102,7 @@ def decode_record(rec):
     final = (mode == "round-trip" and nphases == 2 and phases[1]["end"] not in ("running", "lost") and tot["in_uwh"] > 0)
     return {
         "version": rec[2], "id": rid, "mode": mode, "wiring": wiring, "state": state, "resumes": resumes,
+        "gap_s": gap_s,
         "end_ma": end_ma, "end_s": end_s, "phases": phases, "totals": tot,
         "efficiency_permille": ratio_permille(tot["out_uwh"], tot["in_uwh"]) if final else None,
         "charge_ratio_permille": ratio_permille(tot["out_uah"], tot["in_uah"]) if final else None,
@@ -136,6 +145,9 @@ def render_record(r):
     lines = [f"run {r['id']}: {r['mode']}, {r['wiring']}, {r['state']}"
              + (f", resumed {r['resumes']}x after a reset" if r["resumes"] else "")
              + f"; ends under {r['end_ma']} mA for {r['end_s']} s"]
+    if r["resumes"]:
+        lines.append(f"  at least {r.get('gap_s', 0)} s not measured: each resume also lost the off time and up to "
+                     f"{SAVE_S} s before the cut (the K2 keeps no clock while off)")
     for i, p in enumerate(r["phases"]):
         lines.append(f"  phase {i + 1} {p['kind']} ({p['end']}): {_hms(p['time_s'])}, in {_wh(p['in_uwh'])} {_mah(p['in_uah'])}, "
                      f"out {_wh(p['out_uwh'])} {_mah(p['out_uah'])}" + (f", {p['gaps']} gaps" if p["gaps"] else ""))

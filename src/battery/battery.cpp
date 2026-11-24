@@ -205,6 +205,10 @@ void Recorder::sample(std::uint32_t now_ms, std::int32_t mv, std::int32_t ma, bo
     if (!online) { primed_ = false; return; }
     ma = deadband(ma);
     if (!primed_) {
+        if (resync_) {
+            gap_ms_ += now_ms;
+            resync_ = false;
+        }
         primed_ = true;
         last_ms_ = now_ms;
         last_mv_ = mv;
@@ -282,6 +286,8 @@ void Recorder::to_record(Record &r) const {
     r.mode = mode_;
     r.wiring = wiring_;
     r.state = state_ == State::Measuring ? RunState::Measuring : state_ == State::Between ? RunState::Between : RunState::Done;
+    r.armed = state_ == State::Measuring && armed_;
+    r.gap_s = gap_s();
     r.phases = phases_;
     r.resumes = resumes_;
     r.id = id_;
@@ -293,7 +299,8 @@ void Recorder::to_record(Record &r) const {
         const Phase &p = ph_[i];
         r.ph[i] = PhaseRec{p.kind, p.end, p.gaps, p.ms / 1000u,
                            std::uint32_t(udiv64_by_u16(p.uj_in, 3600u)), std::uint32_t(udiv64_by_u16(p.uj_out, 3600u)),
-                           std::uint32_t(udiv64_by_u16(p.uc_in, 3600u)), std::uint32_t(udiv64_by_u16(p.uc_out, 3600u))};
+                           std::uint32_t(udiv64_by_u16(p.uc_in, 3600u)), std::uint32_t(udiv64_by_u16(p.uc_out, 3600u)),
+                           p.in_rev};
     }
     r.pts = curve_.pts;
 }
@@ -307,10 +314,12 @@ bool Recorder::restore(const Record &r) {
     id_ = r.id;
     phases_ = r.phases;
     resumes_ = r.resumes;
+    gap_ms_ = r.gap_s * 1000u;
     for (int i = 0; i < r.phases; i++) {
         const PhaseRec &q = r.ph[i];
         ph_[i] = Phase{q.kind, q.end, q.gaps, q.secs * 1000u, std::uint64_t(q.uwh_in) * 3600u, std::uint64_t(q.uwh_out) * 3600u,
                        std::uint64_t(q.uah_in) * 3600u, std::uint64_t(q.uah_out) * 3600u};
+        ph_[i].in_rev = q.in_rev;
     }
     curve_.pts = r.pts;
     curve_.n = r.points;
@@ -320,11 +329,18 @@ bool Recorder::restore(const Record &r) {
     case RunState::Between:
         state_ = State::Between;
         ph_[1] = Phase{.kind = Kind::Discharge};
-        ph_[0].in_rev = charge_was_reverse(curve_);   // the record keeps no direction: the charge's curve has it
+        if (r.version == 1) ph_[0].in_rev = charge_was_reverse(curve_);   // version 1 kept no direction: the curve has it
         armed_ = wiring_ == Wiring::Moved;   // a moved bank has been unplugged by the time the K2 boots again
         if (resumes_ < 63) resumes_++;
         break;
     case RunState::Measuring:
+        if (r.version != 1) {                // the last progress save: the same phase goes on from it
+            state_ = State::Measuring;
+            ph_[current()].end = End::Running;
+            armed_ = r.armed;
+            resumed();
+            break;
+        }
         ph_[current()].end = End::Lost;      // what it measured since the phase began was never written
         state_ = State::Done;
         dirty_ = true;
@@ -351,7 +367,7 @@ std::size_t encode(const Record &r, std::span<std::uint8_t> out) {
     b[1] = 'R';
     b[2] = kRecordVersion;
     b[3] = std::uint8_t(std::uint8_t(r.mode) | std::uint8_t(r.wiring) << 4);
-    b[4] = std::uint8_t(r.state);
+    b[4] = std::uint8_t(std::uint8_t(r.state) | r.armed << 7);
     b[5] = std::uint8_t((r.phases & 3) | (r.resumes < 63 ? r.resumes : 63) << 2);
     put16(b + 6, r.id);
     put16(b + 8, r.cfg.end_ma);
@@ -362,7 +378,7 @@ std::size_t encode(const Record &r, std::span<std::uint8_t> out) {
     for (int i = 0; i < 2; i++) {
         std::uint8_t *q = b + 16 + i * kPhaseBytes;
         const PhaseRec &p = r.ph[i];
-        q[0] = std::uint8_t(p.kind);
+        q[0] = std::uint8_t(std::uint8_t(p.kind) | p.in_rev << 7);
         q[1] = std::uint8_t(p.end);
         put16(q + 2, p.gaps);
         put32(q + 4, p.secs);
@@ -372,20 +388,27 @@ std::size_t encode(const Record &r, std::span<std::uint8_t> out) {
         put32(q + 20, p.uah_out);
     }
     for (std::size_t i = 0; i < r.pts.size(); i++) b[kHeadBytes + i] = r.pts[i];
+    put32(b + kRecordBytesV1 - 2, r.gap_s);
     put16(b + kRecordBytes - 2, ringlog::crc16(0xFFFF, {b, kRecordBytes - 2}));
     return kRecordBytes;
 }
 
 bool decode(std::span<const std::uint8_t> in, Record &r) {
-    if (in.size() != kRecordBytes) return false;
+    const std::size_t n = in.size();
     const std::uint8_t *b = in.data();
-    if (b[0] != 'B' || b[1] != 'R' || b[2] != kRecordVersion) return false;
-    if (get16(b + kRecordBytes - 2) != ringlog::crc16(0xFFFF, {b, kRecordBytes - 2})) return false;
-    if ((b[3] & 0xF) > 2 || (b[3] >> 4) > 1 || b[4] > 2 || (b[5] & 3) > 2 || b[14] > Curve::kPoints) return false;
+    if (n < 3 || b[0] != 'B' || b[1] != 'R') return false;
+    const std::uint8_t ver = b[2];
+    if (!(ver == kRecordVersion && n == kRecordBytes) && !(ver == 1 && n == kRecordBytesV1)) return false;
+    if (get16(b + n - 2) != ringlog::crc16(0xFFFF, {b, n - 2})) return false;
+    const std::uint8_t flags = ver == 1 ? 0 : 0x80;   // the bits version 2 added; version 1 had them clear
+    if ((b[3] & 0xF) > 2 || (b[3] >> 4) > 1 || (b[4] & ~flags) > 2 || (b[5] & 3) > 2 || b[14] > Curve::kPoints) return false;
     r = Record{};
+    r.version = ver;
     r.mode = Mode(b[3] & 0xF);
     r.wiring = Wiring(b[3] >> 4);
-    r.state = RunState(b[4]);
+    r.state = RunState(b[4] & 0x7F);
+    r.armed = b[4] & flags;
+    if (ver != 1) r.gap_s = get32(b + kRecordBytesV1 - 2);
     r.phases = b[5] & 3;
     r.resumes = b[5] >> 2;
     r.id = get16(b + 6);
@@ -395,8 +418,9 @@ bool decode(std::span<const std::uint8_t> in, Record &r) {
     r.split = b[15];
     for (int i = 0; i < 2; i++) {
         const std::uint8_t *q = b + 16 + i * kPhaseBytes;
-        if (q[0] > 1 || q[1] > 3) return false;
-        r.ph[i] = PhaseRec{Kind(q[0]), End(q[1]), get16(q + 2), get32(q + 4), get32(q + 8), get32(q + 12), get32(q + 16), get32(q + 20)};
+        if ((q[0] & ~flags) > 1 || q[1] > 3) return false;
+        r.ph[i] = PhaseRec{Kind(q[0] & 0x7F), End(q[1]), get16(q + 2), get32(q + 4), get32(q + 8), get32(q + 12), get32(q + 16),
+                           get32(q + 20), bool(q[0] & flags)};
     }
     for (std::size_t i = 0; i < r.pts.size(); i++) r.pts[i] = b[kHeadBytes + i];
     return true;
@@ -427,6 +451,8 @@ bool has_efficiency(const Record &r) {
 void Recorder::resumed() {
     if (!active()) return;
     primed_ = false;
+    quiet_ = false;    // the quiet timer (and a round trip's outflow hold) ran on the old boot's clock: it starts again
+    resync_ = true;
     if (resumes_ < 63) resumes_++;
     if (state_ == State::Measuring) ph_[current()].gaps++;
     // Not dirty: the record on flash already says "running" with this id, and a write now would land mid-measurement. The

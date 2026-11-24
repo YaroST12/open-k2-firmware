@@ -50,7 +50,7 @@ void init(bool warm_reset) {
     auto *ckpt = std::launder(reinterpret_cast<Service::Checkpoint *>(g_ckpt_raw));   // trivially copyable: bytes are the object
     Service &svc = service_obj();
     const Service::Boot b = svc.boot(&f, ckpt, warm_reset);
-    static constexpr const char *kBoot[] = {"nothing", "resumed", "waiting", "lost", "closed"};
+    static constexpr const char *kBoot[] = {"nothing", "resumed", "waiting", "lost", "closed", "continued"};
     const Recorder &r = svc.rec();
     K2LOG("[BATT] boot %s run=%u resumes=%u\n", kBoot[static_cast<int>(b)], static_cast<unsigned>(r.id()),
           static_cast<unsigned>(r.resumes()));

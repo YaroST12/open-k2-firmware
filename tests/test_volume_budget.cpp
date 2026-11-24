@@ -127,7 +127,7 @@ bool fill_tcap(fs::Fs& f) {
     }
     return true;
 }
-// The battery recorder's runs: a run's record (246 B, inline) per file in the root directory, the newest store::kKeep (3)
+// The battery recorder's runs: a run's record (250 B, inline) per file in the root directory, the newest store::kKeep (3)
 // kept, written through the store the way a device writes them (the oldest pruned before a new file). Three fit the root
 // pair's slack (0 blocks); a fourth splits the pair (4 blocks), a /bt directory costs a pair of its own.
 static_assert(k2::battery::kRecordBytes <= fs::kInlineMax);
@@ -179,7 +179,7 @@ const Row kRows[] = {
     {"settings (usb/cable/prefs/rd/.legacy)", fill_settings, 0},
     {"/log.txt", fill_log, 1},
     {"/lp/last.rec", fill_lp, 3},
-    {"/bt<id>.rec (3 x 246 B, root pair)", fill_bt, 0},
+    {"/bt<id>.rec (3 x 250 B, root pair)", fill_bt, 0},
     {"/ps/run.rec", fill_ps, 3, true},
     {"/ps results (8 x 1376 B + 1 in flight)", fill_psr, 11, true},
     {"/twin (12 x 129 B)", fill_twin, 4},

@@ -124,6 +124,29 @@ class Battery(unittest.TestCase):
         with self.assertRaises(SystemExit):
             run(link, "read", "9")
 
+    @staticmethod
+    def as_version(rec, ver, resumes=0, gap_s=0):
+        """The fixture's run as record version 1 (246 B) or 2 (250 B, the known gap after the curve)."""
+        b = bytearray(rec[:br.HEAD_BYTES + 3 * br.POINTS])
+        b[2] = ver
+        b[5] = (b[5] & 3) | resumes << 2
+        if ver == 2:
+            b += struct.pack("<I", gap_s)
+        return bytes(b) + struct.pack("<H", br.crc16(b))
+
+    def test_resumes_and_gap(self):
+        r = br.decode_record(self.as_version(fixture_record(), 2, resumes=2, gap_s=75))
+        self.assertEqual((r["version"], r["resumes"], r["gap_s"]), (2, 2, 75))
+        text = br.render_record(r)
+        self.assertIn("resumed 2x", text)
+        self.assertIn("at least 75 s not measured", text)
+        self.assertIn("off time", text)
+        old = br.decode_record(self.as_version(fixture_record(), 1, resumes=1))
+        self.assertEqual((old["version"], old["resumes"], old["gap_s"]), (1, 1, 0))
+        self.assertEqual(old["phases"], r["phases"])
+        with self.assertRaises(br.BadRecord):
+            br.decode_record(self.as_version(fixture_record(), 1)[:-1])
+
     def test_corrupt_record_is_an_error(self):
         rec = bytearray(fixture_record())
         rec[20] ^= 1

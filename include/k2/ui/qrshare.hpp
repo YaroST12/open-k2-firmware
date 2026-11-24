@@ -42,7 +42,7 @@ enum class Type : std::uint8_t {
     Identity = 5,    // text "fw=<version> g=<git> p=<proto>"
     Log = 6,         // the newest binary log entries (k2/core/binlog.hpp), see qrshare_records.hpp
     LoopProbe = 7,   // the HID-cable loop probe result (k2/loopprobe/loop_probe.hpp encode(), 399 bytes)
-    Battery = 8,     // one battery recorder run (k2/battery/battery.hpp encode(), 246 bytes)
+    Battery = 8,     // one battery recorder run (k2/battery/battery.hpp encode(), 250 bytes)
     // 9..127 are free; bit 7 of the byte is kPackedFlag
 };
 

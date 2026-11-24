@@ -63,7 +63,7 @@ bool load(fs::Fs &f, std::uint16_t id, Record &r) {
 bool save(fs::Fs &f, const Record &r) {
     std::uint8_t buf[kRecordBytes];
     if (encode(r, buf) != kRecordBytes) return false;
-    return f.write_file(path_of(r.id).data(), buf) == fs::Err::Ok;
+    return f.rewrite_file(path_of(r.id).data(), buf) == fs::Err::Ok;   // one commit in place: the progress saves repeat it
 }
 
 void prune(fs::Fs &f, int keep) {
@@ -113,6 +113,7 @@ Service::Boot Service::boot(fs::Fs *f, Checkpoint *ckpt, bool warm) {
     if (!rec_.restore(r)) return Boot::Nothing;
     cfg_ = rec_.config();
     wiring_ = rec_.wiring();
+    if (rec_.state() == State::Measuring) return Boot::ResumedFlash;
     return rec_.state() == State::Between ? Boot::ResumedBetween : Boot::Lost;
 }
 
@@ -142,9 +143,15 @@ void Service::checkpoint() {
 void Service::poll(std::uint32_t now_ms, std::int32_t mv, std::int32_t ma, bool online, bool may_write) {
     may_write_ = may_write;
     if (rec_.active()) rec_.sample(now_ms, mv, ma, online);
-    if (rec_.dirty() && fs_ && may_write && std::int32_t(now_ms - retry_ms_) >= 0) {
+    // a measuring phase's progress save every kSaveMs (the cold resume's point), once it holds energy
+    const bool measuring = rec_.state() == State::Measuring;
+    if (!measuring) save_set_ = false;
+    else if (!save_set_) { save_ms_ = now_ms + kSaveMs; save_set_ = true; }
+    const bool due = measuring && std::int32_t(now_ms - save_ms_) >= 0 && !rec_.empty();
+    if ((rec_.dirty() || due) && fs_ && may_write && std::int32_t(now_ms - retry_ms_) >= 0) {
         failed_ = !flush();
         if (failed_) retry_ms_ = now_ms + 10'000;
+        else save_ms_ = now_ms + kSaveMs;
     }
     // the checkpoint once a second, and at once when the run changes state (a warm reset never resumes an ended run)
     if (ckpt_ && (rec_.state() != ckpt_state_ || std::int32_t(now_ms - ckpt_ms_) >= 0)) {

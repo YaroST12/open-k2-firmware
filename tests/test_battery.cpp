@@ -12,6 +12,7 @@
 #include "k2/battery/battery.hpp"
 #include "k2/battery/battery_wire.hpp"
 #include "k2/core/fs.hpp"
+#include "k2/core/ringlog.hpp"
 #include "ramdisk.hpp"
 #include "test_util.h"
 
@@ -388,6 +389,49 @@ void test_record_round_trip() {
     CHECK_EQ(encode(r, std::span<std::uint8_t>(buf, 10)), 0u);
 }
 
+// Version 2 keeps what a cold resume needs (each phase's direction, the armed end rule) and the time the resumes are known to
+// have lost; a version 1 file an older firmware left still reads (no gap, no flags).
+void test_record_v2_resume_fields() {
+    Record r;
+    r.mode = Mode::Discharge;
+    r.state = RunState::Measuring;
+    r.phases = 1;
+    r.resumes = 2;
+    r.id = 7;
+    r.armed = true;
+    r.gap_s = 70'000;
+    r.ph[0] = PhaseRec{Kind::Discharge, End::Running, 2, 3600, 5, 9'000'000, 1, 1'800'000, true};
+    std::uint8_t buf[kRecordBytes];
+    CHECK_EQ(kRecordBytes, 250u);
+    CHECK_EQ(encode(r, buf), kRecordBytes);
+    CHECK_EQ(buf[2], 2);
+    Record d;
+    CHECK_EQ(decode(buf, d), true);
+    CHECK_EQ(d.version, 2);
+    CHECK_EQ(d.armed, true);
+    CHECK_EQ(d.gap_s, 70'000u);
+    CHECK_EQ(d.ph[0].in_rev, true);
+    CHECK_EQ(int(d.ph[0].kind), int(Kind::Discharge));
+    CHECK_EQ(int(d.state), int(RunState::Measuring));
+    // the same run as version 1 wrote it: 246 bytes, no flag bits, the CRC at 244
+    std::uint8_t v1[kRecordBytesV1];
+    std::memcpy(v1, buf, kRecordBytesV1);
+    v1[2] = 1;
+    v1[4] &= 0x7F;
+    v1[16] &= 0x7F;
+    const std::uint16_t crc = k2::ringlog::crc16(0xFFFF, {v1, kRecordBytesV1 - 2});
+    v1[kRecordBytesV1 - 2] = std::uint8_t(crc);
+    v1[kRecordBytesV1 - 1] = std::uint8_t(crc >> 8);
+    CHECK_EQ(decode(v1, d), true);
+    CHECK_EQ(d.version, 1);
+    CHECK_EQ(d.armed, false);
+    CHECK_EQ(d.gap_s, 0u);
+    CHECK_EQ(d.ph[0].in_rev, false);
+    CHECK_EQ(d.ph[0].uwh_out, 9'000'000u);
+    v1[4] |= 0x80;   // a flag bit version 1 never had
+    CHECK_EQ(decode(v1, d), false);
+}
+
 // Efficiency: tenths of a percent, rounded; nothing in = no ratio.
 void test_ratio() {
     CHECK_EQ(ratio_permille(873, 1000), 873);
@@ -456,8 +500,8 @@ std::uint32_t serve(Service &s, std::uint32_t t, std::uint32_t ms, std::int32_t 
     return t;
 }
 
-// The record is written when a phase ends, never while it measures (nor at the start: an empty run takes no slot); a
-// write the caller does not allow waits.
+// The record is written when a phase ends and every kSaveMs while it measures (never at the start: an empty run takes no
+// slot); a write the caller does not allow waits.
 void test_service_writes_at_boundaries() {
     Vol v;
     Service::Checkpoint ck{};
@@ -470,11 +514,13 @@ void test_service_writes_at_boundaries() {
     Record r;
     CHECK_EQ(store::load(v.fs, 1, r), false);
     v.disk.reset_counters();
-    t = serve(s, t, 600'000, 5000, 1000);                     // ten minutes measuring: the flash is left alone
-    CHECK_EQ(v.disk.progs + v.disk.erases, 0u);
+    t = serve(s, t, 600'000, 5000, 1000);                     // ten minutes measuring: progress saves
+    CHECK_EQ(store::load(v.fs, 1, r), true);
+    CHECK_EQ(int(r.state), int(RunState::Measuring));
     t = serve(s, t, 61'000, 5000, 0, false);                   // the end rule closes it; a charger test owns the flash
     CHECK_EQ(int(s.rec().state()), int(State::Done));
-    CHECK_EQ(store::load(v.fs, 1, r), false);
+    CHECK_EQ(store::load(v.fs, 1, r), true);
+    CHECK_EQ(int(r.state), int(RunState::Measuring));
     t = serve(s, t, 1000, 5000, 0);                            // allowed again: the record is written
     CHECK_EQ(store::load(v.fs, 1, r), true);
     CHECK_EQ(int(r.state), int(RunState::Done));
@@ -524,10 +570,11 @@ void test_service_warm_resume() {
     CHECK_EQ(s.rec().resumes(), 1);
     CHECK_EQ(s.rec().phase(0).gaps, 1);
     CHECK_COND(s.rec().phase(0).uj_in <= before && s.rec().phase(0).uj_in + 5'000'000 >= before);   // within the last second
-    // the same SRAM after a cold boot (or a corrupted checkpoint) does not count; the first phase never reached the flash
+    // the same SRAM after a cold boot (or a corrupted checkpoint) does not count: the flash's last save resumes instead
     Service c;
     ck.crc ^= 1;
-    CHECK_EQ(int(c.boot(&v.fs, &ck, true)), int(Service::Boot::Nothing));
+    CHECK_EQ(int(c.boot(&v.fs, &ck, true)), int(Service::Boot::ResumedFlash));
+    CHECK_COND(c.rec().phase(0).uj_in < s.rec().phase(0).uj_in);
 }
 
 // A run that ended is not resumed by a later warm reset (the checkpoint follows the end, even between its 1 s ticks).
@@ -547,22 +594,14 @@ void test_service_warm_after_end() {
     CHECK_EQ(int(s.rec().state()), int(State::Idle));
 }
 
-// A cold boot cannot resume a measuring phase: its totals since the last write are gone. A first phase was never written, so
-// the run is gone; a round trip waiting between its phases waits again; a cut discharge is marked Lost and the run closed.
+// A round trip cut between its phases waits again after a cold boot; cut in its discharge, the discharge resumes from its
+// last save with the charge kept.
 void test_service_cold_boot() {
     Vol v;
     Service::Checkpoint ck{};
     {
         Service s;
-        s.boot(&v.fs, &ck, false);
-        s.start(Mode::Charge, Wiring::SamePort, true);
-        serve(s, 0, 60'000, 5000, 1000);
-    }
-    {
-        Service s;   // the first phase never reached the flash
         CHECK_EQ(int(s.boot(&v.fs, &ck, false)), int(Service::Boot::Nothing));
-        std::uint16_t ids[4];
-        CHECK_EQ(store::list(v.fs, ids, 4), 0);
         CHECK_EQ(int(s.start(Mode::RoundTrip, Wiring::Moved, true)), int(Recorder::Start::Ok));
         CHECK_EQ(s.rec().id(), 1);
         std::uint32_t t = serve(s, 0, 600'000, 5000, 1000);
@@ -575,21 +614,29 @@ void test_service_cold_boot() {
     CHECK_EQ(int(s.rec().state()), int(State::Between));
     CHECK_EQ(s.rec().id(), 1);
     // the bank went to the input port: its outflow held 5 s starts the discharge (the power cut was the swap)
-    serve(s, 0, 7000, 5000, 1000);
+    std::uint32_t t = serve(s, 0, 7000, 5000, 1000);
     CHECK_EQ(int(s.rec().state()), int(State::Measuring));
     CHECK_EQ(s.rec().phases(), 2);
-    Service c;   // cut in the discharge: Lost, closed and kept with the charge's totals
-    CHECK_EQ(int(c.boot(&v.fs, &ck, false)), int(Service::Boot::Lost));
-    CHECK_EQ(int(c.rec().state()), int(State::Done));
-    serve(c, 0, 1000, 0, 0);
+    serve(s, t, 30'000, 5000, 1000);
+    const std::uint64_t charged = s.rec().phase(0).uj_in;
+    Service c;   // cut in the discharge: it goes on from its last save, the charge's totals kept
+    CHECK_EQ(int(c.boot(&v.fs, &ck, false)), int(Service::Boot::ResumedFlash));
+    CHECK_EQ(int(c.rec().state()), int(State::Measuring));
+    CHECK_EQ(c.rec().phases(), 2);
+    CHECK_EQ(int(c.rec().phase(0).end), int(End::Auto));
+    CHECK_COND(c.rec().phase(0).uj_in + 3600u > charged);
+    CHECK_COND(c.rec().phase(1).uj_out > 0);
+    t = serve(c, 1000, 20'000, 5000, 1000);
+    c.rec().finish();
+    serve(c, t, 1000, 0, 0);
     Record r;
     CHECK_EQ(store::load(v.fs, 1, r), true);
     CHECK_EQ(int(r.state), int(RunState::Done));
-    CHECK_EQ(int(r.ph[1].end), int(End::Lost));
-    CHECK_COND(r.ph[0].uwh_in > 0);
+    CHECK_EQ(int(r.ph[1].end), int(End::Manual));
+    CHECK_EQ(has_efficiency(r), true);
 }
 
-// A cold boot between the phases loses the RAM's direction: the charge's curve gives it back (negative here, moved wiring).
+// A cold boot between the phases: the record gives back the charge's direction (negative here, moved wiring).
 void test_service_cold_between_negative() {
     Vol v;
     Service::Checkpoint ck{};
@@ -623,6 +670,263 @@ void test_service_no_volume() {
     serve(s, 0, 5000, 5000, 1000);
     CHECK_EQ(int(s.rec().state()), int(State::Measuring));
     CHECK_COND(s.rec().phase(0).uj_in > 0);
+}
+
+// ---- the progress saves and the cold resume -------------------------------------------------------------------------------
+
+// A version 1 record (an older firmware's file): what Record r encodes, rewritten as the 246-byte format.
+std::vector<std::uint8_t> v1_bytes(const Record &r) {
+    std::uint8_t b[kRecordBytes];
+    encode(r, b);
+    std::vector<std::uint8_t> v(b, b + kRecordBytesV1);
+    v[2] = 1;
+    v[4] &= 0x7F;
+    v[16] &= 0x7F;
+    v[40] &= 0x7F;
+    const std::uint16_t crc = k2::ringlog::crc16(0xFFFF, {v.data(), kRecordBytesV1 - 2});
+    v[kRecordBytesV1 - 2] = std::uint8_t(crc);
+    v[kRecordBytesV1 - 1] = std::uint8_t(crc >> 8);
+    return v;
+}
+
+// While a phase measures, the record goes to flash every kSaveMs (once it holds energy), only when writes are allowed.
+void test_service_save_cadence() {
+    Vol v;
+    Service::Checkpoint ck{};
+    Service s;
+    s.boot(&v.fs, &ck, false);
+    s.start(Mode::Charge, Wiring::SamePort, true);
+    std::uint32_t t = serve(s, 0, 30'000, 5000, 1000);
+    Record r;
+    CHECK_EQ(store::load(v.fs, 1, r), true);
+    CHECK_EQ(int(r.state), int(RunState::Measuring));
+    CHECK_COND(r.ph[0].secs >= 18 && r.ph[0].secs <= 29);
+    v.disk.reset_counters();
+    int saves = 0;
+    for (int i = 0; i < 60; i++) {                           // a minute: six saves, one per kSaveMs
+        const auto before = v.disk.progs;
+        t = serve(s, t, 1000, 5000, 1000);
+        if (v.disk.progs != before) saves++;
+    }
+    CHECK_EQ(saves, int(60'000 / kSaveMs));
+    v.disk.reset_counters();
+    t = serve(s, t, 60'000, 5000, 1000, false);              // a charger test owns the flash: nothing written
+    CHECK_EQ(v.disk.progs + v.disk.erases, 0u);
+    t = serve(s, t, 1000, 5000, 1000);                       // allowed again: the late save at once
+    CHECK_COND(v.disk.progs > 0);
+    CHECK_EQ(store::load(v.fs, 1, r), true);
+    CHECK_COND(r.ph[0].secs + 2 >= s.rec().phase(0).ms / 1000u);
+    // the run's file stays one inline entry of the root pair: no data block, no split
+    CHECK_EQ(v.fs.used_blocks(), 2u);
+}
+
+// A cold boot mid-phase resumes the same phase from the last save: the totals within kSaveMs of the cut, the direction kept
+// (a same-port discharge counts the reverse current), the resume and the known gap stored.
+void test_service_cold_resume() {
+    Vol v;
+    Service::Checkpoint ck{};
+    std::uint64_t before = 0;
+    {
+        Service s;
+        s.boot(&v.fs, &ck, false);
+        s.start(Mode::Discharge, Wiring::SamePort, true);
+        serve(s, 0, 605'000, 5000, -1000);
+        before = s.rec().phase(0).uj_out;
+    }
+    Service s;
+    CHECK_EQ(int(s.boot(&v.fs, &ck, false)), int(Service::Boot::ResumedFlash));
+    CHECK_EQ(int(s.rec().state()), int(State::Measuring));
+    CHECK_EQ(s.rec().id(), 1);
+    CHECK_EQ(s.rec().resumes(), 1);
+    CHECK_EQ(s.rec().phase(0).gaps, 1);
+    const std::uint64_t got = s.rec().phase(0).uj_out;
+    CHECK_COND(got <= before && got + 5ull * (kSaveMs + 1000) * 1000 >= before);   // 5 W: at most a save interval lost
+    CHECK_EQ(s.rec().phase(0).uj_in, 0u);
+    std::uint32_t t = serve(s, 2500, 60'000, 5000, -1000);   // the first sample 2.5 s after the boot
+    CHECK_COND(s.rec().phase(0).uj_out > got + 5ull * 58'000 * 1000);
+    CHECK_EQ(s.rec().phase(0).uj_in, 0u);                     // the reverse current is still out of the bank
+    s.rec().finish();
+    serve(s, t, 1000, 5000, 0);
+    Record r;
+    CHECK_EQ(store::load(v.fs, 1, r), true);
+    CHECK_EQ(int(r.state), int(RunState::Done));
+    CHECK_EQ(int(r.ph[0].end), int(End::Manual));
+    CHECK_EQ(r.resumes, 1);
+    CHECK_EQ(r.gap_s, 2u);
+    // a finished run never resumes
+    Service c;
+    CHECK_EQ(int(c.boot(&v.fs, &ck, false)), int(Service::Boot::Nothing));
+    CHECK_EQ(int(c.rec().state()), int(State::Idle));
+}
+
+// Cut three times: each boot resumes, the resumes and the gaps add up, the totals only grow.
+void test_service_repeated_cold_boots() {
+    Vol v;
+    Service::Checkpoint ck{};
+    {
+        Service s;
+        s.boot(&v.fs, &ck, false);
+        s.start(Mode::Charge, Wiring::Moved, true);
+        serve(s, 0, 120'000, 9000, 2000);
+    }
+    std::uint64_t last = 0;
+    for (int i = 1; i <= 3; i++) {
+        Service s;
+        CHECK_EQ(int(s.boot(&v.fs, &ck, false)), int(Service::Boot::ResumedFlash));
+        CHECK_EQ(s.rec().resumes(), i);
+        CHECK_COND(s.rec().phase(0).uj_in > last);
+        last = s.rec().phase(0).uj_in;
+        serve(s, 1000, 65'000, 9000, 2000);
+    }
+    Service s;
+    s.boot(&v.fs, &ck, false);
+    CHECK_EQ(s.rec().resumes(), 4);
+    CHECK_EQ(s.rec().phase(0).gaps, 4);
+    Record r;
+    s.rec().to_record(r);
+    CHECK_EQ(r.gap_s, 3u);                                    // 1 s known per resume that sampled
+    CHECK_COND(r.ph[0].uwh_in > 9 * 2 * (120 + 3 * 55) * 1000 / 3600);
+}
+
+// A warm reset prefers the SRAM checkpoint (a second old at most) over the flash record (up to kSaveMs old).
+void test_service_warm_prefers_checkpoint() {
+    Vol v;
+    Service::Checkpoint ck{};
+    std::uint64_t live = 0;
+    {
+        Service s;
+        s.boot(&v.fs, &ck, false);
+        s.start(Mode::Charge, Wiring::SamePort, true);
+        serve(s, 0, 609'000, 5000, 1000);                     // the last save 9 s ago
+        live = s.rec().phase(0).uj_in;
+    }
+    Record r;
+    CHECK_EQ(store::load(v.fs, 1, r), true);
+    Service s;
+    CHECK_EQ(int(s.boot(&v.fs, &ck, true)), int(Service::Boot::ResumedRam));
+    CHECK_COND(s.rec().phase(0).uj_in + 5'000'000 >= live);   // within the checkpoint's second
+    CHECK_COND(s.rec().phase(0).uj_in > std::uint64_t(r.ph[0].uwh_in) * 3600u + 5'000'000);
+    CHECK_EQ(s.rec().resumes(), 1);
+}
+
+// The end rule restarts at the resume: an armed phase whose current stays off ends end_s after the boot, not at once, and its
+// time stops at the boot; a phase whose current never reached the threshold keeps waiting.
+void test_service_end_rule_after_resume() {
+    Vol v;
+    Service::Checkpoint ck{};
+    {
+        Service s;
+        s.boot(&v.fs, &ck, false);
+        s.start(Mode::Charge, Wiring::SamePort, true);
+        std::uint32_t t = serve(s, 0, 300'000, 5000, 1000);
+        serve(s, t, 50'000, 5000, 0);                         // quiet for 50 s, then the cut (the rule wanted 60)
+    }
+    {
+        Service s;
+        CHECK_EQ(int(s.boot(&v.fs, &ck, false)), int(Service::Boot::ResumedFlash));
+        std::uint32_t t = serve(s, 1000, 59'000, 5000, 0);
+        CHECK_EQ(int(s.rec().state()), int(State::Measuring));   // the 50 s before the cut do not count
+        t = serve(s, t, 3000, 5000, 0);
+        CHECK_EQ(int(s.rec().state()), int(State::Done));
+        CHECK_EQ(int(s.rec().phase(0).end), int(End::Auto));
+        serve(s, t, 1000, 5000, 0);
+        Record r;
+        CHECK_EQ(store::load(v.fs, 1, r), true);
+        CHECK_EQ(int(r.state), int(RunState::Done));
+    }
+    Vol w;
+    {
+        Service s;
+        s.boot(&w.fs, &ck, false);
+        s.start(Mode::Charge, Wiring::SamePort, true);
+        serve(s, 0, 60'000, 5000, 40);                         // under end_ma all along: never armed
+    }
+    Service s;
+    CHECK_EQ(int(s.boot(&w.fs, &ck, false)), int(Service::Boot::ResumedFlash));
+    serve(s, 1000, 300'000, 5000, 0);
+    CHECK_EQ(int(s.rec().state()), int(State::Measuring));
+}
+
+// A warm reset in a quiet stretch: the quiet timer ran on the old boot's clock, so it starts again (not an instant end that
+// would also cut the phase's time to the wrapped tail).
+void test_service_warm_quiet_restarts() {
+    Vol v;
+    Service::Checkpoint ck{};
+    {
+        Service s;
+        s.boot(&v.fs, &ck, false);
+        s.start(Mode::Charge, Wiring::SamePort, true);
+        std::uint32_t t = serve(s, 0, 300'000, 5000, 1000);
+        serve(s, t, 50'000, 5000, 0);
+    }
+    Service s;
+    CHECK_EQ(int(s.boot(&v.fs, &ck, true)), int(Service::Boot::ResumedRam));
+    std::uint32_t t = serve(s, 1000, 59'000, 5000, 0);
+    CHECK_EQ(int(s.rec().state()), int(State::Measuring));
+    serve(s, t, 3000, 5000, 0);
+    CHECK_EQ(int(s.rec().state()), int(State::Done));
+    CHECK_COND(s.rec().phase(0).ms >= 299'000);
+}
+
+// The wear an hour of progress saves costs on a volume like the device's (the settings files and two kept runs share the
+// root pair with the running one): the run's file stays inline (no block, no split); measured 90 erases of the pair (45 per
+// 2 KB block; block_cycles 500 moves the pair after ~11 h) and 446 B programmed per save.
+void test_service_hour_of_saves_wear() {
+    k2test::RamDisk disk{111};
+    k2::fs::Fs fs{disk, 111};
+    bool fm = false;
+    fs.mount_or_format(fm);
+    const std::uint8_t cfg[10] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
+    for (const char *p : {"/usb.cfg", "/cable.cfg", "/prefs.cfg"}) fs.write_file(p, {cfg, 8});
+    fs.write_file("/rd.rec", cfg);
+    fs.write_file("/.legacy", {cfg, 1});
+    for (std::uint16_t id = 1; id <= 2; id++) store::save(fs, done_record(id));
+    const std::uint32_t used = fs.used_blocks();
+    Service::Checkpoint ck{};
+    Service s;
+    s.boot(&fs, &ck, false);
+    s.start(Mode::Discharge, Wiring::SamePort, true);
+    disk.reset_counters();
+    serve(s, 0, 3'600'000, 5000, -2000);
+    const std::uint64_t saves = 3'600'000 / kSaveMs;
+    std::printf("battery saves: %llu/h, %llu erases/h, %llu B programmed/save, %.0f ms flash time/h\n",
+                (unsigned long long)saves, (unsigned long long)disk.erases, (unsigned long long)(disk.halfwords * 2 / saves),
+                disk.cost_ms());
+    CHECK_COND(disk.erases <= 100);
+    CHECK_COND(disk.halfwords * 2 / saves <= 480);
+    CHECK_EQ(fs.used_blocks(), used);
+}
+
+// What cannot resume falls back to the old rule: a record that does not decode is no run; a version 1 measuring record (no
+// direction, no end rule state) is closed Lost.
+void test_service_unreadable_progress() {
+    Vol v;
+    Service::Checkpoint ck{};
+    {
+        Service s;
+        s.boot(&v.fs, &ck, false);
+        s.start(Mode::Charge, Wiring::SamePort, true);
+        serve(s, 0, 60'000, 5000, 1000);
+    }
+    std::uint8_t b[kRecordBytes];
+    std::size_t n = 0;
+    CHECK_EQ(int(v.fs.read_file("/bt1.rec", b, n)), int(k2::fs::Err::Ok));
+    b[30] ^= 0x40;
+    CHECK_EQ(int(v.fs.write_file("/bt1.rec", {b, n})), int(k2::fs::Err::Ok));
+    {
+        Service s;
+        CHECK_EQ(int(s.boot(&v.fs, &ck, false)), int(Service::Boot::Nothing));
+        CHECK_EQ(int(s.rec().state()), int(State::Idle));
+    }
+    Record old = done_record(2);
+    old.state = RunState::Measuring;
+    old.ph[0].end = End::Running;
+    const auto v1 = v1_bytes(old);
+    CHECK_EQ(int(v.fs.write_file("/bt2.rec", v1)), int(k2::fs::Err::Ok));
+    Service s;
+    CHECK_EQ(int(s.boot(&v.fs, &ck, false)), int(Service::Boot::Lost));
+    CHECK_EQ(int(s.rec().state()), int(State::Done));
+    CHECK_EQ(int(s.rec().phase(0).end), int(End::Lost));
 }
 
 // ---- the remote protocol (Cmd::Battery) -----------------------------------------------------------------------------------
@@ -795,7 +1099,7 @@ void test_service_empty_run_not_saved() {
     old.state = RunState::Measuring;
     old.phases = 1;
     old.id = 60;
-    CHECK_EQ(store::save(v.fs, old), true);
+    CHECK_EQ(int(v.fs.write_file("/bt60.rec", v1_bytes(old))), int(k2::fs::Err::Ok));
     Service b;
     CHECK_EQ(int(b.boot(&v.fs, &ck, false)), int(Service::Boot::Lost));
     serve(b, 0, 1000, 0, 0);
@@ -825,6 +1129,7 @@ int main() {
     test_curve_decimation();
     test_curve_pack();
     test_record_round_trip();
+    test_record_v2_resume_fields();
     test_ratio();
     test_store_list_prune();
     test_service_writes_at_boundaries();
@@ -835,6 +1140,14 @@ int main() {
     test_service_cold_between_negative();
     test_service_empty_run_not_saved();
     test_service_no_volume();
+    test_service_save_cadence();
+    test_service_cold_resume();
+    test_service_repeated_cold_boots();
+    test_service_warm_prefers_checkpoint();
+    test_service_end_rule_after_resume();
+    test_service_warm_quiet_restarts();
+    test_service_hour_of_saves_wear();
+    test_service_unreadable_progress();
     test_wire();
     return test_report("test_battery");
 }

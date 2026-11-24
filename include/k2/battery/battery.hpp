@@ -50,6 +50,7 @@ inline constexpr std::int32_t kDeadbandMa = 20;        // idle noise: |I| below 
 inline constexpr std::uint32_t kGapMs = 5000;          // a step longer than this is a gap, not integrated
 inline constexpr std::uint32_t kStartHoldMs = 5000;    // a round trip's discharge starts after this much outflow
 inline constexpr std::int32_t kVbusGoneMv = 1000;      // moved wiring: VBUS under this = the bank was unplugged
+inline constexpr std::uint32_t kSaveMs = 10'000;       // a measuring phase's record goes to flash this often (cold resume)
 
 constexpr std::int32_t deadband(std::int32_t ma) { return ma > -kDeadbandMa && ma < kDeadbandMa ? 0 : ma; }
 
@@ -91,15 +92,19 @@ struct Phase {
     bool in_rev = false;                  // the bank's "in" is the reverse current (learned from the flow, see Recorder::step)
 };
 
-// ---- the stored record (flash file, remote read, QR share): 246 bytes, little endian ------------------------------------
-//   0  'B' 'R'   2 version   3 mode | wiring << 4   4 state (0 measuring, 1 between, 2 done)
+// ---- the stored record (flash file, remote read, QR share): 250 bytes, little endian ------------------------------------
+//   0  'B' 'R'   2 version   3 mode | wiring << 4   4 state (0 measuring, 1 between, 2 done) | armed << 7
 //   5  phases (bits 0..1) | resumes << 2   6 id u16   8 end_ma u16   10 end_s u16   12 interval_s u16   14 points   15 split
-//   16 phase 0, 40 phase 1 (24 bytes each): kind, end, gaps u16, seconds u32, uWh in u32, uWh out u32, uAh in u32, uAh out u32
-//   64 points (Curve::kPoints x 3)   244 CRC-16/CCITT of bytes 0..243
-inline constexpr std::uint8_t kRecordVersion = 1;
+//   16 phase 0, 40 phase 1 (24 bytes each): kind | in_rev << 7, end, gaps u16, seconds u32, uWh in u32, uWh out u32,
+//      uAh in u32, uAh out u32
+//   64 points (Curve::kPoints x 3)   244 gap seconds u32   248 CRC-16/CCITT of bytes 0..247
+// Version 1 (246 bytes) had no flag bits and no gap seconds (its CRC at 244); it still reads, and its measuring phase does not
+// resume (no direction, no end rule state).
+inline constexpr std::uint8_t kRecordVersion = 2;
 inline constexpr std::size_t kPhaseBytes = 24, kHeadBytes = 64;
-inline constexpr std::size_t kRecordBytes = kHeadBytes + Curve::kPoints * 3 + 2;
-static_assert(kRecordBytes == 246);
+inline constexpr std::size_t kRecordBytesV1 = kHeadBytes + Curve::kPoints * 3 + 2;
+inline constexpr std::size_t kRecordBytes = kRecordBytesV1 + 4;
+static_assert(kRecordBytes == 250);
 
 enum class RunState : std::uint8_t { Measuring, Between, Done };
 struct PhaseRec {
@@ -107,8 +112,12 @@ struct PhaseRec {
     End end = End::Running;
     std::uint16_t gaps = 0;
     std::uint32_t secs = 0, uwh_in = 0, uwh_out = 0, uah_in = 0, uah_out = 0;
+    bool in_rev = false;          // Phase::in_rev
 };
 struct Record {
+    std::uint8_t version = kRecordVersion;   // as read (decode); encode always writes kRecordVersion
+    bool armed = false;           // measuring: the end rule is armed (the current has reached the threshold)
+    std::uint32_t gap_s = 0;      // time the resumes are known to have lost (a lower bound: the K2 keeps no clock while off)
     Mode mode = Mode::Charge;
     Wiring wiring = Wiring::SamePort;
     RunState state = RunState::Done;
@@ -157,6 +166,7 @@ public:
     int current() const { return phases_ ? phases_ - 1 : 0; }   // the phase measuring now, or the last one
     const Phase &phase(int i) const { return ph_[i < 0 ? 0 : i > 1 ? 1 : i]; }
     std::uint8_t resumes() const { return resumes_; }
+    std::uint32_t gap_s() const { return gap_ms_ / 1000u; }   // Record::gap_s
     const Curve &curve() const { return curve_; }
     // The flash record is out of date (a start, a phase boundary, the end): the glue writes it when it may.
     bool dirty() const { return dirty_; }
@@ -165,8 +175,9 @@ public:
 
     void to_record(Record &r) const;
     // A run read back from flash at boot. Between resumes as Between (moved wiring: the swap counts as seen, a power cut is
-    // what moving the bank usually is); Measuring cannot resume (its totals since the last write are gone): the phase is
-    // marked Lost and the run is Done, dirty. Done stays Done. False for a record that is not a run.
+    // what moving the bank usually is). Measuring resumes the same phase from its last save (one resume and one gap
+    // counted, the end rule's quiet timer restarted); a version 1 record cannot (no direction, no end rule state): the phase
+    // is marked Lost and the run is Done, dirty. Done stays Done. False for a record that is not a run.
     bool restore(const Record &r);
     // A warm reset kept this object in SRAM: the run goes on; the reset gap is not integrated (one gap counted).
     void resumed();
@@ -187,7 +198,9 @@ private:
     bool primed_ = false;
     bool armed_ = false;          // measuring: |I| reached the threshold; between: the swap was seen
     bool quiet_ = false;          // measuring: |I| is under the threshold since quiet_ms_; between: outflow since quiet_ms_
+    bool resync_ = false;         // resumed: the first sample adds its time since boot to gap_ms_ (the part of the gap known)
     std::uint32_t last_ms_ = 0, quiet_ms_ = 0;
+    std::uint32_t gap_ms_ = 0;
     std::int32_t last_mv_ = 0, last_ma_ = 0;
     std::array<Phase, 2> ph_{};
     Curve curve_{};
@@ -212,8 +225,9 @@ std::uint16_t next_id(fs::Fs &f);
 }  // namespace store
 
 // ---- the service: the recorder, its record on flash and its SRAM checkpoint ----------------------------------------------
-// Flash writes only at a phase boundary (start, end, the discharge's start, the finish) and only when the caller allows them
-// (no charger test or PD Stress run, which own the flash while they run): never in the middle of a measuring phase.
+// Flash writes at a phase boundary (the end, the discharge's start, the finish) and every kSaveMs while a phase measures
+// (once it holds energy), each an in-place rewrite of the run's inline file, and only when the caller allows them (no
+// charger test or PD Stress run, which own the flash while they run; a refused save goes out at the next allowed poll).
 class Service {
 public:
     // The checkpoint a warm reset keeps (SRAM outside .bss): the recorder with a magic and a CRC-16 of its bytes.
@@ -226,7 +240,7 @@ public:
     static constexpr std::uint32_t kMagic = 0x42415431;   // "1TAB"
 
     // Boot: the newest run on the volume and, after a warm reset, the checkpoint. Returns what happened (for the log).
-    enum class Boot : std::uint8_t { Nothing, ResumedRam, ResumedBetween, Lost, Closed };
+    enum class Boot : std::uint8_t { Nothing, ResumedRam, ResumedBetween, Lost, Closed, ResumedFlash };
     Boot boot(fs::Fs *f, Checkpoint *ckpt, bool warm);
     // Every main-loop pass: the latest sample (online false = no monitor), the deferred write when `may_write`, and the
     // checkpoint once a second.
@@ -250,7 +264,8 @@ private:
     Recorder rec_{};
     Config cfg_{};
     Wiring wiring_ = Wiring::SamePort;
-    std::uint32_t ckpt_ms_ = 0, retry_ms_ = 0;
+    std::uint32_t ckpt_ms_ = 0, retry_ms_ = 0, save_ms_ = 0;
+    bool save_set_ = false;       // save_ms_ holds the next progress save of the measuring phase
     bool failed_ = false;
     bool may_write_ = true;       // the last poll's permission: a start flushes an unwritten earlier run only when allowed
     State ckpt_state_ = State::Idle;   // the run's state the checkpoint holds: a change is checkpointed at the next poll
