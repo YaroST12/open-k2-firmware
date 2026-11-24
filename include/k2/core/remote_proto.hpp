@@ -1583,7 +1583,8 @@ struct AppleReadInfo {
 struct AppleReadResult { Status status = Status::Ok; uint8_t refusal = 0; AppleReadInfo info{}; };   // refusal: pd::AppleRefusal as the one-byte payload
 
 // PD limiter (Cmd::PdLimit). The view points at the driver's own status (never copied).
-constexpr uint8_t kLimitStatus = 0, kLimitArm = 1, kLimitOff = 2;
+constexpr uint8_t kLimitStatus = 0, kLimitArm = 1, kLimitOff = 2, kLimitArmCfg = 3;
+constexpr size_t kLimitCfgBytes = 1 + pd::kLimPackBytes;   // op, then pd::lim_pack's form
 constexpr size_t kLimitRspBytes = 20 + 4 * 7;   // 7 bytes of state, limit / request mW and RDO as u32, then seven forged PDO slots
 static_assert(kLimitRspBytes <= kMaxRspPayload);
 struct LimitView { Status status = Status::Ok; uint8_t refusal = 0; const pd::LimStatus* s = nullptr; };
@@ -1797,7 +1798,7 @@ concept Backend = requires(B &b, uint8_t u8, uint16_t u16, bool on) {
     { b.ripple_info() } -> std::same_as<RippleInfo>;
     { b.identify_device(u8) } -> std::same_as<IdentifyResult>;
     { b.reread(u8, u8) } -> std::same_as<RereadResult>;   // op (0 status, 1 start, 2 abort), step mask
-    { b.pd_limit(u8, uint32_t{}) } -> std::same_as<LimitView>;   // op 0 status, 1 arm (limit_mw), 2 off
+    { b.pd_limit(u8, std::declval<const pd::LimConfig &>()) } -> std::same_as<LimitView>;   // op 0 status, 1/3 arm, 2 off
     { b.apple_read(u8) } -> std::same_as<AppleReadResult>;   // lab-only: op 0 status, 1 arm + re-request the current contract
 #if K2_OPPO_PROBE
     { b.oppo_probe(u8, std::declval<const pd::oppo::Config &>()) } -> std::same_as<OppoView>;   // lab-only: op 0 status, 1 start, 2 stop
@@ -2215,11 +2216,18 @@ template <Backend B>
     case Cmd::PdLimit: {
         if (p.empty()) return reply_bad_len(f);
         const uint8_t op = p[0];
-        if (op > kLimitOff) return reply_bad_arg(f);
-        if (p.size() != (op == kLimitArm ? 5u : 1u)) return reply_bad_len(f);
-        const uint32_t mw = op == kLimitArm ? rd32(&p[1]) : uint32_t{0};
-        if (op == kLimitArm && (mw < pd::kLimMinMw || mw > pd::kLimMaxMw)) return reply_bad_arg(f);
-        const LimitView v = backend.pd_limit(op, mw);
+        if (op > kLimitArmCfg) return reply_bad_arg(f);
+        const size_t want_len = op == kLimitArm ? 5u : op == kLimitArmCfg ? kLimitCfgBytes : 1u;
+        if (p.size() != want_len) return reply_bad_len(f);
+        pd::LimConfig cfg{};
+        if (op == kLimitArm) {
+            const uint32_t mw = rd32(&p[1]);
+            if (mw < pd::kLimMinMw || mw > pd::kLimMaxMw) return reply_bad_arg(f);
+            cfg = pd::lim_config_watts(mw);
+        } else if (op == kLimitArmCfg && !pd::lim_unpack(p.subspan(1).first<pd::kLimPackBytes>(), cfg)) {
+            return reply_bad_arg(f);
+        }
+        const LimitView v = backend.pd_limit(op, cfg);
         if (v.status != Status::Ok) return reply_byte(f, v.status, v.refusal);
         return reply_ok(f, encode_pd_limit(f.span(), v));
     }

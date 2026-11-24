@@ -70,9 +70,14 @@ struct StubState {
     k2::pd::LimStatus lim{};
     k2::pd::LimRefusal lim_refusal = k2::pd::LimRefusal::None;
     uint32_t lim_arm_mw = 0;
+    k2::pd::LimConfig lim_arm_cfg{};
     int lim_arms = 0, lim_offs = 0;
     bool lim_arm_seeded = true;          // the last arm's seed flag
     int lim_arm_resets = 0;              // hard_resets when the last arm was made (proves reset-then-arm)
+    bool lim_comeback_save_fail = false;
+    bool lim_comeback_present = false;
+    int lim_comeback_saves = 0, lim_comeback_clears = 0, lim_comeback_consumes = 0;
+    k2::pd::LimConfig lim_comeback_cfg{};
     bool far_sink = false;               // fusb302::far_sink_seen(): a far sink's Request this attach
     bool listen_on = false;                // fusb302::listen_active()
     k2::pd::Emarker em{};

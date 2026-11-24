@@ -615,7 +615,7 @@ static void test_stale_home_has_no_limit_suffix() {
     g_stub.pm.vbus_mv = 0;
     run(ui, 20);
     const int plain = ink_logical(ui, 52, 201, 128, 16, kStale);
-    g_stub.lim.state = pd::LimState::Limited; g_stub.lim.limit_mw = 27000;
+    g_stub.lim.state = pd::LimState::Limited; g_stub.lim.limit_mw = 27000; g_stub.lim.cfg = pd::lim_config_watts(27000);
     run(ui, 10);
     CHECK_EQ(ink_logical(ui, 52, 201, 128, 16, kStale), plain);
     CHECK_EQ(ink_logical(ui, 52, 201, 128, 16, kText), 0);
@@ -1002,7 +1002,7 @@ static void test_limit_suffix_on_the_protocol_row() {
     run(ui, 40);
     const int plain = ink_logical(ui, 52, 201, 128, 16, kText);
     CHECK_TRUE(plain > 0);
-    g_stub.lim.state = pd::LimState::Armed; g_stub.lim.limit_mw = 27000;
+    g_stub.lim.state = pd::LimState::Armed; g_stub.lim.limit_mw = 27000; g_stub.lim.cfg = pd::lim_config_watts(27000);
     run(ui, 10);
     dump("2c", "lim_armed");
     CHECK_TRUE(ink_logical(ui, 52, 201, 128, 16, kText) > plain + 40);   // "lim27W" added

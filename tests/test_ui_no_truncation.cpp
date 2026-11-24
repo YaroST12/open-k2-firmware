@@ -487,7 +487,7 @@ void walk_wizard(Ui &ui, int rot, const Scenario &sc) {
 void walk_limit(Ui &ui, int rot, const Scenario &sc) {
     auto press = [&](Button b) { g_t += 150; ui.on_button(b, ButtonEvent::Short, g_t); ui.tick(g_t + 50); g_t += 50; };
     g_stub.lim = {};
-    g_stub.lim.state = pd::LimState::Armed; g_stub.lim.limit_mw = 100000;
+    g_stub.lim.state = pd::LimState::Armed; g_stub.lim.limit_mw = 100000; g_stub.lim.cfg = pd::lim_config_watts(100000);
     ui.goto_page(static_cast<uint8_t>(Page::Home), g_t);
     draw_for_a_while(ui, "limit-home", rot, sc.name);
     ui.goto_page(static_cast<uint8_t>(Page::Lines), g_t);
@@ -497,7 +497,24 @@ void walk_limit(Ui &ui, int rot, const Scenario &sc) {
     draw_for_a_while(ui, "limit-tools-row", rot, sc.name);
     press(Button::Ok);
     draw_for_a_while(ui, "limit-picker", rot, sc.name);
-    for (int i = 0; i < static_cast<int>(pd::kLimMaxPicks) + 1; ++i) { press(Button::Plus); draw_for_a_while(ui, "limit-picker", rot, sc.name); }
+    for (int i = 0; i < 6; ++i) { press(Button::Plus); draw_for_a_while(ui, "limit-picker", rot, sc.name); }
+    press(Button::Back);
+    // Open Fixed editor and step into adjust mode for V/A rows
+    press(Button::Ok);
+    press(Button::Plus);   // Fixed row
+    press(Button::Ok);     // EditFixed
+    draw_for_a_while(ui, "limit-fixed", rot, sc.name);
+    press(Button::Plus);   // Max V
+    press(Button::Ok);     // adjust V
+    press(Button::Minus);
+    draw_for_a_while(ui, "limit-fixed-v", rot, sc.name);
+    press(Button::Back);
+    press(Button::Plus);   // Max A
+    press(Button::Ok);     // adjust A
+    press(Button::Minus);
+    draw_for_a_while(ui, "limit-fixed-a", rot, sc.name);
+    press(Button::Back);
+    press(Button::Back);
     press(Button::Back);
     ui.goto_page(static_cast<uint8_t>(Page::Home), g_t);
     press(Button::Back);   // Home -> the ring view; Plus walks to LINK, OK enters it

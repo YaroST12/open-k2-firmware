@@ -570,7 +570,7 @@ int main() {
     // the LINK chip and the Home protocol suffix. Frames: pdlimit_*.
     {
         fixture();
-        g_stub.lim.state = pd::LimState::Armed; g_stub.lim.limit_mw = 27000;
+        g_stub.lim.state = pd::LimState::Armed; g_stub.lim.limit_mw = 27000; g_stub.lim.cfg = pd::lim_config_watts(27000);
         static Ui pl;
         pl.init(0);
         pl.configure_rotation(false, rot_pages());

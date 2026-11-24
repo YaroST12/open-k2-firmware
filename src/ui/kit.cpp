@@ -476,7 +476,7 @@ bool ActionCell::draw_ticket(uint32_t tag, std::string_view head, std::string_vi
     });
 }
 
-bool ActionCell::draw_idle(std::string_view verb, std::string_view hint, PaintBudget *bg, bool focused) {
+[[gnu::noinline]] bool ActionCell::draw_idle(std::string_view verb, std::string_view hint, PaintBudget *bg, bool focused) {
     return draw_ticket(focused ? 0 : 2, verb, hint,
                        focused ? kTicket : kBg, focused ? kOnTicket : kInk2, focused ? kTicketFrame : kRule, false, bg);
 }
@@ -612,7 +612,7 @@ void draw_result_row(const Surface &s, int16_t y, int16_t h, std::string_view ro
     }
 }
 
-void ResultGrid::init(const Surface &s, int16_t y, int16_t bottom, RowFn fn, void *ctx) {
+[[gnu::noinline]] void ResultGrid::init(const Surface &s, int16_t y, int16_t bottom, RowFn fn, void *ctx) {
     if (ctx != ctx_) first_ = 0;
     surf_ = s; y_ = y; bottom_ = bottom; fn_ = fn; ctx_ = ctx;
     dot_on_ = false;   // a fresh bind: whatever was on screen is the caller's to clear

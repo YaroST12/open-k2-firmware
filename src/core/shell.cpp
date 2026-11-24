@@ -365,7 +365,7 @@ void Shell::execute(std::string_view line) {
     err(b_, "unknown command (help)");
 }
 
-void Shell::feed(char c) {
+[[gnu::noinline]] void Shell::feed(char c) {
     const bool after_cr = last_cr_;
     last_cr_ = c == '\r';
     if (c == '\n' && after_cr) return;   // second half of CR LF

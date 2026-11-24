@@ -650,11 +650,12 @@ remote::AppleReadResult Remote::apple_read(uint8_t op) {
     return r;
 }
 
-// PD limiter: arm / off / status. RAM only; the refusal is the pd::LimRefusal, BadArg for the limit, Busy for the rest.
-remote::LimitView Remote::pd_limit(uint8_t op, uint32_t limit_mw) {
+// PD limiter: arm / off / status. RAM only (short-lived comeback record if UI resets bus-powered);
+// refusal is pd::LimRefusal, BadArg for invalid config, Busy for port owner.
+remote::LimitView Remote::pd_limit(uint8_t op, const pd::LimConfig &cfg) {
     remote::LimitView v;
-    if (op == remote::kLimitArm) {
-        const pd::LimRefusal why = ui_.pd_limit_arm(limit_mw);
+    if (op == remote::kLimitArm || op == remote::kLimitArmCfg) {
+        const pd::LimRefusal why = ui_.pd_limit_arm(cfg);
         if (why != pd::LimRefusal::None) {
             v.status = why == pd::LimRefusal::BadLimit ? remote::Status::BadArg : remote::Status::Busy;
             v.refusal = static_cast<uint8_t>(why);

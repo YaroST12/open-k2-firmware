@@ -841,7 +841,11 @@ void HomePage::paint_info(const Frame &f) {
     else hm::format_proto(f.proto, pt);
     if (m == hm::Mode::Live) {
         const pd::LimStatus &ls = fusb302::limit_status();
-        if (ls.state != pd::LimState::Off) hm::format_limit(pt, f.proto.kind, pd::lim_watts(ls.limit_mw));
+        if (ls.state != pd::LimState::Off) {
+            char lb[pd::kLimLabelMax + 1]{};
+            const std::size_t ln = pd::lim_label(ls.cfg, lb);
+            hm::format_limit(pt, f.proto.kind, std::string_view{lb, ln});
+        }
     }
     const bool known = (live || stale) && f.proto.kind != hm::ProtoKind::None;
     const uint16_t tcol = known ? kDim : kFaint;

@@ -98,7 +98,7 @@ void each_record(std::span<const std::uint8_t> rec, F f) {
 
 constexpr std::uint16_t rd16(const std::uint8_t* p) { return std::uint16_t(p[0] | p[1] << 8); }
 
-void put(std::span<char> out, std::size_t& n, char c) {
+[[gnu::noinline]] void put(std::span<char> out, std::size_t& n, char c) {
     if (n < out.size()) out[n++] = c;
 }
 void put_num(std::span<char> out, std::size_t& n, std::uint32_t v) {
