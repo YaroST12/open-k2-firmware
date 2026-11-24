@@ -169,12 +169,12 @@ std::vector<int> hunt_moves(pd::RxHunt& h, std::uint32_t t0, std::uint32_t span_
     return at;
 }
 
-void test_hunt_above_5v_alternates_300_1000_3000_then_every_11_s() {
+void test_hunt_above_5v_alternates_1000_1000_3000_then_every_11_s() {
     pd::RxHunt h;
     const auto at = hunt_moves(h, 5000, 40000, 9000);
-    CHECK_EQ(at.size() >= 6, true);
-    if (at.size() < 6) return;
-    CHECK_EQ(at[0] >= 300 && at[0] <= 340, true);
+    CHECK_EQ(at.size() >= 5, true);
+    if (at.size() < 5) return;
+    CHECK_EQ(at[0] >= 1000 && at[0] <= 1040, true);
     CHECK_EQ(at[1] - at[0] >= 1000 && at[1] - at[0] <= 1040, true);
     CHECK_EQ(at[2] - at[1] >= 3000 && at[2] - at[1] <= 3040, true);
     CHECK_EQ(at[3] - at[2] >= 11000 && at[3] - at[2] <= 11040, true);
@@ -197,15 +197,16 @@ void test_hunt_never_moves_a_heard_line_or_without_vbus_or_when_not_passive() {
 
 void test_hunt_stops_once_the_new_line_hears() {
     pd::RxHunt h;
-    CHECK_EQ(int(hunt_moves(h, 0, 400, 9000).size()), 1);
-    CHECK_EQ(int(hunt_moves(h, 400, 30000, 9000, true).size()), 0);
+    CHECK_EQ(int(hunt_moves(h, 0, 1100, 9000).size()), 1);
+    CHECK_EQ(int(hunt_moves(h, 1100, 100, 9000, true).size()), 0);
+    CHECK_EQ(int(hunt_moves(h, 1200, 30000, 9000).size()), 0);   // heard once: a later silence (or a unit reset) keeps the line
     CHECK_EQ(int(h.moves()), 1);
     h.reset();   // a detach: the next attach hunts from the start
     CHECK_EQ(int(h.moves()), 0);
 }
 
 int main() {
-    test_hunt_above_5v_alternates_300_1000_3000_then_every_11_s();
+    test_hunt_above_5v_alternates_1000_1000_3000_then_every_11_s();
     test_hunt_at_5v_stops_after_four_moves();
     test_hunt_never_moves_a_heard_line_or_without_vbus_or_when_not_passive();
     test_hunt_stops_once_the_new_line_hears();

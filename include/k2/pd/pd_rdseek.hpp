@@ -183,7 +183,9 @@ private:
 // or the board's CC2 bias net on the unused one); nothing tested the pick against BMC. So while the K2 presents nothing of its
 // own, VBUS is up and no frame has decoded on the line for the dwell, the receiver (MEAS_CC only) tries the other line. Above
 // vSafe5V a contract was made, so traffic will come (a PPS sink asks every <= 10 s): it keeps alternating; at 5 V it stops.
-inline constexpr std::uint32_t kRxHuntDwellMs[4] = {300, 1000, 3000, 11000};   // the last one repeats
+// The first dwell outlasts a correct line's first frame (tFirstSourceCap 250 ms after vSafe5V, slow chargers later): the hunt must
+// never pull a right pick off before the caps arrive.
+inline constexpr std::uint32_t kRxHuntDwellMs[4] = {1000, 1000, 3000, 11000};   // the last one repeats
 inline constexpr std::uint8_t kRxHuntMoves5V = 4;
 inline constexpr std::int32_t kRxHuntVbusMv = 4400, kRxHuntContractMv = 5500;
 inline constexpr std::int32_t kRxHuntDeadMv = 200;   // the other net known below this: no Rp there, so no BMC either
@@ -195,7 +197,8 @@ public:
     // `heard`: a PD frame decoded on this line since the attach. `other_mv`: the ADC level of the other net, -1 unknown.
     // Returns true once when the receiver should move to the other line.
     bool update(std::uint32_t now, bool eligible, bool heard, std::int32_t vbus_mv, std::int32_t other_mv) {
-        if (!eligible || heard || vbus_mv < kRxHuntVbusMv) { armed_ = false; return false; }
+        if (heard) done_ = true;   // latched: a unit reset that clears the driver's traffic flag does not restart the hunt
+        if (!eligible || done_ || vbus_mv < kRxHuntVbusMv) { armed_ = false; return false; }
         if (!armed_) { armed_ = true; since_ = now; return false; }
         if (now - since_ < kRxHuntDwellMs[moves_ < 3 ? moves_ : 3]) return false;
         if (vbus_mv < kRxHuntContractMv && moves_ >= kRxHuntMoves5V) return false;
@@ -207,6 +210,7 @@ public:
     std::uint8_t moves() const { return moves_; }
 private:
     bool armed_ = false;
+    bool done_ = false;      // a frame decoded on the line in this attach
     std::uint8_t moves_ = 0;
     std::uint32_t since_ = 0;
 };

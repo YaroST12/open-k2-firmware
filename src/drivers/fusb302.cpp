@@ -646,6 +646,7 @@ void apply_cc_choice(const pd::CcChoice& c, bool pinned, std::uint8_t rd_both, b
     if (!seek_move) {
         rdseek().reset(g_idle_wake.enabled());   // setting off: the open readings go with the attach, as before the idle wake
         g_linefb.reset();                        // a fresh attach: the direct-plug schedule starts again (a fallback move keeps it)
+        g_rxhunt.reset();
         g_seek_passive = !pinned && (rd_both & (kPdwn1 | kPdwn2)) == 0;   // no Rd on any line while the scan read: the pick is unverified
     }
     if (pinned || seek_move) apply_rd();   // the pinned Rd follows the active line (pd::rd_lines)
@@ -854,7 +855,7 @@ void line_fallback_move() {
 // (its Rd, VCONN or Auto-CRC) or the line is someone's (a pin, a forced line, the Ra mode, the loop host).
 bool rx_hunt_eligible() {
     return (g_sw0 & (kPdwn1 | kPdwn2 | kVconnCc1 | kVconnCc2)) == 0 && !g_crc_on && g_pin_rd == 0 && g_force_cc == 0 && !g_ra &&
-           !g_lh;
+           !g_lh && !g_run_owner && !g_listen.running();
 }
 void rx_hunt_move() {
     const std::uint8_t to = g_active_cc == 1 ? 2 : 1;
