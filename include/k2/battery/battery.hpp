@@ -4,11 +4,11 @@
 // phase by phase, from the power monitor's samples. No hardware: the K2 glue is k2/battery/battery_hw.hpp, the host tests drive
 // the same classes with made-up samples.
 //
-// Sign. The samples carry the driver's convention (k2/drivers/power_calc.hpp): positive current = forward = input port to
-// output port. A phase maps the two directions to the bank's: "in" = energy into the bank, "out" = energy out of it.
-//   same port: the bank stays on the output side, so forward = in and reverse = out in every phase;
-//   moved:     the bank sits on the output side while it charges (forward = in) and on the input side, feeding a load on the
-//              output, while it discharges (forward = out).
+// Sign. The samples carry the driver's convention (k2/drivers/power_calc.hpp): positive current = bottom port to top port,
+// which says nothing about the port the bank is on. A phase maps the two directions to the bank's: the one that carried more
+// energy is the phase's own ("in" for a charge, "out" for a discharge). The wiring gives a round trip's outflow direction:
+//   same port: the bank stays put and feeds a load on the charger's port: the charge's opposite direction;
+//   moved:     the bank moves to the charger's port and feeds a load on the other: the charge's direction.
 // Integration. Trapezoid over the real time between two samples (mW x ms = uJ, mA x ms = uC); a step whose current changes
 // sign is split at the zero crossing, so the two directions never cancel. |I| under kDeadbandMa counts as 0. A step longer
 // than kGapMs (a stalled loop, a reset) is not integrated, only counted in the phase's `gaps`.
@@ -88,6 +88,7 @@ struct Phase {
     std::uint16_t gaps = 0;
     std::uint32_t ms = 0;                 // measured time (the quiet tail of an auto end taken off)
     std::uint64_t uj_in = 0, uj_out = 0, uc_in = 0, uc_out = 0;
+    bool in_rev = false;                  // the bank's "in" is the reverse current (learned from the flow, see Recorder::step)
 };
 
 // ---- the stored record (flash file, remote read, QR share): 246 bytes, little endian ------------------------------------
@@ -170,7 +171,6 @@ private:
     void begin_phase(Kind k);
     void close_phase(End e, std::uint32_t tail_ms);
     void step(std::uint32_t dt, std::int32_t mv, std::int32_t ma, Phase &p);
-    bool in_is_forward(Kind k) const { return !(wiring_ == Wiring::Moved && k == Kind::Discharge); }
     std::int32_t out_ma(std::int32_t ma) const;   // the current out of the bank in the discharge (positive = out)
 
     Mode mode_ = Mode::Charge;

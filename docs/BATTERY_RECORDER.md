@@ -21,17 +21,22 @@ Battery page of the ring (page 9).
 | Discharge | one discharge phase |
 | Round trip | a charge, a wait, then a discharge; the efficiency is Wh out / Wh in |
 
-The wiring says where the bank sits, and so which direction of the current is "in" and which is "out":
+A charge counts energy into the bank ("in"), a discharge energy out of it ("out"), whichever port the bank is on. The wiring
+only says which way the bank's outflow runs relative to its charge, which a round trip needs to see its discharge start:
 
 | Wiring | Charge (bank takes energy) | Discharge (bank gives energy) |
 | :--- | :--- | :--- |
-| Same port | charger on the input, bank on the output: forward = in | the bank stays on the output and feeds a load on the input: reverse = out |
-| Moved | charger on the input, bank on the output: forward = in | the bank moves to the input and feeds a load on the output: forward = out |
+| Same port | charger on one port, bank on the other | the bank stays put and feeds a load on the charger's port: the charge's opposite direction |
+| Moved | charger on one port, bank on the other | the bank moves to the charger's port and feeds a load on the other: the charge's direction |
 
 ## Sign convention, integration and dead-band
 
-- The samples keep the power monitor's sign: positive current = forward = input port to output port
-  (`k2/drivers/power_calc.hpp`). The record's curve keeps that sign; only the totals are mapped to the bank's in and out.
+- The samples keep the power monitor's sign: positive current = bottom port to top port (`k2/drivers/power_calc.hpp`,
+  `direction` "up"). The record's curve keeps that sign; only the totals are mapped to the bank's in and out.
+- The sign does not say which port the bank is on, so each phase takes the direction that carried more energy as its own:
+  in for a charge, out for a discharge (the two columns swap, Wh and mAh together, when the other direction overtakes). A
+  round trip's discharge waits for the outflow in the direction the charge and the wiring give (after a cold boot, the
+  charge's direction comes from the sign of its curve).
 - Every main-loop pass takes the latest sample (`power::read_raw()`, the monitor's 10 mA dead band already applied) and
   integrates the step since the previous one: trapezoid over the real time (mW x ms = uJ, mA x ms = uC). A step whose
   current changes sign is split at the zero crossing, so the two directions never cancel.

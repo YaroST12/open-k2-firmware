@@ -3,6 +3,8 @@
 // Battery efficiency recorder, pure logic: see k2/battery/battery.hpp.
 #include "k2/battery/battery.hpp"
 
+#include <utility>
+
 #include "k2/core/ringlog.hpp"
 
 namespace k2::battery {
@@ -125,6 +127,18 @@ void Curve::add(std::uint32_t dt_ms, std::int32_t mv, std::int32_t ma) {
     acc_ms = 0;
 }
 
+namespace {
+// A run read back while waiting between its phases: every curve point is the charge's; their sign sum is its direction.
+bool charge_was_reverse(const Curve &c) {
+    std::int32_t sum = 0, mv, ma;
+    for (int i = 0; i < c.n; i++) {
+        c.point(i, mv, ma);
+        sum += ma;
+    }
+    return sum < 0;
+}
+}  // namespace
+
 // ---- Recorder --------------------------------------------------------------------------------------------------------------
 
 Recorder::Start Recorder::start(Mode m, Wiring w, const Config &c, std::uint16_t id) {
@@ -162,19 +176,27 @@ void Recorder::close_phase(End e, std::uint32_t tail_ms) {
     dirty_ = true;
 }
 
-std::int32_t Recorder::out_ma(std::int32_t ma) const { return wiring_ == Wiring::Moved ? ma : -ma; }
+// The discharge's outflow: moved, the bank sits where the charger was and flows the charge's way; same port, the other way.
+std::int32_t Recorder::out_ma(std::int32_t ma) const { return (wiring_ == Wiring::Moved) != ph_[0].in_rev ? ma : -ma; }
 
-// One integration step into phase p: both directions, mapped to the bank's in and out, and the curve.
+// One integration step into phase p: both directions, mapped to the bank's in and out, and the curve. The sign says bottom
+// port to top port, not which port the bank is on: the direction that carried more energy in the phase is its own (in for a
+// charge, out for a discharge).
 void Recorder::step(std::uint32_t dt, std::int32_t mv, std::int32_t ma, Phase &p) {
     p.ms += dt;
     if (dt > kGapMs) { p.gaps++; return; }
     Flow f;
     integrate(f, last_mv_, last_ma_, mv, ma, dt);
-    const bool fwd_in = in_is_forward(p.kind);
-    p.uj_in += fwd_in ? f.uj_fwd : f.uj_rev;
-    p.uj_out += fwd_in ? f.uj_rev : f.uj_fwd;
-    p.uc_in += fwd_in ? f.uc_fwd : f.uc_rev;
-    p.uc_out += fwd_in ? f.uc_rev : f.uc_fwd;
+    const bool rev = p.in_rev;
+    p.uj_in += rev ? f.uj_rev : f.uj_fwd;
+    p.uj_out += rev ? f.uj_fwd : f.uj_rev;
+    p.uc_in += rev ? f.uc_rev : f.uc_fwd;
+    p.uc_out += rev ? f.uc_fwd : f.uc_rev;
+    if (p.kind == Kind::Charge ? p.uj_out > p.uj_in : p.uj_in > p.uj_out) {
+        std::swap(p.uj_in, p.uj_out);
+        std::swap(p.uc_in, p.uc_out);
+        p.in_rev = !rev;
+    }
     curve_.add(dt, (last_mv_ + mv) / 2, (last_ma_ + ma) / 2);
 }
 
@@ -289,6 +311,7 @@ bool Recorder::restore(const Record &r) {
     case RunState::Between:
         state_ = State::Between;
         ph_[1] = Phase{.kind = Kind::Discharge};
+        ph_[0].in_rev = charge_was_reverse(curve_);   // the record keeps no direction: the charge's curve has it
         armed_ = wiring_ == Wiring::Moved;   // a moved bank has been unplugged by the time the K2 boots again
         if (resumes_ < 63) resumes_++;
         break;

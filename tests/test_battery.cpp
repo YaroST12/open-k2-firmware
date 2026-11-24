@@ -133,6 +133,66 @@ void test_discharge_moved_forward() {
     CHECK_EQ(r.phase(0).uj_in, 0u);
 }
 
+// This K2's bench sign: the charger-to-bank flow reads NEGATIVE (the firmware's positive is bottom port to top port, and the
+// charger sat on the top port). The column follows the phase's kind, not the sign: charge = in, discharge = out, either wiring.
+void test_negative_sign_all_wirings() {
+    for (const Wiring w : {Wiring::SamePort, Wiring::Moved}) {
+        Recorder c;
+        c.start(Mode::Charge, w, Config{}, 20);
+        feed(c, 0, 3600'000 + 1000, 5000, -2000, 1000);
+        CHECK_EQ(c.phase(0).uj_in, 10 * kUjPerWh);
+        CHECK_EQ(c.phase(0).uc_in, 2 * kUcPerAh);
+        CHECK_EQ(c.phase(0).uj_out + c.phase(0).uc_out, 0u);
+    }
+    // same port: the bank stays where the charger fed it and feeds back: positive here
+    Recorder s;
+    s.start(Mode::Discharge, Wiring::SamePort, Config{}, 21);
+    feed(s, 0, 3600'000 + 1000, 20000, 862, 1000);
+    CHECK_EQ(s.phase(0).uj_out, 17'240 * kUjPerWh / 1000);
+    CHECK_EQ(s.phase(0).uj_in + s.phase(0).uc_in, 0u);
+    // moved: the bank on the charger's port feeds a load on the other: negative here (the 2026-11-24 run)
+    Recorder m;
+    m.start(Mode::Discharge, Wiring::Moved, Config{}, 22);
+    feed(m, 0, 3600'000 + 1000, 20000, -862, 1000);
+    CHECK_EQ(m.phase(0).uj_out, 17'240 * kUjPerWh / 1000);
+    CHECK_EQ(m.phase(0).uc_out, 862ull * kUcPerAh / 1000);
+    CHECK_EQ(m.phase(0).uj_in + m.phase(0).uc_in, 0u);
+}
+
+// Round trips with that sign: the outflow that starts the discharge is the bank's, found from the charge's direction.
+void test_negative_sign_round_trips() {
+    Recorder s;
+    s.start(Mode::RoundTrip, Wiring::SamePort, Config{.end_ma = 100, .end_s = 30}, 23);
+    std::uint32_t t = feed(s, 0, 3601'000, 5000, -2000, 1000);   // 10 Wh in
+    t = feed(s, t, 31'000, 5000, 0, 1000);
+    CHECK_EQ(int(s.state()), int(State::Between));
+    t = feed(s, t, 10'000, 5000, -500, 1000);                     // the charger back on: not an outflow
+    CHECK_EQ(int(s.state()), int(State::Between));
+    t = feed(s, t, 1'000, 5000, 0, 1000);
+    t = feed(s, t, 3600'000, 5000, 1600, 1000);                   // the bank feeds back: out
+    CHECK_EQ(int(s.state()), int(State::Measuring));
+    CHECK_EQ(s.phases(), 2);
+    CHECK_COND(s.phase(1).uj_out > 7 * kUjPerWh);
+    CHECK_EQ(s.phase(1).uj_in, 0u);
+    Recorder m;
+    m.start(Mode::RoundTrip, Wiring::Moved, Config{}, 24);
+    t = feed(m, 0, 60'000, 5000, -1000, 1000);
+    m.end_phase();
+    t = feed(m, t, 20'000, 5000, -1000, 1000);                    // still on the charger: no unplug, no discharge
+    CHECK_EQ(int(m.state()), int(State::Between));
+    t = feed(m, t, 2'000, 0, 0, 1000);                            // unplugged
+    t = feed(m, t, 20'000, 5000, 1000, 1000);                     // the wrong way for a moved bank: not an outflow
+    CHECK_EQ(int(m.state()), int(State::Between));
+    t = feed(m, t, 1'000, 5000, 0, 1000);
+    t = feed(m, t, 7'000, 5000, -1000, 1000);                     // the bank on the charger's port feeding a load
+    CHECK_EQ(int(m.state()), int(State::Measuring));
+    CHECK_COND(m.phase(1).uj_out > 0);
+    CHECK_EQ(m.phase(1).uj_in, 0u);
+    CHECK_COND(m.phase(0).uj_in > 0);
+    CHECK_EQ(m.phase(0).uj_out, 0u);
+    (void)t;
+}
+
 // Gaps: a step longer than kGapMs is counted, not integrated; offline samples prime again.
 void test_gap_not_integrated() {
     Recorder r;
@@ -531,6 +591,30 @@ void test_service_cold_boot() {
     (void)t;
 }
 
+// A cold boot between the phases loses the RAM's direction: the charge's curve gives it back (negative here, moved wiring).
+void test_service_cold_between_negative() {
+    Vol v;
+    Service::Checkpoint ck{};
+    {
+        Service s;
+        s.boot(&v.fs, &ck, false);
+        s.start(Mode::RoundTrip, Wiring::Moved, true);
+        std::uint32_t t = serve(s, 0, 600'000, 5000, -1000);
+        t = serve(s, t, 61'000, 5000, 0);
+        CHECK_EQ(int(s.rec().state()), int(State::Between));
+        serve(s, t, 2000, 0, 0);
+    }
+    Service s;
+    CHECK_EQ(int(s.boot(&v.fs, &ck, false)), int(Service::Boot::ResumedBetween));
+    std::uint32_t t = serve(s, 0, 7000, 5000, 1000);   // the wrong way for a moved bank
+    CHECK_EQ(int(s.rec().state()), int(State::Between));
+    t = serve(s, t, 1000, 5000, 0);
+    t = serve(s, t, 7000, 5000, -1000);                 // the bank on the charger's port feeding a load
+    CHECK_EQ(int(s.rec().state()), int(State::Measuring));
+    CHECK_COND(s.rec().phase(1).uj_out > 0);
+    CHECK_EQ(s.rec().phase(1).uj_in, 0u);
+}
+
 // Without a volume (or a full one) the recorder still measures; the write failure shows.
 void test_service_no_volume() {
     Service::Checkpoint ck{};
@@ -660,6 +744,8 @@ void test_wire() {
 }  // namespace
 
 int main() {
+    test_negative_sign_all_wirings();
+    test_negative_sign_round_trips();
     test_integrate_forward_hour();
     test_integrate_reverse();
     test_integrate_zero_crossing();
@@ -683,6 +769,7 @@ int main() {
     test_service_warm_resume();
     test_service_warm_after_end();
     test_service_cold_boot();
+    test_service_cold_between_negative();
     test_service_no_volume();
     test_wire();
     return test_report("test_battery");

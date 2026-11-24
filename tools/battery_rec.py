@@ -5,7 +5,7 @@ dict, and the remote status block (CMD_BATTERY 0x58, include/k2/core/remote_prot
 
 The 246-byte record is what /bt<id>.rec holds, what `k2_remote.py battery read` fetches and what a BATT QR share
 carries. Every value keeps its unit in the key name (_uwh microwatt-hours, _uah microamp-hours, _s seconds, _mv, _ma).
-Raw numbers only, no verdicts. Curve current keeps the power monitor's sign: positive = input port -> output port.
+Raw numbers only, no verdicts. Curve current keeps the power monitor's sign: positive = bottom port -> top port.
 """
 import struct
 
