@@ -55,8 +55,8 @@ inline constexpr const char *kLimNoteAvs = "SPR AVS 15/20V and A";
 inline constexpr const char *kLimNoteApply = "arms selected PD limit";
 inline constexpr const char *kLimNoteNoOffer = "not offered by charger";
 inline constexpr const char *kLimNoteMode = "include in forged offers";
-inline constexpr const char *kLimNoteStepV = "OK then +/- to step V";
-inline constexpr const char *kLimNoteStepA = "OK then +/- to step 0.1A";
+inline constexpr const char *kLimNoteStepV = "pick max voltage";
+inline constexpr const char *kLimNoteStepA = "pick max current";
 inline constexpr const char *kLimNotes[] = {kLimNoteOff, kLimNoteNone, kLimNoteFixed, kLimNotePps, kLimNoteAvs, kLimNoteApply,
                                             kLimNoteNoOffer, kLimNoteMode, kLimNoteStepV, kLimNoteStepA};
 static_assert(all_fit(kLimNotes, kLabelAdv, kit::kNoteMaxPx), "a PD limit note is wider than its line");

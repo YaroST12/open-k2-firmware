@@ -1884,16 +1884,30 @@ static void test_settings_long_back_row() {
     CHECK_EQ(int(again.context().keep.long_back), int(ring::Pos::Log));
     again.restore_long_back(200);
     CHECK_EQ(int(again.context().keep.long_back), 0);
-    // Settings > Home boxes: opens submenu, OK cycles box 1 and persists to uiprefs, Reset defaults restores {Pd, Energy, Rotating}.
+    // Settings > Home boxes: OK on Box 1/2/3 opens radio picker; OK commits & returns, BACK cancels & returns, Reset defaults restores {Pd, Energy, Rotating}.
     ui.open_place(bench::Place::K2, kT0 + 180);
     ui.context().keep.settings_sel = SettingsPage::kHomeBoxesRow;
     press(ui, Button::Ok, ButtonEvent::Short, kT0 + 190);
     CHECK_EQ(ui.menu() == Menu::HomeBoxes, 1);
     CHECK_EQ(ui.list_state().count, HomeBoxesPage::kRows);
-    press(ui, Button::Ok, ButtonEvent::Short, kT0 + 200);   // Box 1: Pd -> Energy
+    CHECK_STR(label(ui, Button::Ok), "Pick");
+    press(ui, Button::Ok, ButtonEvent::Short, kT0 + 200);   // Box 1 -> PickBox
+    CHECK_EQ(ui.list_state().count, static_cast<int>(home::BoxKind::Count));
+    CHECK_STR(label(ui, Button::Ok), "Select");
+    press(ui, Button::Plus, ButtonEvent::Short, kT0 + 202);   // Pd -> Energy
+    press(ui, Button::Ok, ButtonEvent::Short, kT0 + 204);     // commit Energy & return to List
+    CHECK_EQ(ui.list_state().count, HomeBoxesPage::kRows);
     CHECK_EQ(int(ui.context().keep.home_boxes[0]), int(home::BoxKind::Energy));
     CHECK_EQ(int(g_stub.prefs.home_boxes[0]), int(home::BoxKind::Energy));
-    for (int i = 0; i < 3; i++) press(ui, Button::Plus, ButtonEvent::Short, kT0 + 210 + i);   // Reset defaults
+    // Box 2: open PickBox, move, BACK cancels without changing Box 2.
+    press(ui, Button::Plus, ButtonEvent::Short, kT0 + 205);   // Box 2
+    press(ui, Button::Ok, ButtonEvent::Short, kT0 + 206);     // PickBox
+    press(ui, Button::Plus, ButtonEvent::Short, kT0 + 207);
+    press(ui, Button::Back, ButtonEvent::Short, kT0 + 208);   // cancel -> List
+    CHECK_EQ(ui.menu() == Menu::HomeBoxes, 1);
+    CHECK_EQ(ui.list_state().count, HomeBoxesPage::kRows);
+    CHECK_EQ(int(ui.context().keep.home_boxes[1]), int(home::BoxKind::Energy));
+    for (int i = 0; i < 2; i++) press(ui, Button::Plus, ButtonEvent::Short, kT0 + 210 + i);   // Reset defaults (row 3)
     press(ui, Button::Ok, ButtonEvent::Short, kT0 + 220);
     CHECK_EQ(int(ui.context().keep.home_boxes[0]), int(home::BoxKind::Pd));
     CHECK_EQ(int(ui.context().keep.home_boxes[1]), int(home::BoxKind::Energy));
@@ -2284,23 +2298,32 @@ static void test_pd_limit_picker() {
     CHECK_EQ(ui.list_state().count, 5);                      // Off, Fixed, PPS, SPR AVS, Apply
     settle(ui, t);
     CHECK_EQ(ui.context().toast.active(t + 20), false);
-    // Open Fixed editor -> step Max V down to 9V -> Back -> Apply
+    // Open Fixed editor -> open Max V radio picker -> pick 9V -> Back -> Apply
     press(ui, Button::Plus, ButtonEvent::Short, t += 10);    // Fixed
     press(ui, Button::Ok, ButtonEvent::Short, t += 10);      // EditFixed
     CHECK_EQ(ui.list_state().count, 3);
     press(ui, Button::Plus, ButtonEvent::Short, t += 10);    // Max V
-    press(ui, Button::Ok, ButtonEvent::Short, t += 10);      // adjust_ = true
-    CHECK_STR(label(ui, Button::Ok), "Done");
-    press(ui, Button::Minus, ButtonEvent::Short, t += 10);   // 20V
-    press(ui, Button::Minus, ButtonEvent::Short, t += 10);   // 15V
-    press(ui, Button::Minus, ButtonEvent::Short, t += 10);   // 9V
-    press(ui, Button::Ok, ButtonEvent::Short, t += 10);      // exit adjust
+    CHECK_STR(label(ui, Button::Ok), "Pick");
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);      // PickMaxV (Max, 5V, 9V, 15V, 20V)
+    CHECK_EQ(ui.list_state().count, 5);
+    CHECK_STR(label(ui, Button::Ok), "Select");
+    press(ui, Button::Plus, ButtonEvent::Short, t += 10);    // 5V
+    press(ui, Button::Plus, ButtonEvent::Short, t += 10);    // 9V
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);      // commit 9V & return to EditFixed
+    CHECK_EQ(ui.list_state().count, 3);
+    // Open Max A picker, move, then Back cancels without changing Max A
+    press(ui, Button::Plus, ButtonEvent::Short, t += 10);    // Max A
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);      // PickMaxA
+    press(ui, Button::Plus, ButtonEvent::Short, t += 10);    // 0.1A
+    press(ui, Button::Back, ButtonEvent::Short, t += 10);    // cancel -> EditFixed
+    CHECK_EQ(ui.list_state().count, 3);
     press(ui, Button::Back, ButtonEvent::Short, t += 10);    // back to PickLimit
     CHECK_EQ(ui.list_state().count, 5);
     for (int i = 0; i < 3; i++) press(ui, Button::Plus, ButtonEvent::Short, t += 10);   // Apply (row 4)
     press(ui, Button::Ok, ButtonEvent::Short, t += 10);
     CHECK_EQ(g_stub.lim_arms, 1);
     CHECK_EQ(g_stub.lim_arm_cfg.fixed.max_mv, 9000u);
+    CHECK_EQ(g_stub.lim_arm_cfg.fixed.max_ma, 0u);
     CHECK_EQ(ui.list_state().count, bench::tools().n + 1);   // back on Tools list
     // Off disarms.
     press(ui, Button::Ok, ButtonEvent::Short, t += 10);
@@ -2321,21 +2344,26 @@ static void test_pd_limit_100w_levels() {
     g_stub.caps.pdos[3] = {pd::PdoType::Avs, 0xE0000000u | (300u << 10) | 500u, 9000, 20000, 5000, 100000};
     uint32_t t = open_limit_row(ui, 20000);
     press(ui, Button::Ok, ButtonEvent::Short, t += 10);
-    // Edit Fixed -> toggle Mode Off
+    // Edit Fixed -> Mode picker -> Off
     press(ui, Button::Plus, ButtonEvent::Short, t += 10);
-    press(ui, Button::Ok, ButtonEvent::Short, t += 10);
-    press(ui, Button::Ok, ButtonEvent::Short, t += 10);      // Mode = Off
-    press(ui, Button::Back, ButtonEvent::Short, t += 10);
-    // Edit PPS (row 2) -> Max A 3.0A (step from 5.0A -> minus 20x? Wait: test Max V down from 21V -> 11V = 10x, keep simple!)
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);      // EditFixed
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);      // PickMode
+    CHECK_EQ(ui.list_state().count, 2);
+    press(ui, Button::Plus, ButtonEvent::Short, t += 10);    // Off
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);      // commit Off -> EditFixed
+    press(ui, Button::Back, ButtonEvent::Short, t += 10);    // PickLimit
+    // Edit PPS (row 2) -> Max V 11V (Max, 5..21V -> 7 steps from Max), Max A 3.0A (Max, 0.1..5.0A -> 30 steps)
     press(ui, Button::Plus, ButtonEvent::Short, t += 10);    // PPS
     press(ui, Button::Ok, ButtonEvent::Short, t += 10);      // EditPps
     press(ui, Button::Plus, ButtonEvent::Short, t += 10);    // Max V
-    press(ui, Button::Ok, ButtonEvent::Short, t += 10);      // adjust
-    for (int i = 0; i < 11; i++) press(ui, Button::Minus, ButtonEvent::Short, t += 10);   // Max -> 21 -> ... -> 11V
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);      // PickMaxV
+    CHECK_EQ(ui.list_state().count, 18);                     // Max + 5..21V
+    for (int i = 0; i < 7; i++) press(ui, Button::Plus, ButtonEvent::Short, t += 10);   // 11V
     press(ui, Button::Ok, ButtonEvent::Short, t += 10);
     press(ui, Button::Plus, ButtonEvent::Short, t += 10);    // Max A
-    press(ui, Button::Ok, ButtonEvent::Short, t += 10);      // adjust
-    for (int i = 0; i < 21; i++) press(ui, Button::Minus, ButtonEvent::Short, t += 10);   // Max -> 5.0 -> 3.0A (100 mA steps)
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);      // PickMaxA
+    CHECK_EQ(ui.list_state().count, 51);                     // Max + 0.1..5.0A
+    for (int i = 0; i < 30; i++) press(ui, Button::Plus, ButtonEvent::Short, t += 10);  // 3.0A
     press(ui, Button::Ok, ButtonEvent::Short, t += 10);
     press(ui, Button::Back, ButtonEvent::Short, t += 10);    // PickLimit
     press(ui, Button::Plus, ButtonEvent::Short, t += 10);    // AVS
@@ -2364,11 +2392,10 @@ static void pick_9v_apply(Ui &ui, uint32_t &t) {
     press(ui, Button::Plus, ButtonEvent::Short, t += 10);   // Fixed
     press(ui, Button::Ok, ButtonEvent::Short, t += 10);     // EditFixed
     press(ui, Button::Plus, ButtonEvent::Short, t += 10);   // Max V
-    press(ui, Button::Ok, ButtonEvent::Short, t += 10);     // adjust
-    press(ui, Button::Minus, ButtonEvent::Short, t += 10);  // 20V
-    press(ui, Button::Minus, ButtonEvent::Short, t += 10);  // 15V
-    press(ui, Button::Minus, ButtonEvent::Short, t += 10);  // 9V
-    press(ui, Button::Ok, ButtonEvent::Short, t += 10);     // exit adjust
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);     // PickMaxV
+    press(ui, Button::Plus, ButtonEvent::Short, t += 10);   // 5V
+    press(ui, Button::Plus, ButtonEvent::Short, t += 10);   // 9V
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);     // commit 9V -> EditFixed
     press(ui, Button::Back, ButtonEvent::Short, t += 10);   // PickLimit
     for (int i = 0; i < 3; i++) press(ui, Button::Plus, ButtonEvent::Short, t += 10);   // Apply
     press(ui, Button::Ok, ButtonEvent::Short, t += 10);

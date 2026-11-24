@@ -1360,17 +1360,23 @@ private:
 class HomeBoxesPage final : public PageBase {
 public:
     explicit HomeBoxesPage(UiContext &c) : PageBase(c, Page::Count, rail::kHomeBoxes, Icon::Meter) {}
-    void enter() override { sel_ = 0; ctx_.rows.set_count(kRows); ctx_.rows.select(0); }
+    enum class View : uint8_t { List, PickBox };   // zero = List
+    void enter() override;
     void draw_static() override;
     void update(uint32_t now_ms) override;
     bool on_event(Event e) override;
     Strip labels() const override;
     void invalidate() override { ctx_.rows.invalidate(); }
     ListState list_state() const { return ctx_.rows.state(); }
+    View view() const { return view_; }
     static constexpr int kRows = 4;   // Box 1, Box 2, Box 3, Reset defaults
 private:
     static void row_fn(void *ctx, int index, bool focused, kit::RowSpec &out);
-    int sel_ = 0;
+    void show(View v);
+    int count() const { return view_ == View::List ? kRows : static_cast<int>(home::BoxKind::Count); }
+    int &cur() { return view_ == View::List ? sel_ : pick_; }
+    View view_ = View::List;
+    int sel_ = 0, pick_ = 0;
 };
 
 // Settings > Display: the backlight level and the two idle timeouts (k2/core/idle_hw.hpp, remembered in flash). OK on
@@ -1447,24 +1453,29 @@ public:
     ListState list_state() const { return ctx_.rows.state(); }
     int selected() const { return sel_; }
     // The last row is the PD limiter: OK opens its per-tech picker (Off, Fixed, PPS, SPR AVS, Apply[, Reset link]).
-    enum class View : uint8_t { List, PickLimit, EditFixed, EditPps, EditAvs };   // zero = List
+    enum class View : uint8_t { List, PickLimit, EditFixed, EditPps, EditAvs, PickMode, PickMaxV, PickMaxA };   // zero = List
     View view() const { return view_; }
 private:
     static void row_fn(void *ctx, int index, bool focused, kit::RowSpec &out);
     void show(View v);
     void build_picks();
     int rows() const;
-    bool in_tech() const { return view_ >= View::EditFixed; }
-    int count() const { return view_ == View::List ? rows() : view_ == View::PickLimit ? (5 + int(!has_caps_)) : 3; }
-    int &cur() { return view_ == View::List ? sel_ : view_ == View::PickLimit ? pick_ : edit_idx_; }
+    bool in_tech() const { return view_ >= View::EditFixed && view_ <= View::EditAvs; }
+    bool in_sub_pick() const { return view_ >= View::PickMode; }
+    int count() const {
+        return view_ == View::List ? rows() : view_ == View::PickLimit ? (5 + int(!has_caps_)) : in_tech() ? 3 : sub_count();
+    }
+    int &cur() { return view_ == View::List ? sel_ : view_ == View::PickLimit ? pick_ : in_tech() ? edit_idx_ : sub_pick_; }
     pd::LimTech &cur_tech();
     const pd::LimTech &cur_tech() const;
     uint16_t tech_max_ma() const;
-    void step_v(int dir);
-    void step_a(int dir);
+    void pps_bounds(uint16_t &lo, uint16_t &hi) const;
+    int sub_count() const;
+    uint16_t sub_val(int index) const;
     void fmt_tech_summary(const pd::LimTech &t, StrBufBase &out) const;
     void limit_row(int index, bool focused, kit::RowSpec &out) const;
     void tech_row(int index, bool focused, kit::RowSpec &out) const;
+    void sub_pick_row(int index, bool focused, kit::RowSpec &out) const;
     bool apply_limit(bool off);
     void limit_edge();
     bool confirmed_for(uint32_t key) const { return confirm_until_ != 0 && confirm_key_ == key && int32_t(confirm_until_ - ctx_.now) > 0; }
@@ -1472,9 +1483,10 @@ private:
     void drop_confirm();   // the window ends: its "OK again" toast goes with it
     int &sel_;
     View view_ = View::List;
+    View tech_view_ = View::EditFixed;
     int pick_ = 0;
     int edit_idx_ = 0;
-    bool adjust_ = false;
+    int sub_pick_ = 0;
     bool has_caps_ = false;
     bool has_pps_ = false, has_avs_ = false;
     uint8_t nfixed_ = 0;

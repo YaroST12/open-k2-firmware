@@ -2480,16 +2480,44 @@ Strip AutorotatePage::labels() const { return setting_labels(base_labels(), sl::
 // Home boxes submenu (configure the 3 Home info boxes: static metric, Rotating, or Off)
 // ---------------------------------------------------------------------------------------
 
+void HomeBoxesPage::enter() {
+    view_ = View::List;
+    sel_ = 0;
+    ctx_.rows.set_count(kRows);
+    ctx_.rows.select(0);
+}
+
+void HomeBoxesPage::show(View v) {
+    view_ = v;
+    if (v == View::PickBox) {
+        pick_ = static_cast<int>(ctx_.keep.home_boxes[static_cast<std::size_t>(sel_)]);
+    }
+    if (!ctx_.blank) pg::clear_body(ctx_.content, kit::kBelowBar);
+    title_bar();
+    ctx_.rows.set_count(count());
+    ctx_.rows.select(cur());
+    invalidate();
+    update(ctx_.now);
+}
+
 void HomeBoxesPage::draw_static() {
     title_bar();
     ctx_.rows.init(ctx_.content, kit::kBodyY, row_fn, this);
-    ctx_.rows.set_count(kRows);
-    ctx_.rows.select(sel_);
+    ctx_.rows.set_count(count());
+    ctx_.rows.select(cur());
 }
 
-void HomeBoxesPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
+void HomeBoxesPage::row_fn(void *ctx, int i, bool focused, kit::RowSpec &out) {
     static constexpr const char *kTitles[kRows] = {"Box 1", "Box 2", "Box 3", "Reset defaults"};
     const auto *self = static_cast<const HomeBoxesPage *>(ctx);
+    if (self->view_ == View::PickBox) {
+        const auto k = static_cast<home::BoxKind>(i);
+        out.marker = kit::Marker::Radio;
+        out.state = self->ctx_.keep.home_boxes[static_cast<std::size_t>(self->sel_)] == k ? 1 : 0;
+        out.text = home::box_short_name(k);
+        if (focused) out.note = home::box_note(k);
+        return;
+    }
     out.marker = kit::Marker::Icon;
     out.icon = i < home::kBoxCount ? Icon::Meter : Icon::Rotate;
     out.text = kTitles[i];
@@ -2505,26 +2533,37 @@ void HomeBoxesPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
 
 void HomeBoxesPage::update(uint32_t) {
     title_badge(false);
-    ctx_.rows.select(sel_);
+    ctx_.rows.select(cur());
     ctx_.rows.draw(ctx_.now, ctx_.budget);
 }
 
 bool HomeBoxesPage::on_event(Event e) {
-    if (e.press == Press::Short && (e.button == Button::Plus || e.button == Button::Minus)) {
-        sel_ = std::clamp(sel_ + (e.button == Button::Plus ? 1 : -1), 0, kRows - 1);
+    if (e.press != Press::Short) return false;
+    if (e.button == Button::Plus || e.button == Button::Minus) {
+        cur() = std::clamp(cur() + (e.button == Button::Plus ? 1 : -1), 0, count() - 1);
         update(ctx_.now);
         return true;
     }
-    if (e.press == Press::Short && e.button == Button::Ok) {
+    if (e.button == Button::Ok) {
         auto boxes = ctx_.keep.home_boxes;
-        if (sel_ < home::kBoxCount) {
-            boxes[static_cast<std::size_t>(sel_)] = home::next_box(boxes[static_cast<std::size_t>(sel_)]);
-        } else {
+        if (view_ == View::List) {
+            if (sel_ < home::kBoxCount) {
+                show(View::PickBox);
+                return true;
+            }
             boxes = home::kDefaultBoxes;
+            ctx_.ui->set_home_boxes(boxes);
+            ctx_.rows.invalidate();
+            update(ctx_.now);
+            return true;
         }
+        boxes[static_cast<std::size_t>(sel_)] = static_cast<home::BoxKind>(pick_);
         ctx_.ui->set_home_boxes(boxes);
-        ctx_.rows.invalidate();
-        update(ctx_.now);
+        show(View::List);
+        return true;
+    }
+    if (e.button == Button::Back && view_ != View::List) {
+        show(View::List);
         return true;
     }
     return false;
@@ -2532,7 +2571,10 @@ bool HomeBoxesPage::on_event(Event e) {
 
 Strip HomeBoxesPage::labels() const {
     Strip l = list_strip(base_labels());
-    l[Button::Ok] = sel_ < home::kBoxCount ? sl::Cycle : sl::Reset;
+    const int at = view_ == View::List ? sel_ : pick_;
+    if (at == 0) l[Button::Minus] = sl::UpDim;
+    if (at >= count() - 1) l[Button::Plus] = sl::DnDim;
+    l[Button::Ok] = view_ == View::List ? (sel_ < home::kBoxCount ? sl::Pick : sl::Reset) : sl::Select;
     return l;
 }
 
@@ -2689,29 +2731,31 @@ int ToolsPage::rows() const { return bench::tools().n + 1; }   // the tools, the
 
 void ToolsPage::enter() {
     view_ = View::List;
-    adjust_ = false;
     title_ = rail::kTools;
     sel_ = std::clamp(sel_, 0, rows() - 1);
     seen_ = fusb302::limit_status().state;   // a give-up while elsewhere shows on the Charger slice, not as a late result
 }
 
 pd::LimTech &ToolsPage::cur_tech() {
-    return view_ == View::EditFixed ? draft_.fixed : view_ == View::EditPps ? draft_.pps : draft_.avs;
+    const View tv = in_sub_pick() ? tech_view_ : view_;
+    return tv == View::EditFixed ? draft_.fixed : tv == View::EditPps ? draft_.pps : draft_.avs;
 }
 const pd::LimTech &ToolsPage::cur_tech() const {
-    return view_ == View::EditFixed ? draft_.fixed : view_ == View::EditPps ? draft_.pps : draft_.avs;
+    const View tv = in_sub_pick() ? tech_view_ : view_;
+    return tv == View::EditFixed ? draft_.fixed : tv == View::EditPps ? draft_.pps : draft_.avs;
 }
 
 uint16_t ToolsPage::tech_max_ma() const {
-    const uint16_t m = view_ == View::EditFixed ? fixed_max_ma_ : view_ == View::EditPps ? pps_max_ma_ : avs_max_ma_;
+    const View tv = in_sub_pick() ? tech_view_ : view_;
+    const uint16_t m = tv == View::EditFixed ? fixed_max_ma_ : tv == View::EditPps ? pps_max_ma_ : avs_max_ma_;
     return m >= pd::kLimStepMa ? std::min<uint16_t>(m, pd::kLimMaxMa) : pd::kLimMaxMa;
 }
 
-// A view change repaints the body: row count and title differ across List, PickLimit and tech editors.
+// A view change repaints the body: row count and title differ across List, PickLimit, tech editors and pick lists.
 void ToolsPage::show(View v) {
     const View was = view_;
+    if (was >= View::EditFixed && was <= View::EditAvs) tech_view_ = was;
     view_ = v;
-    adjust_ = false;
     if (v == View::PickLimit) {
         build_picks();
         if (was == View::List) {
@@ -2723,9 +2767,21 @@ void ToolsPage::show(View v) {
         title_ = rail::kLimit;
         drop_confirm();
     } else if (in_tech()) {
-        edit_idx_ = 0;
+        if (was == View::PickLimit) edit_idx_ = 0;
         title_ = rail::kLimit;
         drop_confirm();
+    } else if (in_sub_pick()) {
+        if (v == View::PickMode) {
+            sub_pick_ = cur_tech().enabled ? 0 : 1;
+        } else {
+            const uint16_t cur_v = v == View::PickMaxV ? cur_tech().max_mv : cur_tech().max_ma;
+            sub_pick_ = 0;
+            const int n = sub_count();
+            for (int i = 0; i < n; ++i) {
+                if (sub_val(i) == cur_v) { sub_pick_ = i; break; }
+            }
+        }
+        title_ = rail::kLimit;
     } else {
         title_ = rail::kTools;
         drop_confirm();
@@ -2771,45 +2827,45 @@ void ToolsPage::build_picks() {
 }
 
 namespace {
-void step_range(uint16_t &val, int dir, uint16_t lo, uint16_t hi, uint16_t step) {
-    if (hi < lo) return;
-    if (val == 0) {
-        if (dir < 0) val = hi;
-        return;
-    }
-    const int nxt = static_cast<int>(val) + dir * static_cast<int>(step);
-    val = nxt > static_cast<int>(hi) ? 0 : static_cast<uint16_t>(std::max<int>(lo, nxt));
-}
+inline constexpr uint16_t kDefaultFxMvs[] = {5000, 9000, 12000, 15000, 20000};
 }  // namespace
 
-void ToolsPage::step_v(int dir) {
-    pd::LimTech &t = cur_tech();
-    draft_.limit_mw = 0;
-    if (view_ == View::EditFixed) {
-        static constexpr uint16_t kDefaultFx[] = {5000, 9000, 12000, 15000, 20000};
-        const uint16_t *vals = nfixed_ > 0 ? fixed_mvs_ : kDefaultFx;
-        const int nv = nfixed_ > 0 ? int(nfixed_) : int(std::size(kDefaultFx));
-        int idx = nv;
-        for (int i = 0; i < nv; ++i)
-            if (vals[i] == t.max_mv) { idx = i; break; }
-        idx = std::clamp(idx + dir, 0, nv);
-        t.max_mv = idx == nv ? 0 : vals[idx];
-    } else if (view_ == View::EditPps) {
-        const uint16_t lo_raw = pps_min_mv_ >= 3000 ? pps_min_mv_ : 5000;
-        const uint16_t lo = static_cast<uint16_t>(((lo_raw + 999u) / 1000u) * 1000u);
-        const uint16_t hi = pps_max_mv_ >= lo ? static_cast<uint16_t>((pps_max_mv_ / 1000u) * 1000u) : 21000;
-        step_range(t.max_mv, dir, lo, hi, pd::kLimPpsStepMv);
-    } else {
-        if (dir < 0 && t.max_mv == 0) t.max_mv = 15000;
-        else if (dir > 0 && t.max_mv == 15000) t.max_mv = 0;
-    }
+void ToolsPage::pps_bounds(uint16_t &lo, uint16_t &hi) const {
+    const uint16_t lo_raw = pps_min_mv_ >= 3000 ? pps_min_mv_ : 5000;
+    lo = static_cast<uint16_t>(((lo_raw + 999u) / 1000u) * 1000u);
+    hi = pps_max_mv_ >= lo ? static_cast<uint16_t>((pps_max_mv_ / 1000u) * 1000u) : 21000;
 }
 
-void ToolsPage::step_a(int dir) {
-    pd::LimTech &t = cur_tech();
-    draft_.limit_mw = 0;
+int ToolsPage::sub_count() const {
+    if (view_ == View::PickMode) return 2;
+    if (view_ == View::PickMaxV) {
+        if (tech_view_ == View::EditFixed) return 1 + (nfixed_ > 0 ? int(nfixed_) : int(std::size(kDefaultFxMvs)));
+        if (tech_view_ == View::EditPps) {
+            uint16_t lo, hi;
+            pps_bounds(lo, hi);
+            return 1 + int((hi - lo) / pd::kLimPpsStepMv) + 1;
+        }
+        return 2;   // SPR AVS: Max, 15V
+    }
     const uint16_t hi = static_cast<uint16_t>((tech_max_ma() / pd::kLimStepMa) * pd::kLimStepMa);
-    step_range(t.max_ma, dir, pd::kLimStepMa, hi, pd::kLimStepMa);
+    return 1 + int(hi / pd::kLimStepMa);
+}
+
+uint16_t ToolsPage::sub_val(int index) const {
+    if (index <= 0) return 0;
+    if (view_ == View::PickMaxV) {
+        if (tech_view_ == View::EditFixed) {
+            const uint16_t *vals = nfixed_ > 0 ? fixed_mvs_ : kDefaultFxMvs;
+            return vals[index - 1];
+        }
+        if (tech_view_ == View::EditPps) {
+            uint16_t lo, hi;
+            pps_bounds(lo, hi);
+            return static_cast<uint16_t>(lo + (index - 1) * pd::kLimPpsStepMv);
+        }
+        return 15000;
+    }
+    return static_cast<uint16_t>(index * pd::kLimStepMa);
 }
 
 void ToolsPage::fmt_tech_summary(const pd::LimTech &t, StrBufBase &out) const {
@@ -2854,7 +2910,28 @@ void ToolsPage::tech_row(int index, bool focused, kit::RowSpec &out) const {
     if (val == 0) tail_.put(tx::kLimMax);
     else pg::put_exact_unit(tail_, val, index == 1 ? 'V' : 'A');
     out.tail = tail_.view();
-    out.tail_color = (adjust_ && edit_idx_ == index) ? kFocus : val ? kCaution : kDim;
+    out.tail_color = val ? kCaution : kDim;
+}
+
+void ToolsPage::sub_pick_row(int index, bool focused, kit::RowSpec &out) const {
+    namespace tx = text::tools;
+    const pd::LimTech &t = cur_tech();
+    out.marker = kit::Marker::Radio;
+    if (view_ == View::PickMode) {
+        const bool en = index == 0;
+        out.state = t.enabled == en ? 1 : 0;
+        out.text = en ? tx::kLimOn : tx::kLimOff;
+        if (focused) out.note = tx::kLimNoteMode;
+        return;
+    }
+    const bool is_v = view_ == View::PickMaxV;
+    const uint16_t v = sub_val(index);
+    const uint16_t cur_v = is_v ? t.max_mv : t.max_ma;
+    out.state = cur_v == v ? 1 : 0;
+    tail_.clear();
+    if (v == 0) tail_.put(tx::kLimMax);
+    else pg::put_exact_unit(tail_, v, is_v ? 'V' : 'A');
+    out.text = tail_.view();
 }
 
 void ToolsPage::limit_row(int index, bool focused, kit::RowSpec &out) const {
@@ -2884,6 +2961,10 @@ void ToolsPage::limit_row(int index, bool focused, kit::RowSpec &out) const {
                 out.note = tx::kLimNoteOff;
             }
         }
+        return;
+    }
+    if (in_sub_pick()) {
+        sub_pick_row(index, focused, out);
         return;
     }
     if (in_tech()) {
@@ -3064,21 +3145,6 @@ bool ToolsPage::apply_limit(bool off) {
 bool ToolsPage::on_event(Event e) {
     if (e.press != Press::Short) return false;
     namespace tx = text::tools;
-    if (adjust_) {
-        if (e.button == Button::Plus || e.button == Button::Minus) {
-            const int dir = e.button == Button::Plus ? 1 : -1;
-            if (edit_idx_ == 1) step_v(dir);
-            else if (edit_idx_ == 2) step_a(dir);
-            update(ctx_.now);
-            return true;
-        }
-        if (e.button == Button::Ok || e.button == Button::Back) {
-            adjust_ = false;
-            update(ctx_.now);
-            return true;
-        }
-        return false;
-    }
     if (e.button == Button::Plus || e.button == Button::Minus) {
         cur() = std::clamp(cur() + (e.button == Button::Plus ? 1 : -1), 0, count() - 1);
         drop_confirm();   // a moved selection is another question
@@ -3122,34 +3188,28 @@ bool ToolsPage::on_event(Event e) {
             }
             return true;
         }
-        // In EditFixed / EditPps / EditAvs:
-        if (edit_idx_ == 0) {
-            cur_tech().enabled = !cur_tech().enabled;
-            draft_.limit_mw = 0;
-            update(ctx_.now);
-        } else {
-            adjust_ = true;
-            update(ctx_.now);
+        if (in_tech()) {
+            show(edit_idx_ == 0 ? View::PickMode : edit_idx_ == 1 ? View::PickMaxV : View::PickMaxA);
+            return true;
         }
+        // In PickMode / PickMaxV / PickMaxA: commit selection and return to the tech view.
+        if (view_ == View::PickMode) cur_tech().enabled = (sub_pick_ == 0);
+        else if (view_ == View::PickMaxV) cur_tech().max_mv = sub_val(sub_pick_);
+        else cur_tech().max_ma = sub_val(sub_pick_);
+        draft_.limit_mw = 0;
+        show(tech_view_);
         return true;
     }
-    if (e.button == Button::Back && view_ != View::List) {   // step back to PickLimit or List, never out of Tools
-        show(in_tech() ? View::PickLimit : View::List);
+    if (e.button == Button::Back && view_ != View::List) {   // step back to tech view, PickLimit, or List, never out of Tools
+        show(in_sub_pick() ? tech_view_ : in_tech() ? View::PickLimit : View::List);
         return true;
     }
     return false;
 }
 
 Strip ToolsPage::labels() const {
-    Strip l = base_labels();
-    if (adjust_) {
-        l[Button::Minus] = sl::Dec;
-        l[Button::Plus] = sl::Inc;
-        l[Button::Ok] = sl::Done;
-        return l;
-    }
-    l = list_strip(l);
-    const int at = view_ == View::List ? sel_ : view_ == View::PickLimit ? pick_ : edit_idx_;
+    Strip l = list_strip(base_labels());
+    const int at = view_ == View::List ? sel_ : view_ == View::PickLimit ? pick_ : in_tech() ? edit_idx_ : sub_pick_;
     const int n = count();
     if (at == 0) l[Button::Minus] = sl::UpDim;
     if (at >= n - 1) l[Button::Plus] = sl::DnDim;
@@ -3157,8 +3217,10 @@ Strip ToolsPage::labels() const {
         l[Button::Ok] = sel_ >= bench::tools().n ? sl::Pick : sl::Open;
     } else if (view_ == View::PickLimit) {
         l[Button::Ok] = (pick_ >= 1 && pick_ <= 3) ? sl::Open : sl::Select;
+    } else if (in_tech()) {
+        l[Button::Ok] = sl::Pick;
     } else {
-        l[Button::Ok] = edit_idx_ == 0 ? sl::Select : sl::Set;
+        l[Button::Ok] = sl::Select;
     }
     return l;
 }

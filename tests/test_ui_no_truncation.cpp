@@ -499,19 +499,22 @@ void walk_limit(Ui &ui, int rot, const Scenario &sc) {
     draw_for_a_while(ui, "limit-picker", rot, sc.name);
     for (int i = 0; i < 6; ++i) { press(Button::Plus); draw_for_a_while(ui, "limit-picker", rot, sc.name); }
     press(Button::Back);
-    // Open Fixed editor and step into adjust mode for V/A rows
+    // Open Fixed editor and each of its radio pick-one submenus (Mode, Max V, Max A)
     press(Button::Ok);
     press(Button::Plus);   // Fixed row
     press(Button::Ok);     // EditFixed
     draw_for_a_while(ui, "limit-fixed", rot, sc.name);
+    press(Button::Ok);     // PickMode
+    draw_for_a_while(ui, "limit-fixed-mode", rot, sc.name);
+    press(Button::Back);
     press(Button::Plus);   // Max V
-    press(Button::Ok);     // adjust V
-    press(Button::Minus);
+    press(Button::Ok);     // PickMaxV
+    press(Button::Plus);
     draw_for_a_while(ui, "limit-fixed-v", rot, sc.name);
     press(Button::Back);
     press(Button::Plus);   // Max A
-    press(Button::Ok);     // adjust A
-    press(Button::Minus);
+    press(Button::Ok);     // PickMaxA
+    press(Button::Plus);
     draw_for_a_while(ui, "limit-fixed-a", rot, sc.name);
     press(Button::Back);
     press(Button::Back);
