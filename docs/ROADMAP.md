@@ -84,7 +84,7 @@ Everything is C++23; there are no C files left in `src/` (TinyUSB and lwIP under
 
 - **Selftest slower than the 1.0.2 perf baseline** (2026-11-24, selftest images built with K2_SELFTEST=1 K2_PDSPEC=0 K2_WEBUSB=0 to fit). Against tools/perf_baseline.json (1.0.2-155, 2026-11-16): sweep_sum +60 %, fmt_line +31 %, gfx_fill +6 %, pd_sink +5-7 %, pd_codec +3 %, power_calc +2 %; rd_slow 19 % faster. The same image built at 30236902 (this morning) shows the same numbers, so the day's work (icons, V/A picker, flash carve, limiter, battery) is within ~1.3 % of it; the drift happened between 1.0.2 and 1.2.0-297. Open: bisect sweep_sum and fmt_line before refreshing the baseline. Cause found (not verified on hardware): lambdas of pinned/K2_HOT functions and strcmp, PixelSink, pd le32 and other callees sat past 0x08040000; pinned in 8531d244, gate step "hot" now fails on such lambdas (6599c925). Remeasure on the K2.
 
-- **Volume budget understates the root pair** (2026-11-24, found on k2/battresume). `tests/test_volume_budget.cpp` fills each store alone, so the three `/bt<id>.rec` show 0 blocks; with the device's real root (settings, the six store directories, `/log.txt`) the root pair splits (+2 blocks) at the first compaction after the third run file, on the base firmware too (246 B records, write_file at phase boundaries). Open: fill the root as the device does in the budget test and fix the row.
+- **Volume budget understates the root pair** (2026-11-24, found on k2/battresume). `tests/test_volume_budget.cpp` fills each store alone, so the three `/bt<id>.rec` show 0 blocks; with the device's real root (settings, the six store directories, `/log.txt`) the root pair splits (+2 blocks) at the first compaction after the third run file, on the base firmware too (246 B records, write_file at phase boundaries). Addressed on k2/battresume: the runs moved to their own `/bt` pair (2 blocks, budget row updated) and `test_battery_runs_and_the_real_root` fills the real root. Open: a K2_PDSTRESS=1 build with every store at cap is now 2 blocks short (the largest `/jr` misses).
 
 - **Battery recorder counts a moved-wiring discharge as "in"** (2026-11-24, 077dd1d9). Full bank on the K2 input, laptop on the output, `battery start discharge` with wiring moved: the monitor reads the bank-to-laptop flow as negative current (direction down, -862 mA at 20 V; the same sign as charger-to-bank earlier), so after 23 s the status read in 0.321 Wh, out 0.000 Wh. BATTERY_RECORDER.md says moved discharge = forward = out. Either the input/output port mapping or the sign rule is reversed. Also: the recorder stored a run with 0.000 Wh in and out; such runs should not be saved.
   Fixed on k2/battfix (05313146, c69d052e), host-tested, not verified on hardware. Root cause: the firmware's positive current is bottom port to top port (charger on the bottom); the recorder read it as charger-to-bank, so with the charger on the top port every column swapped. Each phase now takes its dominant direction as its own (charge = in, discharge = out). Empty runs (under 1 mWh both ways) are no longer saved, and the start no longer writes a file. A record from the old firmware: swap a phase's in/out (Wh and mAh) when its dominant column disagrees with its kind; the totals are exact.
@@ -1168,12 +1168,14 @@ and the hardware check). A row leaves this list when its fix is merged and the h
   - Per phase Wh and mAh in and out plus time; Round trip efficiency = Wh out / Wh in. Its own signed integrator
     (`k2/battery/battery.hpp`), so the same-port discharge counts the reverse flow; `EnergyMeter` is unchanged.
   - Phase end: under 50 mA for 60 s (settable, RAM-only) or by hand; a 60-point downsampled V/I curve; a 246 B record.
-  - The newest 3 runs on flash (`/bt<id>.rec`, inline in the root pair, 0 blocks), written at phase boundaries and
+  - The newest 3 runs on flash (`/bt/<id>.rec`, the `/bt` pair, 2 blocks; root files of older firmware move there at
+    boot), written at phase boundaries and
     every 10 s while a phase measures (in place, `Fs::rewrite_file`; record v2, 250 B); a warm reset resumes from the
     `.noinit` checkpoint (preferred), a cold boot resumes the measuring phase from its last save (resumes + known gap
     seconds stored; the off time and up to 10 s before the cut are not measured). An end/finish is final once written.
-    Built and host-tested on k2/battresume (932a34e7, 2026-11-24), NOT hardware-verified. Wear: 72-90 root-pair
-    erases/h, 446 B/save; after ~6-7 h of saves littlefs expands the superblock once (+2 blocks, volume under 88 % full).
+    Built and host-tested on k2/battresume (932a34e7, 2026-11-24), NOT hardware-verified. Own directory
+    (k2/battresume, 2026-11-24): 72 erases/h of the /bt pair, ~380 B/save, root never erased, 24 h: 5 blocks levelled,
+    no superblock expansion. K2_PDSTRESS=1 builds with every store at cap are now 2 blocks short (only /jr misses).
   - Shell `k2_remote.py [--json] battery status|start|end|next|finish|config|list|read` (CMD_BATTERY 0x58), QR share
     `BATT`, `k2_remote.py page battery`.
   - Validate on hardware: a short charge of a power bank from the bench charger (Wh in against the Home Wh counter),
@@ -1182,7 +1184,7 @@ and the hardware check). A row leaves this list when its fix is merged and the h
   - **Battery efficiency test** (planned 2026-11-18, not run yet; no record exported). A real bank, two runs:
     1. Discharge, wiring moved: the full bank (10K / 100 W) on the K2 input, the laptop on the output (forward = out).
        Load: `runs/battery/load-loop.sh` (the sanitizer pass in a loop; `touch runs/battery/STOP` ends it). The phase
-       ends by itself when the bank stops (|I| < 50 mA for 60 s); the K2 writes `/bt<id>.rec`.
+       ends by itself when the bank stops (|I| < 50 mA for 60 s); the K2 writes `/bt/<id>.rec`.
     2. Charge: the bench charger on the input, the emptied bank on the output (forward = in), until the bank stops.
     - Efficiency = Wh out (run 1) / Wh in (run 2), against the bank's rated Wh. An inline meter (UC96) on the HID cable
       checks the K2's own draw.

@@ -83,26 +83,29 @@ The same bytes are the flash file, the remote's `read` payload and the QR share 
 
 ## Storage and writes
 
-- One file per run, `/bt<id>.rec`, inline in the root directory's metadata pair; the newest 3 are kept (`store::kKeep`), the
-  oldest is pruned before a new file is written.
+- One file per run, `/bt/<id>.rec`, inline in the `/bt` directory's own metadata pair; the newest 3 are kept
+  (`store::kKeep`), the oldest is pruned before a new file is written.
+- Runs an older firmware kept in the root (`/bt<id>.rec`) move into `/bt` at boot, one rename each (littlefs renames
+  across directories atomically; `Fs::mount` settles a rename a power cut interrupted, so a run is always in exactly one
+  place, and the next boot moves the rest). The move deletes nothing; the next new run prunes to 3. A version 1 run that
+  was measuring resumes when it holds energy (its direction from its curve, its end rule armed); one with none is closed
+  Lost (an older firmware's start write).
 - An empty run (under 1 mWh in and out: `0.000Wh` both ways) is not saved: no file, no kept run pruned for it. The footer
-  says `Empty run, not saved`; `battery status` says `empty run, not saved` (status flag 16). Budget: 0 blocks (`tests/test_volume_budget.cpp`, the volume table in
-  `docs/ARCHITECTURE.md`); a fourth run would split the root pair (4 blocks).
+  says `Empty run, not saved`; `battery status` says `empty run, not saved` (status flag 16). Budget: 2 blocks, the `/bt` pair (`tests/test_volume_budget.cpp`, the volume
+  table in `docs/ARCHITECTURE.md`).
 - Writes happen at a phase boundary (a phase end, the discharge's start, the finish; not the start, so a run takes a
   slot only once it measured something) and every 10 s (`kSaveMs`) while a phase measures and holds energy, and only
   when the main loop allows an erase (no charger test or PD Stress run owns the ports, the PD link quiet for the erase
   window); a refused save goes out at the next allowed pass. A failed write is retried every 10 s; the footer says
   `Run not saved to flash`.
 - Every write rewrites the run's file in place (`Fs::rewrite_file`: one metadata commit, no `.tmp` and rename; a power
-  cut leaves the old record or the new one). Cost, measured in `tests/test_battery.cpp` on a device-like root (settings
-  and two kept runs): 360 saves an hour, 446 B programmed per save, 90 erases of the root pair an hour (45 per 2 KB
-  block), about 19 s of flash time an hour (~50 ms per save, ~130-170 ms when the save compacts the pair). With the
-  device's root (store directories, `/log.txt`) 72 erases an hour.
-- Wear levelling: the root is the superblock pair (blocks 0 and 1), which littlefs never relocates. After 500 erases of
-  it (`block_cycles`, about 6-7 h of recording) it expands the superblock once on a volume under 88 % full: the root's
-  entries move to a new pair, +2 blocks for good (measured on a 111-block RamDisk: used 17 -> 19 at hour 7, then flat to
-  48 h, erases spread over 10 blocks, at most ~500 each per cycle). On a fuller volume it does not expand and blocks 0/1
-  take every erase (~36 an hour each).
+  cut leaves the old record or the new one). Cost, measured in `tests/test_battery.cpp` (24 h of saves on the device's
+  root: settings, the six store directories, `/log.txt`; two kept runs): 360 saves an hour, ~380 B programmed per save,
+  72 erases an hour of the `/bt` pair (36 per 2 KB block), about 16 s of flash time an hour (~45 ms per save, more when
+  the save compacts the pair).
+- Wear levelling: the root (the superblock pair, blocks 0 and 1) is never erased by the saves. littlefs relocates the
+  `/bt` pair every 500 erases (`block_cycles`, about 14 h of recording) onto free blocks: in 24 h 1728 erases over 5
+  blocks, at most 501 on one, blocks in use unchanged (17 -> 17), no superblock expansion.
 - A save waits while the main loop forbids an erase (a port owner, or PD traffic in the last second), so the flash copy
   can be older than 10 s at a cut. A run cut before its first save (the first 10 s, or under 1 mWh) is not on flash.
 - A new run waits for the previous run's write: `start` refuses with Busy while that record is unwritten and a write is not

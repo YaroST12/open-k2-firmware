@@ -924,7 +924,7 @@ What each littlefs store costs at its cap, in 2 KB blocks, measured by `tests/te
 | settings | `/usb.cfg`, `/cable.cfg`, `/prefs.cfg` (8 B each), `/rd.rec` (10 B), `/.legacy` (1 B), inline in the root pair | 0 |
 | `/log.txt` | 512 B | 1 |
 | `/lp/last.rec` | the loop probe record (`loopprobe::kFileBytes`) | 3 |
-| `/bt<id>.rec` | the battery recorder's newest 3 runs (`battery::store::kKeep`), 250 B each, inline in the root pair, rewritten in place every 10 s while a phase measures beside the settings (a fourth run splits the pair: 4 blocks; a `/bt` directory costs a pair of its own) | 0 |
+| `/bt/<id>.rec` | the battery recorder's newest 3 runs (`battery::store::kKeep`), 250 B each, inline in the `/bt` directory's own pair, rewritten in place every 10 s while a phase measures (the pair levels; the root stays quiet). Older firmware kept them in the root; a boot moves them | 2 |
 | `/ps/run.rec` | the PD Stress journal (`pdstress::journal::kMaxBytes`) | 3 |
 | `/ps/xxxx.psr` | PD Stress saved results: 8 blobs of 1376 B (`pdstress::store::kFileBytes`, one data block each) + 1 in flight (a save writes before it drops the oldest) | 11 |
 | `/twin` | 12 twins of 129 B | 4 |
@@ -934,7 +934,7 @@ What each littlefs store costs at its cap, in 2 KB blocks, measured by `tests/te
 | `/jr` | the largest plan (`kMaxSteps` rows over all five sections, every small record written) | 7 |
 | **Sum** | 2 + 96 (typical emk) | **98 of 111** |
 
-Measured by the test: every store at its cap at once, in device order, fits 111 blocks with 11 free (the test asks for at least 8, the margin the move into the ring layout keeps); on 90 blocks it runs out at `/jr` with 1 free. The worst-case e-marker library (every quirk block full, 152 blocks) does not fit either size; on a 145-block unit that holds one, the move into the ring layout drops `/tcap` and `/log.txt` and, if the rest still does not fit, waits (Deferred).
+Measured by the test: every store at its cap at once, in device order, fits 111 blocks with 12 free (the test asks for at least 8, the margin the move into the ring layout keeps); with the PD Stress stores too (a K2_PDSTRESS=1 lab build) only the largest `/jr` misses, 2 blocks short since the battery runs took their own pair; on 90 blocks it runs out at `/jr` with 1 free. The worst-case e-marker library (every quirk block full, 152 blocks) does not fit either size; on a 145-block unit that holds one, the move into the ring layout drops `/tcap` and `/log.txt` and, if the rest still does not fit, waits (Deferred).
 
 Ring budgets (same test, on the RAM flash):
 
