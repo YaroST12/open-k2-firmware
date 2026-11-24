@@ -2367,6 +2367,7 @@ static void test_pd_limit_refusals_toast() {
     pick_9v_apply(ui, t);
     CHECK_STR(ui.context().toast.view().data(), "Port in use: stop it first");
     CHECK_EQ(int(ui.context().toast.tone), int(k2::FooterTone::Caution));
+    CHECK_EQ(ui.context().toast.active(ui.context().now + 1000), true);   // the default dwell, not a zero one
     CHECK_EQ(int(g_stub.lim.state), int(pd::LimState::Off));
     ui.context().toast.clear();
     g_stub.lim_refusal = pd::LimRefusal::BadLimit;

@@ -2948,6 +2948,18 @@ void ToolsPage::ask_confirm(uint32_t key) {
     ctx_.toast.show(FooterTone::Caution, text::tools::kLimToastConfirm, ctx_.now, Ui::kConfirmWindowMs);
 }
 
+namespace {
+// A limiter result toast, indexed by the result enum; no text = no toast, dwell 0 = the default.
+struct LimToast {
+    const char *msg;
+    FooterTone tone;
+    uint16_t dwell_ms;
+};
+void show_lim_toast(Toast &toast, const LimToast &t, uint32_t now) {
+    if (t.msg) toast.show(t.tone, t.msg, now, t.dwell_ms ? t.dwell_ms : kToastDefaultMs);
+}
+}  // namespace
+
 bool ToolsPage::apply_limit(bool off) {
     namespace tx = text::tools;
     const uint32_t key = off ? 0u : 1u;
@@ -2967,18 +2979,16 @@ bool ToolsPage::apply_limit(bool off) {
     drop_confirm();
     const Ui::LimitSet ls = ctx_.ui->pd_limit_set(off ? pd::LimConfig{} : draft_, off, confirmed, ctx_.now);
     if (ls == Ui::LimitSet::NeedConfirm) { ask_confirm(key); return true; }
-    struct Toast { FooterTone tone; const char *msg; uint16_t ms; };
-    static constexpr Toast kSetToast[] = {
-        {FooterTone::Info, nullptr, 0},                   // Done
-        {FooterTone::Info, tx::kLimToastResetting, 2500}, // DoneReset
-        {FooterTone::Info, nullptr, 0},                   // NeedConfirm
-        {FooterTone::Caution, tx::kLimToastNoReset, 0},   // NoReset
-        {FooterTone::Caution, tx::kLimToastBusy, 0},      // Busy
-        {FooterTone::Error, tx::kLimToastBadLimit, 0},    // BadLimit
+    static constexpr LimToast kSetToast[] = {
+        {nullptr, FooterTone::Info, 0},                   // Done
+        {tx::kLimToastResetting, FooterTone::Info, 2500}, // DoneReset
+        {nullptr, FooterTone::Info, 0},                   // NeedConfirm
+        {tx::kLimToastNoReset, FooterTone::Caution, 0},   // NoReset
+        {tx::kLimToastBusy, FooterTone::Caution, 0},      // Busy
+        {tx::kLimToastBadLimit, FooterTone::Error, 0},    // BadLimit
     };
-    static_assert(sizeof(kSetToast) / sizeof(kSetToast[0]) == static_cast<size_t>(Ui::LimitSet::BadLimit) + 1);
-    const Toast &t = kSetToast[static_cast<unsigned>(ls)];
-    if (t.msg) ctx_.toast.show(t.tone, t.msg, ctx_.now, t.ms);
+    static_assert(std::size(kSetToast) == static_cast<size_t>(Ui::LimitSet::BadLimit) + 1);
+    show_lim_toast(ctx_.toast, kSetToast[static_cast<unsigned>(ls)], ctx_.now);
     return false;
 }
 
@@ -3028,17 +3038,16 @@ bool ToolsPage::on_event(Event e) {
                 if (lr == Ui::LinkResetResult::NeedConfirm) {
                     ask_confirm(kResetKey);
                 } else {
-                    struct Toast { FooterTone tone; const char *msg; uint16_t ms; };
-                    static constexpr Toast kLrToast[] = {
-                        {FooterTone::Info, tx::kLimToastRescan, 2500},
-                        {FooterTone::Info, tx::kLimToastResetting, 2500},
-                        {FooterTone::Info, nullptr, 0},
-                        {FooterTone::Caution, tx::kLimToastSelfPowered, 0},
-                        {FooterTone::Caution, tx::kLimToastRetry, 1500},
-                        {FooterTone::Info, tx::kLimToastNoLink, 1500},
+                    static constexpr LimToast kLrToast[] = {
+                        {tx::kLimToastRescan, FooterTone::Info, 2500},        // Cycled
+                        {tx::kLimToastResetting, FooterTone::Info, 2500},     // HardReset
+                        {nullptr, FooterTone::Info, 0},                       // NeedConfirm
+                        {tx::kLimToastSelfPowered, FooterTone::Caution, 0},   // SelfPowered
+                        {tx::kLimToastRetry, FooterTone::Caution, 1500},      // Busy
+                        {tx::kLimToastNoLink, FooterTone::Info, 1500},        // NoLink
                     };
-                    const Toast &t = kLrToast[static_cast<unsigned>(lr)];
-                    if (t.msg) ctx_.toast.show(t.tone, t.msg, ctx_.now, t.ms);
+                    static_assert(std::size(kLrToast) == static_cast<size_t>(Ui::LinkResetResult::NoLink) + 1);
+                    show_lim_toast(ctx_.toast, kLrToast[static_cast<unsigned>(lr)], ctx_.now);
                 }
                 update(ctx_.now);
             }
