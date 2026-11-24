@@ -1914,7 +1914,7 @@ void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
     // First, so the 3-chip cap never drops it: the user's PD limit hides offers (a chip that explains a short list).
     if (const pd::LimStatus &ls = fusb302::limit_status(); ls.state != pd::LimState::Off) {
         char lb[pd::kLimLabelMax + 1]{};
-        const std::size_t ln = pd::lim_label(pd::lim_effective_config(ls), lb);
+        const std::size_t ln = pd::lim_label(ls.cfg, lb);
         StrBuf<12> lim;
         lim.put("LIM ").put(std::string_view{lb, ln});
         sl.add_chip(lim.view(), SliceSpec::Warn);
@@ -2869,16 +2869,9 @@ void ConnectionPage::update(uint32_t now_ms) {
     c = mix_u32(c, uint32_t(vbus_));   // the Type-C row's VBUS (100 mV steps)
     if (view_ == View::Overview) {   // the Charger slice's LIM chip
         const pd::LimStatus &ls = fusb302::limit_status();
-        if (ls.state != pd::LimState::Off) {
-            const pd::LimConfig lc = pd::lim_effective_config(ls);
-            c = mix_u32(c, lc.limit_mw + 1u);
-            c = mix_u32(c, (uint32_t(lc.fixed.enabled) | (uint32_t(lc.pps.enabled) << 1) | (uint32_t(lc.avs.enabled) << 2)) ^
-                               (uint32_t(lc.fixed.max_mv) << 3) ^ (uint32_t(lc.fixed.max_ma) << 15) ^
-                               (uint32_t(lc.pps.max_mv) << 5) ^ (uint32_t(lc.pps.max_ma) << 17) ^
-                               (uint32_t(lc.avs.max_mv) << 7) ^ (uint32_t(lc.avs.max_ma) << 19));
-        } else {
-            c = mix_u32(c, 0u);
-        }
+        std::array<uint8_t, pd::kLimPackBytes> lb{};   // Off hashes as all zero: an armed limit keeps one tech on
+        if (ls.state != pd::LimState::Off) pd::lim_pack(ls.cfg, lb);
+        c = pg::mix_str(c, {reinterpret_cast<const char *>(lb.data()), lb.size()});
     }
     if (view_ == View::Overview && (!shown_caps.valid || !ct.valid || fusb302::self_powered())) {
         c = mix_u32(c, uint32_t(ibus_));

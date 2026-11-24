@@ -2395,7 +2395,7 @@ static void test_pd_limit_give_up_toast_once() {
     Ui &ui = fresh_ui();
     set_caps_65w();
     uint32_t t = open_limit_row(ui, 20000);
-    g_stub.lim.state = pd::LimState::Armed; g_stub.lim.limit_mw = 27000;
+    g_stub.lim.state = pd::LimState::Armed; g_stub.lim.limit_mw = 27000; g_stub.lim.cfg = pd::lim_config_watts(27000);
     ui.goto_page(static_cast<uint8_t>(Page::Lines), t += 100);
     ui.goto_page(kMenuPageBase + static_cast<uint8_t>(Menu::Tools), t += 100);
     t = settle(ui, t);

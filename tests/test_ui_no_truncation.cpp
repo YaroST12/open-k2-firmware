@@ -487,7 +487,7 @@ void walk_wizard(Ui &ui, int rot, const Scenario &sc) {
 void walk_limit(Ui &ui, int rot, const Scenario &sc) {
     auto press = [&](Button b) { g_t += 150; ui.on_button(b, ButtonEvent::Short, g_t); ui.tick(g_t + 50); g_t += 50; };
     g_stub.lim = {};
-    g_stub.lim.state = pd::LimState::Armed; g_stub.lim.limit_mw = 100000;
+    g_stub.lim.state = pd::LimState::Armed; g_stub.lim.limit_mw = 100000; g_stub.lim.cfg = pd::lim_config_watts(100000);
     ui.goto_page(static_cast<uint8_t>(Page::Home), g_t);
     draw_for_a_while(ui, "limit-home", rot, sc.name);
     ui.goto_page(static_cast<uint8_t>(Page::Lines), g_t);

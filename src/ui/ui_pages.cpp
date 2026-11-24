@@ -2647,7 +2647,7 @@ void ToolsPage::show(View v) {
         build_picks();
         if (was == View::List) {
             const pd::LimStatus &s = fusb302::limit_status();
-            draft_ = s.state != pd::LimState::Off ? pd::lim_effective_config(s) : pd::LimConfig{};
+            draft_ = s.state != pd::LimState::Off ? s.cfg : pd::LimConfig{};
             pick_ = s.state != pd::LimState::Off ? 1 : 0;
             if (!has_caps_) ctx_.toast.show(FooterTone::Info, text::tools::kLimToastNoOffers, ctx_.now);
         }
@@ -2799,7 +2799,7 @@ void ToolsPage::limit_row(int index, bool focused, kit::RowSpec &out) const {
         tail_.clear();
         if (armed) {
             char lb[pd::kLimLabelMax + 1]{};
-            const std::size_t ln = pd::lim_label(pd::lim_effective_config(s), lb);
+            const std::size_t ln = pd::lim_label(s.cfg, lb);
             tail_.put(std::string_view{lb, ln});
             out.tail_color = kCaution;
         } else {
@@ -2961,7 +2961,7 @@ bool ToolsPage::apply_limit(bool off) {
             return true;
         }
         const pd::LimStatus &s = fusb302::limit_status();
-        if (s.state != pd::LimState::Off && pd::lim_effective_config(s) == draft_) return false;
+        if (s.state != pd::LimState::Off && s.cfg == draft_) return false;
     }
     const bool confirmed = confirmed_for(key);
     drop_confirm();

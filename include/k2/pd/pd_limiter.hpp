@@ -117,7 +117,7 @@ struct LimStatus {
     LimState state = LimState::Off;
     LimWhy why = LimWhy::None;          // why it is Off (None while armed)
     std::uint32_t limit_mw = 0;         // mirrored cfg.limit_mw (for existing wire layout / logs)
-    LimConfig cfg{};
+    LimConfig cfg{};                    // what arm() took, always valid while armed
     std::uint8_t injections = 0;
     std::uint8_t rejects = 0;           // resets right after our list, since the last stable Limited
     std::uint8_t ignores = 0;           // lists the sink answered with another too-large Request or nothing
@@ -127,10 +127,6 @@ struct LimStatus {
     std::uint32_t req_rdo = 0;
     std::uint32_t req_mw = 0;
 };
-
-constexpr LimConfig lim_effective_config(const LimStatus& s) {
-    return (s.limit_mw != 0 && !lim_config_active(s.cfg)) ? lim_config_watts(s.limit_mw) : s.cfg;
-}
 
 class Limiter {
 public:

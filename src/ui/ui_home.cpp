@@ -843,7 +843,7 @@ void HomePage::paint_info(const Frame &f) {
         const pd::LimStatus &ls = fusb302::limit_status();
         if (ls.state != pd::LimState::Off) {
             char lb[pd::kLimLabelMax + 1]{};
-            const std::size_t ln = pd::lim_label(pd::lim_effective_config(ls), lb);
+            const std::size_t ln = pd::lim_label(ls.cfg, lb);
             hm::format_limit(pt, f.proto.kind, std::string_view{lb, ln});
         }
     }
