@@ -27,14 +27,14 @@ enum class Stage : uint8_t { Pick, Edit, Review, Live };
 
 enum class Kind : uint8_t { Scan, Levels, Range, Fixed };
 
-struct Entry {
+struct Entry {   // 16-bit fields: every value is under 20 V in mV (24 B a row, not 44)
     const char *name;
     fc::Proto proto;
     Kind kind;
-    int n;                       // Levels: number of levels
-    std::array<int, 4> mv;       // Levels: the levels, ascending
-    int lo, hi, step;            // Range: bounds and step
-    int def;                     // default target
+    uint8_t n;                        // Levels: number of levels
+    std::array<uint16_t, 4> mv;       // Levels: the levels, ascending
+    uint16_t lo, hi, step;            // Range: bounds and step
+    uint16_t def;                     // default target
 };
 
 inline constexpr std::array<Entry, kEntries> kList = {{
