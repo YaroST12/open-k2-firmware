@@ -7,6 +7,7 @@
 #include "k2/core/bbstore.hpp"
 #include "k2/core/hot.h"
 #include "k2/fastcharge/edges.hpp"
+#include "k2/pd/pd_rxstamp.hpp"
 
 #include <initializer_list>
 
@@ -45,7 +46,9 @@ bool g_have_stamp;
 K2_HOT void push(Type t, std::span<const std::uint8_t> p) {
     if (!g_ring.frozen() && (t == Type::Rx || t == Type::Tx || t == Type::Vbus)) g_idle.touch(systick::millis());   // a collapsed frame is activity too
     std::uint32_t ts = g_have_stamp && (t == Type::Rx || t == Type::RxBad || t == Type::Poll) ? g_stamp_us : systick::micros();
-    if (std::int32_t(ts - g_last_ts_us) < 0) ts = g_last_ts_us;   // the ring's time stays monotone (the host unwraps by comparing)
+    // The ring's time stays monotone (the host unwraps by comparing) over the small steps back an RX edge stamp makes. A quiet
+    // ring over 2^31 us also reads as "back": clamping that froze every stamp for up to 35.8 min (trace 2026-11-24).
+    if (std::int32_t(ts - g_last_ts_us) < 0 && g_last_ts_us - ts <= pd::RxStamp::kMaxAgeUs) ts = g_last_ts_us;
     g_last_ts_us = ts;
     g_collapse.record(g_ring, t, ts, p, emit);
 }

@@ -84,6 +84,17 @@ struct Trace {
         wait(2);
         return c;
     }
+    // A message the passive K2 did not decode: only the other end's GoodCRC to it is on the record.
+    void missed(bool src, bool dfp) {
+        unsigned& idc = src ? id_src : id_snk;
+        const std::uint16_t g = hdr(GoodCRC, 0, idc, !src, !dfp);
+        const std::uint32_t gc = crc++;
+        std::vector<std::uint8_t> q{kSop, std::uint8_t(g), std::uint8_t(g >> 8)};
+        for (int i = 0; i < 4; i++) q.push_back(std::uint8_t(gc >> 8 * i));
+        put(pdtrace::Type::Rx, q);
+        idc = (idc + 1) & 7;
+        wait(2);
+    }
     // The K2 itself sends (active): a Tx record.
     void tx(bool src, bool dfp, unsigned type, const std::vector<std::uint32_t>& objs) {
         const std::uint16_t h = hdr(type, unsigned(objs.size()), id_snk, src, dfp);
@@ -1284,15 +1295,105 @@ void test_no_goodcrc_and_retries() {
     const auto c = t.rx(true, false, Source_Cap, kHubCaps, false, kSop, -1, 0);
     t.rx(true, false, Source_Cap, kHubCaps, false, kSop, int(c), 0);   // retry: same header and CRC within 20 ms
     t.rx(true, false, Source_Cap, kHubCaps, true, kSop, int(c), 0);
-    t.wait(200);
-    t.rx(false, true, Request, {rdo(1, 1000, 3000)}, false);   // no GoodCRC ...
-    t.rx(false, true, Request, {rdo(1, 900, 3000)}, true);     // ... and a different frame next
     Run run;
     run.go(t);
     EXPECT_CODE(run, Code::Retries, Sev::Info);
     CHECK_EQ(run.find(Code::Retries)->a, 2);
-    EXPECT_CODE(run, Code::NoGoodCrc, Sev::Info);
     EXPECT_NO(run, Code::CapsUnanswered);
+
+    Trace u;   // a Request retried without GoodCRC, then the sender gives up and moves on: a real link fault
+    u.cc(true);
+    u.rx(true, false, Source_Cap, kHubCaps);
+    const auto r = u.rx(false, true, Request, {rdo(1, 1000, 3000)}, false, kSop, -1, 0);
+    u.rx(false, true, Request, {rdo(1, 1000, 3000)}, false, kSop, int(r), 0);
+    u.id_snk = 1;
+    u.rx(false, true, Request, {rdo(1, 900, 3000)}, true);
+    Run ru;
+    ru.go(u);
+    EXPECT_CODE(ru, Code::NoGoodCrc, Sev::Info);
+    EXPECT_NO(ru, Code::CaptureGap);
+}
+
+// A frame the passive K2 did not decode is a capture gap, never a protocol verdict (PPS trace 2026-11-24: Accepts and
+// PS_RDYs lost at the device end, their GoodCRCs on the record).
+void test_capture_gap_is_no_verdict() {
+    {   // the Accept missed, the sink's GoodCRC to it seen, then PS_RDY
+        Trace t;
+        t.cc(true);
+        t.rx(true, false, Source_Cap, kHubCaps);
+        t.rx(false, true, Request, {rdo(2, 1000, 3000)});
+        t.missed(true, false);
+        t.wait(40);
+        t.rx(true, false, PS_RDY, {});
+        t.wait(3000);
+        Run run;
+        run.go(t);
+        EXPECT_NO(run, Code::NoAccept);
+        EXPECT_NO(run, Code::NoPsRdy);
+        EXPECT_NO(run, Code::NoGoodCrc);
+        EXPECT_CODE(run, Code::CaptureGap, Sev::Info);
+        CHECK_EQ(run.find(Code::CaptureGap)->a, 1);
+        CHECK_COND(run.a.shown().contract_seen);
+    }
+    {   // Accept and its GoodCRC both missed: PS_RDY alone shows the Request was taken
+        Trace t;
+        t.cc(true);
+        t.rx(true, false, Source_Cap, kHubCaps);
+        t.rx(false, true, Request, {rdo(2, 1000, 3000)});
+        t.id_src = (t.id_src + 1) & 7;
+        t.wait(40);
+        t.rx(true, false, PS_RDY, {});
+        t.wait(3000);
+        Run run;
+        run.go(t);
+        EXPECT_NO(run, Code::NoAccept);
+        EXPECT_CODE(run, Code::CaptureGap, Sev::Info);
+        CHECK_COND(run.a.shown().contract_seen);
+    }
+    {   // a PPS burst: Accept and PS_RDY missed twice, only the sink's GoodCRCs seen
+        Trace t;
+        t.cc(true);
+        t.rx(true, false, Source_Cap, kHubCaps);
+        for (int i = 0; i < 2; i++) {
+            t.rx(false, true, Request, {rdo(2, 1000, 3000)});
+            t.missed(true, false);
+            t.wait(30);
+            t.missed(true, false);
+            t.wait(300);
+        }
+        t.wait(3000);
+        Run run;
+        run.go(t);
+        EXPECT_NO(run, Code::NoAccept);
+        EXPECT_NO(run, Code::NoPsRdy);
+        EXPECT_CODE(run, Code::CaptureGap, Sev::Info);
+        CHECK_EQ(run.find(Code::CaptureGap)->a, 4);
+        CHECK_COND(run.a.shown().contract_seen);
+    }
+    {   // the GoodCRC to the Accept missed: the source moving on to its next MessageID shows it arrived
+        Trace t;
+        t.cc(true);
+        t.rx(true, false, Source_Cap, kHubCaps);
+        t.rx(false, true, Request, {rdo(2, 1000, 3000)});
+        t.rx(true, false, Accept, {}, false);
+        t.wait(40);
+        t.rx(true, false, PS_RDY, {});
+        Run run;
+        run.go(t);
+        EXPECT_NO(run, Code::NoGoodCrc);
+        EXPECT_CODE(run, Code::CaptureGap, Sev::Info);
+    }
+    {   // a real silence is still a verdict
+        Trace t;
+        t.cc(true);
+        t.rx(true, false, Source_Cap, kHubCaps);
+        t.rx(false, true, Request, {rdo(2, 1000, 3000)});
+        t.wait(1500);
+        Run run;
+        run.go(t);
+        EXPECT_CODE(run, Code::NoAccept, Sev::Warn);
+        EXPECT_NO(run, Code::CaptureGap);
+    }
 }
 
 void test_tx_fail_and_rx_bad() {
@@ -1450,11 +1551,11 @@ void test_boot_mark_finishes() {
 }
 
 void test_lines_fit_and_codes_named() {
-    for (int c = 0; c <= int(Code::CableSilent); c++) CHECK_COND(std::strcmp(code_name(Code(c)), "?") != 0);
+    for (int c = 0; c <= int(Code::CaptureGap); c++) CHECK_COND(std::strcmp(code_name(Code(c)), "?") != 0);
     Report r;
     r.empty = false;
     r.n = 0;
-    for (int c = 0; c <= int(Code::CableSilent) && r.n < kMaxFindings; c++) r.f[r.n++] = Finding{Sev::Warn, Group::Power, Code(c), 3600000, 99999, 99999, 99999, 3};
+    for (int c = 0; c <= int(Code::CaptureGap) && r.n < kMaxFindings; c++) r.f[r.n++] = Finding{Sev::Warn, Group::Power, Code(c), 3600000, 99999, 99999, 99999, 3};
     for (unsigned i = 0; i < line_count(r); i++) {
         Line l;
         if (line(r, i, l)) CHECK_COND(std::strlen(l.text.data()) < kLineMax);
@@ -1464,9 +1565,10 @@ void test_lines_fit_and_codes_named() {
 void test_ram_budget() {
     std::printf("sizeof Analyzer=%zu Session=%zu Report=%zu\n", sizeof(Analyzer), sizeof(Session), sizeof(Report));
     // two Sessions (the running one and the last finished one) are most of it; the window input added 8 B + state; the
-    // 64-bit energy sums added 12 B per Session (the host build has the same layout as the K2 for these fields)
+    // 64-bit energy sums added 12 B per Session (the host build has the same layout as the K2 for these fields); the
+    // capture-gap clock 8 B (alignment)
     CHECK_COND(sizeof(Session) <= 336);
-    CHECK_COND(sizeof(Analyzer) <= 824);
+    CHECK_COND(sizeof(Analyzer) <= 832);
 }
 
 // ---- the K2 screen's compact form (k2/pd/diag_screen.hpp) ----
@@ -1607,9 +1709,9 @@ void test_screen_worst_case_fits() {
         {Code::ModeNak, 7, 1, 0, 0}, {Code::ModeNak, 2, 0, 0, 0}, {Code::ModeNak, 4, 0, 0, 0},
         {Code::EnterUsbRefused, 0, 0, 0, 0}, {Code::EprFailed, 255, 0, 0, 0}, {Code::CableCap, 12340, 0, 0, 0},
         {Code::VdmLoop, 0xFF01 << 8 | 17, 255, 4, 0}, {Code::VdmLoop, 1, 255, 1, 0}, {Code::VdmLoop, 0x8087 << 8 | 16, 255, 0, 0},
-        {Code::CableSilent, 255, 255, 0, 0},
+        {Code::CableSilent, 255, 255, 0, 0}, {Code::CaptureGap, 255, 0, 0, 0},
     };
-    for (int c = 0; c <= int(Code::CableSilent); c++) {   // every code is in the table
+    for (int c = 0; c <= int(Code::CaptureGap); c++) {   // every code is in the table
         bool seen = false;
         for (const auto& w : worst) seen |= int(w.c) == c;
         CHECK_COND(seen);
@@ -1763,6 +1865,7 @@ int main() {
     test_active_sink_pdo_not_captured();
     test_contract_unseen_without_vbus();
     test_no_goodcrc_and_retries();
+    test_capture_gap_is_no_verdict();
     test_tx_fail_and_rx_bad();
     test_goodcrc_from_the_rx_fifo_is_no_tx_fail();
     test_pr_swap_refused_by_source();

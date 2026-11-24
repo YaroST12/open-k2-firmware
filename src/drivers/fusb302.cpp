@@ -74,6 +74,7 @@ pd::DetachTracker g_detach;
 bool g_pd_traffic = false;
 bool g_pd_seen_attach = false;
 pd::LineFallback g_linefb;
+pd::RxHunt g_rxhunt;
 pd::IdleWake g_idle_wake;
 std::uint32_t g_ident_session = 0;
 volatile bool g_irq = false;
@@ -646,6 +647,7 @@ void apply_cc_choice(const pd::CcChoice& c, bool pinned, std::uint8_t rd_both, b
     if (!seek_move) {
         rdseek().reset(g_idle_wake.enabled());   // setting off: the open readings go with the attach, as before the idle wake
         g_linefb.reset();                        // a fresh attach: the direct-plug schedule starts again (a fallback move keeps it)
+        g_rxhunt.reset();
         g_seek_passive = !pinned && (rd_both & (kPdwn1 | kPdwn2)) == 0;   // no Rd on any line while the scan read: the pick is unverified
     }
     if (pinned || seek_move) apply_rd();   // the pinned Rd follows the active line (pd::rd_lines)
@@ -784,6 +786,7 @@ void cc_window_recheck() {
     if (g_active_cc == 0 || g_pd_traffic || g_force_cc != 0 || g_pin_rd != 0) return;
     if (rdseek().moves() != 0) return;   // the Rd seek found the line by the Rp itself: the ADC levels do not overrule that
     if (g_linefb.moves() != 0) return;   // a direct plug: both lines read high by design, the fallback chose the line
+    if (g_rxhunt.moves() != 0) return;   // the listen hunt moved the receiver off the line the levels named
     const std::uint32_t now = systick::millis();
     if (std::int32_t(now - g_cc_recheck_at) < std::int32_t(kCcRecheckMinMs)) return;
     g_cc_recheck_at = now;
@@ -847,6 +850,23 @@ void line_fallback_move() {
     K2LOG("[PD] Rd CC%u -> CC%u: no VBUS after %u ms on a direct plug (try %u)\n", unsigned(from), unsigned(to),
           unsigned(g_linefb.ran_ms()), unsigned(g_linefb.moves()));
     apply_cc_choice({true, cc_mask(), to}, false, 0, true);
+}
+
+// The listen hunt (pd::RxHunt): only the receiver moves, nothing on the wire changes. Never while the K2 is a party to the link
+// (its Rd, VCONN or Auto-CRC) or the line is someone's (a pin, a forced line, the Ra mode, the loop host).
+bool rx_hunt_eligible() {
+    return (g_sw0 & (kPdwn1 | kPdwn2 | kVconnCc1 | kVconnCc2)) == 0 && !g_crc_on && g_pin_rd == 0 && g_force_cc == 0 && !g_ra &&
+           !g_lh && !g_run_owner && !g_listen.running();
+}
+void rx_hunt_move() {
+    const std::uint8_t to = g_active_cc == 1 ? 2 : 1;
+    if (g_rxhunt.moves() <= 8)   // a long silent contract keeps the hunt alternating: the log names the first moves only
+        K2LOG("[PD] Listen CC%u -> CC%u: no PD frame, VBUS %d mV (move %u)\n", unsigned(g_active_cc), unsigned(to),
+              int(g_vbus_mv), unsigned(g_rxhunt.moves()));
+    g_active_cc = to;
+    wr(kSwitches0, std::uint8_t((g_sw0 & ~(kMeasCc1 | kMeasCc2)) | phy::sw0_measure(to)));
+    write_sw1();
+    flush_rx();   // the old line's leftovers
 }
 
 }  // namespace
@@ -1492,6 +1512,7 @@ void detach_reset(std::uint8_t status0) {
     rdseek().reset(g_idle_wake.enabled());   // the next attach decides again whether its line was picked without Rd (the open readings stay only while the idle wake needs them)
     g_idle_wake.reset();   // back to idle: the wake re-decides from the fresh open readings
     g_linefb.reset();      // a detach ends the direct-plug schedule with the attach it belonged to
+    g_rxhunt.reset();
     g_seek_passive = false;
     g_detach.reset();
     sink().detach();
@@ -1643,6 +1664,8 @@ K2_HOT void poll() {
         else if (got && g_linefb.update(now_ms, line_fallback_eligible(), (status0 & kComp) != 0, g_vbus_mv < pd::kDarkVbusMv,
                                         line_fallback_other_rp()))
             line_fallback_move();
+        else if (got && g_rxhunt.update(now_ms, rx_hunt_eligible(), g_pd_traffic, g_vbus_mv, g_active_cc == 1 ? g_cc2_mv : g_cc1_mv))
+            rx_hunt_move();
         else if (got && g_detach.update(systick::millis(), (g_iq_inited && iq().resetting()) ? -1 : g_vbus_mv,   // an interrogation's reset drops VBUS on purpose
                                         (status0 & kComp) != 0 || rdseek().holding_slow(systick::millis(), g_active_cc) ||
                                             g_idle_wake.holding_slow(systick::millis(), g_active_cc, rdseek().open_mv(g_active_cc)),

@@ -703,6 +703,68 @@ void test_inline_drops_rd_and_detects_the_sink_leaving() {
     fusb302::set_inline(false);
 }
 
+// The inline listen hunt (pd::RxHunt): the scan latched CC2 by its levels, the BMC runs on CC1. VBUS is up (a PPS contract) and
+// nothing decodes on CC2: the receiver moves to CC1 (MEAS only: no Rd, no VCONN, nothing sent) and stays once frames decode.
+void test_inline_listen_moves_to_the_line_that_carries_bmc() {
+    reset_world();
+    fusb302::init();
+    fusb302::set_inline(false);
+    fusb302::sink_cc(1600, 1600);
+    g_reg[0x40] = 0x23;
+    g_line_mv_cc[0] = 100;                               // at scan time the comparator sees CC2 only
+    for (int i = 0; i < 60 && !usb_has("Active CC detected"); i++) { g_ms += 20; fusb302::poll(); }
+    CHECK_EQ(usb_has("Active CC detected: CC2"), true);
+    fusb302::set_inline(true);
+    g_line_mv_cc[0] = 1600;
+    g_log.clear(); g_usb.clear();
+    unsigned id = 0;
+    for (int i = 0; i < 200; i++) {                      // 4 s
+        g_ms += 20;
+        fusb302::sink_vbus(9000);
+        fusb302::sink_cc(1600, 1600);
+        if ((g_reg[0x02] & 0x0C) == 0x04 && i % 5 == 0)  // the source's PS_RDY, heard on CC1 only
+            push_frame(0xE0, std::uint16_t(0x0006 | 2u << 6 | 1u << 8 | (id++ & 7u) << 9), {});
+        fusb302::poll();
+    }
+    CHECK_EQ(usb_has("[PD] Listen CC2 -> CC1"), true);
+    CHECK_EQ(int(fusb302::active_cc()), 1);
+    CHECK_EQ(fusb302::pd_traffic(), true);
+    int moves = 0;
+    for (const auto& s : g_usb) moves += s.find("[PD] Listen") != std::string::npos;
+    CHECK_EQ(moves, 1);
+    for (const auto& s : g_log) {
+        CHECK_COND(s != "W 06=01");                      // nothing sent
+        if (s.rfind("W 02=", 0) == 0) CHECK_EQ(std::stoul(s.substr(5), nullptr, 16) & 0x33ul, 0ul);   // no Rd, no VCONN
+    }
+    fusb302::set_inline(false);
+}
+
+// The hunt never pulls a right pick off before its first frame: the caps arrive 900 ms after VBUS on the scanned line.
+void test_inline_listen_keeps_a_right_line_with_slow_caps() {
+    reset_world();
+    fusb302::init();
+    fusb302::set_inline(false);
+    fusb302::sink_cc(1600, 1600);
+    g_reg[0x40] = 0x23;
+    for (int i = 0; i < 60 && !usb_has("Active CC detected"); i++) { g_ms += 20; fusb302::poll(); }
+    CHECK_EQ(usb_has("Active CC detected: CC1"), true);
+    fusb302::set_inline(true);
+    g_usb.clear();
+    unsigned id = 0;
+    for (int i = 0; i < 300; i++) {                      // 6 s, VBUS at vSafe5V from the first tick
+        g_ms += 20;
+        fusb302::sink_vbus(5000);
+        fusb302::sink_cc(1600, 1600);
+        if ((g_reg[0x02] & 0x0C) == 0x04 && i >= 45 && i % 25 == 20)   // heard on CC1 only, the first at 900 ms
+            push_frame(0xE0, std::uint16_t(0x0006 | 2u << 6 | 1u << 8 | (id++ & 7u) << 9), {});
+        fusb302::poll();
+    }
+    CHECK_EQ(usb_has("[PD] Listen"), false);
+    CHECK_EQ(int(fusb302::active_cc()), 1);
+    CHECK_EQ(fusb302::pd_traffic(), true);
+    fusb302::set_inline(false);
+}
+
 // Inline (a real sink on the other port): after the sink left, the line stays at SWITCHES0 = 0 (no Rd in
 // plain boot) and a charger that shows up is found by the next scan, with no hold delaying it.
 void test_inline_rd_stays_off_after_a_detach_then_comes_back() {
@@ -5536,6 +5598,8 @@ int main() {
     test_sniff_never_touches_cc_or_vconn();
     test_failed_scan_restores_the_pre_scan_state();
     test_detach_on_cc_loss_after_500ms();
+    test_inline_listen_moves_to_the_line_that_carries_bmc();
+    test_inline_listen_keeps_a_right_line_with_slow_caps();
     test_detach_on_low_vbus_after_1s();
     test_vbus_zero_throughout_is_no_detach();
     test_inline_drops_rd_and_detects_the_sink_leaving();

@@ -470,8 +470,8 @@ void Analyzer::timers() {
     }
     if (pend_ != kPendNone && now_ms_ - pend_ms_ > kMissingMs) {
         if (pend_ == kPendRequest) {
-            if (s.no_accept++ == 0) s.miss_ms = pend_ms_;
-        } else if (const std::uint8_t b = swap_bit(pend_)) {
+            if (!blind(pend_ms_) && s.no_accept++ == 0) s.miss_ms = pend_ms_;
+        } else if (const std::uint8_t b = blind(pend_ms_) ? 0 : swap_bit(pend_)) {
             s.refused |= b;   // never answered
             if (pend_ == kPendPr) { s.refused_ans = 0; s.refused_ms = pend_ms_; s.refused_mv = s.contract ? s.c_mv : v_mv_; }
             if (!pend_from_src_) s.refused_by_src |= b;
@@ -480,9 +480,28 @@ void Analyzer::timers() {
     }
     if (wait_psrdy_ && now_ms_ - accept_ms_ > kPsRdyMissingMs) {
         wait_psrdy_ = false;
-        if (s.no_psrdy++ == 0 && s.miss_ms == 0) s.miss_ms = accept_ms_;
+        if (!blind(accept_ms_) && s.no_psrdy++ == 0 && s.miss_ms == 0) s.miss_ms = accept_ms_;
     }
 }
+
+void Analyzer::ps_rdy() {
+    Session& s = cur_;
+    wait_psrdy_ = false;
+    const std::uint32_t dt = now_ms_ - accept_ms_;
+    const std::uint32_t lim = (s.epr ? spec::kPsTransitionEprMaxMs : spec::kPsTransitionMaxMs) + kAnswerSlackMs;
+    if (dt > lim && dt > s.late_psrdy_ms) s.late_psrdy_ms = std::uint16_t(dt);
+    s.contract = s.contract_seen = true;
+    s.contract_ms = now_ms_;
+    contract_from_rdo();
+    last_pwr_ms_ = now_ms_;
+}
+
+void Analyzer::gap() {
+    inc(cur_.gaps);
+    gap_ms_ = now_ms_;
+}
+
+bool Analyzer::blind(std::uint32_t since) const { return cur_.gaps && std::int32_t(gap_ms_ - since) >= 0; }
 
 void Analyzer::advance(std::uint32_t ts_us) {
     tick(ts_us);
@@ -609,6 +628,18 @@ void Analyzer::message(bool rx, std::uint8_t token, std::uint16_t hdr, std::span
         if ((frame_open_ >> sop & 1) && (frame_[sop].hdr >> 9 & 7) == id) frame_open_ &= std::uint8_t(~(1u << sop));
         if (sop == 0 && !from_src) s.sink_answered = true;
         if (sop != 0 && from_src) s.cable_answered = true;   // the cable plug acknowledged
+        // a GoodCRC to no frame the K2 decoded: the frame was missed; after a Request the source's frames are Accept, PS_RDY
+        if (sop == 0 && !s.active && ((frame_[0].hdr >> 8 & 1) == from_src || (frame_[0].hdr >> 9 & 7) != id)) {
+            gap();
+            if (from_src) return;
+            if (pend_ == kPendRequest) {
+                pend_ = kPendNone;
+                wait_psrdy_ = true;
+                accept_ms_ = last_pwr_ms_ = now_ms_;
+            } else if (wait_psrdy_) {
+                ps_rdy();
+            }
+        }
         return;
     }
     if (rx) {   // retries and frames left without GoodCRC (both ends' GoodCRC are on the wire when the K2 is passive)
@@ -617,6 +648,7 @@ void Analyzer::message(bool rx, std::uint8_t token, std::uint16_t hdr, std::span
         if (frame_open_ >> sop & 1) {
             if (f.hdr == hdr && f.crc == crc && std::uint16_t(ms16 - f.ms16) <= kRetryMs) {
                 inc(sop == 0 ? s.retries : s.cable_frames);
+                frame_open_ |= std::uint8_t(0x10u << sop);   // retried: the sender saw no GoodCRC
                 f.ms16 = ms16;
                 return;   // the same message again: its meaning was taken the first time
             }
@@ -624,12 +656,19 @@ void Analyzer::message(bool rx, std::uint8_t token, std::uint16_t hdr, std::span
             // caps-unanswered rule covers a sink that never answers): not a link fault
             const bool early_caps = (f.hdr & 0x1F) == kSrcCaps && !(f.hdr >> 15 & 1) && (f.hdr >> 12 & 7) &&
                                     !s.contract_seen;
-            if (sop == 0 && !s.active && !early_caps) inc(s.no_goodcrc);
+            // a sender without GoodCRC retries the same frame: none seen and the talk moved on (the other end, a new
+            // MessageID, not a Soft_Reset) means the GoodCRC was sent and the K2 missed it
+            const bool moved_on = !(frame_open_ >> (4 + sop) & 1) && ((f.hdr ^ hdr) & 0x0F00) &&
+                                  !(!ext && n == 0 && type == kSoftReset);
+            if (sop == 0 && !s.active && !early_caps) {
+                if (moved_on) gap();
+                else inc(s.no_goodcrc);
+            }
         }
         f.hdr = hdr;
         f.crc = crc;
         f.ms16 = ms16;
-        frame_open_ |= std::uint8_t(1u << sop);
+        frame_open_ = std::uint8_t((frame_open_ & ~(0x10u << sop)) | 1u << sop);
     }
     const std::uint8_t* o = objs.data();
 
@@ -723,14 +762,17 @@ void Analyzer::message(bool rx, std::uint8_t token, std::uint16_t hdr, std::span
                 s.offer_ma = b.ma;
                 s.offer_top_mv = b.top_mv;
             }
-            if (pend_ == kPendRequest) { if (s.no_accept++ == 0) s.miss_ms = pend_ms_; pend_ = kPendNone; }
-            if (wait_psrdy_) { wait_psrdy_ = false; if (s.no_psrdy++ == 0 && s.miss_ms == 0) s.miss_ms = accept_ms_; }
+            if (pend_ == kPendRequest) { if (!blind(pend_ms_) && s.no_accept++ == 0) s.miss_ms = pend_ms_; pend_ = kPendNone; }
+            if (wait_psrdy_) {
+                wait_psrdy_ = false;
+                if (!blind(accept_ms_) && s.no_psrdy++ == 0 && s.miss_ms == 0) s.miss_ms = accept_ms_;
+            }
             last_pwr_ms_ = now_ms_;
             return;
         case kRequest:
         case kEprRequest: {
             if (from_src) return;
-            if (pend_ == kPendRequest) { if (s.no_accept++ == 0) s.miss_ms = pend_ms_; }
+            if (pend_ == kPendRequest && !blind(pend_ms_)) { if (s.no_accept++ == 0) s.miss_ms = pend_ms_; }
             s.rdo = rd32(o);
             s.rdo_ms = now_ms_;
             s.req_dev = rx;
@@ -822,16 +864,14 @@ void Analyzer::message(bool rx, std::uint8_t token, std::uint16_t hdr, std::span
         return;
     }
     case kPsRdy:
-        if (wait_psrdy_ && from_src) {
-            wait_psrdy_ = false;
-            const std::uint32_t dt = now_ms_ - accept_ms_;
-            const std::uint32_t lim = (s.epr ? spec::kPsTransitionEprMaxMs : spec::kPsTransitionMaxMs) + kAnswerSlackMs;
-            if (dt > lim && dt > s.late_psrdy_ms) s.late_psrdy_ms = std::uint16_t(dt);
-            s.contract = s.contract_seen = true;
-            s.contract_ms = now_ms_;
-            contract_from_rdo();
-            last_pwr_ms_ = now_ms_;
+        if (!from_src) return;
+        if (pend_ == kPendRequest) {   // its Accept was missed
+            gap();
+            pend_ = kPendNone;
+            wait_psrdy_ = true;
+            accept_ms_ = now_ms_;
         }
+        if (wait_psrdy_) ps_rdy();
         return;
     case kPrSwap: case kDrSwap: case kVconnSwap: case kFrSwap:
         pend_ = type == kPrSwap ? kPendPr : type == kDrSwap ? kPendDr : type == kVconnSwap ? kPendVconn : kPendFr;
@@ -1020,6 +1060,7 @@ Report evaluate(const Session& s, const TwinHint* twin, std::uint32_t now_ms) {
     if (s.tx_fail) add(r, Sev::Warn, Group::Link, Code::TxFail, 0, s.tx_fail);
     if (s.rx_bad) add(r, s.rx_bad >= 3 ? Sev::Warn : Sev::Info, Group::Link, Code::RxBad, 0, s.rx_bad);
     r.quiet_link = r.n == n2;
+    if (s.gaps) add(r, Sev::Info, Group::Link, Code::CaptureGap, 0, s.gaps);
 
     // -- roles and modes --
     const unsigned n3 = r.n;
@@ -1169,6 +1210,7 @@ void title(const Report& r, const Finding& f, Out& o) {
     case Code::CableCap: o.s("Cable limits the offer to 3 A"); break;
     case Code::VdmLoop: o.s(vdm_cmd(std::uint32_t(f.a))); o.s(" asked "); o.u(std::uint32_t(f.b)); o.c('x'); break;
     case Code::CableSilent: o.s("Cable plug never answered on SOP'"); break;
+    case Code::CaptureGap: o.u(std::uint32_t(f.a)); o.s(f.a == 1 ? " frame the K2 missed" : " frames the K2 missed"); break;
     }
 }
 
@@ -1287,6 +1329,7 @@ void note(const Report& r, const Finding& f, Out& o) {
         o.s("Discover_Identity sent "); o.u(std::uint32_t(f.a)); o.s("x (");
         o.u(std::uint32_t(f.b)); o.s(f.b == 1 ? " request" : " requests"); o.s(" + retries); no cable chip on this leg");
         break;
+    case Code::CaptureGap: o.s("seen by their GoodCRC or the next MessageID; a capture gap, not a link fault"); break;
     }
 }
 
@@ -1450,8 +1493,9 @@ const char* code_name(Code c) {
         "vbus_low", "vbus_high", "vbus_lost", "input_cuts", "over_sustained",
         "no_goodcrc", "retries", "tx_fail", "rx_bad",
         "swap_refused", "mode_nak", "enter_usb_refused", "epr_failed", "cable_cap", "vdm_loop", "cable_silent",
+        "capture_gap",
     };
-    static_assert(sizeof(kCodeNames) / sizeof(kCodeNames[0]) == static_cast<unsigned>(Code::CableSilent) + 1);
+    static_assert(sizeof(kCodeNames) / sizeof(kCodeNames[0]) == static_cast<unsigned>(Code::CaptureGap) + 1);
     const unsigned i = static_cast<unsigned>(c);
     return i < (sizeof(kCodeNames) / sizeof(kCodeNames[0])) ? kCodeNames[i] : "?";
 }

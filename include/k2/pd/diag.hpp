@@ -52,6 +52,8 @@ enum class Code : std::uint8_t {
     NoGoodCrc, Retries, TxFail, RxBad,
     // roles and modes
     SwapRefused, ModeNak, EnterUsbRefused, EprFailed, CableCap, VdmLoop, CableSilent,
+    // the capture itself: frames the passive K2 did not decode (no verdict on the link)
+    CaptureGap,
 };
 
 // Thresholds (named, so the tests and the docs quote the same numbers).
@@ -178,6 +180,7 @@ struct Session {
     bool src_host = false;                 // ... the source is
     std::uint8_t hard = 0, soft = 0, soft_k2 = 0, rejects = 0, waits = 0, no_accept = 0, no_psrdy = 0;
     std::uint8_t retries = 0, no_goodcrc = 0, tx_fail = 0, rx_bad = 0;   // link quality; counters saturate (255)
+    std::uint8_t gaps = 0;                 // frames the passive K2 missed: a GoodCRC or the sender's next MessageID shows them
     std::uint8_t refused = 0;              // bit per swap kind refused: 1 PR, 2 DR, 4 VCONN, 8 FR
     std::uint8_t refused_by_src = 0;       // ... the refuser held the source role
     std::uint8_t refused_ans = 0;          // the PR refusal's answer (4 Reject, 12 Wait, 16 Not_Supported, 0 none)
@@ -299,6 +302,9 @@ private:
     void message(bool rx, std::uint8_t token, std::uint16_t hdr, std::span<const std::uint8_t> objs, std::uint32_t crc);
     void contract_from_rdo();
     void close_burst();
+    void ps_rdy();
+    void gap();
+    bool blind(std::uint32_t since) const;   // a capture gap since then: a missing answer may be one the K2 missed
     void hand_over();   // the K2 latched an inline sink: its own sink session ends, the device's begins
     bool first_vbus_opens(std::uint16_t mv) const;   // VBUS up on a trace that started mid-session
     void sustain(std::uint32_t dt, std::uint32_t ma);   // the kSustainMs blocks against the contract
@@ -311,7 +317,7 @@ private:
     Session cur_, last_;
     std::array<Frame, 3> frame_{};         // SOP, SOP', SOP''
     std::array<std::uint32_t, 7> src_pdos_{};   // the offer, for the contract at PS_RDY
-    std::uint32_t pend_ms_ = 0, accept_ms_ = 0, v_ms_ = 0;
+    std::uint32_t pend_ms_ = 0, accept_ms_ = 0, v_ms_ = 0, gap_ms_ = 0;
     std::uint32_t plow_ms_ = 0;            // a VBUS reading under the band, waiting kUnplugMs for a detach (plow_)
     std::uint32_t lost_pend_ms_ = 0, last_pwr_ms_ = 0;
     std::uint32_t over_on_ms_ = 0, over_last_ms_ = 0;   // the open over-draw burst: first and last sample above
@@ -329,7 +335,7 @@ private:
     std::int16_t prev_imax_ = 0;           // the previous power window's IBUS maximum (a cut-out across windows)
     std::uint16_t pre_mv_ = 0;            // VBUS before any session opened (seeds the next one)
     std::int16_t pre_ma_ = 0;
-    std::uint8_t frame_open_ = 0;          // bit per SOP type: a frame waits for its GoodCRC
+    std::uint8_t frame_open_ = 0;          // bit per SOP type: a frame waits for its GoodCRC; bit 4 + SOP: it was retried
     std::uint8_t pend_ = 0, pend_from_src_ = 0;
     bool wait_psrdy_ = false;
     bool lost_pend_ = false, low_ = false;

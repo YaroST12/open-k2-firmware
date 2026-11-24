@@ -178,6 +178,43 @@ private:
     std::uint8_t moves_ = 0;
 };
 
+// The passive listen hunt (inline, 2026-11-24: one plug orientation decoded nothing until the cable was flipped). The attach
+// scan names the line from DC levels alone, and inline both nets can look like CC (a source's Rp on both pins of a plug, an Ra
+// or the board's CC2 bias net on the unused one); nothing tested the pick against BMC. So while the K2 presents nothing of its
+// own, VBUS is up and no frame has decoded on the line for the dwell, the receiver (MEAS_CC only) tries the other line. Above
+// vSafe5V a contract was made, so traffic will come (a PPS sink asks every <= 10 s): it keeps alternating; at 5 V it stops.
+// The first dwell outlasts a correct line's first frame (tFirstSourceCap 250 ms after vSafe5V, slow chargers later): the hunt must
+// never pull a right pick off before the caps arrive.
+inline constexpr std::uint32_t kRxHuntDwellMs[4] = {1000, 1000, 3000, 11000};   // the last one repeats
+inline constexpr std::uint8_t kRxHuntMoves5V = 4;
+inline constexpr std::int32_t kRxHuntVbusMv = 4400, kRxHuntContractMv = 5500;
+inline constexpr std::int32_t kRxHuntDeadMv = 200;   // the other net known below this: no Rp there, so no BMC either
+
+class RxHunt {
+public:
+    void reset() { *this = RxHunt{}; }
+    // One call per poll while attached. `eligible`: passive (no Rd, VCONN or Auto-CRC of ours, no pinned or forced line).
+    // `heard`: a PD frame decoded on this line since the attach. `other_mv`: the ADC level of the other net, -1 unknown.
+    // Returns true once when the receiver should move to the other line.
+    bool update(std::uint32_t now, bool eligible, bool heard, std::int32_t vbus_mv, std::int32_t other_mv) {
+        if (heard) done_ = true;   // latched: a unit reset that clears the driver's traffic flag does not restart the hunt
+        if (!eligible || done_ || vbus_mv < kRxHuntVbusMv) { armed_ = false; return false; }
+        if (!armed_) { armed_ = true; since_ = now; return false; }
+        if (now - since_ < kRxHuntDwellMs[moves_ < 3 ? moves_ : 3]) return false;
+        if (vbus_mv < kRxHuntContractMv && moves_ >= kRxHuntMoves5V) return false;
+        since_ = now;
+        if (other_mv >= 0 && other_mv < kRxHuntDeadMv) return false;
+        if (moves_ < 0xFF) ++moves_;
+        return true;
+    }
+    std::uint8_t moves() const { return moves_; }
+private:
+    bool armed_ = false;
+    bool done_ = false;      // a frame decoded on the line in this attach
+    std::uint8_t moves_ = 0;
+    std::uint32_t since_ = 0;
+};
+
 // The idle wake (pattern slow-rp-wake, idle path, 2026-11-10): an idle K2 with no source detected and no Rd of its
 // own presents none, so a sleeping source - the splitter's port with nothing attached, one CC line reading the
 // standby signature open, VBUS 78 mV, "No source" - is never asked and never wakes; only a pinned re-read woke it

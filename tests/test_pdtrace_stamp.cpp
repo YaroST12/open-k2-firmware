@@ -7,6 +7,7 @@
 
 #include "k2/pd/pdtrace.hpp"
 #include "test_util.h"
+#include "ui_stubs.h"
 
 using namespace k2::pdtrace;
 
@@ -47,11 +48,14 @@ int main() {
     }
     {   // the stamp is for one frame: the next one is stamped now
         const std::uint32_t h = live_ring().head();
-        stamp_rx(0x7FFFFFF0u);
+        mark(4);
+        fl();
+        const std::uint32_t stamp = last_ts(h, Type::Mark) + 3000;
+        stamp_rx(stamp);
         rx_frame(2);
         fl();
         const std::uint32_t t1 = last_ts(h, Type::Rx);
-        CHECK_EQ(int(t1), 0x7FFFFFF0);
+        CHECK_EQ(int(t1), int(stamp));
         const std::uint32_t h2 = live_ring().head();
         rx_frame(3);
         fl();
@@ -77,6 +81,19 @@ int main() {
         rx_bad(0x00, 1, 2);
         fl();
         CHECK_EQ(int(last_ts(h, Type::RxBad)), int(t_mark + 40));
+    }
+    {   // a quiet ring longer than 2^31 us (35.8 min) is no step back: the clamp froze the time for the next 35.8 min
+        const std::uint32_t h = live_ring().head();
+        mark(5);
+        fl();
+        const std::uint32_t t_mark = last_ts(h, Type::Mark);
+        g_stub.ms += 40u * 60u * 1000u;
+        const std::uint32_t h2 = live_ring().head();
+        mark(6);
+        fl();
+        const std::uint32_t t_late = last_ts(h2, Type::Mark);
+        CHECK_COND(t_late != t_mark);
+        CHECK_COND(t_late - t_mark >= 2'400'000'000u && t_late - t_mark < 2'401'000'000u);
     }
     return test_report("test_pdtrace_stamp");
 }
