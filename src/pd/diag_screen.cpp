@@ -63,6 +63,7 @@ const char* label(const Finding& f) {
     case Code::CableCap: return "Cable caps 3A";
     case Code::VdmLoop: return "VDM repeats";
     case Code::CableSilent: return "Cable silent";
+    case Code::CaptureGap: return "Capture gap";
     }
     return "?";
 }
@@ -208,6 +209,7 @@ void note(const Report& r, const Finding& f, Out& o) {
         break;
     }
     case Code::CableSilent: o.s("Discover_Identity "); o.u(un(f.a)); o.s("x, no ID"); break;
+    case Code::CaptureGap: o.u(un(f.a)); o.s(" frames not decoded"); break;
     }
 }
 
@@ -302,6 +304,7 @@ bool is_event(Code c) {
     case Code::PowerShort: case Code::MismatchFlag: case Code::NoMismatchFlag: case Code::Pinned: case Code::Draw:
     case Code::DrawReduced: case Code::FiveVoltOnly: case Code::ContractUnseen: case Code::NoContract: case Code::ActiveSink:
     case Code::CapsUnanswered: case Code::SwapRefused: case Code::CableCap: case Code::VdmLoop: case Code::CableSilent:
+    case Code::CaptureGap:
         return false;
     }
     return false;

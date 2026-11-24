@@ -385,10 +385,10 @@ static void test_diag_event_classes() {
     // the session as it stands: stays while it holds
     for (Code c : {Code::PowerShort, Code::MismatchFlag, Code::Pinned, Code::FiveVoltOnly, Code::CapsUnanswered, Code::CableCap,
                    Code::NoMismatchFlag, Code::Draw, Code::DrawReduced, Code::ContractUnseen, Code::NoContract,
-                   Code::ActiveSink, Code::SwapRefused, Code::VdmLoop, Code::CableSilent})
+                   Code::ActiveSink, Code::SwapRefused, Code::VdmLoop, Code::CableSilent, Code::CaptureGap})
         CHECK_EQ(sc::is_event(c), false);
     int events = 0;
-    for (int c = 0; c <= static_cast<int>(Code::CableSilent); c++) events += sc::is_event(static_cast<Code>(c));
+    for (int c = 0; c <= static_cast<int>(Code::CaptureGap); c++) events += sc::is_event(static_cast<Code>(c));
     CHECK_EQ(events, 23);
 }
 
