@@ -89,6 +89,14 @@ static void battery_frames(Ui& ui, uint32_t& t, const char* prefix) {
     bt::hw::poll(tb += 1000, true);
     g_stub.pm.current_ma = ma;
     ui.open_place(bench::Place::Battery, t); render(ui, t, name("place_battery_done"));
+    // Continue: the row under the facts, armed by the first OK (only on the plain frames: the README keeps its set)
+    if (!*prefix) {
+        for (int k = 0; k < 4; k++) ui.on_button(Button::Plus, ButtonEvent::Short, t);   // past In, Out, Time, Efficiency
+        ui.on_button(Button::Ok, ButtonEvent::Short, t);
+        render(ui, t, name("place_battery_continue_armed"));
+        ui.on_button(Button::Ok, ButtonEvent::Short, t);
+        render(ui, t, name("place_battery_continued"));
+    }
     stub_battery_reset();
 }
 

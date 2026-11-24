@@ -97,6 +97,13 @@ static void test_rows() {
     CHECK_EQ(s.eff_final, true);
     rw = view::rows(s, false);
     CHECK_EQ(int(rw.a[rw.n - 1]), int(A::Share));
+    CHECK_EQ(int(rw.a[rw.facts]), int(A::Continue));   // the run just ended goes on from here
+    CHECK_EQ(rw.n, 13);                                 // 4 facts, Continue, 3 starts, 3 settings, Saved runs, Share
+    CHECK(eq(view::act_name(A::Continue, s), "Continue run"));
+    CHECK_EQ(int(view::act_verb(A::Continue)), int(sl::Resume));
+    rw = view::rows(s, true, true);   // the newest stored run, nothing measuring: Continue too
+    CHECK_EQ(rw.n, rw.facts + 2);
+    CHECK_EQ(int(rw.a[rw.facts]), int(A::Continue));
     rw = view::rows(s, true);   // a stored run: its facts and Share only
     CHECK_EQ(rw.n, rw.facts + 1);
     for (int i = 0; i < rw.n; i++) CHECK(view::is_fact(rw.a[i]) == (i < rw.facts));
@@ -298,11 +305,78 @@ static void test_classic() {
     CHECK(count_px(kBg, kOppRailThickness, 0, kOppRailThickness + 208, 240) > 208 * 100);
 }
 
+// Continue: from the run just ended (main view), and after a boot from the newest stored run (Saved runs > the run); both arm
+// first like End. An older stored run has no Continue row.
+static int find_row(Ui &ui, const BatteryPage *p, view::Act a, std::uint32_t &t) {
+    for (int i = 0; i < 20 && p->selected() > 0; i++) press(ui, Button::Minus, t);
+    while (p->act() != a && p->selected() < p->list_state().count - 1) press(ui, Button::Plus, t);
+    return p->act() == a;
+}
+
+static void run_and_end(std::uint32_t &t) {
+    bt::hw::service().start(bt::Mode::Charge, bt::Wiring::SamePort, true);
+    g_stub.pm.vbus_mv = 5000;
+    g_stub.pm.current_ma = 1000;
+    for (int i = 0; i < 5; i++) bt::hw::poll(t += 1000, true);
+    g_stub.pm.current_ma = 0;
+    bt::hw::service().rec().end_phase();
+    bt::hw::poll(t += 1000, true);
+}
+
+static void test_continue_page() {
+    Ui &ui = fresh_ui();
+    std::uint32_t t = 1000;
+    ui.tick(t);
+    run_and_end(t);
+    open_settled(ui, bench::Place::Battery, t);
+    const BatteryPage *p = ui.battery_page();
+    CHECK(p != nullptr);
+    if (!p) return;
+    CHECK(find_row(ui, p, view::Act::Continue, t));
+    press(ui, Button::Ok, t);
+    CHECK_EQ(int(bt::hw::service().rec().state()), int(bt::State::Done));        // armed only
+    CHECK_EQ(int(p->labels()[Button::Ok]), int(sl::Confirm));
+    press(ui, Button::Ok, t);
+    CHECK_EQ(int(bt::hw::service().rec().state()), int(bt::State::Measuring));
+    CHECK_EQ(int(p->act()), int(view::Act::EndPhase));                              // the next thing to do
+    bt::hw::service().rec().finish();
+    bt::hw::poll(t += 1000, true);
+    run_and_end(t);                                                                 // run 2, the newest
+    // a boot: the recorder is idle, the runs are on flash
+    bt::hw::init(false);
+    press(ui, Button::Back, t);
+    open_settled(ui, bench::Place::Battery, t);
+    p = ui.battery_page();
+    if (!p) return;
+    CHECK(!find_row(ui, p, view::Act::Continue, t));                               // nothing in RAM to continue here
+    CHECK(find_row(ui, p, view::Act::Runs, t));
+    press(ui, Button::Ok, t);
+    CHECK_EQ(p->list_state().count, 2);
+    press(ui, Button::Plus, t);                                                     // the older run: no Continue
+    press(ui, Button::Ok, t);
+    CHECK(p->viewing_stored());
+    CHECK(!find_row(ui, p, view::Act::Continue, t));
+    press(ui, Button::Back, t);
+    press(ui, Button::Minus, t);                                                    // the newest
+    press(ui, Button::Ok, t);
+    CHECK(p->viewing_stored());
+    CHECK(find_row(ui, p, view::Act::Continue, t));
+    press(ui, Button::Ok, t);
+    CHECK_EQ(int(bt::hw::service().rec().state()), int(bt::State::Idle));
+    press(ui, Button::Ok, t);
+    CHECK_EQ(int(bt::hw::service().rec().state()), int(bt::State::Measuring));
+    CHECK_EQ(bt::hw::service().rec().id(), 2);
+    CHECK(!p->viewing_stored());                                                    // back on the main view, measuring
+    bt::hw::service().rec().finish();
+    bt::hw::poll(t += 1000, true);
+}
+
 int main() {
     test_numbers();
     test_rows();
     test_ident_and_footer();
     test_page();
+    test_continue_page();
     test_rows_have_no_marker();
     test_classic();
     return test_report("test_ui_battery");

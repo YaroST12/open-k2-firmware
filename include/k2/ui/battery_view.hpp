@@ -52,16 +52,17 @@ enum class Act : uint8_t {
     EndPhase, Next, Finish,                               // a run in progress
     Wiring, EndMa, EndS,                                  // the settings
     Runs, Share,                                          // the stored runs, the QR of the shown run
+    Continue,                                             // the newest run measures its last phase again
 };
-inline constexpr int kMaxRows = 12;
+inline constexpr int kMaxRows = 13;
 struct Rows {
     Act a[kMaxRows] = {};
     int n = 0;
     int facts = 0;               // the first `facts` rows are facts; the actions follow
 };
-// The main view (the run in RAM: facts when there is one, then what can be done now), or a stored run (`stored`: its facts
-// and Share).
-Rows rows(const Shown &s, bool stored);
+// The main view (the run in RAM: facts when there is one, then what can be done now; a Done run can be continued), or a
+// stored run (`stored`: its facts, Continue when `cont` (the newest, nothing active), and Share).
+Rows rows(const Shown &s, bool stored, bool cont = false);
 bool is_fact(Act a);
 const char *act_name(Act a, const Shown &s);   // the row text (font 16, <= 18 characters)
 sl::Id act_verb(Act a);                        // the OK strip slot of an action row (sl::None for a fact)

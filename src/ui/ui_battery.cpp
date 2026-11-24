@@ -39,13 +39,14 @@ constexpr const char *kNotes[] = {
     "the run as a QR code",              // Share
     "Wh out / Wh in, so far",            // Eff, running
     "Wh out / Wh in",                    // Eff, final
+    "measures its last phase again",     // Continue
 };
 static_assert(all_fit(kNotes, kLabelAdv, kit::kNoteMaxPx), "a Battery note is wider than the note box");
 
 // Rows without a tail run to the tail's edge; a row with one leaves the gap and the widest tail ("123.4Wh"; Wiring's
 // "Same port" sits beside a six-letter name).
 constexpr const char *kBareRows[] = {"Start round trip", "Start discharge", "End discharge", "Finish run", "Share as QR",
-                                     "No saved runs"};
+                                     "No saved runs", "Continue run"};
 static_assert(all_fit(kBareRows, kSmallAdvPx, kit::kTailX - kit::kTextX), "a Battery row runs into the tail");
 constexpr const char *kTailRows[] = {"Efficiency", "End below", "End after", "#999 Dischg", "#999 Round"};
 static_assert(all_fit(kTailRows, kSmallAdvPx, kit::kTailX - kit::kTextX - kit::kTailGap - 7 * static_cast<int>(kSmallAdvPx)),
@@ -64,6 +65,7 @@ bool live_any() { return bt::hw::service().rec().state() != bt::State::Idle; }
 
 const char *armed_text(Act a, const view::Shown &s) {
     if (a == Act::Finish) return "Press again to end run";
+    if (a == Act::Continue) return "Press again to continue";
     return s.kind == bt::Kind::Charge ? "Press again: end charge" : "Press again: end dischg";
 }
 }  // namespace
@@ -85,7 +87,7 @@ void BatteryPage::leave() {
 void BatteryPage::build() {
     if (view_ == View::Stored) {
         shown_ = view::shown(rec_, true);
-        rows_ = view::rows(shown_, true);
+        rows_ = view::rows(shown_, true, runs_sel_ == 0 && !bt::hw::service().rec().active());   // only the newest continues
         return;
     }
     bt::hw::service().rec().to_record(rec_);
@@ -104,7 +106,7 @@ Act BatteryPage::act() const {
 }
 
 bool BatteryPage::armed() const {
-    return armed_until_ && static_cast<int32_t>(armed_until_ - ctx_.now) > 0 && act() == armed_act_ && view_ == View::Main;
+    return armed_until_ && static_cast<int32_t>(armed_until_ - ctx_.now) > 0 && act() == armed_act_ && view_ != View::Runs;
 }
 
 void BatteryPage::load_runs() {
@@ -210,6 +212,9 @@ void BatteryPage::action_row(Act a, bool focused, kit::RowSpec &out) {
         break;
     case Act::Share:
         note = kNotes[12];
+        break;
+    case Act::Continue:
+        note = kNotes[15];
         break;
     }
     if (armed_until_ && a == armed_act_ && armed()) out.text_color = kCaution;
@@ -333,7 +338,8 @@ void BatteryPage::ok() {
     }
     case Act::EndPhase:
     case Act::Finish:
-        if (!armed() || armed_act_ != a) {   // the first OK arms, the second within the window ends
+    case Act::Continue:
+        if (!armed() || armed_act_ != a) {   // the first OK arms, the second within the window acts
             armed_act_ = a;
             armed_until_ = ctx_.now + Ui::kConfirmWindowMs;
             if (!armed_until_) armed_until_ = 1;
@@ -341,7 +347,15 @@ void BatteryPage::ok() {
         }
         armed_until_ = 0;
         if (a == Act::EndPhase) sv.rec().end_phase();
-        else sv.rec().finish();
+        else if (a == Act::Finish) sv.rec().finish();
+        else {
+            static constexpr const char *kCont[] = {"Run continues", "A run is measuring", "No power monitor",
+                                                    "No run to continue", "Only the newest run"};   // Service::Cont
+            const auto c = sv.continue_run(shown_.id, bt::hw::monitor_online());
+            refuse(kCont[static_cast<int>(c)], c == bt::Service::Cont::Ok ? FooterTone::Ok : FooterTone::Caution);
+            if (c != bt::Service::Cont::Ok) return;
+            set_view(View::Main, 0);
+        }
         build();
         sel_ = rows_.facts;
         ctx_.rows.invalidate();
