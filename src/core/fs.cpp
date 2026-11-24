@@ -115,6 +115,10 @@ Err Fs::mount() {
     }
     const Err e = map(r);
     mounted_ = e == Err::Ok;
+    // A power cut inside a rename across directories leaves a pending move in littlefs's global state, which it resolves
+    // only at the next write; until then a lookup in the source directory can hide the wrong entry. Settle it now (no write
+    // when nothing is pending).
+    if (mounted_) lfs_fs_mkconsistent(&lfs_);
     return e;
 }
 

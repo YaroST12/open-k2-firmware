@@ -226,6 +226,51 @@ void test_rewrite_in_place() {
     CHECK_EQ(compacted, true);
 }
 
+// A rename into another directory: a power cut at any program or erase leaves the file in one place or the other, and the
+// reads straight after the mount (before any write) already see that. littlefs records such a move in its global state and
+// resolves it on the first write; until then a lookup in the source directory can hide the wrong entry, so mount() settles it.
+void test_power_cut_sweep_rename_across_dirs() {
+    const auto setup = [](fs::Fs& f) {
+        bool fm;
+        f.mount_or_format(fm);
+        for (const char* p : {"/a1.rec", "/a2.rec", "/a3.rec"}) f.write_file(p, sv(p));
+        f.mkdir("/d");
+    };
+    const auto move = [](fs::Fs& f) {
+        f.rename("/a3.rec", "/d/3.rec");
+        f.rename("/a2.rec", "/d/2.rec");
+        f.rename("/a1.rec", "/d/1.rec");
+    };
+    int total = 0;
+    {
+        RamDisk d(kBlocks);
+        fs::Fs f(d, kBlocks);
+        setup(f);
+        d.reset_counters();
+        move(f);
+        total = d.ops_done();
+    }
+    for (int cut = 0; cut <= total; ++cut) {
+        RamDisk d(kBlocks);
+        {
+            fs::Fs f(d, kBlocks);
+            setup(f);
+            d.cut_after(cut);
+            move(f);
+        }
+        d.revive();
+        fs::Fs g(d, kBlocks);
+        CHECK_EQ(g.mount() == fs::Err::Ok, 1);
+        CHECK_EQ(g.exists("/d"), true);
+        for (int i = 1; i <= 3; ++i) {
+            const std::string from = "/a" + std::to_string(i) + ".rec", to = "/d/" + std::to_string(i) + ".rec";
+            const bool a = g.exists(from.c_str()), b = g.exists(to.c_str());
+            CHECK_EQ(a != b, true);
+            CHECK_EQ(slurp(g, a ? from.c_str() : to.c_str()) == from, 1);
+        }
+    }
+}
+
 // A torn append leaves the old content (a littlefs commit is all or nothing).
 void test_power_cut_sweep_append() {
     int total = 0;
@@ -464,6 +509,7 @@ int main() {
     test_power_cut_sweep_atomic_replace();
     test_power_cut_sweep_append();
     test_rewrite_in_place();
+    test_power_cut_sweep_rename_across_dirs();
     test_full_disk_reports_no_space_and_recovers();
     test_wear_levelling_spreads_erases();
     test_write_chunks_round_trip();
