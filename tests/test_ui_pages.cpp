@@ -2534,6 +2534,12 @@ static void test_pd_limit_give_up_toast_once() {
     ui.tick(t += 200);
     t = settle(ui, t);
     CHECK_STR(ui.context().toast.view().data(), "Limit off: charger resets");
+    g_stub.lim.state = pd::LimState::Armed; g_stub.lim.why = pd::LimWhy::None;
+    ui.tick(t += 200);
+    g_stub.lim.state = pd::LimState::Off; g_stub.lim.why = pd::LimWhy::ChargerRefuses;
+    ui.tick(t += 200);
+    t = settle(ui, t);
+    CHECK_STR(ui.context().toast.view().data(), "Limit off: charger refuses");
     CHECK_EQ(int(ui.context().toast.tone), int(k2::FooterTone::Caution));
     ui.context().toast.clear();
     ui.tick(t += 200);
@@ -2615,7 +2621,7 @@ static void test_pd_limit_confirm_window() {
 }
 
 static void test_pd_limit_no_live_contract_no_reset() {
-    for (int scene = 0; scene < 5; scene++) {
+    for (int scene = 0; scene < 3; scene++) {
         Ui &ui = fresh_ui();
         set_caps_65w();
         uint32_t t = open_limit_row(ui, 20000);
@@ -2630,14 +2636,95 @@ static void test_pd_limit_no_live_contract_no_reset() {
         CHECK_EQ(g_stub.lim_arms, 1);
         CHECK_EQ(g_stub.hard_resets, 0);
         CHECK_EQ(g_stub.lim_arm_seeded, true);
-        if (scene >= 3) {
-            CHECK_STR(ui.context().toast.view().data(), "No reset: replug to apply");
-        } else {
-            CHECK_EQ(ui.context().toast.view().empty(), true);
-        }
+        CHECK_EQ(ui.context().toast.view().empty(), true);
         idle_link();
         g_stub.pm.vbus_mv = 0;
     }
+}
+
+// Hardware 2026-11-24: armed right after a flash, a 15 V contract live and no list seen since boot, the limit stayed armed.
+// A contract joined mid-way has nothing to seed from: the arm resets the link (second OK) so the charger offers again.
+static void test_pd_limit_joined_contract_resets_then_arms() {
+    for (int scene = 0; scene < 2; scene++) {
+        Ui &ui = fresh_ui();
+        set_caps_65w();
+        uint32_t t = open_limit_row(ui, 20000);
+        idle_link();
+        g_stub.hard_resets = g_stub.lab_hard_resets = 0;
+        g_stub.contract.valid = true; g_stub.contract.ready = true; g_stub.pm.vbus_mv = 9000;
+        if (scene == 1) g_stub.inl = true;
+        press(ui, Button::Ok, ButtonEvent::Short, t += 10);
+        pick_9v_apply(ui, t);
+        CHECK_STR(ui.context().toast.view().data(), "OK again: resets link");
+        CHECK_EQ(g_stub.lim_arms, 0);
+        press(ui, Button::Ok, ButtonEvent::Short, t += 100);
+        CHECK_EQ(g_stub.lab_hard_resets, 1);                // the inline Hard Reset
+        CHECK_EQ(g_stub.lim_arms, 1);
+        CHECK_EQ(g_stub.lim_arm_seeded, false);
+        CHECK_STR(ui.context().toast.view().data(), "Resetting link...");
+        idle_link();
+        g_stub.pm.vbus_mv = 0;
+    }
+}
+
+// The shell's arm is the user's action: seeded when the sniffer holds the contract, else the confirmed reset path.
+static void test_pd_limit_shell_arm() {
+    Ui &ui = fresh_ui();
+    uint32_t t = g_stub.ms;
+    const pd::LimConfig cfg = pd::lim_config_watts(20000);
+    idle_link();
+    g_stub.hard_resets = g_stub.lab_hard_resets = 0;
+    g_stub.lim_arms = 0;
+    CHECK_EQ(int(ui.pd_limit_shell_arm(cfg, t)), int(Ui::LimitSet::Done));      // nothing live: it waits
+    CHECK_EQ(g_stub.lim_arms, 1);
+    CHECK_EQ(g_stub.hard_resets, 0);
+    live_contract();                                                              // a far sink's whole contract seen
+    CHECK_EQ(int(ui.pd_limit_shell_arm(cfg, t += 10)), int(Ui::LimitSet::Done));
+    CHECK_EQ(g_stub.lim_arms, 2);
+    CHECK_EQ(g_stub.lim_arm_seeded, true);
+    CHECK_EQ(g_stub.hard_resets, 0);
+    idle_link();
+    g_stub.contract.valid = true; g_stub.contract.ready = true; g_stub.pm.vbus_mv = 15000;   // joined mid-way
+    CHECK_EQ(int(ui.pd_limit_shell_arm(cfg, t += 10)), int(Ui::LimitSet::DoneReset));
+    CHECK_EQ(g_stub.lab_hard_resets, 1);
+    CHECK_EQ(g_stub.lim_arms, 3);
+    CHECK_EQ(g_stub.lim_arm_seeded, false);
+    idle_link();
+    g_stub.pm.vbus_mv = 0;
+}
+
+// The limiter gave up because the charger refuses re-offers: the off path's inline Hard Reset hands the sink the real list,
+// once. Bus-powered it stays (the reset would reboot the K2 and hide the reason): Off resets then.
+static void test_pd_limit_refused_give_up_restores() {
+    Ui &ui = fresh_ui();
+    uint32_t t = g_stub.ms;
+    live_contract();
+    g_stub.lim = {};
+    g_stub.lim.state = pd::LimState::Armed;
+    ui.tick(t += 100);
+    g_stub.lim.state = pd::LimState::Off;
+    g_stub.lim.why = pd::LimWhy::ChargerRefuses;
+    g_stub.lim_held = true;
+    ui.tick(t += 100);
+    CHECK_EQ(g_stub.lab_hard_resets, 1);
+    g_stub.lim_held = false;
+    ui.tick(t += 100);
+    ui.tick(t += 100);
+    CHECK_EQ(g_stub.lab_hard_resets, 1);
+    // bus-powered: no reset
+    live_contract();
+    g_stub.lim = {};
+    g_stub.lim.state = pd::LimState::Armed;
+    ui.tick(t += 100);
+    g_stub.self_powered = true;
+    g_stub.lim.state = pd::LimState::Off;
+    g_stub.lim.why = pd::LimWhy::ChargerRefuses;
+    g_stub.lim_held = true;
+    ui.tick(t += 100);
+    CHECK_EQ(g_stub.lab_hard_resets, 0);
+    g_stub.lim_held = false;
+    g_stub.lim = {};
+    idle_link();
 }
 
 // Hardware 2026-11-24: off left the sink on the limited contract. Off resets whenever the sink still holds a forged list, a
@@ -2859,6 +2946,9 @@ int main() {
     test_pd_limit_live_contract_resets_then_arms();
     test_pd_limit_confirm_window();
     test_pd_limit_no_live_contract_no_reset();
+    test_pd_limit_joined_contract_resets_then_arms();
+    test_pd_limit_shell_arm();
+    test_pd_limit_refused_give_up_restores();
     test_pd_limit_reset_refusals();
     test_pd_limit_no_fit_stop_says_so();
     test_pd_limit_off_resets_while_the_sink_holds_the_list();

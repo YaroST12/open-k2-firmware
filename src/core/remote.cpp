@@ -655,8 +655,10 @@ remote::AppleReadResult Remote::apple_read(uint8_t op) {
 remote::LimitView Remote::pd_limit(uint8_t op, const pd::LimConfig &cfg) {
     remote::LimitView v;
     if (op == remote::kLimitArm || op == remote::kLimitArmCfg) {
-        const pd::LimRefusal why = ui_.pd_limit_arm(cfg);
-        if (why != pd::LimRefusal::None) {
+        // a live contract the sniffer cannot seed from is reset first (the shell's arm is the user's confirmation)
+        const Ui::LimitSet ls = ui_.pd_limit_shell_arm(cfg, systick::millis());
+        if (ls == Ui::LimitSet::BadLimit || ls == Ui::LimitSet::Busy) {
+            const pd::LimRefusal why = ls == Ui::LimitSet::BadLimit ? pd::LimRefusal::BadLimit : pd::LimRefusal::Busy;
             v.status = why == pd::LimRefusal::BadLimit ? remote::Status::BadArg : remote::Status::Busy;
             v.refusal = static_cast<uint8_t>(why);
             return v;

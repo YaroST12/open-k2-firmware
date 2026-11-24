@@ -1144,6 +1144,7 @@ void limit_disarm() {
 bool limit_armed() { return g_lim_on && lim().armed(); }
 const pd::LimStatus& limit_status() { return lim().status(); }
 bool limit_holds_sink() { return g_lim_on && lim().sink_holds_forged(); }
+bool limit_seed_ready() { return far_sink_seen() && iq().watch().contract().ready; }
 namespace detail {
 void lim_report() {
     const pd::LimStatus& s = lim().status();

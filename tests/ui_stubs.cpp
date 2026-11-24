@@ -253,6 +253,7 @@ bool limit_holds_sink() {
     return g_stub.lim_held || g_stub.lim.state == pd::LimState::Injected || g_stub.lim.state == pd::LimState::Limited;
 }
 bool far_sink_seen() { return g_stub.far_sink; }
+bool limit_seed_ready() { return g_stub.far_sink; }
 const pd::LimStatus& limit_status() { return g_stub.lim; }
 bool listen_active() { return g_stub.listen_on; }
 void feed(uint8_t, uint16_t, std::span<const uint8_t>) {}

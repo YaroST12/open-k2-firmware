@@ -3054,6 +3054,7 @@ void ToolsPage::limit_edge() {
         case pd::LimWhy::SinkIgnores: m = tx::kLimToastSinkIgnores; break;
         case pd::LimWhy::Epr: m = tx::kLimToastEpr; break;
         case pd::LimWhy::NoFit: m = tx::kLimToastNoFit; break;
+        case pd::LimWhy::ChargerRefuses: m = tx::kLimToastChargerRefuses; break;
         default: break;
         }
         if (m) ctx_.toast.show(FooterTone::Caution, m, ctx_.now);

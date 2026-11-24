@@ -427,6 +427,7 @@ void limit_disarm();
 bool limit_armed();
 const pd::LimStatus& limit_status();   // kept after the stop: state off and why
 bool limit_holds_sink();   // a forged list is still the sink's (armed or not): ending the limit takes a reset
+bool limit_seed_ready();   // the sniffer holds this attach's whole contract: an arm limits it with no reset
 // Quick source probe for the charger report card (k2/pd/pd_probe.hpp): Discover Identity, Get_Manufacturer_Info and
 // Get_Source_Cap_Extended on SOP, one try each, over within ~1 s whatever the charger does. False when refused
 // (no CC, inline, or the sink / Identify is busy). The answers land in vdm() and ext(); probe_status() says which.

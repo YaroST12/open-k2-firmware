@@ -434,6 +434,8 @@ public:
     LimitSet pd_limit_set(const pd::LimConfig &cfg, bool off, bool confirmed, uint32_t now_ms);
     LimitSet pd_limit_set(uint32_t limit_mw, bool confirmed, uint32_t now_ms);
     bool pd_limit_link_live() const;   // inline with a far sink's Request or a sniffed contract
+    // The shell's arm (a user action, confirmed): seeded when the sniffer holds the contract, else pd_limit_set's reset path.
+    LimitSet pd_limit_shell_arm(const pd::LimConfig &cfg, uint32_t now_ms);
     // A loop probe run (Tools -> Loop probe) drives D+/D-, the backlight and the K2's own Rd: the ports are its until it ends.
 #if K2_LOOPPROBE
     bool loop_probe_busy() const;
@@ -663,6 +665,7 @@ private:
     bool rotation_notice_drawn_ K2_BSS_INIT(false);
     pd::HrRecovery hr_recover_;   // link_reset's sink Hard Reset: a source that stays dark is woken once (hr_recover_poll)
     void hr_recover_poll(uint32_t now_ms);
+    void lim_refused_poll();   // a give-up for a refusing charger: the off path hands the sink the real list
     int8_t conn_lock_ = -1;   // open_connection / open_place -> build_menu: the place tab (Charger / Cable / Device)
     bool conn_actions_next_ K2_BSS_INIT(false);   // open_place_actions / open_connection(spoof) -> build_menu: open on Actions sub-page
     bool conn_overview_next_ K2_BSS_INIT(false);  // ring_show(Pos::Link) / open_place -> build_menu: open on 3-slice Overview
@@ -699,6 +702,7 @@ private:
     uint8_t opp_mask_ K2_BSS_INIT(0);
     bool lim_comeback_scrub_ K2_BSS_INIT(false);
     uint32_t lim_comeback_scrub_at_ms_ K2_BSS_INIT(0);
+    bool lim_refused_ K2_BSS_INIT(false);   // the give-up lim_refused_poll() acted on
 };
 
 }  // namespace k2

@@ -438,7 +438,10 @@ Ui::LimitSet Ui::pd_limit_set(const pd::LimConfig &cfg, bool off, bool confirmed
     }
     bool seed = true;
     LimitSet res = LimitSet::Done;
-    if (undo && (pd_limit_link_live() || held)) {
+    // a contract joined mid-way (no Request heard since boot or attach): nothing to seed from, the reset makes the charger offer
+    const bool joined = !off && link_reset_inline() &&
+                        (fusb302::contract().valid || (ctx_.pm_online && ctx_.vbus_fast_mv > pd::kVSafe5MaxMv));
+    if (undo && (pd_limit_link_live() || held || joined)) {
         const bool bus_pwr = fusb302::self_powered() || power_source::bus_powered();
         if (confirmed && bus_pwr && !off && !limcomeback::save(cfg)) {
             res = LimitSet::NoReset;   // never cut VBUS unless comeback persisted: arm seeded and ask to replug
@@ -466,8 +469,6 @@ Ui::LimitSet Ui::pd_limit_set(const pd::LimConfig &cfg, bool off, bool confirmed
                 lim_comeback_scrub_at_ms_ = now_ms + 5000;
             }
         }
-    } else if (undo && link_reset_inline() && (fusb302::contract().valid || (ctx_.pm_online && ctx_.vbus_fast_mv > pd::kVSafe5MaxMv))) {
-        res = LimitSet::NoReset;   // a contract joined mid-way, no Request heard: nothing to seed from, the sink must re-ask
     }
     if (off) {
         limcomeback::clear();
@@ -480,6 +481,25 @@ Ui::LimitSet Ui::pd_limit_set(const pd::LimConfig &cfg, bool off, bool confirmed
     case pd::LimRefusal::Busy: return LimitSet::Busy;
     }
     return LimitSet::Busy;
+}
+
+Ui::LimitSet Ui::pd_limit_shell_arm(const pd::LimConfig &cfg, uint32_t now_ms) {
+    if (!fusb302::limit_seed_ready()) return pd_limit_set(cfg, false, true, now_ms);
+    switch (pd_limit_arm(cfg)) {
+    case pd::LimRefusal::None: return LimitSet::Done;
+    case pd::LimRefusal::BadLimit: return LimitSet::BadLimit;
+    case pd::LimRefusal::Busy: return LimitSet::Busy;
+    }
+    return LimitSet::Busy;
+}
+
+// Once per give-up. Bus-powered the reset would reboot the K2 and hide the reason: the sink keeps the list until Off.
+void Ui::lim_refused_poll() {
+    const pd::LimStatus &s = fusb302::limit_status();
+    const bool refused = s.state == pd::LimState::Off && s.why == pd::LimWhy::ChargerRefuses;
+    if (refused && !lim_refused_ && fusb302::limit_holds_sink() && !fusb302::self_powered() && !power_source::bus_powered())
+        pd_limit_set(pd::LimConfig{}, true, true, ctx_.now);
+    lim_refused_ = refused;
 }
 
 Ui::LimitSet Ui::pd_limit_set(uint32_t limit_mw, bool confirmed, uint32_t now_ms) {

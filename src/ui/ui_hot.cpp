@@ -226,6 +226,7 @@ K2_HOT UiAction Ui::tick(uint32_t now_ms) {
         lim_comeback_scrub_ = false;
         limcomeback::consume();
     }
+    lim_refused_poll();
     const auto previous_release = fc_release_.state();
     if (TriggerPage *trigger = find<TriggerPage>(Menu::Trigger)) trigger->poll();   // no page, no session: leave() ended it
 #if K2_LOOPPROBE

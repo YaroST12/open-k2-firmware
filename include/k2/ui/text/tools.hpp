@@ -81,12 +81,14 @@ inline constexpr const char *kLimToastSelfPowered = "Power K2 via USB port";
 inline constexpr const char *kLimToastRetry = "Busy, retry";
 inline constexpr const char *kLimToastNoLink = "No active link";
 inline constexpr const char *kLimToastNoFit = "Fixed Off: not on charger";   // a fixed object before the APDOs
+inline constexpr const char *kLimToastChargerRefuses = "Limit off: charger refuses";   // it will not take a re-offered Request
 inline constexpr const char *kLimRowReset = "Reset link";                       // the picker's row when no offers are known
 inline constexpr const char *kLimNoteReset = "reads the charger's offers";
 inline constexpr const char *kLimToasts[] = {kLimToastNoOffers, kLimToastNoLimit, kLimToastKeepOne, kLimToastBadLimit, kLimToastBusy, kLimToastRate,
                                              kLimToastChargerResets, kLimToastSinkResets, kLimToastSinkIgnores, kLimToastEpr,
                                              kLimToastConfirm, kLimToastResetting, kLimToastRescan, kLimToastNoReset,
-                                             kLimToastSelfPowered, kLimToastRetry, kLimToastNoLink, kLimToastNoFit};
+                                             kLimToastSelfPowered, kLimToastRetry, kLimToastNoLink, kLimToastNoFit,
+                                             kLimToastChargerRefuses};
 static_assert(fits_px(kLabelAdv, kLimNoteReset, kit::kNoteMaxPx), "the reset row note is wider than its line");
 static_assert(all_fit(kLimToasts, kLabelAdv, kToastTextPx), "a PD limit result is wider than the toast");
 
