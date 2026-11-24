@@ -244,16 +244,11 @@ bool request_complies(std::uint32_t rdo, std::span<const std::uint32_t> real_pdo
 
 std::size_t forge_caps(std::span<const std::uint32_t> real, const LimConfig& cfg, std::span<std::uint32_t> out) {
     const std::size_t n = std::min(std::min(real.size(), out.size()), kMaxPdos);
-    if (n == 0) return 0;
     std::array<std::uint32_t, kMaxPdos> words{};
-    std::array<bool, kMaxPdos> keep{};
+    std::size_t out_n = 0;   // up to the last kept object: a disabled one before it stays as a 0 mA placeholder
     for (std::size_t i = 0; i < n; i++) {
         std::uint32_t w = real[i];
-        if (w == 0) {
-            words[i] = 0;
-            keep[i] = false;
-            continue;
-        }
+        if (w == 0) continue;
         const Pdo p = decode_pdo(w);
         auto clamp10 = [](std::uint32_t cur, std::uint32_t shift, std::uint32_t max_ma) {
             const std::uint32_t orig = (cur >> shift) & 0x3FFu;
@@ -262,11 +257,12 @@ std::size_t forge_caps(std::span<const std::uint32_t> real, const LimConfig& cfg
         };
         const bool within_w = cfg.limit_mw == 0 || p.max_mw <= cfg.limit_mw;
         const bool fx_ok = cfg.fixed.enabled && (cfg.fixed.max_mv == 0 || p.max_mv <= cfg.fixed.max_mv) && within_w;
+        bool keep = fx_ok;
         switch (w >> 30) {
-            case 0: { // Fixed
+            case 0:   // Fixed
                 if (i == 0) {
                     w &= ~(1u << 23);   // never invite EPR while capped
-                    keep[i] = true;
+                    keep = true;
                     std::uint32_t cap_ma = p.max_ma;
                     if (!cfg.fixed.enabled) cap_ma = std::min<std::uint32_t>(cap_ma, kLimMinFixedMa);
                     else {
@@ -275,15 +271,14 @@ std::size_t forge_caps(std::span<const std::uint32_t> real, const LimConfig& cfg
                             cap_ma = std::min<std::uint32_t>(cap_ma, std::max<std::uint32_t>(kLimMinFixedMa, cfg.limit_mw * 1000u / p.max_mv));
                     }
                     w = clamp10(w, 0, cap_ma);
-                } else {
-                    keep[i] = fx_ok;
-                    if (!fx_ok) w &= ~0x3FFu;   // neutered placeholder (0 mA) if followed by an enabled slot
-                    else if (cfg.fixed.max_ma) w = clamp10(w, 0, cfg.fixed.max_ma);
+                    break;
                 }
+                [[fallthrough]];
+            case 2:   // Variable
+                if (!fx_ok) w &= ~0x3FFu;   // neutered placeholder (0 mA) if followed by an enabled slot
+                else if (cfg.fixed.max_ma) w = clamp10(w, 0, cfg.fixed.max_ma);
                 break;
-            }
-            case 1: { // Battery
-                keep[i] = fx_ok;
+            case 1:   // Battery
                 if (!fx_ok) {
                     w &= ~0x3FFu;
                 } else if (cfg.fixed.max_ma && p.max_mv) {
@@ -292,19 +287,11 @@ std::size_t forge_caps(std::span<const std::uint32_t> real, const LimConfig& cfg
                     if ((w & 0x3FFu) > lim) w = (w & ~0x3FFu) | lim;
                 }
                 break;
-            }
-            case 2: { // Variable
-                keep[i] = fx_ok;
-                if (!fx_ok) w &= ~0x3FFu;
-                else if (cfg.fixed.max_ma) w = clamp10(w, 0, cfg.fixed.max_ma);
-                break;
-            }
             default: {
                 const unsigned apdo = (w >> 28) & 3u;
                 if (apdo == 0) {   // PPS
-                    const bool ok = cfg.pps.enabled && (cfg.pps.max_mv == 0 || cfg.pps.max_mv >= p.min_mv) && within_w;
-                    keep[i] = ok;
-                    if (!ok) {
+                    keep = cfg.pps.enabled && (cfg.pps.max_mv == 0 || cfg.pps.max_mv >= p.min_mv) && within_w;
+                    if (!keep) {
                         w &= ~0x7Fu;
                     } else {
                         if (cfg.pps.max_mv && cfg.pps.max_mv < p.max_mv)
@@ -315,9 +302,8 @@ std::size_t forge_caps(std::span<const std::uint32_t> real, const LimConfig& cfg
                         }
                     }
                 } else if (apdo == 2) {   // SPR AVS
-                    const bool ok = cfg.avs.enabled && (cfg.avs.max_mv == 0 || cfg.avs.max_mv >= 15000) && within_w;
-                    keep[i] = ok;
-                    if (!ok) {
+                    keep = cfg.avs.enabled && (cfg.avs.max_mv == 0 || cfg.avs.max_mv >= 15000) && within_w;
+                    if (!keep) {
                         w &= ~0xFFFFFu;
                     } else {
                         if (cfg.avs.max_mv && cfg.avs.max_mv < 20000) w &= ~0x3FFu;   // leaves valid 9..15 V range
@@ -327,24 +313,14 @@ std::size_t forge_caps(std::span<const std::uint32_t> real, const LimConfig& cfg
                         }
                     }
                 } else {
-                    keep[i] = within_w;
+                    keep = within_w;
                 }
                 break;
             }
         }
         words[i] = w;
+        if (keep) out_n = i + 1;
     }
-    std::size_t last_kept = 0;
-    bool any_kept = false;
-    for (std::size_t i = n; i > 0; i--) {
-        if (keep[i - 1]) {
-            last_kept = i - 1;
-            any_kept = true;
-            break;
-        }
-    }
-    if (!any_kept) return 0;
-    const std::size_t out_n = last_kept + 1;
     for (std::size_t i = 0; i < out_n; i++) out[i] = words[i];
     return out_n;
 }
