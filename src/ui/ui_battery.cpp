@@ -7,6 +7,7 @@
 #include <string_view>
 
 #include "k2/battery/battery_hw.hpp"
+#include "k2/core/strpack.hpp"
 #include "k2/ui/qrshare.hpp"
 #include "k2/ui/trunc.hpp"
 #include "k2/ui/ui.hpp"
@@ -24,37 +25,37 @@ constexpr uint32_t kNoteMs = 2500;   // a refusal holds the footer this long
 
 // The focused rows' notes (font 12, <= kNoteMaxPx).
 constexpr const char *kNotes[] = {
-    "charger in, bank on output",        // StartCharge
-    "bank on output, load on input",     // StartDischarge, same port
-    "bank on input, load on output",     // StartDischarge, moved
-    "charge, then discharge",            // StartRoundTrip
-    "ends this phase now",               // EndPhase
-    "the discharge starts now",          // Next
-    "ends the run here",                 // Finish
-    "the bank stays on the output",      // Wiring, same port
-    "the bank moves to the input",       // Wiring, moved
-    "phase ends under this current",     // EndMa
-    "for this long",                     // EndS
-    "the newest runs kept on flash",     // Runs
-    "the run as a QR code",              // Share
-    "Wh out / Wh in, so far",            // Eff, running
-    "Wh out / Wh in",                    // Eff, final
+    K2_P("charger in, bank on output"),        // StartCharge
+    K2_P("bank on output, load on input"),     // StartDischarge, same port
+    K2_P("bank on input, load on output"),     // StartDischarge, moved
+    K2_P("charge, then discharge"),            // StartRoundTrip
+    K2_P("ends this phase now"),               // EndPhase
+    K2_P("the discharge starts now"),          // Next
+    K2_P("ends the run here"),                 // Finish
+    K2_P("the bank stays on the output"),      // Wiring, same port
+    K2_P("the bank moves to the input"),       // Wiring, moved
+    K2_P("phase ends under this current"),     // EndMa
+    K2_P("for this long"),                     // EndS
+    K2_P("the newest runs kept on flash"),     // Runs
+    K2_P("the run as a QR code"),              // Share
+    K2_P("Wh out / Wh in, so far"),            // Eff, running
+    K2_P("Wh out / Wh in"),                    // Eff, final
 };
-static_assert(all_fit(kNotes, kLabelAdv, kit::kNoteMaxPx), "a Battery note is wider than the note box");
+static_assert(all_fit_p(kNotes, kLabelAdv, kit::kNoteMaxPx), "a Battery note is wider than the note box");
 
 // Rows without a tail run to the tail's edge; a row with one leaves the gap and the widest tail ("123.4Wh"; Wiring's
 // "Same port" sits beside a six-letter name).
-constexpr const char *kBareRows[] = {"Start round trip", "Start discharge", "End discharge", "Finish run", "Share as QR",
-                                     "No saved runs"};
-static_assert(all_fit(kBareRows, kSmallAdvPx, kit::kTailX - kit::kTextX), "a Battery row runs into the tail");
-constexpr const char *kTailRows[] = {"Efficiency", "End below", "End after", "#999 Dischg", "#999 Round"};
-static_assert(all_fit(kTailRows, kSmallAdvPx, kit::kTailX - kit::kTextX - kit::kTailGap - 7 * static_cast<int>(kSmallAdvPx)),
+constexpr const char *kBareRows[] = {K2_P("Start round trip"), K2_P("Start discharge"), K2_P("End discharge"), K2_P("Finish run"), K2_P("Share as QR"),
+                                     K2_P("No saved runs")};
+static_assert(all_fit_p(kBareRows, kSmallAdvPx, kit::kTailX - kit::kTextX), "a Battery row runs into the tail");
+constexpr const char *kTailRows[] = {K2_P("Efficiency"), K2_P("End below"), K2_P("End after"), K2_P("#999 Dischg"), K2_P("#999 Round")};
+static_assert(all_fit_p(kTailRows, kSmallAdvPx, kit::kTailX - kit::kTextX - kit::kTailGap - 7 * static_cast<int>(kSmallAdvPx)),
               "a Battery row and its tail do not fit one row");
 
 const char *mode_name(bt::Mode m) {
     switch (m) {
-    case bt::Mode::Charge: return "Charge";
-    case bt::Mode::Discharge: return "Dischg";
+    case bt::Mode::Charge: return K2_P("Charge");
+    case bt::Mode::Discharge: return K2_P("Dischg");
     case bt::Mode::RoundTrip: break;
     }
     return "Round";
@@ -63,8 +64,8 @@ const char *mode_name(bt::Mode m) {
 bool live_any() { return bt::hw::service().rec().state() != bt::State::Idle; }
 
 const char *armed_text(Act a, const view::Shown &s) {
-    if (a == Act::Finish) return "Press again to end run";
-    return s.kind == bt::Kind::Charge ? "Press again: end charge" : "Press again: end dischg";
+    if (a == Act::Finish) return K2_P("Press again to end run");
+    return s.kind == bt::Kind::Charge ? K2_P("Press again: end charge") : K2_P("Press again: end dischg");
 }
 }  // namespace
 
@@ -171,12 +172,12 @@ void BatteryPage::action_row(Act a, bool focused, kit::RowSpec &out) {
         const bool in = a == Act::In;
         tail_.put(view::wh(in ? s.sum.uwh_in : s.sum.uwh_out).view());
         out.tail_color = kEnergy;
-        note_row_.put(view::mah(in ? s.sum.uah_in : s.sum.uah_out).view()).put(in ? " into the bank" : " out of the bank");
+        note_row_.put(view::mah(in ? s.sum.uah_in : s.sum.uah_out).view()).put(in ? K2_P(" into the bank") : K2_P(" out of the bank"));
         break;
     }
     case Act::Time:
         tail_.put(view::hms(s.secs).view());
-        if (s.gaps) note_row_.put_u32(s.gaps).put(s.gaps == 1 ? " gap not counted" : " gaps not counted");
+        if (s.gaps) note_row_.put_u32(s.gaps).put(s.gaps == 1 ? K2_P(" gap not counted") : K2_P(" gaps not counted"));
         else if (s.phases == 2) note_row_.put(view::hms(s.secs - s.phase_secs).view()).put(" in, ").put(view::hms(s.phase_secs).view()).put(" out");
         break;
     case Act::Eff:
@@ -192,7 +193,7 @@ void BatteryPage::action_row(Act a, bool focused, kit::RowSpec &out) {
     case Act::Next: note = kNotes[5]; break;
     case Act::Finish: note = kNotes[6]; break;
     case Act::Wiring:
-        tail_.put(same ? "Same port" : "Moved");
+        tail_.put(same ? K2_P("Same port") : "Moved");
         note = same ? kNotes[7] : kNotes[8];
         break;
     case Act::EndMa:
@@ -219,7 +220,7 @@ void BatteryPage::action_row(Act a, bool focused, kit::RowSpec &out) {
 
 void BatteryPage::run_row(int i, bool focused, kit::RowSpec &out) {
     if (n_runs_ == 0) {
-        out.text = "No saved runs";
+        out.text = K2_P("No saved runs");
         out.text_color = kDim;
         return;
     }
@@ -250,9 +251,9 @@ void BatteryPage::update(uint32_t now_ms) {
     // the identity block
     kit::Ident id;
     if (view_ == View::Runs) {
-        id.head.put("Saved runs");
+        id.head.put(K2_P("Saved runs"));
         id.dim = n_runs_ == 0;
-        id.line.put(n_runs_ ? "Newest first, OK opens one" : "A run is saved when it ends");
+        id.line.put(n_runs_ ? K2_P("Newest first, OK opens one") : K2_P("A run is saved when it ends"));
     } else {
         view::ident(shown_, id);
     }
@@ -269,7 +270,7 @@ void BatteryPage::update(uint32_t now_ms) {
         f.put(armed_text(armed_act_, shown_));
         tone = FooterTone::Caution;
     } else if (view_ == View::Runs) {
-        f.put_u32(static_cast<uint32_t>(n_runs_)).put(" of ").put_u32(bt::store::kKeep).put(" kept on flash");
+        f.put_u32(static_cast<uint32_t>(n_runs_)).put(" of ").put_u32(bt::store::kKeep).put(K2_P(" kept on flash"));
     } else if (view_ == View::Stored) {
         tone = view::footer(shown_, true, false, false, false, f);
     } else {
@@ -309,7 +310,7 @@ void BatteryPage::ok() {
         if (!n_runs_) return;
         fs::Fs *f = sv.volume();
         runs_sel_ = sel_;
-        if (!f || !bt::store::load(*f, runs_[sel_].id, rec_)) { refuse("Run not readable", FooterTone::Error); return; }
+        if (!f || !bt::store::load(*f, runs_[sel_].id, rec_)) { refuse(K2_P("Run not readable"), FooterTone::Error); return; }
         set_view(View::Stored, 0);
         return;
     }
@@ -325,9 +326,9 @@ void BatteryPage::ok() {
             sel_ = rows_.facts;   // the first thing to do now: End charge
             ctx_.rows.invalidate();
             break;
-        case bt::Recorder::Start::NoMonitor: refuse("No power monitor", FooterTone::Error); break;
-        case bt::Recorder::Start::Busy: refuse("Last run not saved yet", FooterTone::Caution); break;
-        case bt::Recorder::Start::BadArg: refuse("Settings out of range", FooterTone::Error); break;
+        case bt::Recorder::Start::NoMonitor: refuse(K2_P("No power monitor"), FooterTone::Error); break;
+        case bt::Recorder::Start::Busy: refuse(K2_P("Last run not saved yet"), FooterTone::Caution); break;
+        case bt::Recorder::Start::BadArg: refuse(K2_P("Settings out of range"), FooterTone::Error); break;
         }
         return;
     }

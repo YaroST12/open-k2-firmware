@@ -6,6 +6,7 @@
 #include <iterator>
 
 #include "k2/core/lab.hpp"
+#include "k2/core/strpack.hpp"
 #include "k2/drivers/lcd_timing.hpp"
 #include "k2/fastcharge/ufcs_tune.hpp"
 
@@ -223,7 +224,7 @@ std::string_view name(Id id) {
     if (n == 0) return "empty";
     bool verbless;
     const Entry* e = find(t[0], n > 1 ? t[1] : std::string_view{}, verbless);
-    if (!e) return "unknown verb (help lab)";
+    if (!e) return K2_P("unknown verb (help lab)");
     out.id = e->id;
     const std::size_t first = verbless ? 1 : 2;
     const char* kinds = e->args;
@@ -239,48 +240,48 @@ std::string_view name(Id id) {
         if (tok == "--release") { out.o.release = true; continue; }
         if (tok == "--json") { out.o.json = true; continue; }
         if (tok == "--log") {
-            if (i + 1 >= n || (t[i + 1] != "raw" && t[i + 1] != "decoded")) return "--log needs raw or decoded";
+            if (i + 1 >= n || (t[i + 1] != "raw" && t[i + 1] != "decoded")) return K2_P("--log needs raw or decoded");
             out.o.raw_log = t[++i] == "raw";
             continue;
         }
         if (tok.size() >= 2 && tok[0] == '-' && tok[1] == '-') {
             const OptDef* d = nullptr;
             for (const OptDef& od : kOpts) if (od.name == tok) d = &od;
-            if (!d) return "unknown option";
+            if (!d) return K2_P("unknown option");
             std::uint32_t v;
-            if (i + 1 >= n || !number(t[i + 1], v)) return "option needs a number";
-            if (v < d->lo || v > d->hi) return "option out of range";
+            if (i + 1 >= n || !number(t[i + 1], v)) return K2_P("option needs a number");
+            if (v < d->lo || v > d->hi) return K2_P("option out of range");
             out.o.*(d->field) = v;
             i++;
             continue;
         }
-        if (got >= want) return "too many arguments";
+        if (got >= want) return K2_P("too many arguments");
         const char kind = kinds[got++];
         std::uint32_t v;
         switch (kind) {
         case 'b': case 'B':
-            if (!number(tok, v) || v > 255) return "argument must be a byte (0..255 or 0x00..0xFF)";
+            if (!number(tok, v) || v > 255) return K2_P("argument must be a byte (0..255 or 0x00..0xFF)");
             out.a[out.na++] = v;
             break;
         case 'n': case 'o':
-            if (!number(tok, v) || v > static_cast<std::uint32_t>(kMaxMv)) return "argument must be a number (max 36000)";
+            if (!number(tok, v) || v > static_cast<std::uint32_t>(kMaxMv)) return K2_P("argument must be a number (max 36000)");
             out.a[out.na++] = v;
             break;
         case 'v':
-            if (!number(tok, v)) return "argument must be a number (decimal or 0x hex)";
+            if (!number(tok, v)) return K2_P("argument must be a number (decimal or 0x hex)");
             out.a[out.na++] = v;
             break;
         case 'w':
             if (nwords < 2) words[nwords++] = tok;
             break;
         default:   // 'x'
-            if (!hex_bytes(tok, out)) return "argument must be an even-length hex string (max 32 bytes)";
+            if (!hex_bytes(tok, out)) return K2_P("argument must be an even-length hex string (max 32 bytes)");
             break;
         }
     }
     std::size_t needed_seen = 0;   // required positionals must all be present
     for (std::size_t i = 0; i < got; i++) if (kinds[i] == 'b' || kinds[i] == 'n' || kinds[i] == 'v' || kinds[i] == 'w' || kinds[i] == 'x') needed_seen++;
-    if (needed_seen < need) return "missing argument";
+    if (needed_seen < need) return K2_P("missing argument");
 
     bool raises = false;
     switch (e->raise) {
@@ -292,12 +293,12 @@ std::string_view name(Id id) {
     }
     switch (e->id) {
     case Id::AccpDump:
-        if (out.a[0] > out.a[1]) return "dump range is <from> <to>, from <= to";
+        if (out.a[0] > out.a[1]) return K2_P("dump range is <from> <to>, from <= to");
         break;
     case Id::Dpdm: {
         bool r0, r1;
         const int d0 = level(words[0], r0), d1 = level(words[1], r1);
-        if (d0 < 0 || d1 < 0) return "level is hiz, 0, 0.6 or 3.3";
+        if (d0 < 0 || d1 < 0) return K2_P("level is hiz, 0, 0.6 or 3.3");
         out.a[0] = static_cast<std::uint32_t>(d0);
         out.a[1] = static_cast<std::uint32_t>(d1);
         out.na = 2;
@@ -307,7 +308,7 @@ std::string_view name(Id id) {
     case Id::PdVdm: {
         bool known = false;
         for (std::string_view w : kVdmWords) if (w == words[0]) known = true;
-        if (!known) return "vdm is discover-identity, svids or modes";
+        if (!known) return K2_P("vdm is discover-identity, svids or modes");
         out.word = words[0];
         break;
     }
@@ -316,26 +317,26 @@ std::string_view name(Id id) {
         break;
     case Id::LcdSpi: {
         lcd::SpiDiv d;
-        if (!lcd::lab_spi_div(out.a[0], d)) return "divider is 4 (30 MHz, the default), 8 (15 MHz) or 2 (60 MHz, visual check)";
+        if (!lcd::lab_spi_div(out.a[0], d)) return K2_P("divider is 4 (30 MHz, the default), 8 (15 MHz) or 2 (60 MHz, visual check)");
         break;
     }
     case Id::UfcsSet: {   // a[0] = value, a[1] = ufcs::Field index; the range is the field's own
         ufcs::Field f;
-        if (!ufcs::find_field(words[0], f)) return "unknown tuner field (ufcs show lists them)";
+        if (!ufcs::find_field(words[0], f)) return K2_P("unknown tuner field (ufcs show lists them)");
         const ufcs::FieldDef& d = ufcs::kFields[static_cast<std::size_t>(f)];
-        if (out.a[0] < d.lo || out.a[0] > d.hi) return "value out of range for this field (ufcs show lists ranges)";
+        if (out.a[0] < d.lo || out.a[0] > d.hi) return K2_P("value out of range for this field (ufcs show lists ranges)");
         out.a[1] = static_cast<std::uint32_t>(f);
         out.na = 2;
         out.word = words[0];
         break;
     }
     case Id::PdReread:   // optional step mask: 1 caps-ext, 2 identity, 4 svids, 8 get-cap, 16 get-cap again
-        if (out.na && (out.a[0] == 0 || out.a[0] > 31)) return "mask is 1..31 (1 caps-ext, 2 identity, 4 svids, 8 get-cap, 16 second get-cap)";
+        if (out.na && (out.a[0] == 0 || out.a[0] > 31)) return K2_P("mask is 1..31 (1 caps-ext, 2 identity, 4 svids, 8 get-cap, 16 second get-cap)");
         break;
     default: break;
     }
-    if (out.o.sop > 2) return "sop is 0 (SOP), 1 (SOP') or 2 (SOP'')";
-    if (raises && !out.o.confirm) return "this can raise VBUS: add --confirm or a trailing confirm";
+    if (out.o.sop > 2) return K2_P("sop is 0 (SOP), 1 (SOP') or 2 (SOP'')");
+    if (raises && !out.o.confirm) return K2_P("this can raise VBUS: add --confirm or a trailing confirm");
     return nullptr;
 }
 

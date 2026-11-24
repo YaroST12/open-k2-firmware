@@ -907,10 +907,10 @@ void add(Report& r, Sev sev, Group g, Code c, std::uint32_t t, std::int32_t a = 
 // The source's noun from its ID header product types (UFP bits 29:27, DFP bits 25:23), else its data role.
 const char* src_noun(std::uint32_t idh, bool host) {
     const unsigned ufp = idh >> 27 & 7, dfp = idh >> 23 & 7;
-    if (dfp == 3) return "charger";
+    if (dfp == 3) return K2_P("charger");
     if (ufp == 1 || dfp == 1) return "hub";
     if (dfp == 2 || host) return "host";
-    return "source";
+    return K2_P("source");
 }
 
 }  // namespace
@@ -954,7 +954,7 @@ Report evaluate(const Session& s, const TwinHint* twin, std::uint32_t now_ms) {
     }
     if (r.need_mw == 0) r.need_from = NeedFrom::None;
     const bool host = s.snk_host || (s.snk_idh >> 31 & 1) || (twin && twin->host);
-    r.snk_noun = s.active ? "K2" : host && r.need_mw >= 45000 ? "Laptop" : host ? "Host" : "Device";
+    r.snk_noun = s.active ? "K2" : host && r.need_mw >= 45000 ? K2_P("Laptop") : host ? "Host" : K2_P("Device");
     r.src_noun = src_noun(s.src_idh, s.src_host);
     const std::uint32_t mean_mv = mean_of(s.mv_s, s.obs_ms);
     r.vbus_mv = std::uint16_t(mean_mv);
@@ -1125,25 +1125,25 @@ const char* answer_name(unsigned a) {
     case 1: return "ACK";
     case 2: return "NAK";
     case 3: return "BUSY";
-    case 4: return "Not_Supported";
-    default: return "nothing";
+    case 4: return K2_P("Not_Supported");
+    default: return K2_P("nothing");
     }
 }
 const char* ctl_answer(unsigned t) {
-    return t == kReject ? "rejected" : t == kWait ? "answered Wait" : t == kNotSupported ? "answered Not_Supported" : "not answered";
+    return t == kReject ? K2_P("rejected") : t == kWait ? K2_P("answered Wait") : t == kNotSupported ? K2_P("answered Not_Supported") : K2_P("not answered");
 }
 const char* vdm_cmd(unsigned key) {
     const unsigned cmd = key & 0x1F, svid = key >> 8;
     switch (cmd) {
-    case 1: return "Discover_Identity";
-    case 2: return "Discover_SVIDs";
-    case 3: return "Discover_Modes";
-    case 4: return "Enter_Mode";
-    case 5: return "Exit_Mode";
-    case 6: return "Attention";
-    case 16: return svid == kSvidDp ? "DP Status" : "VDM 16";
-    case 17: return svid == kSvidDp ? "DP Configure" : "VDM 17";
-    default: return "VDM request";
+    case 1: return K2_P("Discover_Identity");
+    case 2: return K2_P("Discover_SVIDs");
+    case 3: return K2_P("Discover_Modes");
+    case 4: return K2_P("Enter_Mode");
+    case 5: return K2_P("Exit_Mode");
+    case 6: return K2_P("Attention");
+    case 16: return svid == kSvidDp ? K2_P("DP Status") : K2_P("VDM 16");
+    case 17: return svid == kSvidDp ? K2_P("DP Configure") : K2_P("VDM 17");
+    default: return K2_P("VDM request");
     }
 }
 
@@ -1153,7 +1153,7 @@ void title(const Report& r, const Finding& f, Out& o) {
     case Code::MismatchFlag: o.cap(r.snk_noun); o.s(K2_P(" flagged capability mismatch")); break;
     case Code::NoMismatchFlag: o.cap(r.snk_noun); o.s(K2_P(" did not flag capability mismatch")); break;
     case Code::OverDraw:
-        o.cap(r.snk_noun); o.s(f.d >> 22 & 1 ? " draws far above its contract: up to " : " draws above its contract: up to ");
+        o.cap(r.snk_noun); o.s(f.d >> 22 & 1 ? K2_P(" draws far above its contract: up to ") : K2_P(" draws above its contract: up to "));
         o.amps(f.a); o.s(K2_P(" on a ")); o.amps(f.b); o.s(K2_P(" contract"));
         break;
     case Code::InputCuts: o.cap(r.snk_noun); o.s(K2_P("'s input cuts out repeatedly")); break;
@@ -1165,8 +1165,8 @@ void title(const Report& r, const Finding& f, Out& o) {
         if (f.a) { o.s(K2_P("Contract ")); o.volts(f.a); o.c(' '); o.amps(f.b); o.s(K2_P(", draws ")); o.watts(f.c); }
         else { o.s(K2_P("Draws ")); o.watts(f.c); o.s(" at "); o.volts(r.vbus_mv); }
         break;
-    case Code::DrawReduced: o.cap(r.snk_noun); o.s(f.d ? " reduced its draw, contract unchanged" : " drew less, with PD traffic around it"); break;
-    case Code::FiveVoltOnly: o.s(K2_P("5 V contract, ")); o.s(r.snk_noun[0] == 'K' ? "K2" : "the device"); o.s(K2_P(" can use ")); o.volts(f.b > f.a ? f.a : f.b); break;
+    case Code::DrawReduced: o.cap(r.snk_noun); o.s(f.d ? K2_P(" reduced its draw, contract unchanged") : K2_P(" drew less, with PD traffic around it")); break;
+    case Code::FiveVoltOnly: o.s(K2_P("5 V contract, ")); o.s(r.snk_noun[0] == 'K' ? "K2" : K2_P("the device")); o.s(K2_P(" can use ")); o.volts(f.b > f.a ? f.a : f.b); break;
     case Code::ContractUnseen: o.s(K2_P("Contract not observed (the K2 attached after it)")); break;
     case Code::NoContract: o.s(K2_P("No contract made, VBUS ")); o.volts(f.a); break;
     case Code::ActiveSink:
@@ -1174,8 +1174,8 @@ void title(const Report& r, const Finding& f, Out& o) {
         if (f.a) { o.volts(f.a); o.c(' '); o.amps(f.b); o.s(K2_P(" contract")); }
         else { o.s(K2_P("contract on PDO ")); o.u(std::uint32_t(f.c)); }   // its PDO is not in the captured offer
         break;
-    case Code::HardReset: o.u(std::uint32_t(f.a)); o.s(f.a == 1 ? " hard reset" : " hard resets"); break;
-    case Code::SoftReset: o.u(std::uint32_t(f.a)); o.s(f.a == 1 ? " soft reset on SOP" : " soft resets on SOP"); break;
+    case Code::HardReset: o.u(std::uint32_t(f.a)); o.s(f.a == 1 ? K2_P(" hard reset") : K2_P(" hard resets")); break;
+    case Code::SoftReset: o.u(std::uint32_t(f.a)); o.s(f.a == 1 ? K2_P(" soft reset on SOP") : K2_P(" soft resets on SOP")); break;
     case Code::Reattach: o.s(K2_P("Re-attached ")); o.u(std::uint32_t(f.a)); o.s(K2_P("x within 3 s")); break;
     case Code::Rejected: o.s(K2_P("Request rejected ")); o.u(std::uint32_t(f.a)); o.c('x'); break;
     case Code::WaitLoop: o.s(K2_P("Request answered Wait ")); o.u(std::uint32_t(f.a)); o.c('x'); break;
@@ -1188,32 +1188,32 @@ void title(const Report& r, const Finding& f, Out& o) {
     case Code::VbusLow: o.s(K2_P("VBUS fell to ")); o.volts2(f.a); o.s(K2_P(" on a ")); o.volts(f.b); o.s(K2_P(" contract")); break;
     case Code::VbusHigh: o.s(K2_P("VBUS rose to ")); o.volts2(f.a); o.s(K2_P(" on a ")); o.volts(f.b); o.s(K2_P(" contract")); break;
     case Code::VbusLost: o.s(K2_P("VBUS lost with the contract up")); break;
-    case Code::NoGoodCrc: o.u(std::uint32_t(f.a)); o.s(f.a == 1 ? " message without GoodCRC" : " messages without GoodCRC"); break;
-    case Code::Retries: o.u(std::uint32_t(f.a)); o.s(f.a == 1 ? " retry on SOP" : " retries on SOP"); break;
+    case Code::NoGoodCrc: o.u(std::uint32_t(f.a)); o.s(f.a == 1 ? K2_P(" message without GoodCRC") : K2_P(" messages without GoodCRC")); break;
+    case Code::Retries: o.u(std::uint32_t(f.a)); o.s(f.a == 1 ? K2_P(" retry on SOP") : K2_P(" retries on SOP")); break;
     case Code::TxFail: o.u(std::uint32_t(f.a)); o.s(K2_P(" K2 transmissions not acknowledged")); break;
-    case Code::RxBad: o.u(std::uint32_t(f.a)); o.s(f.a == 1 ? " garbled frame" : " garbled frames"); break;
+    case Code::RxBad: o.u(std::uint32_t(f.a)); o.s(f.a == 1 ? K2_P(" garbled frame") : K2_P(" garbled frames")); break;
     case Code::SwapRefused: {
         const char* who = f.b ? r.src_noun : r.snk_noun;
         if (f.a == 1) {
             o.cap(f.b ? r.src_noun : r.snk_noun);
-            o.s(f.b ? " refuses to take power on this port" : " refuses to source power on this port");
+            o.s(f.b ? K2_P(" refuses to take power on this port") : K2_P(" refuses to source power on this port"));
         } else {
             o.cap(who);
-            o.s(f.a == 2 ? " refused a data role swap" : f.a == 4 ? " refused a VCONN swap" : " refused a fast role swap");
+            o.s(f.a == 2 ? K2_P(" refused a data role swap") : f.a == 4 ? K2_P(" refused a VCONN swap") : K2_P(" refused a fast role swap"));
         }
         break;
     }
     case Code::ModeNak:
         if (f.b) o.s(K2_P("Cable plug refused "));
-        o.s(f.a & 1 ? (f.b ? "DP alt mode" : "DP alt mode refused") : f.a & 2 ? (f.b ? "Thunderbolt mode" : "Thunderbolt mode refused")
-                    : (f.b ? "an alt mode" : "Alt mode refused"));
+        o.s(f.a & 1 ? (f.b ? K2_P("DP alt mode") : K2_P("DP alt mode refused")) : f.a & 2 ? (f.b ? K2_P("Thunderbolt mode") : K2_P("Thunderbolt mode refused"))
+                    : (f.b ? K2_P("an alt mode") : K2_P("Alt mode refused")));
         break;
     case Code::EnterUsbRefused: o.s(K2_P("Enter_USB refused")); break;
     case Code::EprFailed: o.s(K2_P("EPR entry failed")); break;
     case Code::CableCap: o.s(K2_P("Cable limits the offer to 3 A")); break;
     case Code::VdmLoop: o.s(vdm_cmd(std::uint32_t(f.a))); o.s(K2_P(" asked ")); o.u(std::uint32_t(f.b)); o.c('x'); break;
     case Code::CableSilent: o.s(K2_P("Cable plug never answered on SOP'")); break;
-    case Code::CaptureGap: o.u(std::uint32_t(f.a)); o.s(f.a == 1 ? " frame the K2 missed" : " frames the K2 missed"); break;
+    case Code::CaptureGap: o.u(std::uint32_t(f.a)); o.s(f.a == 1 ? K2_P(" frame the K2 missed") : K2_P(" frames the K2 missed")); break;
     }
 }
 
@@ -1224,7 +1224,7 @@ void note(const Report& r, const Finding& f, Out& o) {
         if (r.need_from == NeedFrom::SinkCaps) o.s(K2_P("its sink caps on the wire, "));
         else if (r.need_from == NeedFrom::Skedb) { o.s(K2_P("its PDP over PD (Sink_Capabilities_Extended)")); break; }
         else {
-            o.s(r.need_from == NeedFrom::AssumedTwin ? "assumed twin \"" : "twin \"");
+            o.s(r.need_from == NeedFrom::AssumedTwin ? K2_P("assumed twin \"") : K2_P("twin \""));
             o.s(r.twin ? r.twin : "?");
             o.s("\", ");
         }
@@ -1262,7 +1262,7 @@ void note(const Report& r, const Finding& f, Out& o) {
     case Code::DrawReduced:
         o.amps(f.a); o.s(" to "); o.amps(f.b); o.s(" at "); o.clock(f.t_ms);
         if (f.c > 1) { o.s(", "); o.u(std::uint32_t(f.c)); o.s(K2_P(" drops")); }
-        o.s(f.d ? "; no PD message, VBUS kept" : "; PD messages around it");
+        o.s(f.d ? K2_P("; no PD message, VBUS kept") : K2_P("; PD messages around it"));
         break;
     case Code::FiveVoltOnly: o.s(K2_P("the offer goes to ")); o.volts(f.a); o.s(K2_P(", the device's sink caps to ")); o.volts(f.b); break;
     case Code::ContractUnseen:
@@ -1317,11 +1317,11 @@ void note(const Report& r, const Finding& f, Out& o) {
             if (f.b) { o.s(K2_P("; it stays the ")); o.milli(f.d ? f.d : 5000, 0); o.s(K2_P(" V source")); }
             else o.s(K2_P("; it stays the sink"));
         } else {
-            o.s(f.a == 2 ? "DR_Swap" : f.a == 4 ? "VCONN_Swap" : "FR_Swap"); o.s(K2_P(" not accepted"));
+            o.s(f.a == 2 ? K2_P("DR_Swap") : f.a == 4 ? K2_P("VCONN_Swap") : K2_P("FR_Swap")); o.s(K2_P(" not accepted"));
         }
         break;
     case Code::ModeNak:
-        o.s(f.b ? "Enter_Mode NAK on SOP' at " : "Enter_Mode NAK at "); o.clock(f.t_ms);
+        o.s(f.b ? K2_P("Enter_Mode NAK on SOP' at ") : K2_P("Enter_Mode NAK at ")); o.clock(f.t_ms);
         if (f.b) o.s(K2_P("; the cable plug only, not the port"));
         break;
     case Code::EnterUsbRefused: o.s(K2_P("not accepted by the other end")); break;
@@ -1330,7 +1330,7 @@ void note(const Report& r, const Finding& f, Out& o) {
     case Code::VdmLoop: o.s(K2_P("answered ")); o.s(answer_name(std::uint32_t(f.c))); o.s(K2_P("; harmless to power")); break;
     case Code::CableSilent:
         o.s(K2_P("Discover_Identity sent ")); o.u(std::uint32_t(f.a)); o.s("x (");
-        o.u(std::uint32_t(f.b)); o.s(f.b == 1 ? " request" : " requests"); o.s(K2_P(" + retries); no cable chip on this leg"));
+        o.u(std::uint32_t(f.b)); o.s(f.b == 1 ? K2_P(" request") : K2_P(" requests")); o.s(K2_P(" + retries); no cable chip on this leg"));
         break;
     case Code::CaptureGap: o.s(K2_P("seen by their GoodCRC or the next MessageID; a capture gap, not a link fault")); break;
     }
@@ -1341,7 +1341,7 @@ void lanes_note(const Report& r, Out& o) {
     o.s(K2_P("agreed over PD: "));
     bool any = false;
     auto sep = [&] { if (any) o.s(", "); any = true; };
-    if (l.eusb) { sep(); o.s(l.usb_mode == 2 ? "USB4 entry" : l.usb_mode == 1 ? "USB 3 entry" : "USB 2 entry"); }
+    if (l.eusb) { sep(); o.s(l.usb_mode == 2 ? K2_P("USB4 entry") : l.usb_mode == 1 ? K2_P("USB 3 entry") : K2_P("USB 2 entry")); }
     if (l.tbt) { sep(); o.s(K2_P("Thunderbolt mode")); }
     if (l.dp) {
         sep(); o.s(K2_P("DP alt mode"));
@@ -1352,13 +1352,13 @@ void lanes_note(const Report& r, Out& o) {
 
 const char* head_power(std::uint8_t p) {
     switch (p) {
-    case kPowerShort: return "power short";
-    case kPowerOk: return "power OK";
-    case kPowerUnknown: return "need not known";
-    case kPowerUnseen: return "contract not observed";
-    case kPowerNone: return "no contract made";
-    case kPowerActive: return "K2 is the sink";
-    case kPowerOver: return "draw over contract";
+    case kPowerShort: return K2_P("power short");
+    case kPowerOk: return K2_P("power OK");
+    case kPowerUnknown: return K2_P("need not known");
+    case kPowerUnseen: return K2_P("contract not observed");
+    case kPowerNone: return K2_P("no contract made");
+    case kPowerActive: return K2_P("K2 is the sink");
+    case kPowerOver: return K2_P("draw over contract");
     default: return "";
     }
 }
@@ -1370,7 +1370,7 @@ void head(const Report& r, Out& o) {
         o.volts(r.vbus_mv);
         return;
     }
-    o.s(r.link == 2 ? "PD link unstable, " : r.link == 1 ? "PD link degraded, " : "PD link healthy, ");
+    o.s(r.link == 2 ? K2_P("PD link unstable, ") : r.link == 1 ? K2_P("PD link degraded, ") : K2_P("PD link healthy, "));
     o.s(head_power(r.power));
 }
 

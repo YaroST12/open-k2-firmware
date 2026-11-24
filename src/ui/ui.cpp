@@ -9,6 +9,7 @@
 #include "k2/core/loop_guard.hpp"
 #include "k2/core/paint_meter.hpp"
 #include "k2/core/rescan.hpp"
+#include "k2/core/strpack.hpp"
 #include "k2/core/survey.hpp"
 #include "k2/fastcharge/dpsniff.hpp"
 #include "k2/fastcharge/fctrig.hpp"
@@ -318,8 +319,8 @@ void Ui::draw_rotation_notice(uint32_t now_ms) {
     ContentViewport viewport(active_dest(), ctx_.content.w, ctx_.content.h);
     StrBuf<24> notice;
     if (notice_) notice.put(notice_);   // a refusal note (refuse_menu) shares the toast and its timer
-    else if (rotation_lock_) notice.put("Manual ").put_u32(rotation() * 90).put(" deg");
-    else notice.put("Autorotate: Auto");
+    else if (rotation_lock_) notice.put(K2_P("Manual ")).put_u32(rotation() * 90).put(" deg");
+    else notice.put(K2_P("Autorotate: Auto"));
     if (notice_ == kCalibrationNotice && page_ == Page::Home) return;
     draw_toast(ctx_.content, notice_ == kCalibrationNotice ? FooterTone::Caution
                          : notice_ ? FooterTone::Error : FooterTone::Info, notice.view());
@@ -817,7 +818,7 @@ void Ui::paint_incoming(uint32_t now_ms, uint32_t t0, bool blank) {
 void Ui::refuse_menu(Menu m, const char *why, uint32_t now_ms) {
     K2LOG("[UI] menu %u refused: %s (depth %u, arena %u/%u B)\n", unsigned(m), why, depth_, unsigned(pages_.used()),
           unsigned(kPageArenaBytes));
-    notice_ = "Can't open that here";
+    notice_ = K2_P("Can't open that here");
     rotation_notice_until_ = now_ms + 3000;
     rotation_notice_drawn_ = false;
     draw_rotation_notice(now_ms);
@@ -1157,7 +1158,7 @@ void Ui::draw_hold_card(uint32_t ms) {
         gfx_fill(c, kX, kY + kF, kF, kH - 2 * kF, kInk);
         gfx_fill(c, kX + kW - kF, kY + kF, kF, kH - 2 * kF, kInk);
         gfx_fill(c, kX + kF, kY + kF, kIn, kH - 2 * kF, kCaution);
-        gfx_text(c, kLabelFont, kNoteX, 116, "release to cancel", kSpotInk, kCaution);
+        gfx_text(c, kLabelFont, kNoteX, 116, K2_P("release to cancel"), kSpotInk, kCaution);
     }
     if (left != hold_left_) {
         hold_left_ = left;
@@ -1174,7 +1175,7 @@ void Ui::draw_hold_card(uint32_t ms) {
 
 void Ui::show_rebooting() {
     ContentViewport viewport(active_dest(), ctx_.content.w, ctx_.content.h);
-    gfx_text(ctx_.content, kMid, 14, 100, "Rebooting...", kWarn, kBg);
+    gfx_text(ctx_.content, kMid, 14, 100, K2_P("Rebooting..."), kWarn, kBg);
 }
 
 // ---------------------------------------------------------------------------------------
@@ -1753,7 +1754,7 @@ bool Ui::land_rescanned(uint32_t now_ms) {
     if (!open_connection(conn::Tab::Source, false, now_ms)) return false;
     ContentViewport viewport(active_dest(), ctx_.content.w, ctx_.content.h);
     ConnectionPage &conn = top_as<ConnectionPage>();
-    conn.say("Rescanned (rebooted)", now_ms);
+    conn.say(K2_P("Rescanned (rebooted)"), now_ms);
     pump_paint(now_ms);
     return true;
 }
@@ -1873,7 +1874,7 @@ void Ui::draw_release_notice() {
     if (fc_release_.busy() && menu() != Menu::Trigger) {
         const bool unsafe = fc_release_.state() == trig::Release::State::Unsafe;
         draw_toast(ctx_.content, unsafe ? FooterTone::Error : FooterTone::Caution,
-                   unsafe ? "Unsafe VBUS: unplug source" : "FC releasing; verify 5V");
+                   unsafe ? K2_P("Unsafe VBUS: unplug source") : K2_P("FC releasing; verify 5V"));
     } else if (loopguard::locked() && menu() != Menu::Trigger) {
         draw_toast(ctx_.content, FooterTone::Caution, loopguard::kLockText);   // on whatever page is up, while the lock holds
     }

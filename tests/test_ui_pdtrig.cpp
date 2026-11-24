@@ -4,6 +4,7 @@
 #include <string>
 
 #include "test_util.h"
+#include "k2/core/strpack.hpp"
 #include "k2/ui/ui_labels.hpp"
 #include "k2/ui/ui_pdtrig.hpp"
 #include "k2/ui/ui_wizard.hpp"
@@ -25,7 +26,8 @@ static pd::SourceCaps caps() {
 // the live reason (which port, what must be absent) for the state the link reports.
 static std::string hint_text(const SetupHint &h) {
     std::string s;
-    for (int i = 0; i < h.lines; i++) { s += h.line[i]; s += '|'; }
+    char b[64];
+    for (int i = 0; i < h.lines; i++) { s += strpack::unpack(h.line[i], b); s += '|'; }
     return s;
 }
 
@@ -42,7 +44,8 @@ static void test_setup_hints() {
                         const SetupHint h = setup_hint(t, st);
                         CHECK_TRUE(h.lines >= 2 && h.lines <= 4);
                         for (int i = 0; i < h.lines; i++) {
-                            const std::string l = h.line[i];
+                            char b[64];
+                            const std::string l(strpack::unpack(h.line[i], b));
                             CHECK_TRUE(l.size() <= 22);
                             for (char ch : l) CHECK_TRUE(ch >= 0x20 && ch < 0x7F);
                         }

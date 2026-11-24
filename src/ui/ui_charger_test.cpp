@@ -13,6 +13,7 @@
 #include "k2/core/bbpersist.hpp"
 #include "k2/core/gap_meter.hpp"
 #include "k2/core/log.hpp"
+#include "k2/core/strpack.hpp"
 #include "k2/core/paint_meter.hpp"
 #include "k2/core/rd_comeback.hpp"
 #include "k2/core/rescan_bridge.hpp"
@@ -76,8 +77,8 @@ using runlay::kFamilyNames;
 // A family name is a Custom / Steps row text (16 px, x28 up to the count tail) and the Steps header title ("<name> steps").
 static_assert(all_fit(kFamilyNames, kSmallAdvPx, 112), "a family name is wider than its row");
 static_assert(all_fit(kFamilyNames, kLabelAdv, runlay::kLeftW), "a family name is wider than the Running header's left column");
-constexpr const char *kSweepNames[] = {"PPS 3.3-4.9V", "PPS 3.3-20.5V", "PPS 5.5-21V", "AVS 15-28V", "AVS 15-48V"};
-static_assert(all_fit(kSweepNames, kSmallAdvPx, runlay::kSweepNameCells * runlay::kAdv16), "a sweep name is wider than its cells");
+constexpr const char *kSweepNames[] = {K2_P("PPS 3.3-4.9V"), K2_P("PPS 3.3-20.5V"), K2_P("PPS 5.5-21V"), K2_P("AVS 15-28V"), K2_P("AVS 15-48V")};
+static_assert(all_fit_p(kSweepNames, kSmallAdvPx, runlay::kSweepNameCells * runlay::kAdv16), "a sweep name is wider than its cells");
 static_assert(step_label::kInterludeCells <= runlay::kNameCellsSmall, "an interlude name is wider than the Running header's left column");
 // Tests rows (wizard step 1): 0 Depth, 1..4 the presets, 5 "Custom...", 6 "Last results" once a run exists.
 // Custom rows: 0..kFamilyCount-1 the families, then "Done" (row kFamilyCount).
@@ -86,28 +87,28 @@ constexpr int kFamilyCount = 6, kDepthRow = 0, kPresetFirst = 1, kPresets = 4, k
 constexpr int kStartRow = 0;
 // The presets are subsets of "All tests" (the default set, Class B included): PD = the PD family (its Xiaomi rows ride
 // along), Legacy = every D+/D- family (OEM vendor modes + QC / UFCS), Vendor modes = the OEM D+/D- families only.
-constexpr const char* kPresetNames[kPresets] = {"All tests", "PD only", "Legacy only", "Vendor modes"};
+constexpr const char* kPresetNames[kPresets] = {K2_P("All tests"), K2_P("PD only"), K2_P("Legacy only"), K2_P("Vendor modes")};
 // The 12 px note under the focused row (x28 .. 202, 29 chars).
-constexpr const char* kPresetNotes[kPresets] = {"Everything, QC Class B 20V", "PD fixed, PPS, EPR, Xiaomi",
-                                                "D+/D-: vendor modes, QC, UFCS", "Huawei, Samsung, OPPO, vivo"};
-static_assert(all_fit(kPresetNotes, kLabelAdv, kit::kNoteMaxPx), "a preset note is wider than the row note");
-static_assert(all_fit(kPresetNames, kSmallAdvPx, 150), "a preset name is wider than its row");
+constexpr const char* kPresetNotes[kPresets] = {K2_P("Everything, QC Class B 20V"), K2_P("PD fixed, PPS, EPR, Xiaomi"),
+                                                K2_P("D+/D-: vendor modes, QC, UFCS"), K2_P("Huawei, Samsung, OPPO, vivo")};
+static_assert(all_fit_p(kPresetNotes, kLabelAdv, kit::kNoteMaxPx), "a preset note is wider than the row note");
+static_assert(all_fit_p(kPresetNames, kSmallAdvPx, 150), "a preset name is wider than its row");
 // The count is a byte (ev8 clamps at 255): its three digits fit beside the widest name.
-static_assert(all_fit(kPresetNames, kSmallAdvPx, kit::kTailX - kit::kTextX - 3 * int(kSmallAdvPx) - 4), "a preset count would touch its name");
+static_assert(all_fit_p(kPresetNames, kSmallAdvPx, kit::kTailX - kit::kTextX - 3 * int(kSmallAdvPx) - 4), "a preset count would touch its name");
 // The planned re-attach (rdintent::plan_reattach) is announced on the footer of the START confirmation, never as a warning or a
 // stage of its own (27 characters at most): the second press goes straight on.
-constexpr const char* kReattachConfirm = "Press again, K2 blinks once";
-static_assert(fits_px(kSmallAdvPx, kReattachConfirm, 216), "the re-attach confirmation is wider than the footer");
+constexpr const char* kReattachConfirm = K2_P("Press again, K2 blinks once");
+static_assert(fits_px_p(kSmallAdvPx, kReattachConfirm, 216), "the re-attach confirmation is wider than the footer");
 // Depth row's note on Tests (charger_test::Level order: Medium, Light, Deep).
 // A build with the PD spec stage (K2_PDSPEC) says so on Deep; the default image has no such stage and keeps the old words.
-constexpr const char *kLevelItems[ct::kLevelCount] = {"Light", "Medium", "Deep"};
+constexpr const char *kLevelItems[ct::kLevelCount] = {"Light", K2_P("Medium"), "Deep"};
 constexpr int level_segment(ct::Level l) { return l == ct::Level::Light ? 0 : l == ct::Level::Medium ? 1 : 2; }
 static_assert(level_segment(ct::next_level(ct::Level::Light)) == 1 && level_segment(ct::next_level(ct::Level::Medium)) == 2 &&
               level_segment(ct::next_level(ct::Level::Deep)) == 0, "OK steps the level to the right and wraps");
-static_assert(all_fit(kLevelItems, kSmallAdvPx, 18 * kSmallAdvPx), "a Level word is wider than its value cell");
-constexpr const char *kLevelNotes[ct::kLevelCount] = {"Tests each advertised voltage", "Checks what charger offers",
-                                                       specsec::kBuilt ? "Sweeps, accuracy & PD spec" : "Sweeps & voltage accuracy"};
-static_assert(all_fit(kLevelNotes, kLabelAdv, kit::kNoteMaxPx), "a level note is wider than the row note");
+static_assert(all_fit_p(kLevelItems, kSmallAdvPx, 18 * kSmallAdvPx), "a Level word is wider than its value cell");
+constexpr const char *kLevelNotes[ct::kLevelCount] = {K2_P("Tests each advertised voltage"), K2_P("Checks what charger offers"),
+                                                       specsec::kBuilt ? K2_P("Sweeps, accuracy & PD spec") : K2_P("Sweeps & voltage accuracy")};
+static_assert(all_fit_p(kLevelNotes, kLabelAdv, kit::kNoteMaxPx), "a level note is wider than the row note");
 const char *level_note(ct::Level l) { return kLevelNotes[unsigned(l) < ct::kLevelCount ? unsigned(l) : 0]; }
 // A row whose engine times its own pulses stops the screen for the length of the handshake (the engine window the LCD idle hook
 // does not serve, Runner::paint_blocked; Engine::blocks_paint names the protocols). One Info footer line says why, painted before
@@ -818,7 +819,7 @@ void ChargerTestSession::boot_arm_cable() {
         K2LOG("[BOOTRA] %s cc1=%d pin=%u journaled=%u\n", bootra::name(v), int(in.cc1_mv), unsigned(in.pinned_rd), unsigned(in.journaled));
 }
 void ChargerTestSession::resume_run(uint32_t now) {
-    if (!gate_.ready(now)) { message("Waiting for stable 5V"); return; }
+    if (!gate_.ready(now)) { message(K2_P("Waiting for stable 5V")); return; }
     if (!reapply_cable()) { auto_resume_ = false; return; }   // the reason is on the footer; the OK press decides from here
     const auto r = runner_.resume(input(now), true);    K2LOG("[TEST] resume -> %s\n", ct::name(r));
     if (r != ct::Reason::None) { auto_resume_ = false; message(ct::refusal_words(r)); return; }
@@ -858,7 +859,7 @@ void ChargerTestSession::resume_rd_step(uint32_t now) {
         if (resume_refused_) return;   // behind a cable (or nothing plugged in): the identity cannot answer, wait for a direct plug
         if (!ctcable::valid(resume_cable_) || !arm_cable(resume_cable_)) { resume_hold_ = true; auto_resume_ = false; return; }   // reason on the footer
     }
-    if (!present_rd(now)) { release_run(); resume_hold_ = true; auto_resume_ = false; message("Rd refused: sink inline"); return; }
+    if (!present_rd(now)) { release_run(); resume_hold_ = true; auto_resume_ = false; message(K2_P("Rd refused: sink inline")); return; }
     resume_rd_ = true;
     K2LOG("[TEST] resume: Rd presented, waiting for the charger\n");
 }
@@ -1378,8 +1379,8 @@ __attribute__((noinline)) bool ChargerTestSession::arm_cable(ctcable::Choice c, 
     const bool already = ctx_.cables.armed_choice() == c;
     const auto r = ctx_.cables.arm(c, facts, name);   // the one arming path (Tools -> Spoof uses it too)
     if (r != CableIdentityList::ArmErr::Ok) {
-        message(r == CableIdentityList::ArmErr::Gone ? "Saved clone gone"
-                : r == CableIdentityList::ArmErr::Inline ? "Live sink: unplug load" : "Bad saved record");
+        message(r == CableIdentityList::ArmErr::Gone ? K2_P("Saved clone gone")
+                : r == CableIdentityList::ArmErr::Inline ? K2_P("Live sink: unplug load") : K2_P("Bad saved record"));
         return false;
     }
     if (!fusb302::ra_set(true)) {
@@ -1764,7 +1765,7 @@ __attribute__((noinline)) void ChargerTestPage::compose_best() {
     best_none_ = n == 0;
     std::array<std::string_view, 3> items{};
     for (size_t i = 0; i < n; ++i) items[i] = best[i].text;
-    if (best_none_) { items[0] = "No passing mode"; }
+    if (best_none_) { items[0] = K2_P("No passing mode"); }
     static_assert(pd_version::kMaxLabel + 2 + 15 <= kBestChars, "the version and \"No passing mode\" fit one line");
     char line[40];
     pd_version::headline(line, sizeof line, pd_version::label(run_version(s_.runner_.evidence())).view(), items.data(),
@@ -1968,13 +1969,13 @@ ChargerTestSession::Proposal ChargerTestSession::proposal(ct::Input in) const {
 // ====================================================================================================================
 namespace {
 // ---- copy that is not a preset (every 12 px note fits the kit's 190 px note box; the assert below pins it)
-constexpr const char *kNoteCustom = "Choose families one by one", *kNoteLast = "The run kept from last time",
-                     *kNoteFamily = "Entries inside this family", *kNoteXiaomi = "SVID 0x2717 auth, runs in PD",
-                     *kNotePdFixed = "Fixed offers: SPR + EPR", *kNotePps = "PPS + SPR/EPR AVS offers",
-                     *kNoteClassB = "20 V; Class A shows a skip", *kNoteUfcs = "UART 5/9/12V; needs UFCS",
-                     *kNoteVivo = "UART 5/9/11V, unproven", *kNoteHs = "5V handshake, not power",
-                     *kNoteEntry = "One entry of this family", *kNoteSweep = "Every 100mV, 1A; opt-in",
-                     *kNoteSweep200 = "Every 200mV, 1A; opt-in", *kNoteSweepPhone = "100mV, 20mV in phone zones", *kNoteSweep20 = "Every 20mV, 1A; opt-in";
+constexpr const char *kNoteCustom = K2_P("Choose families one by one"), *kNoteLast = K2_P("The run kept from last time"),
+                     *kNoteFamily = K2_P("Entries inside this family"), *kNoteXiaomi = K2_P("SVID 0x2717 auth, runs in PD"),
+                     *kNotePdFixed = K2_P("Fixed offers: SPR + EPR"), *kNotePps = K2_P("PPS + SPR/EPR AVS offers"),
+                     *kNoteClassB = K2_P("20 V; Class A shows a skip"), *kNoteUfcs = K2_P("UART 5/9/12V; needs UFCS"),
+                     *kNoteVivo = K2_P("UART 5/9/11V, unproven"), *kNoteHs = K2_P("5V handshake, not power"),
+                     *kNoteEntry = K2_P("One entry of this family"), *kNoteSweep = K2_P("Every 100mV, 1A; opt-in"),
+                     *kNoteSweep200 = K2_P("Every 200mV, 1A; opt-in"), *kNoteSweepPhone = K2_P("100mV, 20mV in phone zones"), *kNoteSweep20 = K2_P("Every 20mV, 1A; opt-in");
 constexpr const char *kNotes[] = {kNoteCustom, kNoteLast, kNoteFamily, kNoteXiaomi, kNotePdFixed, kNotePps, kNoteClassB,
                                   kNoteUfcs, kNoteVivo, kNoteHs, kNoteEntry, kNoteSweep,
                                   kNoteSweep200, kNoteSweepPhone, kNoteSweep20};
@@ -1988,9 +1989,9 @@ const char *sweep_note(ctsweep::Depth d, bool avs) {
 constexpr const char *kDepthWords[ctsweep::kDepthCount] = {ctsweep::depth_name(ctsweep::Depth::Step100), ctsweep::depth_name(ctsweep::Depth::Step200),
                                                            ctsweep::depth_name(ctsweep::Depth::Phone), ctsweep::depth_name(ctsweep::Depth::Step20)};
 static_assert(all_fit(kDepthWords, kSmallAdvPx, 6 * kSmallAdvPx), "a depth word is wider than its tail");
-static_assert(all_fit(kLevelItems, kSmallAdvPx, 11 * kSmallAdvPx), "a Level word and a depth word are wider than the Review value");
+static_assert(all_fit_p(kLevelItems, kSmallAdvPx, 11 * kSmallAdvPx), "a Level word and a depth word are wider than the Review value");
 static_assert(all_fit(kDepthWords, kLabelAdv, 9 * kLabelAdv), "a depth word after the family label is wider than its cells");
-static_assert(all_fit(kNotes, kLabelAdv, kit::kNoteMaxPx), "a note is wider than the row note");
+static_assert(all_fit_p(kNotes, kLabelAdv, kit::kNoteMaxPx), "a note is wider than the row note");
 
 // The Group page's mask for row `row` of family `fam` (the PD family has two algorithm rows - fixed offers, the PPS /
 // AVS offers - and, when the source offers PPS / AVS APDOs, two more: the deep sweeps, which are Options flags, not
@@ -2037,8 +2038,8 @@ kit::Verdict vmap(const ct::Step& s, const ctsweep::View& view) {
 const char *cc_word(int mv) {
     if (mv < 0) return "--";
     if (mv < 200) return "open";
-    if (mv < 660) return "Rp USB";
-    if (mv < 1230) return "Rp 1.5A";
+    if (mv < 660) return K2_P("Rp USB");
+    if (mv < 1230) return K2_P("Rp 1.5A");
     if (mv < 2200) return "Rp 3A";
     return "open";
 }
@@ -2137,19 +2138,19 @@ static kit::Verdict range_verdict(specsec::RangeTone t) {
     const pdspec::Verdict v = c.verdict();
     switch (v) {
         case pdspec::Verdict::Skip: f.put(pdspec::skip_name(c.skip())); return FooterTone::Info;
-        case pdspec::Verdict::Pending: if (!detail) f.put(name).put(": "); f.put("not judged"); return FooterTone::Info;
-        case pdspec::Verdict::Unverified: if (!detail) f.put(name).put(": "); f.put("limit unverified"); return FooterTone::Info;
+        case pdspec::Verdict::Pending: if (!detail) f.put(name).put(": "); f.put(K2_P("not judged")); return FooterTone::Info;
+        case pdspec::Verdict::Unverified: if (!detail) f.put(name).put(": "); f.put(K2_P("limit unverified")); return FooterTone::Info;
         case pdspec::Verdict::Pass:
         case pdspec::Verdict::Fail: break;
     }
     if (!detail) f.put(name).put(": ");
     if (c.fails) {
         f.put("fail ").put_u32(c.fails);
-        if (detail && c.detailed()) f.put(" of ").put_u32(c.n).put(" measured");
+        if (detail && c.detailed()) f.put(" of ").put_u32(c.n).put(K2_P(" measured"));
         return FooterTone::Caution;
     }
     f.put("pass");
-    if (detail && c.detailed()) f.put(", ").put_u32(c.n).put(" measured");
+    if (detail && c.detailed()) f.put(", ").put_u32(c.n).put(K2_P(" measured"));
     return FooterTone::Ok;
 }
 
@@ -2188,7 +2189,7 @@ static FooterTone range_footer(StrBuf<32> &f, const ct::Runner &runner, A algo, 
     const auto rw = runner.sweep_view().apdo(static_cast<uint8_t>(algo), pos);
     const bool has_pts = rw && rw->sum.points;
     if (has_pts && put_fold_footer(f, rw)) return FooterTone::Caution;
-    if (!has_pts && lost) { f.put("sweep failed"); return FooterTone::Caution; }   // no recorded point at all
+    if (!has_pts && lost) { f.put(K2_P("sweep failed")); return FooterTone::Caution; }   // no recorded point at all
     if (wl) { f.put(std::string_view(wk, wl)); return FooterTone::Caution; }
     if (spec_bad && !lost) { f.clear(); spectext::range_footer(f, *sp, rs); return FooterTone::Caution; }
     if (has_pts && (lost || rc.tone == result_layout::Tone::Pass)) {   // both 5 V parts
@@ -2215,7 +2216,7 @@ static FooterTone range_footer(StrBuf<32> &f, const ct::Runner &runner, A algo, 
     StrBuf<48> g;
     for (int part = 2; part >= 0; --part) {
         g.clear();
-        g.put("worst ").put(name.view());
+        g.put(K2_P("worst ")).put(name.view());
         if (part >= 1 && !val.view().empty()) g.put(": ").put(val.view());
         if (part >= 2 && !margin.view().empty()) g.put_char(' ').put(margin.view());
         if (text_cells(g.view()) <= 27) break;
@@ -2233,13 +2234,13 @@ static FooterTone range_footer(StrBuf<32> &f, const ct::Runner &runner, A algo, 
     switch (s_.stage_) {
     case Stage::Algorithms: {
         const int pr = preset_row_of(s_.options_.selected);
-        f.put("Picked: ").put(pr ? kPresetNames[pr - 1] : "custom set");
+        f.put(K2_P("Picked: ")).put(pr ? kPresetNames[pr - 1] : K2_P("custom set"));
         return FooterTone::Info;
     }
     case Stage::Custom: {
         unsigned on = 0;
         for (int n = fam_skip(); n < kFamilyCount; ++n) on += family_state(s_.options_.selected, n) != 0;
-        put_of(f, on, family_rows(), " families on");
+        put_of(f, on, family_rows(), K2_P(" families on"));
         return FooterTone::Info;
     }
     case Stage::Group: {
@@ -2253,13 +2254,13 @@ static FooterTone range_footer(StrBuf<32> &f, const ct::Runner &runner, A algo, 
             const uint32_t m = group_mask(s_.family_, i, algorithm_at(i));
             on += (s_.options_.selected & m) == m;
         }
-        put_of(f, on, static_cast<unsigned>(n), " entries on");
+        put_of(f, on, static_cast<unsigned>(n), K2_P(" entries on"));
         return FooterTone::Info;
     }
     case Stage::Cable: {
         const auto sel = ctx_.cables.selected();
-        f.put("Picked: ");
-        if (sel.kind == ctcable::Kind::Off) { f.put("no identity"); return FooterTone::Info; }
+        f.put(K2_P("Picked: "));
+        if (sel.kind == ctcable::Kind::Off) { f.put(K2_P("no identity")); return FooterTone::Info; }
         row_ = ctx_.cables.row(ctx_.cables.index_of(sel), CableIdentityList::View::CableStep);
         const size_t room = kFooterCells - 8 - (row_.rating.empty() ? 0 : row_.rating.size() + 1);
         f.put(row_.text.view().substr(0, room));
@@ -2275,14 +2276,14 @@ static FooterTone range_footer(StrBuf<32> &f, const ct::Runner &runner, A algo, 
         }
         const char *msg = "";   // the other port is START's hint; no fixed warning toast rides on a bare Review
         FooterTone tone = FooterTone::Info;
-        if (!s_.summary_.runnable) { msg = "Nothing to run: all skip"; tone = FooterTone::Caution; }
-        else if (s_.confirming_) { msg = s_.confirm_reattach_ ? kReattachConfirm : "Press again to start"; tone = FooterTone::Caution; }
-        else if (in.cable_mv == 20000 && s_.summary_.max_mv == 21000) { msg = "PPS: 21V on 20V wire"; tone = FooterTone::Info; }
-        else if (self_supplied()) { msg = "Self-powered: VBUS stays up"; tone = FooterTone::Info; }
+        if (!s_.summary_.runnable) { msg = K2_P("Nothing to run: all skip"); tone = FooterTone::Caution; }
+        else if (s_.confirming_) { msg = s_.confirm_reattach_ ? kReattachConfirm : K2_P("Press again to start"); tone = FooterTone::Caution; }
+        else if (in.cable_mv == 20000 && s_.summary_.max_mv == 21000) { msg = K2_P("PPS: 21V on 20V wire"); tone = FooterTone::Info; }
+        else if (self_supplied()) { msg = K2_P("Self-powered: VBUS stays up"); tone = FooterTone::Info; }
         f.put(msg);
         return tone;
     }
-    case Stage::Refuse: f.put("Direct plug is the sure way"); return FooterTone::Caution;
+    case Stage::Refuse: f.put(K2_P("Direct plug is the sure way")); return FooterTone::Caution;
     case Stage::Waiting: {
         const int cc1 = ctx_.analog ? ctx_.analog->cc1_mv : -1, cc2 = ctx_.analog ? ctx_.analog->cc2_mv : -1;
         const fusb302::LineTrial lt = fusb302::line_trial();   // the direct-plug fallback's own fact: the line our Rd is on while it is live
@@ -2296,21 +2297,21 @@ static FooterTone range_footer(StrBuf<32> &f, const ct::Runner &runner, A algo, 
         const auto &steps = s_.runner_.steps();
         const char *msg = nullptr;
         FooterTone tone = FooterTone::Info;
-        if (s_.runner_.state() == ct::State::Unsafe) { msg = "Unplug; verify measured 5V"; tone = FooterTone::Error; }
+        if (s_.runner_.state() == ct::State::Unsafe) { msg = K2_P("Unplug; verify measured 5V"); tone = FooterTone::Error; }
         else if (s_.runner_.reason() != ct::Reason::None) { msg = ct::refusal_words(s_.runner_.reason()); tone = FooterTone::Caution; }
-        else if (steps.empty()) msg = "Starting";
-        else if (s_.runner_.state() == ct::State::Spec) msg = "PD spec checks";
+        else if (steps.empty()) msg = K2_P("Starting");
+        else if (s_.runner_.state() == ct::State::Spec) msg = K2_P("PD spec checks");
         else if (s_.fc_words_ && fctrig::paint_critical()) msg = s_.fc_words_;   // the window the screen sits out
         if (msg) { f.put(msg); return tone; }
         unsigned i, n;
         const char *unit;
         unit_progress(s_.runner_, std::min(s_.runner_.index(), steps.size() - 1), i, n, unit);
-        f.put(unit).put(": step ");
+        f.put(unit).put(K2_P(": step "));
         put_of(f, i, n, "");
         return FooterTone::Info;
     }
     case Stage::Results: {
-        if (s_.selection_ >= delta_row()) { f.put("Compare with the last card"); return FooterTone::Info; }
+        if (s_.selection_ >= delta_row()) { f.put(K2_P("Compare with the last card")); return FooterTone::Info; }
         if (s_.selection_ >= static_cast<int>(line_n_)) {   // a PD spec row
             const size_t ci = spec_cell(s_.selection_ - static_cast<int>(line_n_));
             if (ci >= specsec::kCells) return FooterTone::Info;
@@ -2322,7 +2323,7 @@ static FooterTone range_footer(StrBuf<32> &f, const ct::Runner &runner, A algo, 
         if (row.kind == result_layout::CompactKind::Collapsed && row.mv == 2) { f.put(kLinesOpenFooter); return FooterTone::Caution; }   // the "No D+/D-" row
         if (row.kind == result_layout::CompactKind::Header || row.kind == result_layout::CompactKind::Fact ||
             row.kind == result_layout::CompactKind::Collapsed) {
-            f.put(lbl).put(": see steps");
+            f.put(lbl).put(K2_P(": see steps"));
             return FooterTone::Info;
         }
         if (row.kind == result_layout::CompactKind::Levels) {   // "SVOOC: up to 120W claimed": claimed, never a pass
@@ -2351,11 +2352,11 @@ static FooterTone range_footer(StrBuf<32> &f, const ct::Runner &runner, A algo, 
     case Stage::SpecDetail: {
         pdspec::Check chk;
         specsec::Cell cell;
-        if (!spec_open(chk, cell)) { f.put("No result"); return FooterTone::Info; }
+        if (!spec_open(chk, cell)) { f.put(K2_P("No result")); return FooterTone::Info; }
 #if K2_SPECROWS
         if (spec_list_on()) {   // the worst transition, by name, in the verdict's tone
             specsec::Row r;
-            if (!spec_list_row(spec_list_.worst, r)) { f.put("worst: no row"); return FooterTone::Info; }
+            if (!spec_list_row(spec_list_.worst, r)) { f.put(K2_P("worst: no row")); return FooterTone::Info; }
             return spec_detail_footer(f, r);
         }
 #endif
@@ -2369,9 +2370,9 @@ static FooterTone range_footer(StrBuf<32> &f, const ct::Runner &runner, A algo, 
             if (chk != pdspec::Check::Count) return spec_footer(f, static_cast<int>(chk), specsec::slot_cell(s_.runner_.evidence().spec, *p, slot), false);
         }
         if (s_.picked()) return put_counts(f, s_.result_label_, c);   // "PPS: 3 pass, 1 caution": the name the bar's title uses
-        f.put_u32(c.total).put(" steps, ");   // a non-PD unit (QC, UFCS, ...): its whole step list
-        if (!c.fail && c.caution) f.put_u32(c.caution).put(" caution");
-        else f.put_u32(c.fail).put(" failed");
+        f.put_u32(c.total).put(K2_P(" steps, "));   // a non-PD unit (QC, UFCS, ...): its whole step list
+        if (!c.fail && c.caution) f.put_u32(c.caution).put(K2_P(" caution"));
+        else f.put_u32(c.fail).put(K2_P(" failed"));
         return c.fail || c.caution ? FooterTone::Caution : FooterTone::Info;
     }
     case Stage::Detail: {
@@ -2388,10 +2389,10 @@ static FooterTone range_footer(StrBuf<32> &f, const ct::Runner &runner, A algo, 
             if (result_layout::is_lines_open(st)) { f.put(kLinesOpenFooter); return FooterTone::Caution; }
             if (result_layout::is_no_answer(st)) { f.put(trig::fail_long(fc::Fail(st.detail))); return FooterTone::Info; }   // 27 cells: the card carries ", unloaded"
         }
-        f.put("Kept until the next start");
+        f.put(K2_P("Kept until the next start"));
         return FooterTone::Info;
     }
-    case Stage::Changes: f.put_u32(s_.delta_n_).put(" changed, was run ").put_u32(s_.delta_runs_); return FooterTone::Info;
+    case Stage::Changes: f.put_u32(s_.delta_n_).put(K2_P(" changed, was run ")).put_u32(s_.delta_runs_); return FooterTone::Info;
     case Stage::Resume: {
         const auto w = resume_words(ctx_.now);
         f.put(resumetext::footer(w));
@@ -2430,12 +2431,12 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
             const bool custom = preset_row_of(s_.options_.selected) == 0;
             out.marker = kit::Marker::Radio;
             out.state = custom;
-            out.text = "Custom...";
+            out.text = K2_P("Custom...");
             out.text_color = custom ? kFocus : kText;
             out.chevron = true;
             if (focused) out.note = kNoteCustom;
         } else {
-            out.text = "Last results";
+            out.text = K2_P("Last results");
             out.chevron = true;
             if (focused) out.note = kNoteLast;
         }
@@ -2467,13 +2468,13 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
         if (sweep_row_shown(s_.family_, index, s_.sweep_points(), s_.avs_sweep_points())) {   // a deep sweep's own line, with its point count
             const bool avs = sweep_kind_at(index, s_.sweep_points(), s_.avs_sweep_points()) == 1;
             out.state = avs ? s_.options_.avs_sweep : s_.options_.pps_sweep;
-            out.text = avs ? "AVS sweep" : "PPS sweep";
+            out.text = avs ? K2_P("AVS sweep") : K2_P("PPS sweep");
             row_tail_.put_u32(avs ? s_.avs_sweep_points() : s_.sweep_points()).put(" pts");
             if (focused) out.note = sweep_note(s_.options_.sweep_depth, avs);
             break;
         }
         out.state = (s_.options_.selected & m) == m;
-        out.text = s_.family_ == kFamPd ? (index == 0 ? "PD fixed" : "PPS") : ct::name(a);
+        out.text = s_.family_ == kFamPd ? (index == 0 ? K2_P("PD fixed") : "PPS") : ct::name(a);
         if (focused) out.note = group_note(s_.family_, index, a);
         break;
     }
@@ -2483,7 +2484,7 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
         if (focused) out.note = row_.note;
         break;
     case Stage::Refuse:
-        out.text = index == 0 ? "Start anyway" : "Start, skip spoof";
+        out.text = index == 0 ? K2_P("Start anyway") : K2_P("Start, skip spoof");
         if (index == 0) out.text_color = kCaution;
         break;
     case Stage::Resume:
@@ -2518,7 +2519,7 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
             } else {
                 row_text_.put_char(' ');
                 pg::put_dv(row_text_, d.was_dv ? d.was_dv : d.now_dv);
-                row_tail_.put(d.was_dv ? "FAIL > PASS" : "PASS > FAIL");
+                row_tail_.put(d.was_dv ? K2_P("FAIL > PASS") : K2_P("PASS > FAIL"));
             }
             out.tail_color = (d.was_dv && !d.now_dv) ? kOk : kCaution;
         }
@@ -2560,7 +2561,7 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
                 break;
             }
         }
-        if (si < 0) { out.text = "No selected steps"; out.text_color = kDim; break; }
+        if (si < 0) { out.text = K2_P("No selected steps"); out.text_color = kDim; break; }
         const auto &steps = s_.runner_.steps();
         const auto &s = steps[static_cast<size_t>(si)];
         out.marker = kit::Marker::Verdict;
@@ -2585,7 +2586,7 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
             if (result_layout::deviates(s, view)) { StrBuf<16> off; put_off(off, view, s); row_note_.put(": ").put(off.view()); }
             else if (walk) row_note_.put(": ").put(wk);
             else if (caution || (!listing && (s.verdict == ct::Verdict::Fail || s.verdict == ct::Verdict::Skip))) row_note_.put(": ").put(detail_name(s));
-            if (s.pos && !(walk && s.reason == ct::Reason::StepResolution)) row_note_.put(" PDO #").put_u32(s.pos);
+            if (s.pos && !(walk && s.reason == ct::Reason::StepResolution)) row_note_.put(K2_P(" PDO #")).put_u32(s.pos);
             out.note = row_note_.view().substr(0, kit::kNoteMaxPx / kLabelAdv);
         }
         break;
@@ -2639,9 +2640,9 @@ void ChargerTestPage::paint_warning() {
     if (!laid_) {
         const Surface &c = ctx_.content;
         if (ctx_.budget && !ctx_.budget->admit(static_cast<int>(c.w) * 44 + 1200, true)) return;
-        kit::draw_alert_band(c, kit::kBodyY, false, "Cable connected");
-        gfx_text(c, kSmall, 6, runlay::kRefuseRowsY - 46, "the spoof won't reach", kText, kBg);
-        gfx_text(c, kSmall, 6, runlay::kRefuseRowsY - 26, "the charger.", kText, kBg);
+        kit::draw_alert_band(c, kit::kBodyY, false, K2_P("Cable connected"));
+        gfx_text(c, kSmall, 6, runlay::kRefuseRowsY - 46, K2_P("the spoof won't reach"), kText, kBg);
+        gfx_text(c, kSmall, 6, runlay::kRefuseRowsY - 26, K2_P("the charger."), kText, kBg);
         ctx_.rows.init(c, runlay::kRefuseRowsY, &ChargerTestPage::row_fn, this);
         ctx_.rows.restart();
         ctx_.rows.invalidate();
@@ -2657,10 +2658,10 @@ void ChargerTestPage::paint_warning() {
 // ====================================================================================================================
 namespace {
 using result_layout::Tone;
-constexpr const char *kChecks[3] = {"Rd presented", "VBUS up", "Source caps"};
-static_assert(all_fit(kChecks, kSmallAdvPx, 190), "a Waiting checklist item is wider than its row");
-constexpr const char *kRdOn[2] = {"Rd on CC1", "Rd on CC2"};   // the checklist's first row once the Rd sits on a line
-static_assert(all_fit(kRdOn, kSmallAdvPx, 190), "a Waiting checklist item is wider than its row");
+constexpr const char *kChecks[3] = {K2_P("Rd presented"), K2_P("VBUS up"), K2_P("Source caps")};
+static_assert(all_fit_p(kChecks, kSmallAdvPx, 190), "a Waiting checklist item is wider than its row");
+constexpr const char *kRdOn[2] = {K2_P("Rd on CC1"), K2_P("Rd on CC2")};   // the checklist's first row once the Rd sits on a line
+static_assert(all_fit_p(kRdOn, kSmallAdvPx, 190), "a Waiting checklist item is wider than its row");
 // The Review table: five rows of 26 px from the body top, the key at x6 and the value from x68 (17 cells).
 constexpr kit::KvLayout kKv{kit::kBodyY, kit::kRowH, 6, nullptr, nullptr, 68, 17, Align::Left};
 // Review: five kKv rows from the body top (Tests, Depth, Spoof, Peak, Power), the rule at y154 and the 64 px START ticket. The
@@ -2852,7 +2853,7 @@ void ChargerTestPage::paint_review() {
     };
     StrBuf<48> buf;
     // the PD spec stage's checks (Deep, K2_PDSPEC) are tests too
-    buf.put_u32(s_.summary_.runnable + s_.summary_.spec_checks).put(" run, ").put_u32(s_.summary_.skipped).put(" skip");
+    buf.put_u32(s_.summary_.runnable + s_.summary_.spec_checks).put(K2_P(" run, ")).put_u32(s_.summary_.skipped).put(" skip");
     if (!kv(0, "Tests", buf.view(), s_.summary_.runnable ? kText : kCaution)) return;
     buf.clear();
     buf.put(kLevelItems[level_segment(s_.options_.level)]);
@@ -2889,16 +2890,16 @@ void ChargerTestPage::paint_review() {
         buf.put("--");
     }
     if (!kv(3, "Peak", buf.view(), buf.view() == "--" ? kDim : kText)) return;
-    if (!kv(4, "Power", self_supplied() ? "From the charger" : "K2 on USB", kText)) return;
+    if (!kv(4, "Power", self_supplied() ? K2_P("From the charger") : K2_P("K2 on USB"), kText)) return;
 
     if (s_.confirming_) {
         const int32_t left = std::max<int32_t>(0, static_cast<int32_t>(s_.confirm_until_ - ctx_.now));
         const int permille = std::clamp<int>(left * 1000 / static_cast<int32_t>(Ui::kConfirmWindowMs), 0, 1000);
         buf.clear();
-        buf.put("closes in ").put_u32(static_cast<uint32_t>((left + 999) / 1000)).put_char('s');
-        action_.draw_armed("CONFIRM", buf.view(), permille, pbg);
+        buf.put(K2_P("closes in ")).put_u32(static_cast<uint32_t>((left + 999) / 1000)).put_char('s');
+        action_.draw_armed(K2_P("CONFIRM"), buf.view(), permille, pbg);
     } else {
-        action_.draw_idle("START", "other port must be empty", pbg, true);
+        action_.draw_idle("START", K2_P("other port must be empty"), pbg, true);
     }
 }
 
@@ -3208,7 +3209,7 @@ void ChargerTestPage::paint_running(uint32_t now) {
         const auto work = result_layout::run_progress(steps);   // rows the run executes: a plan-time skip is not work (the counter and the bar read it alike)
         const int done = static_cast<int>(work.done), total = static_cast<int>(work.total);
         buf.clear();
-        buf.put_u32(work.done).put_char('/').put_u32(work.total).put(" steps");
+        buf.put_u32(work.done).put_char('/').put_u32(work.total).put(K2_P(" steps"));
         put_line(c, kSmall, 6, 4, buf.view(), kText, 12, cell_sig_[0], false, false, &bg);
         if (bg.admit(prog_.cost(done, total))) prog_.set(done, total);
         const int fam = st ? family(*st) : -1;
@@ -3233,7 +3234,7 @@ void ChargerTestPage::paint_running(uint32_t now) {
         else put_line(c, kSmall, runlay::kLeftX, L.name_y, buf.view(), kText, runlay::kNameCells, cell_sig_[3], false, true, &bg);
         if (!sweeping) {
             buf.clear();
-            if (st && st->mv) { buf.put("target "); pg::put_volts_trim(buf, st->mv); buf.put_char('V'); }
+            if (st && st->mv) { buf.put(K2_P("target ")); pg::put_volts_trim(buf, st->mv); buf.put_char('V'); }
             put_line(c, kLabelFont, runlay::kLeftX, 68, buf.view(), kDim, runlay::kTargetCells, cell_sig_[4], false, false, &bg);
         }
     }
@@ -3281,9 +3282,9 @@ void ChargerTestPage::grid_row(int index, kit::ResultRowSpec &out) {
             out.section = specsec::section_start(ci) || k == 0;
         } else {
             StrBuf<12> t;
-            t.put_u32(static_cast<uint32_t>(s_.delta_n_)).put(" changed");
+            t.put_u32(static_cast<uint32_t>(s_.delta_n_)).put(K2_P(" changed"));
             put_clip(cell_txt_[0][0], t.view());
-            out.label = "Changes";
+            out.label = K2_P("Changes");
             out.cells[0] = {kit::Verdict::None, cell_txt_[0][0], {}};
             out.section = spec_n() > 0;
         }
@@ -3376,7 +3377,7 @@ void ChargerTestPage::paint_results() {
         laid_ = true;
     }
     const unsigned n4[4] = {all.pass, all.caution, all.fail, all.skip};
-    static constexpr const char *kWords4[4] = {"pass", "caution", "fail", "skip"};
+    static constexpr const char *kWords4[4] = {"pass", K2_P("caution"), "fail", "skip"};
     const uint16_t ink4[4] = {kOk, kCaution, kError, kDim};
     const int cols = all.caution ? 4 : 3, pitch = c.w / cols, chars = (pitch - 18) / kSmallAdvPx;   // the text ends 2 px short of the next cell's rule
     // The words (pass / fail / skip) show for all three counts or for none: one of them too wide for its cell never leaves its
@@ -3415,7 +3416,7 @@ void ChargerTestPage::draw_capture(const transcap::Meta &m) {
     cap.put("Peak ").put_fixed(m.thumb.vmax_mv, 2).put("V ").put(transcap::reason_name(m.reason));
     char fitted[kFitBuf];
     gfx_text(ctx_.content, kLabelFont, 6, kTop + kHeight + 1, fit_text(kLabelFont, cap.view(), 150, fitted), kDim, kBg);
-    if (m.thumb.accept_col != 0xFF) gfx_text(ctx_.content, kLabelFont, 160, kTop + kHeight + 1, "|Accept", kCaution, kBg);
+    if (m.thumb.accept_col != 0xFF) gfx_text(ctx_.content, kLabelFont, 160, kTop + kHeight + 1, K2_P("|Accept"), kCaution, kBg);
 }
 
 // The verdict band of a detail page (y22..57): the verdict's fill and glyph, the word (font 24; font 12 when `tight`) and `right` (font 12,
@@ -3471,8 +3472,8 @@ void ChargerTestPage::paint_detail() {
                 StrBuf<40> line;
                 if (n == 0) line.put("Auth ").put(mi_unlock::chain_text(s.detail).view());
                 else if (n == 1 && mi_unlock::chain_done(s.detail)) {
-                    if (modes.empty()) line.put("No new modes");
-                    else line.put_u32(static_cast<uint32_t>(modes.size())).put(modes.size() == 1 ? " mode unlocked" : " modes unlocked");
+                    if (modes.empty()) line.put(K2_P("No new modes"));
+                    else line.put_u32(static_cast<uint32_t>(modes.size())).put(modes.size() == 1 ? K2_P(" mode unlocked") : K2_P(" modes unlocked"));
                 } else if (n >= 2 && static_cast<size_t>(n - 2) < modes.size()) line.put(mi_unlock::mode_text(modes[static_cast<size_t>(n - 2)]).view());
                 if (line.view().empty()) continue;
                 gfx_text(c, kLabelFont, 6, static_cast<int16_t>(116 + n * 18), line.view(), n == 0 ? kText : kDim, kBg);
@@ -3495,31 +3496,31 @@ void ChargerTestPage::paint_detail() {
         uint16_t col = kText;
         switch (detail_step_) {
         case 1:
-            key = "Target";
+            key = K2_P("Target");
             if (s.mv) val.put_fixed(s.mv, 2).put("V ").put_u32(s.ma).put("mA");
-            else { val.put("No request"); col = kDim; }
+            else { val.put(K2_P("No request")); col = kDim; }
             sv = val.view();
             break;
         case 2:
-            key = "Measured";
+            key = K2_P("Measured");
             if (measured_shown(s)) { val.put_fixed(s.measured_mv, 2).put_char('V'); col = kVolt; }
             else { val.put("--"); col = kFaint; }
             sv = val.view();
             break;
         case 3:
             if (is_capped(s)) {
-                key = "Reached";
+                key = K2_P("Reached");
                 val.put(result_layout::reach_span(result_layout::reach(steps, s.algorithm, s.pos)).view());
                 col = kCaution;
             } else {
-                key = "Window";
+                key = K2_P("Window");
                 if (s.mv) val.put_fixed(s.mv * 95 / 100, 2).put_char('-').put_fixed(s.mv * 105 / 100, 2).put_char('V');
                 else { val.put("--"); col = kDim; }
             }
             sv = val.view();
             break;
         case 4: {
-            key = "Reason";
+            key = K2_P("Reason");
             const bool deviates = result_layout::deviates(s, s_.runner_.sweep_view());
             char pk[16] = {};
             if (deviates) { put_off(val, s_.runner_.sweep_view(), s); sv = val.view(); }
@@ -3531,21 +3532,21 @@ void ChargerTestPage::paint_detail() {
         }
         case 5:
             if (ct::is_mi_mode(s)) {   // the offer before the chain ("not listed": a new PDO; "not kept": a resumed run lost it)
-                key = "Before";
+                key = K2_P("Before");
                 const auto* m = s_.runner_.mi_mode(s);
                 if (m && m->before) val.put(mi_unlock::mode_text({0, m->before, m->pos}, false, kDet.value_chars).view());
-                else { val.put(m ? "not listed" : "not kept"); col = kDim; }
+                else { val.put(m ? K2_P("not listed") : K2_P("not kept")); col = kDim; }
             } else if (const auto mode = step_label::ufcs_range(s); mode.len) {
                 key = "Mode";
                 val.put(mode.view());
             } else {
-                key = "Header";
+                key = K2_P("Header");
                 // An answer under what the offer proves says both (pd_version::conflict); the PD version itself is the Results line.
                 const auto clash = pd_version::conflict(run_version(e));
-                if (clash.len) { key = "Revision"; val.put(clash.view()); col = kCaution; }
+                if (clash.len) { key = K2_P("Revision"); val.put(clash.view()); col = kCaution; }
                 else {
                     val.put(pd::wire_revision_name(e.wire_rev));
-                    if (e.reported.valid) val.put("  RMDO ").put_u32(e.reported.rev_major).put_char('.').put_u32(e.reported.rev_minor);
+                    if (e.reported.valid) val.put(K2_P("  RMDO ")).put_u32(e.reported.rev_major).put_char('.').put_u32(e.reported.rev_minor);
                 }
             }
             sv = val.view();
@@ -3558,7 +3559,7 @@ void ChargerTestPage::paint_detail() {
                 break;
             }
             key = "Scope";
-            sv = "Voltage hold";
+            sv = K2_P("Voltage hold");
             break;
         }
         kit::kv_row(c, kDet, kit::kv_row_y(kDet, detail_step_ - 1), key, sv, col);
@@ -3582,7 +3583,7 @@ void ChargerTestPage::paint_spec_detail() {
             const bool fail = spec_list_.fails != 0;
             StrBuf<20> cnt;
             if (fail) cnt.put_u32(spec_list_.fails).put(" of ").put_u32(spec_list_.n).put(" fail");
-            else cnt.put_u32(spec_list_.n).put(" within limit");
+            else cnt.put_u32(spec_list_.n).put(K2_P(" within limit"));
             draw_band(c, fail ? kit::Verdict::Fail : kit::Verdict::Pass, fail ? "FAIL" : "PASS", false, cnt.view());
             detail_step_ = 1;
         }

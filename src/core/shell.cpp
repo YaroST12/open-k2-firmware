@@ -3,13 +3,21 @@
 // Debug shell line parser, see k2/core/shell.hpp.
 #include "k2/core/shell.hpp"
 #include "k2/core/build_config.h"
+#include "k2/core/strpack.hpp"
 
 namespace k2::shell {
 namespace {
 
 constexpr std::size_t kMaxTokens = 12;
 
-constexpr std::string_view kHelp =
+#if K2_PDSTRESS
+#define K2_SHELL_HELP_PDSTRESS \
+    "pdstress start [--mask m --cycles pct --pace 0..2 --max-s s --max-trans n] confirm | status | result [off] | stop   PD Stress, docs/PD_SPEC_CHECK.md\r\n"
+#else
+#define K2_SHELL_HELP_PDSTRESS ""
+#endif
+
+constexpr const char* kHelp = K2_P(
     "state                       V/A, D+/D-, CC, fast-charge, PD\r\n"
     "diag                        Black Box diagnosis of the PD session (read-only)\r\n"
     "mem                         stacks (now, low-water), static RAM, littlefs and image sizes (read-only)\r\n"
@@ -31,10 +39,9 @@ constexpr std::string_view kHelp =
     "lcd show | lcd spi <2|4|8>    LCD SPI clock divider (RAM only, /4 = 30 MHz at boot, /2 = 60 MHz visual check) and paint totals, no confirm\r\n"
     "twin list|predict [n]|status|cancel|learn identify|sniff [dry] [name]|rename n name   device twins (docs/DEVICE_TWIN.md)\r\n"
     "twin run [n|all] confirm | twin delete n confirm   the live proof negotiates with the charger as the twin\r\n"
-#if K2_PDSTRESS
-    "pdstress start [--mask m --cycles pct --pace 0..2 --max-s s --max-trans n] confirm | status | result [off] | stop   PD Stress, docs/PD_SPEC_CHECK.md\r\n"
-#endif
-    "above 5 V needs a trailing confirm; closing the port returns to 5 V\r\n";
+    K2_SHELL_HELP_PDSTRESS
+    "above 5 V needs a trailing confirm; closing the port returns to 5 V\r\n");
+#undef K2_SHELL_HELP_PDSTRESS
 
 constexpr std::array<const char*, static_cast<std::size_t>(fc::Proto::Count)> kProtos = {
     "qc2", "qc3", "qc3+", "afc", "fcp", "scp", "vooc", "svooc", "svooc65", "ufcs", "vivo"};
@@ -85,9 +92,21 @@ struct Tokens {
     return r;
 }
 
+[[gnu::noinline]] void emit(Backend& b, std::string_view s) {
+    if (!strpack::is_packed(s)) return b.write(s);
+    strpack::Reader r(s.data());
+    char buf[64];
+    std::size_t n = 0;
+    for (int ch; (ch = r.next()) >= 0;) {
+        buf[n++] = static_cast<char>(ch);
+        if (n == sizeof(buf)) { b.write({buf, n}); n = 0; }
+    }
+    if (n) b.write({buf, n});
+}
+
 [[gnu::noinline]] void err(Backend& b, const char* why) {
     b.write("err: ");
-    b.write(why);
+    emit(b, why);
     b.write("\r\n");
 }
 
@@ -112,17 +131,17 @@ struct Tokens {
 }
 
 [[gnu::noinline]] void cmd_drive(Backend& b, const Tokens& k, bool dp) {
-    if (k.n < 2) return err(b, "usage: dp|dm hiz|0|0.6|3.3");
+    if (k.n < 2) return err(b, K2_P("usage: dp|dm hiz|0|0.6|3.3"));
     dpdm::Drive d;
     bool needs_confirm = false;
     if (same(k.t[1], "hiz")) d = dpdm::Drive::HiZ;
     else if (k.t[1] == "0") d = dpdm::Drive::V0;
     else if (k.t[1] == "0.6") { d = dpdm::Drive::V0p6; needs_confirm = true; }
     else if (k.t[1] == "3.3") { d = dpdm::Drive::V3p3; needs_confirm = true; }
-    else return err(b, "level is hiz, 0, 0.6 or 3.3");
+    else return err(b, K2_P("level is hiz, 0, 0.6 or 3.3"));
     bool confirm;
-    if (!trailing_confirm(k, 2, confirm)) return err(b, "unexpected argument");
-    if (needs_confirm && !confirm) return err(b, "this level needs a trailing confirm");
+    if (!trailing_confirm(k, 2, confirm)) return err(b, K2_P("unexpected argument"));
+    if (needs_confirm && !confirm) return err(b, K2_P("this level needs a trailing confirm"));
     if (locked(b)) return;
     done(b, b.drive(dp, d));
 }
@@ -130,19 +149,19 @@ struct Tokens {
 [[gnu::noinline]] void cmd_cc(Backend& b, const Tokens& k) {
     std::uint32_t ms;
     if (k.n != 3 || !same(k.t[1], "open") || !number_range(k.t[2], ms, 1, 1000))
-        return err(b, "usage: cc open <1..1000 ms>");
+        return err(b, K2_P("usage: cc open <1..1000 ms>"));
     done(b, b.cc_open(ms));
 }
 
 [[gnu::noinline]] void cmd_pd(Backend& b, const Tokens& k) {
     std::uint32_t s;
     if (k.n == 3 && same(k.t[1], "silent")) {
-        if (!number_range(k.t[2], s, 1, 600)) return err(b, "usage: pd silent <1..600 s>");
+        if (!number_range(k.t[2], s, 1, 600)) return err(b, K2_P("usage: pd silent <1..600 s>"));
         return done(b, b.pd_silent(s));
     }
     if (k.n == 2 && same(k.t[1], "reset")) return done(b, b.pd_reset());
     if (k.n == 2 && same(k.t[1], "rescan")) return done(b, b.pd_rescan());
-    err(b, "usage: pd silent <s> | reset | rescan");
+    err(b, K2_P("usage: pd silent <s> | reset | rescan"));
 }
 
 [[gnu::noinline]] void cmd_fc(Backend& b, const Tokens& k) {
@@ -151,18 +170,18 @@ struct Tokens {
         if (k.n == 2) return done(b, b.vooc_monitor(2));
         if (k.n == 3 && same(k.t[2], "on")) return locked(b) ? void() : done(b, b.vooc_monitor(1));
         if (k.n == 3 && same(k.t[2], "off")) return locked(b) ? void() : done(b, b.vooc_monitor(0));
-        return err(b, "usage: fc vooc [on|off]");
+        return err(b, K2_P("usage: fc vooc [on|off]"));
     }
-    if (k.n < 4 || !same(k.t[1], "trigger")) return err(b, "usage: fc trigger <proto> <mV> [confirm] | fc reset");
+    if (k.n < 4 || !same(k.t[1], "trigger")) return err(b, K2_P("usage: fc trigger <proto> <mV> [confirm] | fc reset"));
     std::size_t proto = kProtos.size();
     for (std::size_t i = 0; i < kProtos.size(); i++) if (same(k.t[2], kProtos[i])) proto = i;
-    if (proto == kProtos.size()) return err(b, "unknown protocol");
+    if (proto == kProtos.size()) return err(b, K2_P("unknown protocol"));
     std::uint32_t mv;
     if (!number_range(k.t[3], mv, 1, static_cast<std::uint32_t>(kMaxMv)))
-        return err(b, "mV must be 1..36000");
+        return err(b, K2_P("mV must be 1..36000"));
     bool confirm;
-    if (!trailing_confirm(k, 4, confirm)) return err(b, "unexpected argument");
-    if (static_cast<int>(mv) > fc::kConfirmAboveMv && !confirm) return err(b, "above 5000 mV needs a trailing confirm");
+    if (!trailing_confirm(k, 4, confirm)) return err(b, K2_P("unexpected argument"));
+    if (static_cast<int>(mv) > fc::kConfirmAboveMv && !confirm) return err(b, K2_P("above 5000 mV needs a trailing confirm"));
     if (locked(b)) return;
     done(b, b.fc_trigger(static_cast<fc::Proto>(proto), static_cast<int>(mv), confirm));
 }
@@ -174,20 +193,20 @@ struct Tokens {
     else if (k.n == 2 && same(k.t[1], "stop")) mode = 0;
     else if (k.n == 3 && same(k.t[1], "synth") && number_range(k.t[2], rate, 1, 100000)) mode = 2;
     if (mode >= 0) return locked(b) ? void() : done(b, b.sniff(mode, mode == 2 ? rate : 0));
-    err(b, "usage: sniff stream | sniff stop | sniff synth <1..100000 edges/s>");
+    err(b, K2_P("usage: sniff stream | sniff stop | sniff synth <1..100000 edges/s>"));
 }
 
 [[gnu::noinline]] void cmd_trace(Backend& b, const Tokens& k) {
     if (k.n == 2 && same(k.t[1], "stream")) return done(b, b.trace(1));
     if (k.n == 3 && same(k.t[1], "stream") && same(k.t[2], "all")) return done(b, b.trace(2));
     if (k.n == 2 && same(k.t[1], "stop")) return done(b, b.trace(0));
-    err(b, "usage: trace stream [all] | trace stop");
+    err(b, K2_P("usage: trace stream [all] | trace stop"));
 }
 
 // stream on [log|trace|power[=Hz]|run|all ...] [old] | stream off. Kind bits match k2::dbg::Mask. `all power=50` is fine
 // (every kind, power at 50 Hz); naming one kind twice is a typo.
 [[gnu::noinline]] void cmd_stream(Backend& b, const Tokens& k) {
-    constexpr const char* kUsage = "usage: stream on [log|trace|power[=1..100 Hz]|run|all] [old] | stream off";
+    constexpr const char* kUsage = K2_P("usage: stream on [log|trace|power[=1..100 Hz]|run|all] [old] | stream off");
     if (k.n == 2 && same(k.t[1], "off")) return done(b, b.stream(0, 0, false));
     if (k.n < 2 || !same(k.t[1], "on")) return err(b, kUsage);
     struct Kind { const char* name; unsigned bit; };
@@ -238,10 +257,10 @@ bool twin_name(const Tokens& k, std::size_t first, std::string_view& name) {
 }
 
 [[gnu::noinline]] void cmd_twin(Backend& b, const Tokens& k) {
-    constexpr const char* kUsage =
+    constexpr const char* kUsage = K2_P(
         "usage: twin list | predict [n|all] | run [n|all] confirm | status | cancel | learn identify|sniff [dry] [name] | "
-        "learn inline confirm [spoof lib|builtin n] [dry] [name] | rename n name | delete n confirm";
-    constexpr const char* kInlineUsage = "usage: twin learn inline confirm [spoof lib|builtin <n>] [dry] [name]";
+        "learn inline confirm [spoof lib|builtin n] [dry] [name] | rename n name | delete n confirm");
+    constexpr const char* kInlineUsage = K2_P("usage: twin learn inline confirm [spoof lib|builtin <n>] [dry] [name]");
     if (k.n < 2) return err(b, kUsage);
     const std::string_view s = k.t[1];
     TwinCmd c;
@@ -253,7 +272,7 @@ bool twin_name(const Tokens& k, std::size_t first, std::string_view& name) {
     if (same(s, "predict")) {
         c.op = TwinOp::Predict;
         if (k.n == 2 || (k.n == 3 && same(k.t[2], "all"))) c.all = true;
-        else if (k.n != 3 || !twin_seq(k.t[2], c.seq)) return err(b, "usage: twin predict [1..12|all]");
+        else if (k.n != 3 || !twin_seq(k.t[2], c.seq)) return err(b, K2_P("usage: twin predict [1..12|all]"));
         return done(b, b.twin(c));
     }
     if (same(s, "run")) {
@@ -261,11 +280,11 @@ bool twin_name(const Tokens& k, std::size_t first, std::string_view& name) {
         std::size_t i = 2;
         if (k.n > i && same(k.t[i], "all")) { c.all = true; i++; }
         else if (k.n > i && !same(k.t[i], "confirm")) {
-            if (!twin_seq(k.t[i], c.seq)) return err(b, "usage: twin run [1..12|all] confirm");
+            if (!twin_seq(k.t[i], c.seq)) return err(b, K2_P("usage: twin run [1..12|all] confirm"));
             i++;
         } else c.all = true;
-        if (k.n == i) return err(b, "a live run negotiates with the charger and needs a trailing confirm");
-        if (k.n != i + 1 || !same(k.t[i], "confirm")) return err(b, "usage: twin run [1..12|all] confirm");
+        if (k.n == i) return err(b, K2_P("a live run negotiates with the charger and needs a trailing confirm"));
+        if (k.n != i + 1 || !same(k.t[i], "confirm")) return err(b, K2_P("usage: twin run [1..12|all] confirm"));
         c.confirm = true;
         return done(b, b.twin(c));
     }
@@ -277,7 +296,7 @@ bool twin_name(const Tokens& k, std::size_t first, std::string_view& name) {
         else if (same(k.t[2], "inline")) {
             c.op = TwinOp::LearnInline;
             if (k.n == i || !same(k.t[i], "confirm"))
-                return err(b, "an inline interrogation hard-resets the link twice: twin learn inline confirm [dry] [name]");
+                return err(b, K2_P("an inline interrogation hard-resets the link twice: twin learn inline confirm [dry] [name]"));
             c.confirm = true;
             i++;
             if (k.n > i && same(k.t[i], "spoof")) {
@@ -290,22 +309,22 @@ bool twin_name(const Tokens& k, std::size_t first, std::string_view& name) {
                 c.spoof_id = static_cast<std::uint16_t>(id);
                 i += 3;
             }
-        } else return err(b, "usage: twin learn identify|sniff|inline [confirm] [dry] [name]");
+        } else return err(b, K2_P("usage: twin learn identify|sniff|inline [confirm] [dry] [name]"));
         if (k.n > i && same(k.t[i], "dry")) { c.dry = true; i++; }
-        if (k.n > i && !twin_name(k, i, c.name)) return err(b, "name is at most 24 characters");
+        if (k.n > i && !twin_name(k, i, c.name)) return err(b, K2_P("name is at most 24 characters"));
         return done(b, b.twin(c));
     }
     if (same(s, "rename")) {
         c.op = TwinOp::Rename;
-        if (k.n < 4 || !twin_seq(k.t[2], c.seq)) return err(b, "usage: twin rename 1..12 <name>");
-        if (!twin_name(k, 3, c.name)) return err(b, "name is at most 24 characters");
+        if (k.n < 4 || !twin_seq(k.t[2], c.seq)) return err(b, K2_P("usage: twin rename 1..12 <name>"));
+        if (!twin_name(k, 3, c.name)) return err(b, K2_P("name is at most 24 characters"));
         return done(b, b.twin(c));
     }
     if (same(s, "delete")) {
         c.op = TwinOp::Delete;
-        if (k.n < 3 || !twin_seq(k.t[2], c.seq) || k.n > 4) return err(b, "usage: twin delete 1..12 confirm");
-        if (k.n == 3) return err(b, "a delete needs a trailing confirm");
-        if (!same(k.t[3], "confirm")) return err(b, "usage: twin delete 1..12 confirm");
+        if (k.n < 3 || !twin_seq(k.t[2], c.seq) || k.n > 4) return err(b, K2_P("usage: twin delete 1..12 confirm"));
+        if (k.n == 3) return err(b, K2_P("a delete needs a trailing confirm"));
+        if (!same(k.t[3], "confirm")) return err(b, K2_P("usage: twin delete 1..12 confirm"));
         c.confirm = true;
         return done(b, b.twin(c));
     }
@@ -317,12 +336,12 @@ bool twin_name(const Tokens& k, std::size_t first, std::string_view& name) {
 void Shell::execute(std::string_view line) {
     const Tokens k = split(line);
     if (k.n == 0) return;
-    if (k.overflow) return err(b_, "too many arguments");
+    if (k.overflow) return err(b_, K2_P("too many arguments"));
     const std::string_view c = k.t[0];
-    if (same(c, "help")) return b_.write(kHelp);
+    if (same(c, "help")) return emit(b_, kHelp);
     if (same(c, "state")) return b_.state();
     if (same(c, "stop")) {
-        if (k.n != 1) return err(b_, "usage: stop");
+        if (k.n != 1) return err(b_, K2_P("usage: stop"));
         return done(b_, b_.stop());
     }
     if (same(c, "log")) {
@@ -330,7 +349,7 @@ void Shell::execute(std::string_view line) {
             b_.log_stream(same(k.t[1], "on"));
             return done(b_, nullptr);
         }
-        return err(b_, "usage: log on|off");
+        return err(b_, K2_P("usage: log on|off"));
     }
     if (same(c, "dp")) return cmd_drive(b_, k, true);
     if (same(c, "dm")) return cmd_drive(b_, k, false);
@@ -351,9 +370,9 @@ void Shell::execute(std::string_view line) {
     for (const CmdEntry& ce : kCmds) if (same(c, ce.name)) return ce.fn(b_, k);
     struct NoArg { const char* name; const char* usage; const char* (Backend::*fn)(); };
     static constexpr NoArg kNoArg[] = {
-        {"diag", "usage: diag", &Backend::diag},
-        {"mem", "usage: mem", &Backend::memory},
-        {"selftest", "usage: selftest", &Backend::selftest},
+        {"diag", K2_P("usage: diag"), &Backend::diag},
+        {"mem", K2_P("usage: mem"), &Backend::memory},
+        {"selftest", K2_P("usage: selftest"), &Backend::selftest},
     };
     for (const NoArg& na : kNoArg) {
         if (same(c, na.name)) {
@@ -362,7 +381,7 @@ void Shell::execute(std::string_view line) {
             return;
         }
     }
-    err(b_, "unknown command (help)");
+    err(b_, K2_P("unknown command (help)"));
 }
 
 [[gnu::noinline]] void Shell::feed(char c) {
@@ -370,7 +389,7 @@ void Shell::execute(std::string_view line) {
     last_cr_ = c == '\r';
     if (c == '\n' && after_cr) return;   // second half of CR LF
     if (c == '\r' || c == '\n') {
-        if (overflow_) err(b_, "line too long");
+        if (overflow_) err(b_, K2_P("line too long"));
         else execute({buf_.data(), len_});
         len_ = 0;
         overflow_ = false;

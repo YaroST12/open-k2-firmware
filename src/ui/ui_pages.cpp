@@ -14,6 +14,7 @@
 #include "k2/ui/ui_emarker.hpp"
 #include "k2/core/build_config.h"
 #include "k2/core/log.hpp"
+#include "k2/core/strpack.hpp"
 #include "k2/core/math_opt.hpp"
 #include "k2/pd/pd_emarker_plan.hpp"
 #include <algorithm>
@@ -126,13 +127,13 @@ void lines_row_text(int i, const std::optional<adc::Reading> &r, fastcharge::Pro
         s.put("MCU  ");
         if (r && r->mcu.valid) {
             s.put_fixed(r->mcu.deci_c * 100, 1).put(" C");
-            if (!r->mcu.calibrated) s.put(" uncal");
+            if (!r->mcu.calibrated) s.put(K2_P(" uncal"));
         } else {
             s.put("--");
         }
         break;
     case 6:   // board temperature: live data showed no exposed channel (ch1/ch6/ch7) tracks it
-        s.put("BRD  n/a (no sensor)");
+        s.put(K2_P("BRD  n/a (no sensor)"));
         break;
     case 7:
         s.put("VREF ");
@@ -148,15 +149,15 @@ void cable_row_text(int i, bool online, int32_t vbus_mv, int32_t ibus_ma, const 
     switch (i) {
     case 0:
         if (online) s.put_fixed(vbus_mv, 2).put("V ").put_abs_fixed(ibus_ma, 3).put("A");
-        else s.put("-- no power monitor");
+        else s.put(K2_P("-- no power monitor"));
         break;
     case 1:
         if (m.has_idle()) s.put("IDLE ").put_fixed(m.idle_mv(), 2).put("V ").put_abs_fixed(m.idle_ma(), 2).put("A");
-        else s.put("IDLE waiting <0.2A");
+        else s.put(K2_P("IDLE waiting <0.2A"));
         break;
     case 2:
         if (est) s.put("LOAD ").put_fixed(est->load_mv, 2).put("V ").put_abs_fixed(est->load_ma, 2).put("A");
-        else s.put(m.has_idle() ? "LOAD need +1.0A step" : "LOAD --");
+        else s.put(m.has_idle() ? K2_P("LOAD need +1.0A step") : K2_P("LOAD --"));
         break;
     case 3: {
         char t[16];
@@ -181,16 +182,16 @@ void cable_kelvin_row_text(int i, bool online, int32_t vbus_mv, int32_t ibus_ma,
     switch (i) {
     case 0:
         if (online) s.put_fixed(vbus_mv, 2).put("V ").put_abs_fixed(ibus_ma, 3).put("A");
-        else s.put("-- no power monitor");
+        else s.put(K2_P("-- no power monitor"));
         break;
     case 1:
         if (k) { s.put("POS "); mohm(k->pos_mohm, s); s.put(" GND "); mohm(k->gnd_mohm, s); }
-        else s.put("POS -- GND --");
+        else s.put(K2_P("POS -- GND --"));
         break;
     case 2: {
         const int32_t a = power::abs_sat(ibus_ma);
-        if (k) s.put("SENSE ok");
-        else s.put(a < cable_r::kKelvinMinMa ? "LOAD need 0.45A+" : "SENSE check fixture");
+        if (k) s.put(K2_P("SENSE ok"));
+        else s.put(a < cable_r::kKelvinMinMa ? K2_P("LOAD need 0.45A+") : K2_P("SENSE check fixture"));
         break;
     }
     case 3:
@@ -205,13 +206,13 @@ void cable_kelvin_row_text(int i, bool online, int32_t vbus_mv, int32_t ibus_ma,
 
 void temp_short_text(const std::optional<adc::Reading> &r, StrBuf<8> &s) {
     if (!r || !r->mcu.valid) {
-        s.put("MCU --");
+        s.put(K2_P("MCU --"));
         return;
     }
     const int32_t d = r->mcu.deci_c;
     const int32_t whole = d >= 0 ? (d + 5) / 10 : -((-d + 5) / 10);   // round half away from zero
-    if (whole > 99) s.put("MCU>99");        // keep the field at 6 characters
-    else if (whole < -9) s.put("MCU<-9");
+    if (whole > 99) s.put(K2_P("MCU>99"));        // keep the field at 6 characters
+    else if (whole < -9) s.put(K2_P("MCU<-9"));
     else s.put("MCU").put_fixed(whole * 1000, 0).put_char('C');
 }
 
@@ -298,22 +299,22 @@ void home_contract_short(const pd::Contract &c, fastcharge::Protocol p, int32_t 
 }
 
 void home_cable_text(const pd::Emarker &em, StrBuf<12> &out) {
-    if (!em.valid) { out.put("no e-marker"); return; }
+    if (!em.valid) { out.put(K2_P("no e-marker")); return; }
     out.put_u32(em.max_current_a).put("A ").put_u32(em.max_power_w).put_char('W');
 }
 
 void detail_cable_text(const pd::Emarker &em, StrBuf<28> &out) {
-    if (!em.valid) { out.put("no e-marker"); return; }
+    if (!em.valid) { out.put(K2_P("no e-marker")); return; }
     out.put_u32(em.max_current_a).put("A ").put_u32(em.max_power_w).put("W ").put_u32(em.max_voltage_v).put_char('V');
     if (em.epr_capable) out.put(" EPR");
-    if (em.is_active) out.put(" active");
+    if (em.is_active) out.put(K2_P(" active"));
 }
 
 void detail_offer_text(const pd::SourceCaps &caps, StrBuf<28> &out) {
     if (!caps.valid || caps.num_pdos == 0) return;
     uint32_t mw = 0;
     for (int i = 0; i < caps.num_pdos; i++) mw = caps.pdos[i].max_mw > mw ? caps.pdos[i].max_mw : mw;
-    out.put_u32(mw / 1000).put("W max, ").put_u32(static_cast<uint32_t>(caps.num_pdos)).put(" PDO");
+    out.put_u32(mw / 1000).put(K2_P("W max, ")).put_u32(static_cast<uint32_t>(caps.num_pdos)).put(" PDO");
 }
 
 
@@ -323,7 +324,7 @@ void home_cc_text(int cc, int32_t mv, StrBuf<10> &out) {
     out.put_char('V');
 }
 
-const char *home_idle_note(uint8_t mode) { return mode == 1 ? "No source" : mode == 0 ? "" : nullptr; }
+const char *home_idle_note(uint8_t mode) { return mode == 1 ? K2_P("No source") : mode == 0 ? "" : nullptr; }
 
 // ---------------------------------------------------------------------------------------
 // PD source capabilities
@@ -338,7 +339,7 @@ void contract_text(const pd::Contract &c, StrBuf<24> &out) {
     if (c.op_ma % 1000 == 0) t.put_u32(c.op_ma / 1000); else t.put_fixed(c.op_ma, 3 - 2, 0);
     t.put_char('A');
     if (!c.ready) t.put(" ..");
-    if (t.view().size() + 9 <= kContentChars) out.put("Contract ");
+    if (t.view().size() + 9 <= kContentChars) out.put(K2_P("Contract "));
     out.put(t.view());
 }
 
@@ -367,8 +368,8 @@ namespace {
 // e-marker icon instead of a key.
 constexpr kit::KvLayout kEmKv{kit::kBodyY, kit::kRowH, kit::kTextX, &kLabelFont, nullptr, 104, 14, Align::Left};
 constexpr kit::KvLayout kEmNameKv{kit::kBodyY, kit::kRowH, kit::kTextX, &kLabelFont, nullptr, kit::kTextX, 24, Align::Left};
-constexpr const char *kEmKey[kEmDetailRows] = {"", "VID/PID", "XID", "PD", "ID VDO", "Cable VDO", "Rating"};
-static_assert(all_fit(kEmKey, kLabelAdv, 104 - kit::kTextX - 4), "a saved-cable key is wider than its column");
+constexpr const char *kEmKey[kEmDetailRows] = {"", K2_P("VID/PID"), "XID", "PD", K2_P("ID VDO"), K2_P("Cable VDO"), K2_P("Rating")};
+static_assert(all_fit_p(kEmKey, kLabelAdv, 104 - kit::kTextX - 4), "a saved-cable key is wider than its column");
 static_assert(kit::kBodyY + kEmDetailRows * kit::kRowH < kFooterY, "the saved-cable table reaches the footer");
 constexpr int16_t kEmConfirmY = kit::kBodyY + kit::kAlertH + 10;   // first line under the delete band
 }  // namespace
@@ -402,7 +403,7 @@ void EmarkerPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
     out.marker = kit::Marker::Icon;
     out.icon = Icon::Emark;
     if (self->n_seqs_ == 0) {   // the list is one dim row, not a selectable cable
-        out.text = "No saved cables";
+        out.text = K2_P("No saved cables");
         out.text_color = kDim;
         return;
     }
@@ -436,10 +437,10 @@ void EmarkerPage::update(uint32_t now_ms) {
         body_.paint(sg, [&] {
             if (!have_cur_) return;
             if (confirm) {
-                kit::draw_alert_band(c, kit::kBodyY, false, "DELETE CABLE?");
+                kit::draw_alert_band(c, kit::kBodyY, false, K2_P("DELETE CABLE?"));
                 char buf[kFitBuf];
                 gfx_text(c, kSmall, kit::kTextX, kEmConfirmY, fit_data(kSmall, cur_.name.data(), 192, buf), kText, kBg);
-                gfx_text(c, kSmall, kit::kTextX, static_cast<int16_t>(kEmConfirmY + 22), "Erased for good", kDim, kBg);
+                gfx_text(c, kSmall, kit::kTextX, static_cast<int16_t>(kEmConfirmY + 22), K2_P("Erased for good"), kDim, kBg);
                 return;
             }
             StrBuf<24> v;
@@ -459,10 +460,10 @@ void EmarkerPage::update(uint32_t now_ms) {
         st.put(note_.view());
         tone = note_caution_ ? FooterTone::Caution : FooterTone::Info;
     } else if (n == 0) {
-        st.put("Nothing saved yet");
+        st.put(K2_P("Nothing saved yet"));
     } else {
-        st.put("Cable ").put_u32(static_cast<uint32_t>(idx + 1)).put(" of ").put_u32(static_cast<uint32_t>(n));
-        if (menu_.view == EmView::Confirm) { st.put(". Not deleted"); tone = FooterTone::Caution; }
+        st.put(K2_P("Cable ")).put_u32(static_cast<uint32_t>(idx + 1)).put(" of ").put_u32(static_cast<uint32_t>(n));
+        if (menu_.view == EmView::Confirm) { st.put(K2_P(". Not deleted")); tone = FooterTone::Caution; }
     }
     if (note_until_ || menu_.view == EmView::Confirm) {
         draw_footer_cached(c, tone, st.view(), foot_);
@@ -529,7 +530,7 @@ void EmarkerPage::run_cmd(EmCmd cmd) {
     if (i >= 0 && i < n_seqs_) {
         const bool ok = storage::lib_remove(seqs_[i]) == emlib::Err::Ok;
         note_.clear();
-        note_.put(ok ? "Deleted" : "Flash error");
+        note_.put(ok ? K2_P("Deleted") : K2_P("Flash error"));
         note_caution_ = !ok;
         note_until_ = ctx_.now + 2500;
         if (note_until_ == 0) note_until_ = 1;
@@ -603,7 +604,7 @@ namespace {
 constexpr kit::KvLayout kDgLayout{kit::kBodyY, 22, kit::kTextX, &kLabelFont, nullptr, 204 - 17 * 8, 17, Align::Right};
 // Worst case per row ("4294M / 4294M" is 13 chars, RX 17): each cell is only as wide as its text, clear of the S12 keys.
 constexpr uint8_t kDgValueChars[DiagPage::kRows] = {7, 13, 13, 7, 17, 13, 7, 11, 11};
-const char *const kDgLabel[DiagPage::kRows] = {"Link", "RST/ISR", "TX/drop", "FUSB302", "RX", "Poll gap", "Meter", "Uptime", "Model"};
+const char *const kDgLabel[DiagPage::kRows] = {"Link", K2_P("RST/ISR"), K2_P("TX/drop"), K2_P("FUSB302"), "RX", K2_P("Poll gap"), "Meter", K2_P("Uptime"), "Model"};
 }  // namespace
 
 void DiagPage::draw_static() {
@@ -666,7 +667,7 @@ void DiagPage::update(uint32_t now_ms) {
         t.clear();
         uint16_t col = kText;
         switch (i) {
-        case 0: t.put(live_.configured ? "ready" : "waiting"); break;
+        case 0: t.put(live_.configured ? "ready" : K2_P("waiting")); break;
         // Capped counts (10K, 999M, ">999M") are at most 5 chars, so "a / b" is at most 13 and always fits.
         case 1: t.put_count_capped(live_.resets).put(" / ").put_count_capped(live_.isrs); break;
         case 2:
@@ -676,11 +677,11 @@ void DiagPage::update(uint32_t now_ms) {
                 col = kCaution;
             break;
         case 3: t.put("ID 0x").put_hex(fusb_id, 2); break;
-        case 4: t.put_u32(live_.rx_count).put(live_.cc == 1 ? " on CC1" : live_.cc == 2 ? " on CC2" : " on CC-"); break;
+        case 4: t.put_u32(live_.rx_count).put(live_.cc == 1 ? K2_P(" on CC1") : live_.cc == 2 ? K2_P(" on CC2") : K2_P(" on CC-")); break;
         case 5: t.put_u32(live_.poll_gap_max).put(" ms"); break;
         case 6:
             if (on) t.put(power::name(power::chip()));
-            else { t.put(meter_wait ? "wait" : "missing"); if (!meter_wait) col = kError; }
+            else { t.put(meter_wait ? "wait" : K2_P("missing")); if (!meter_wait) col = kError; }
             break;
         case 7: t.put_hms(now_ms / 1000); break;
         default: model_row_text(t); break;
@@ -693,11 +694,11 @@ void DiagPage::update(uint32_t now_ms) {
     const int state = !on ? (meter_wait ? 4 : 1) : !usb_ok ? 2 : !fusb_ok ? 3 : 0;
     struct DiagFoot { FooterTone tone; const char *msg; };
     static constexpr DiagFoot kDiagFoot[5] = {
-        {FooterTone::Ok, "All subsystems up"},
-        {FooterTone::Error, "Power meter not found"},
-        {FooterTone::Caution, "USB not configured"},
-        {FooterTone::Error, "FUSB302 not answering"},
-        {FooterTone::Info, "Power meter starting"},
+        {FooterTone::Ok, K2_P("All subsystems up")},
+        {FooterTone::Error, K2_P("Power meter not found")},
+        {FooterTone::Caution, K2_P("USB not configured")},
+        {FooterTone::Error, K2_P("FUSB302 not answering")},
+        {FooterTone::Info, K2_P("Power meter starting")},
     };
     if (kDiagFoot[state].tone == FooterTone::Error || kDiagFoot[state].tone == FooterTone::Caution)
         draw_toast(ctx_.content, kDiagFoot[state].tone, kDiagFoot[state].msg);
@@ -824,12 +825,12 @@ bool MemoryPage::on_event(Event e) {
         std::uint32_t erased = 0;
         const bool ok = memstat::scrub_storage(erased);
         if (!ok) {
-            ctx_.toast.show(FooterTone::Error, "Scrub failed", ctx_.now);
+            ctx_.toast.show(FooterTone::Error, K2_P("Scrub failed"), ctx_.now);
         } else if (erased == 0) {
-            ctx_.toast.show(FooterTone::Ok, "Storage clean", ctx_.now);
+            ctx_.toast.show(FooterTone::Ok, K2_P("Storage clean"), ctx_.now);
         } else {
             StrBuf<24> msg;
-            msg.put("Scrubbed ").put_u32(erased).put(erased == 1 ? " block" : " blocks");
+            msg.put(K2_P("Scrubbed ")).put_u32(erased).put(erased == 1 ? K2_P(" block") : K2_P(" blocks"));
             ctx_.toast.show(FooterTone::Ok, msg.view(), ctx_.now);
         }
         return true;
@@ -1118,9 +1119,9 @@ void PdTriggerPage::paint_bar() {
     bar_valid_ = false;   // the band repaint erased the readout: title_badge redraws it
     struct PtBar { const char *title; uint8_t step; };
     static constexpr PtBar kBar[5] = {
-        {"PD offer", 1}, {"PD voltage", 2}, {"PD current", 2}, {"PD confirm", 3}, {"PD live", 0}
+        {K2_P("PD offer"), 1}, {K2_P("PD voltage"), 2}, {K2_P("PD current"), 2}, {K2_P("PD confirm"), 3}, {K2_P("PD live"), 0}
     };
-    const char *title = refused ? "PD trigger" : kBar[static_cast<unsigned>(st)].title;
+    const char *title = refused ? K2_P("PD trigger") : kBar[static_cast<unsigned>(st)].title;
     const int step = refused ? 0 : kBar[static_cast<unsigned>(st)].step;
     (void)title; (void)step;
     bar_valid_ = true;
@@ -1256,8 +1257,8 @@ void PdTriggerPage::paint_value() {
     if (sig != bsig_) {
         bsig_ = sig;
         pg::clear_body(c, kit::kBodyY);
-        static const char *const kVoltKeys[] = {"Offer", "Max amps", "Max power"};
-        static const char *const kAmpKeys[] = {"Offer", "Voltage", "Power"};
+        static const char *const kVoltKeys[] = {"Offer", K2_P("Max amps"), K2_P("Max power")};
+        static const char *const kAmpKeys[] = {"Offer", K2_P("Voltage"), "Power"};
         kit::kv_static(c, kPtKv, volt ? kVoltKeys : kAmpKeys, 3);
         pdo_line(d, line_);
         kit::kv_draw_text(c, kPtKv, 0, line_.text.view());
@@ -1302,10 +1303,10 @@ void PdTriggerPage::paint_confirm(uint32_t now_ms) {
         pg::clear_body(c, kit::kBodyY);
         send_.invalidate();
         if (ok && s.err != pd::Err::Ok) {   // the plan refused it: say so instead of a summary
-            kit::draw_alert_band(c, kit::kBodyY, true, "NOT SENDABLE");
+            kit::draw_alert_band(c, kit::kBodyY, true, K2_P("NOT SENDABLE"));
             gfx_text(c, kSmall, 6, static_cast<int16_t>(kit::kBodyY + kit::kAlertH + 10), pd::err_name(s.err), kText, kBg);
         } else if (ok) {
-            static const char *const kKeys[] = {"Offer", "Voltage", "Current", "Power"};
+            static const char *const kKeys[] = {"Offer", K2_P("Voltage"), K2_P("Current"), "Power"};
             kit::kv_static(c, kPtKv, kKeys, 4);
             pdo_line(caps_->pdos[wiz_.cursor], line_);
             kit::kv_draw_text(c, kPtKv, 0, line_.text.view());
@@ -1322,12 +1323,12 @@ void PdTriggerPage::paint_confirm(uint32_t now_ms) {
     if (!ok || s.err != pd::Err::Ok) return;
     if (ctx_.trig_armed) {
         StrBuf<32> sub;
-        sub.put("Send again: ").put(s.volts.view()).put_char(' ').put(s.amps.view());
+        sub.put(K2_P("Send again: ")).put(s.volts.view()).put_char(' ').put(s.amps.view());
         const uint32_t used = armed_at_ && now_ms > armed_at_ ? now_ms - armed_at_ : 0;
         const int left = used >= Ui::kConfirmWindowMs ? 0 : static_cast<int>(1000u - used * 1000u / Ui::kConfirmWindowMs);
-        send_.draw_armed("CONFIRM", sub.view(), left);
+        send_.draw_armed(K2_P("CONFIRM"), sub.view(), left);
     } else {
-        send_.draw_idle("SEND", s.needs_confirm ? "Above 5V: check your load" : "");
+        send_.draw_idle("SEND", s.needs_confirm ? K2_P("Above 5V: check your load") : "");
     }
 }
 
@@ -1346,7 +1347,7 @@ void PdTriggerPage::paint_live() {
         bsig_ = sig;
         vsig_ = tsig_ = 0;
         pg::clear_body(c, kit::kBodyY);
-        static const char *const kKeys[] = {"Requested V", "Measured V", "Requested A", "Measured A", "Resets"};
+        static const char *const kKeys[] = {K2_P("Requested V"), K2_P("Measured V"), K2_P("Requested A"), K2_P("Measured A"), K2_P("Resets")};
         kit::kv_static(c, kPtLiveKv, kKeys, 5);
         kit::kv_draw_text(c, kPtLiveKv, 0, s.volts.view(), kVolt);
         kit::kv_draw_text(c, kPtLiveKv, 2, s.amps.view(), kAmp);
@@ -1378,21 +1379,21 @@ void PdTriggerPage::paint_footer() {
     StrBuf<32> msg;
     FooterTone tone = FooterTone::Info;
     if (blocked_ && wiz_.step == WizStep::Offer) {
-        msg.put("Other port busy: unplug");
+        msg.put(K2_P("Other port busy: unplug"));
         tone = FooterTone::Error;
     } else if (wiz_.step == WizStep::Confirm && send_err_ != pd::Err::Ok) {
-        msg.put("Refused: ").put(pd::err_name(send_err_));
+        msg.put(K2_P("Refused: ")).put(pd::err_name(send_err_));
         tone = FooterTone::Error;
     } else if (wiz_.step == WizStep::Offer && !Wizard::offer_available(*caps_, wiz_.cursor, ctx_.cap_mv)) {
         const bool over = pd::plan_request(*caps_, pd::Choice{static_cast<uint8_t>(wiz_.cursor + 1), 0, 0}, ctx_.cap_mv, wiz_.cursor >= 7).err == pd::Err::OverCap;
-        if (over) msg.put("Over ").put_u32(ctx_.cap_mv / 1000).put("V limit: pick other");
-        else msg.put("Not requestable: pick other");
+        if (over) msg.put("Over ").put_u32(ctx_.cap_mv / 1000).put(K2_P("V limit: pick other"));
+        else msg.put(K2_P("Not requestable: pick other"));
         tone = FooterTone::Caution;
     } else if (wiz_.step == WizStep::Voltage && std::min<uint32_t>(caps_->pdos[wiz_.cursor].max_mv, std::max<uint32_t>(ctx_.cap_mv, pd::kVsafe5vMv)) < caps_->pdos[wiz_.cursor].max_mv) {
         const uint32_t vmax = std::max<uint32_t>(ctx_.cap_mv, pd::kVsafe5vMv);
-        msg.put("Capped at ");
+        msg.put(K2_P("Capped at "));
         pg::put_exact_unit(msg, vmax, 'V');
-        msg.put(" by monitor");
+        msg.put(K2_P(" by monitor"));
         tone = FooterTone::Caution;
     } else {
         wiz_.footer(*caps_, ctx_.cap_mv, ctx_.trig_armed, msg);
@@ -1415,7 +1416,7 @@ void PdTriggerPage::paint_refusal() {
     sig |= 1u;
     if (sig == rsig_) return;
     rsig_ = sig;
-    kit::draw_alert_band(c, kit::kBodyY, true, "NOT READY");
+    kit::draw_alert_band(c, kit::kBodyY, true, K2_P("NOT READY"));
     const int16_t body_y = static_cast<int16_t>(kit::kBodyY + kit::kAlertH + kit::kAlertStripeH);
     gfx_fill(c, 0, body_y, c.w, static_cast<int16_t>(kFooterY - body_y), kBg);
     for (int k = 0; k < v.n; k++) {
@@ -1535,16 +1536,16 @@ void CableRPage::paint_table(const CrView &v) {
     rsig_ = 0;
     pg::invalidate_fields(val_, 2);
     if (v.meter_missing) {
-        kit::draw_alert_band(c, kit::kBodyY, true, "METER MISSING");
-        gfx_text(c, kSmall, kit::kMarkX, kit::kBodyY + kit::kAlertH + 10, "Cable R needs INA2xx", kText, kBg);
-        gfx_text(c, kSmall, kit::kMarkX, kit::kBodyY + kit::kAlertH + 30, "Diag shows the chip", kDim, kBg);
+        kit::draw_alert_band(c, kit::kBodyY, true, K2_P("METER MISSING"));
+        gfx_text(c, kSmall, kit::kMarkX, kit::kBodyY + kit::kAlertH + 10, K2_P("Cable R needs INA2xx"), kText, kBg);
+        gfx_text(c, kSmall, kit::kMarkX, kit::kBodyY + kit::kAlertH + 30, K2_P("Diag shows the chip"), kDim, kBg);
         return;
     }
     const char *const keys[kCrRows] = {v.step[0].label, v.step[1].label, "Port"};
     kit::kv_static(c, kCrKv, keys, kCrRows);
     // The ports are fixed by the hardware: the load plugs into the top port (the charger into the bottom one), whatever the
     // screen rotation.
-    kit::kv_draw_text(c, kCrKv, 2, "load on top", kDim);
+    kit::kv_draw_text(c, kCrKv, 2, K2_P("load on top"), kDim);
     kit::kv_cells(c, kCrKv, val_, 2);
 }
 
@@ -1614,7 +1615,7 @@ bool CableRPage::on_event(Event e) {
         ctx_.cable.reset();
         ctx_.kelvin.reset();
         cleared_until_ = ctx_.now + 1500;
-        ctx_.toast.show(FooterTone::Info, "Cleared, measuring again", ctx_.now, 1500);
+        ctx_.toast.show(FooterTone::Info, K2_P("Cleared, measuring again"), ctx_.now, 1500);
         draw_toast(ctx_.content, FooterTone::Info, ctx_.toast.view());
         ctx_.toast.drawn = true;
         update(ctx_.now);
@@ -1686,7 +1687,7 @@ void TriggerPage::paint_bar() {
     if (sg == barsig_) return;
     barsig_ = sg;
     bar_valid_ = false;   // the band repaint erased the readout: title_badge redraws it
-    const char *title = scan ? "FC scan" : retarget ? "Retarget" : "FC trigger";
+    const char *title = scan ? K2_P("FC scan") : retarget ? K2_P("Retarget") : K2_P("FC trigger");
     const int step = scan || stage == trig::Stage::Live ? 0 : stage == trig::Stage::Pick ? 1 : stage == trig::Stage::Edit ? 2 : 3;
     (void)title; (void)step;
     bar_valid_ = true;
@@ -1761,8 +1762,8 @@ void TriggerPage::row_fn(void *self, int index, bool, kit::RowSpec &out) {
     if (index < 0 || index >= trig::kEntries) return;
     const trig::Entry &e = trig::entry(index);
     out.text = e.name;
-    out.tail = e.kind == trig::Kind::Scan ? "HV sweep" :
-        e.kind == trig::Kind::Range ? "adjustable" : e.kind == trig::Kind::Levels ? "levels" : "5V only";
+    out.tail = e.kind == trig::Kind::Scan ? K2_P("HV sweep") :
+        e.kind == trig::Kind::Range ? K2_P("adjustable") : e.kind == trig::Kind::Levels ? K2_P("levels") : K2_P("5V only");
 }
 
 // The Offered cell of the table: what the protocol takes.
@@ -1776,9 +1777,9 @@ static void fc_offered_text(const trig::Entry &e, StrBufBase &s) {
         }
         s.put_char('V');
     } else if (e.kind == trig::Kind::Scan) {
-        s.put("HV sweep");
+        s.put(K2_P("HV sweep"));
     } else {
-        s.put("5V only");
+        s.put(K2_P("5V only"));
     }
 }
 
@@ -1788,8 +1789,8 @@ void TriggerPage::paint_release(bool fresh) {
     const Surface &c = ctx_.content;
     if (fresh) {
         const bool unsafe = ctx_.ui->fc_release().state() == trig::Release::State::Unsafe;
-        kit::draw_alert_band(c, kit::kBodyY, unsafe, unsafe ? "UNSAFE VBUS" : "RELEASING");
-        static const char *const labels[] = {"Target", "Measured"};
+        kit::draw_alert_band(c, kit::kBodyY, unsafe, unsafe ? K2_P("UNSAFE VBUS") : K2_P("RELEASING"));
+        static const char *const labels[] = {K2_P("Target"), K2_P("Measured")};
         kit::kv_static(c, kFcRelKv, labels, 2);
         const int16_t y0 = static_cast<int16_t>(kFcRelKv.y0 + kit::row_text_y(kFcRelKv.pitch, 16));
         kit::kv_draw_text(c, kFcRelKv, 0, "5V", kVolt);
@@ -1842,9 +1843,9 @@ void TriggerPage::paint_main(uint32_t now_ms) {
     } else {
         // The key/value table: Edit and Review show the protocol, what it offers, the measured VBUS and the held voltage
         // (retarget) or the monitor cap; Live shows the state, the protocol, the request and the measurement.
-        static const char *const kLiveKeys[] = {"State", "Protocol", "Requested", "Measured"};
-        static const char *const kHeldKeys[] = {"Protocol", "Offered", "Measured", "Held"};
-        static const char *const kCapKeys[] = {"Protocol", "Offered", "Measured", "Cap"};
+        static const char *const kLiveKeys[] = {"State", K2_P("Protocol"), K2_P("Requested"), K2_P("Measured")};
+        static const char *const kHeldKeys[] = {K2_P("Protocol"), K2_P("Offered"), K2_P("Measured"), "Held"};
+        static const char *const kCapKeys[] = {K2_P("Protocol"), K2_P("Offered"), K2_P("Measured"), "Cap"};
         if (fresh) {
             kit::kv_static(c, kFcKv, live ? kLiveKeys : retarget ? kHeldKeys : kCapKeys, 4);
             kit::kv_draw_text(c, kFcKv, live ? 1 : 0, e.name);
@@ -1895,12 +1896,12 @@ void TriggerPage::paint_main(uint32_t now_ms) {
         if (stage == trig::Stage::Review) {
             if (model_.armed()) {
                 s.clear();
-                s.put("Send again: ");
+                s.put(K2_P("Send again: "));
                 if (scan_sel) s.put("SCAN"); else s.put_fixed(model_.target_mv(), 2).put_char('V');
-                send_.draw_armed("CONFIRM", s.view(), static_cast<int>(model_.arm_left_permille(ctx_.now)));
+                send_.draw_armed(K2_P("CONFIRM"), s.view(), static_cast<int>(model_.arm_left_permille(ctx_.now)));
             } else {
-                send_.draw_idle("SEND", scan_sel ? "SCAN requests HV" : model_.needs_confirm() ? "Above 5V: other port empty" :
-                                                                                           "Other port must be empty");
+                send_.draw_idle("SEND", scan_sel ? K2_P("SCAN requests HV") : model_.needs_confirm() ? K2_P("Above 5V: other port empty") :
+                                                                                           K2_P("Other port must be empty"));
             }
         }
     }
@@ -1908,25 +1909,25 @@ void TriggerPage::paint_main(uint32_t now_ms) {
     // Footer: facts only. The Edit hint says how far one step moves.
     const char *footer = nullptr;
     if (cleanup) {
-        footer = release == trig::Release::State::Unsafe ? "Unsafe VBUS: unplug source" : "Releasing; measuring VBUS";
+        footer = release == trig::Release::State::Unsafe ? K2_P("Unsafe VBUS: unplug source") : K2_P("Releasing; measuring VBUS");
     } else if (refused_ != fc::Fail::None) {
         footer = trig::fail_long(refused_);
     } else if (!model_.available()) {
-        footer = "No voltage within monitor cap";
+        footer = K2_P("No voltage within monitor cap");
     } else if (stage == trig::Stage::Pick) {
-        footer = release == trig::Release::State::Safe ? "5V verified. Pick protocol" : "Pick a protocol";
+        footer = release == trig::Release::State::Safe ? K2_P("5V verified. Pick protocol") : K2_P("Pick a protocol");
     } else if (stage == trig::Stage::Edit) {
         if (e.kind == trig::Kind::Range) {
             s.clear();
-            s.put("Step ").put_u32(e.step).put("mV, hold ").put_u32(e.step < 1000 ? 1000 : e.step).put("mV");
+            s.put("Step ").put_u32(e.step).put(K2_P("mV, hold ")).put_u32(e.step < 1000 ? 1000 : e.step).put("mV");
             footer = s.c_str();
         } else {
-            footer = "Choose offered voltage";
+            footer = K2_P("Choose offered voltage");
         }
     } else if (stage == trig::Stage::Review) {
-        footer = model_.needs_confirm() ? (model_.armed() ? "Above 5V! Send again" : "Above 5V: send twice") : "Ready to send";
+        footer = model_.needs_confirm() ? (model_.armed() ? K2_P("Above 5V! Send again") : K2_P("Above 5V: send twice")) : K2_P("Ready to send");
     } else {
-        footer = run() == trig::Run::Negotiating ? "Requesting the voltage" : "VBUS 10s trace, 0-20V";
+        footer = run() == trig::Run::Negotiating ? K2_P("Requesting the voltage") : K2_P("VBUS 10s trace, 0-20V");
     }
     const bool unsafe = cleanup && release == trig::Release::State::Unsafe;
     const bool error = unsafe || refused_ != fc::Fail::None || !model_.available();
@@ -1948,8 +1949,8 @@ void TriggerPage::paint_scan() {
         const char *tail = "";
         switch (o) {
         case fc::Outcome::Accepted: v = kit::Verdict::Pass; break;
-        case fc::Outcome::Rejected: v = kit::Verdict::Fail; tail = "no reply"; break;
-        case fc::Outcome::Skipped:  v = kit::Verdict::Skip; tail = "skipped"; break;
+        case fc::Outcome::Rejected: v = kit::Verdict::Fail; tail = K2_P("no reply"); break;
+        case fc::Outcome::Skipped:  v = kit::Verdict::Skip; tail = K2_P("skipped"); break;
         case fc::Outcome::None:     v = running ? kit::Verdict::Running : kit::Verdict::Pending; break;
         }
         StrBuf<8> volts;
@@ -1979,20 +1980,20 @@ void TriggerPage::paint_scan() {
             label.put("SCAN ").put_u32(static_cast<uint32_t>(scan_step_ + 1)).put(" OF ").put_u32(fc::kScanSteps);
         } else if (acc > 0) {
             sv = kit::Verdict::Pass;
-            label.put_u32(static_cast<uint32_t>(acc)).put(" OF ").put_u32(fc::kScanSteps).put("  MAX ");
+            label.put_u32(static_cast<uint32_t>(acc)).put(" OF ").put_u32(fc::kScanSteps).put(K2_P("  MAX "));
             trig::put_volts(label, maxmv);
         } else {
-            label.put("NONE ANSWERED");
+            label.put(K2_P("NONE ANSWERED"));
         }
         kit::draw_verdict(c, 0, kFcSumY, c.w, kFcSumH, sv, label.view(), kBg);
     }
     const FooterTone ft = ctx_.ui->fc_release().busy() ? FooterTone::Caution
                         : (!scanning_ && acc <= 0)     ? FooterTone::Caution
                                                        : FooterTone::Info;
-    const char *fm = ctx_.ui->fc_release().busy() ? "Releasing; measuring VBUS"
-                   : scanning_                    ? "Scanning..."
-                   : acc > 0                      ? "Scan done"
-                                                  : "Scan done: none answered";
+    const char *fm = ctx_.ui->fc_release().busy() ? K2_P("Releasing; measuring VBUS")
+                   : scanning_                    ? K2_P("Scanning...")
+                   : acc > 0                      ? K2_P("Scan done")
+                                                  : K2_P("Scan done: none answered");
     if (ft != FooterTone::Info) ctx_.toast.show(ft, fm, ctx_.now);
 }
 
@@ -2201,7 +2202,7 @@ void SettingsPage::paint_identity() {
             if (up_min % 60 < 10) line.put_char('0');
         }
         line.put_u32(up_min % 60).put_char('m');
-        line.put("  USB ").put(usbcfg::describe(usb));   // this boot's mode, the words the USB Link note uses
+        line.put(K2_P("  USB ")).put(usbcfg::describe(usb));   // this boot's mode, the words the USB Link note uses
         const kit::TextRun runs[2] = {{8, kIdHeadY, &kSmall, std::string_view(kFwVersion), kText},
                                       {8, kIdLineY, &kLabelFont, line.view(), kDim}};
         kit::paint_texts(c, {0, kit::kBelowBar, c.w, static_cast<int16_t>(kIdDashY - kit::kBelowBar)}, runs, 2, kBg);
@@ -2225,26 +2226,26 @@ bool SettingsPage::share_boot_info() {
 // settings, so the rows keep no value text of their own.
 void SettingsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
     static constexpr const char *kTitles[kSettingsRows] = {
-        "USB Link", "Autorotate", "Rotate buttons",
+        K2_P("USB Link"), K2_P("Autorotate"), K2_P("Rotate buttons"),
 #if K2_SCREENSHOT
-        "Screenshot",
+        K2_P("Screenshot"),
 #endif
-        "Smoothing", "Wake port", "Test level", "Huawei/Samsung", "Sweep depth", "Long Back", "Home boxes", "Display", "System state", "Memory", "Boot info"};
-    static constexpr const char *kPresets[smoothing::kPresetCount] = {"Off", "Low", "Medium", "High"};
-    static constexpr const char *kPresetNotes[smoothing::kPresetCount] = {"Raw readings", "Light calming", "Balanced", "Steady, slower"};
+        K2_P("Smoothing"), K2_P("Wake port"), K2_P("Test level"), K2_P("Huawei/Samsung"), K2_P("Sweep depth"), K2_P("Long Back"), K2_P("Home boxes"), K2_P("Display"), K2_P("System state"), K2_P("Memory"), K2_P("Boot info")};
+    static constexpr const char *kPresets[smoothing::kPresetCount] = {"Off", "Low", K2_P("Medium"), "High"};
+    static constexpr const char *kPresetNotes[smoothing::kPresetCount] = {K2_P("Raw readings"), K2_P("Light calming"), K2_P("Balanced"), K2_P("Steady, slower")};
     // charger_test::Level order (Medium 0, Light 1, Deep 2): the charger test's default level and what it runs.
-    static constexpr const char *kLevels[charger_test::kLevelCount] = {"Medium", "Light", "Deep"};
+    static constexpr const char *kLevels[charger_test::kLevelCount] = {K2_P("Medium"), "Light", "Deep"};
     static constexpr const char *kLevelNotes[charger_test::kLevelCount] = {
-        "Tests each advertised voltage", "Checks what charger offers",
+        K2_P("Tests each advertised voltage"), K2_P("Checks what charger offers"),
 #if K2_PDSPEC
-        "Sweeps, accuracy & PD spec"
+        K2_P("Sweeps, accuracy & PD spec")
 #else
-        "Sweeps & voltage accuracy"
+        K2_P("Sweeps & voltage accuracy")
 #endif
     };
     // ctsweep::Depth order (100 mV 0, 200 mV 1, Phone 2, 20 mV 3): the deep sweeps' step.
-    static constexpr const char *kDepthNotes[ctsweep::kDepthCount] = {"Every 100 mV, PPS and AVS", "Every 200 mV, quickest", "100 mV, 20 mV in phone zones", "Every 20 mV on PPS, slowest"};
-    static_assert(all_fit(kDepthNotes, kLabelAdv, kit::kNoteMaxPx), "a Sweep depth note is wider than the row note");
+    static constexpr const char *kDepthNotes[ctsweep::kDepthCount] = {K2_P("Every 100 mV, PPS and AVS"), K2_P("Every 200 mV, quickest"), K2_P("100 mV, 20 mV in phone zones"), K2_P("Every 20 mV on PPS, slowest")};
+    static_assert(all_fit_p(kDepthNotes, kLabelAdv, kit::kNoteMaxPx), "a Sweep depth note is wider than the row note");
     const auto *self = static_cast<const SettingsPage *>(ctx);
     out.text = kTitles[i];
     auto set_toggle = [&](bool on, const char *on_note, const char *off_note) {
@@ -2260,15 +2261,15 @@ void SettingsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
         out.note = self->usb_note_.view();
         break;
     case SettingRow::Autorotate:
-        out.tail = self->ctx_.ui->rotation_locked() ? "Locked" : "Auto";
-        out.note = self->ctx_.ui->rotation_locked() ? "Fixed orientation" : "Follows gravity";
+        out.tail = self->ctx_.ui->rotation_locked() ? K2_P("Locked") : "Auto";
+        out.note = self->ctx_.ui->rotation_locked() ? K2_P("Fixed orientation") : K2_P("Follows gravity");
         break;
     case SettingRow::RotateButtons:
-        set_toggle(self->ctx_.ui->rotate_buttons(), "Follow the display", "Physical keys");
+        set_toggle(self->ctx_.ui->rotate_buttons(), K2_P("Follow the display"), K2_P("Physical keys"));
         break;
 #if K2_SCREENSHOT
     case SettingRow::Screenshot:
-        set_toggle(uiprefs::screenshot_enabled, "Remote and web capture", "No capture");
+        set_toggle(uiprefs::screenshot_enabled, K2_P("Remote and web capture"), K2_P("No capture"));
         break;
 #endif
     case SettingRow::Smoothing: {
@@ -2278,7 +2279,7 @@ void SettingsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
         break;
     }
     case SettingRow::IdleWake:   // the opt-in exception to "no Rd at idle": a sleeping source's port is asked with our Rd
-        set_toggle(fusb302::idle_wake(), "Idle Rd on a sleeping port", "Idle stays passive");
+        set_toggle(fusb302::idle_wake(), K2_P("Idle Rd on a sleeping port"), K2_P("Idle stays passive"));
         break;
     case SettingRow::TestLevel: {
         const unsigned l = self->ct_level_ < charger_test::kLevelCount ? self->ct_level_ : 0;
@@ -2287,7 +2288,7 @@ void SettingsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
         break;
     }
     case SettingRow::LegacyUnits:   // FCP, SCP and AFC: slow to run and rarely answered, so off until asked for
-        set_toggle(uiprefs::legacy_units_shown, "FCP, SCP, AFC in the test", "FCP, SCP, AFC hidden");
+        set_toggle(uiprefs::legacy_units_shown, K2_P("FCP, SCP, AFC in the test"), K2_P("FCP, SCP, AFC hidden"));
         break;
     case SettingRow::SweepDepth: {
         const unsigned d = self->sweep_depth_ < ctsweep::kDepthCount ? self->sweep_depth_ : 1;
@@ -2297,27 +2298,27 @@ void SettingsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
     }
     case SettingRow::LongBack:   // the ring view's long Back target (ring::view_key)
         out.tail = ring::name(ring::sanitize_target(self->ctx_.keep.long_back));
-        out.note = "Where Long Back jumps";
+        out.note = K2_P("Where Long Back jumps");
         break;
     case SettingRow::HomeBoxes:
         out.chevron = true;
-        out.note = "Configure 3 Home info boxes";
+        out.note = K2_P("Configure 3 Home info boxes");
         break;
     case SettingRow::Display:
         out.tail = {self->display_tail_, uidisp::format_summary(self->display_tail_, idle_hw::config())};
-        out.note = "Brightness, dim, screen off";
+        out.note = K2_P("Brightness, dim, screen off");
         break;
     case SettingRow::SystemState:
         out.chevron = true;
-        out.note = "meter, USB, FUSB302, MCU";
+        out.note = K2_P("meter, USB, FUSB302, MCU");
         break;
     case SettingRow::Memory:
         out.chevron = true;
-        out.note = "stacks, RAM, flash, files";
+        out.note = K2_P("stacks, RAM, flash, files");
         break;
     default:   // SettingRow::BootInfo
         out.chevron = true;
-        out.note = "this boot's log as a QR code";
+        out.note = K2_P("this boot's log as a QR code");
         break;
     }
 }
@@ -2437,12 +2438,12 @@ void AutorotatePage::draw_static() {
 
 // The active choice carries the radio dot; the focused row says what it does.
 void AutorotatePage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
-    static constexpr const char *kNames[5] = {"Auto", "Manual 0 deg", "Manual 90 deg", "Manual 180 deg", "Manual 270 deg"};
+    static constexpr const char *kNames[5] = {"Auto", K2_P("Manual 0 deg"), K2_P("Manual 90 deg"), K2_P("Manual 180 deg"), K2_P("Manual 270 deg")};
     const auto *self = static_cast<const AutorotatePage *>(ctx);
     out.marker = kit::Marker::Radio;
     out.state = rotation_choice(*self->ctx_.ui) == i ? 1 : 0;
     out.text = kNames[i];
-    out.note = i == 0 ? "Follows gravity" : "Fixed orientation";
+    out.note = i == 0 ? K2_P("Follows gravity") : K2_P("Fixed orientation");
 }
 
 void AutorotatePage::update(uint32_t) {
@@ -2500,7 +2501,7 @@ void HomeBoxesPage::draw_static() {
 }
 
 void HomeBoxesPage::row_fn(void *ctx, int i, bool focused, kit::RowSpec &out) {
-    static constexpr const char *kTitles[kRows] = {"Box 1", "Box 2", "Box 3", "Reset defaults"};
+    static constexpr const char *kTitles[kRows] = {"Box 1", "Box 2", "Box 3", K2_P("Reset defaults")};
     const auto *self = static_cast<const HomeBoxesPage *>(ctx);
     if (self->view_ == View::PickBox) {
         const auto k = static_cast<home::BoxKind>(i);
@@ -2517,7 +2518,7 @@ void HomeBoxesPage::row_fn(void *ctx, int i, bool focused, kit::RowSpec &out) {
         out.tail_color = b == home::BoxKind::Off ? kDim : kAccent;
         out.note = home::box_note(b);
     } else {
-        out.note = "PD Req, Energy, Rotating";
+        out.note = K2_P("PD Req, Energy, Rotating");
     }
 }
 
@@ -2605,7 +2606,7 @@ void DisplayPage::draw_static() {
 }
 
 void DisplayPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
-    static constexpr const char *kTitles[3] = {"Brightness", "Dim after", "Screen off"};
+    static constexpr const char *kTitles[3] = {K2_P("Brightness"), K2_P("Dim after"), K2_P("Screen off")};
     const auto *self = static_cast<const DisplayPage *>(ctx);
     const idle::Config &c = idle_hw::config();
     if (self->view_ >= View::PickDim) {   // a pick list: the radio sits on the stored value
@@ -2622,10 +2623,10 @@ void DisplayPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
     if (i == 0) {
         out.tail = {t, uidisp::format_percent(buf, c.brightness)};
         out.tail_color = self->view_ == View::Adjust ? kFocus : kDim;
-        out.note = self->view_ == View::Adjust ? "Changes live" : "Backlight level";
+        out.note = self->view_ == View::Adjust ? K2_P("Changes live") : K2_P("Backlight level");
     } else {
         out.tail = {t, uidisp::format_span(buf, i == 1 ? c.dim_after_s : c.off_after_s, false)};
-        out.note = i == 1 ? "Dims the backlight" : "Only with nothing plugged in";
+        out.note = i == 1 ? K2_P("Dims the backlight") : K2_P("Only with nothing plugged in");
     }
 }
 
@@ -3238,10 +3239,10 @@ constexpr int kUlRows = usbcfg::rows();   // 2 without the network function (K2_
 constexpr usbcfg::Row ul_row(int i) { return usbcfg::row_at(i); }
 struct UlMeta { const char *name, *hint; };
 constexpr UlMeta kUlMeta[4] = {
-    {"HID", "logs and remote"},
-    {"Drive", "read-only files"},
-    {"Network", "web 192.168.7.1"},
-    {"WebUSB", "web + remote"},
+    {"HID", K2_P("logs and remote")},
+    {"Drive", K2_P("read-only files")},
+    {K2_P("Network"), K2_P("web 192.168.7.1")},
+    {K2_P("WebUSB"), K2_P("web + remote")},
 };
 bool ul_on(const usbcfg::Setting &s, usbcfg::Row r) {
     switch (r) {
@@ -3276,7 +3277,7 @@ void UsbLinkPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
     out.text = m.name;
     out.tail = on ? "ON" : "OFF";
     out.tail_color = on ? kOk : kDim;
-    out.note = usbcfg::same_mode(self->pending_, usbcfg::current) ? m.hint : "Replug to apply";
+    out.note = usbcfg::same_mode(self->pending_, usbcfg::current) ? m.hint : K2_P("Replug to apply");
 }
 
 void UsbLinkPage::update(uint32_t) {

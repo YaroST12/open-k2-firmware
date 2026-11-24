@@ -10,6 +10,7 @@
 #include "k2/chargertest/report_card_delta.hpp"
 #include "k2/chargertest/report_card_hw.hpp"
 #include "k2/chargertest/step_label.hpp"
+#include "k2/core/strpack.hpp"
 #include "k2/ui/ui.hpp"
 #include "k2/ui/ui_pages.hpp"
 #include "k2/ui/ui_style.hpp"
@@ -153,7 +154,7 @@ void cards_mi_text(const rc::deep::MiSection &m, StrBuf<32> &out) {
     out.clear();
     if (!m.chain) return;
     if (m.chain != mi_unlock::kCodeVerified && m.chain != mi_unlock::kCodeFinished) { out.put(mi_unlock::chain_text(m.chain).view()); return; }
-    if (!m.n) { out.put("done, no new modes"); return; }
+    if (!m.n) { out.put(K2_P("done, no new modes")); return; }
     constexpr int kBoxPx = kRightEdge - kMiValueX;   // the value's box on the fact line, beside the "Xiaomi" key
     for (int pass = 0; pass < 2; ++pass) {   // the words for a mode not tested, then the dash when they do not fit
         out.clear();
@@ -176,7 +177,7 @@ void cards_mi_text(const rc::deep::MiSection &m, StrBuf<32> &out) {
     }
     for (int form = 0; form < 2; ++form) {   // "4 modes: ..." then "4: ..." when the words do not fit the 208 px canvas
         out.clear();
-        out.put_u32(m.n).put(form ? ":" : " modes:");
+        out.put_u32(m.n).put(form ? ":" : K2_P(" modes:"));
         if (pass) out.put_char(' ').put_u32(pass).put_char(kMarkCheck);
         if (fail) out.put_char(' ').put_u32(fail).put_char(kMarkCross);
         if (m.n - pass - fail) out.put_char(' ').put_u32(m.n - pass - fail).put(" skip");
@@ -200,7 +201,7 @@ void put_repeat(StrBuf<32> &out, const rc::Card &c, size_t room) {
     for (int form = 0; form < 3; ++form) {
         StrBuf<32> t;
         t.put(" x").put_u32(c.times);
-        if (form == 0) t.put(" last boot ").put_u32(c.last_boots);
+        if (form == 0) t.put(K2_P(" last boot ")).put_u32(c.last_boots);
         else if (form == 1) t.put(" b").put_u32(c.last_boots);
         if (t.view().size() <= room) { out.put(t.view()); return; }
     }
@@ -215,13 +216,13 @@ void cards_note_text(const rc::Card &c, StrBuf<32> &out) {
     StrBuf<24> t;
     cards_title_text(c, t);
     out.put(t.view());
-    if (c.times <= 1) { out.put("  boot ").put_u32(std::min<uint32_t>(c.boots, 999)); return; }
+    if (c.times <= 1) { out.put(K2_P("  boot ")).put_u32(std::min<uint32_t>(c.boots, 999)); return; }
     const size_t room = kNoteCells - t.view().size();
     StrBuf<32> tail;
     for (int form = 0; form < 3; ++form) {   // "  x3 boot 9", "  x3 b9", "  x3"
         tail.clear();
         tail.put("  x").put_u32(c.times);
-        if (form == 0) tail.put(" boot ").put_u32(std::min<uint32_t>(c.last_boots, 999));
+        if (form == 0) tail.put(K2_P(" boot ")).put_u32(std::min<uint32_t>(c.last_boots, 999));
         else if (form == 1) tail.put(" b").put_u32(std::min<uint32_t>(c.last_boots, 999));
         if (tail.view().size() <= room) break;
     }
@@ -244,19 +245,19 @@ void cards_fold_text(const rc::Card &c, const rc::Range &r, StrBuf<32> &out) {
     if (i >= c.n_ranges || i >= c.sweep.size() || !c.sweep[i].fold_dv) return;
     // "folds to 19.4V above 19.9V": the level it fell to, the last good setpoint (one 0.1 V step under the first folded one); the
     // device's note (ctsweep::format_fold) reads the same, both at the nearest 0.1 V
-    out.put("folds to ");
+    out.put(K2_P("folds to "));
     put_volts(out, c.sweep[i].fold_dv);
-    out.put(" above ");
+    out.put(K2_P(" above "));
     put_volts(out, unsigned(c.sweep[i].fold_from_dv > 1 ? c.sweep[i].fold_from_dv - 1 : 0));
 }
 
 void cards_range_status_text(const rc::Card &c, const rc::Range &r, StrBuf<16> &out) {
     if (tone::folded(c, r)) {   // a fold is a caution: the row says what it fell to ("folds to 19.4V"), the sheet the whole note
-        out.put("folds to ");
+        out.put(K2_P("folds to "));
         put_volts(out, c.sweep[std::size_t(&r - c.range.data())].fold_dv);
         return;
     }
-    if (tone::deviates(c, r)) { out.put("off >100mV"); return; }   // a sweep that tracked worse than the pass window: a caution
+    if (tone::deviates(c, r)) { out.put(K2_P("off >100mV")); return; }   // a sweep that tracked worse than the pass window: a caution
     if (r.fail_dv) {
         if (r.max_dv && tone::capped(c)) {
             out.put("caps ");
@@ -266,7 +267,7 @@ void cards_range_status_text(const rc::Card &c, const rc::Range &r, StrBuf<16> &
             put_volts(out, r.fail_dv);
         }
     } else if (tone::range(c, r) == tone::Tone::Partial) {
-        out.put("reached ");
+        out.put(K2_P("reached "));
         put_volts(out, r.max_dv);
     }
 }
@@ -274,7 +275,7 @@ void cards_range_status_text(const rc::Card &c, const rc::Range &r, StrBuf<16> &
 void cards_pd_why_text(const rc::GroupResult &r, StrBuf<24> &out) {
     const char *why = rc::group_why(0, r);
     if (fits_px(kLabelFont.adv, why, kPdWhyPx)) out.put(why);
-    else out.put("see detail");   // "source shut off (needs replug)" is 30 cells: the detail screen spells it out, nothing is cut
+    else out.put(K2_P("see detail"));   // "source shut off (needs replug)" is 30 cells: the detail screen spells it out, nothing is cut
 }
 
 void cards_summary_text(const rc::Card &c, StrBuf<12> &out) {
@@ -304,7 +305,7 @@ void cards_group_cell_text(const rc::GroupResult &r, StrBuf<16> &out) {
         out.put_char(kMarkCheck);   // both count as a pass; "handshake ok" / "detected" is spelled out in the group detail
     } else if (r.verdict == rc::GV::Pass) {
         if (!mx) out.put_char(kMarkCheck);
-        else if (mx <= kHandshakeDv) out.put_char(kMarkCheck).put_u32(mx / 10).put("V only");
+        else if (mx <= kHandshakeDv) out.put_char(kMarkCheck).put_u32(mx / 10).put(K2_P("V only"));
         else out.put_char(kMarkCheck), put_volts(out, mx);
     } else if (r.verdict == rc::GV::Fail) {
         if (mx) {
@@ -322,12 +323,12 @@ void cards_group_cell_text(const rc::GroupResult &r, StrBuf<16> &out) {
 void cards_handover_text(const rc::Card &c, StrBuf<32> &out) {
     using HO = charger_test::HandoverOutcome;
     switch (c.handover) {
-    case HO::NotTried: out.put("not tried"); return;
-    case HO::FellBack: out.put("fell back"); break;
-    case HO::StayedPd: out.put("stayed in PD"); break;
+    case HO::NotTried: out.put(K2_P("not tried")); return;
+    case HO::FellBack: out.put(K2_P("fell back")); break;
+    case HO::StayedPd: out.put(K2_P("stayed in PD")); break;
     case HO::Fault:    out.put("fault"); break;
-    case HO::Reboot:   out.put("rebooted"); break;
-    case HO::InContract: out.put("in PD contract"); break;
+    case HO::Reboot:   out.put(K2_P("rebooted")); break;
+    case HO::InContract: out.put(K2_P("in PD contract")); break;
     }
     if (c.handover_ds) {
         out.put_char(' ').put_u32(c.handover_ds / 10).put_char('.').put_u32(c.handover_ds % 10).put_char('s');
@@ -335,7 +336,7 @@ void cards_handover_text(const rc::Card &c, StrBuf<32> &out) {
 }
 
 void cards_stats_text(const rc::Card &c, StrBuf<32> &out) {
-    out.put("run ").put_u32(c.runs).put(" boot ").put_u32(std::min<uint32_t>(c.boots, 99999));
+    out.put("run ").put_u32(c.runs).put(K2_P(" boot ")).put_u32(std::min<uint32_t>(c.boots, 99999));
     // A repeated card ("x3 last boot 9") comes first: it is the newer fact, and it takes the room before the optional tail.
     put_repeat(out, c, static_cast<size_t>(kFooterCells) - out.view().size());
     // One optional tail, the fullest form that still fits the 27-cell footer: a run that went through power losses says so (in
@@ -345,9 +346,9 @@ void cards_stats_text(const rc::Card &c, StrBuf<32> &out) {
     StrBuf<32> tail;
     for (int form = 0; form < 3; ++form) {   // 0 full words, 1 "self-pwr r2", 2 "self r16"
         tail.clear();
-        if (self) tail.put(form == 0 ? " self-powered" : form == 1 ? " self-pwr" : " self");
-        if (c.resumed) tail.put(!self && form == 0 ? " resumed " : " r").put_u32(c.resumed);
-        else if (c.cable.flags & rc::kCableReattach) tail.put(form == 0 ? " re-attach" : form == 1 ? " reatt" : " re");   // the planned re-attach, not a resume
+        if (self) tail.put(form == 0 ? K2_P(" self-powered") : form == 1 ? K2_P(" self-pwr") : " self");
+        if (c.resumed) tail.put(!self && form == 0 ? K2_P(" resumed ") : " r").put_u32(c.resumed);
+        else if (c.cable.flags & rc::kCableReattach) tail.put(form == 0 ? K2_P(" re-attach") : form == 1 ? K2_P(" reatt") : " re");   // the planned re-attach, not a resume
         else if (!self && c.fw && form == 0) tail.put(" fw ").put_hex(c.fw, 8);
         if (tail.view().size() <= room) { out.put(tail.view()); break; }
     }
@@ -587,7 +588,7 @@ bool CardsPage::on_event(Event e) {
             refresh();
             mode_ = Mode::List;
             note_.clear();
-            note_.put(ok ? "Card deleted" : "Delete failed");
+            note_.put(ok ? K2_P("Card deleted") : K2_P("Delete failed"));
             note_color_ = ok ? kOk : kError;
             note_until_ = ctx_.now + 2500;
             painted_ = false;
@@ -658,10 +659,10 @@ void CardsPage::update(uint32_t now_ms) {
 void CardsPage::paint_empty() {
     const Surface &c = ctx_.content;
     // The body ground and the four constant lines in one pass; the table is width-checked at compile time.
-    static constexpr const char *kEmptyTitle = "No report cards yet";
-    static constexpr const char *kEmptyHint[3] = {"Finish a Charger test and the", "K2 keeps one card per charger",
-                                                   "that offers PD source caps."};
-    static_assert(fits_px(8, kEmptyTitle, 224 - 16) && all_fit(kEmptyHint, 6, 224 - 16), "empty-state copy fits (16 px font: 8 px/cell, 12 px font: 6)");
+    static constexpr const char *kEmptyTitle = K2_P("No report cards yet");
+    static constexpr const char *kEmptyHint[3] = {K2_P("Finish a Charger test and the"), K2_P("K2 keeps one card per charger"),
+                                                   K2_P("that offers PD source caps.")};
+    static_assert(fits_px_p(8, kEmptyTitle, 224 - 16) && all_fit_p(kEmptyHint, 6, 224 - 16), "empty-state copy fits (16 px font: 8 px/cell, 12 px font: 6)");
     const kit::TextRun runs[4] = {{8, 30, &kSmall, kEmptyTitle, kText},      {8, 54, &kLabelFont, kEmptyHint[0], kDim},
                                   {8, 68, &kLabelFont, kEmptyHint[1], kDim}, {8, 82, &kLabelFont, kEmptyHint[2], kDim}};
     kit::paint_texts(c, {0, kBarH, c.w, static_cast<int16_t>(kFooterY - kBarH)}, runs, 4, kBg);
@@ -738,7 +739,7 @@ void CardsPage::paint_cell(int row, bool focused) {
     if (row == 0) {   // PD fixed
         const rc::GroupResult &r = cd.group[0];
         const tone::Tone pt = tone::group(cd, 0);
-        draw_cell_head(c, 8, int16_t(g.y + 1), kit::kTextX, ty, 84 - 4 - kit::kTextX, "PD fixed", pt, r.verdict == rc::GV::Skip, bg);
+        draw_cell_head(c, 8, int16_t(g.y + 1), kit::kTextX, ty, 84 - 4 - kit::kTextX, K2_P("PD fixed"), pt, r.verdict == rc::GV::Skip, bg);
         StrBuf<16> a, b;
         cards_group_max_text(r, a);
         cards_group_fail_text(r, b);
@@ -823,7 +824,7 @@ void CardsPage::paint_detail() {
     cards_handover_text(cd, ho);
     const bool tried = cd.handover != charger_test::HandoverOutcome::NotTried;
     const bool ho_bad = cd.handover == charger_test::HandoverOutcome::Fault || cd.handover == charger_test::HandoverOutcome::Reboot;
-    kit::kv_row(c, kHandover, y_h, "Handover", ho.view(), ho_bad ? kError : tried ? kText : kFaint, true);
+    kit::kv_row(c, kHandover, y_h, K2_P("Handover"), ho.view(), ho_bad ? kError : tried ? kText : kFaint, true);
     // A QC4+/QC5 source gets one fact line ahead of the groups ("QC5 (Qualcomm VID, PPS 3.3-21V)").
     int16_t ly = int16_t(y_h + kDP);
     {
@@ -847,7 +848,7 @@ void CardsPage::paint_detail() {
         if (!mi_.view().empty()) {   // the Xiaomi section of the card's block: the modes the 0x2717 chain unlocked, or how it stopped
             gfx_fill(c, 0, ly, c.w, 1, kRule);
             const int16_t ty = int16_t(ly + kit::row_text_y(kDP, kLabelFont.height));
-            put_line(c, kLabelFont, 8, ty, 40, "Xiaomi", kDim, kBg);
+            put_line(c, kLabelFont, 8, ty, 40, K2_P("Xiaomi"), kDim, kBg);
             put_marked(c, kLabelFont, kMiValueX, ty, kRightEdge - kMiValueX, mi_.view(), kText, kBg);   // the Handover row's value column
             ly = int16_t(ly + kDP);
         }
@@ -856,7 +857,7 @@ void CardsPage::paint_detail() {
     const int first = 1 + int(cd.n_ranges), cells = rows() - first;
     if (cells <= 0) {
         gfx_fill(c, 0, ly, c.w, 1, kRule);
-        put_line(c, kLabelFont, 8, int16_t(ly + kit::row_text_y(kDP, kLabelFont.height)), c.w - 16, "No legacy protocols tested", kFaint, kBg);
+        put_line(c, kLabelFont, 8, int16_t(ly + kit::row_text_y(kDP, kLabelFont.height)), c.w - 16, K2_P("No legacy protocols tested"), kFaint, kBg);
     } else {
         const int lines = (cells + 1) / 2;
         for (int i = 0; i <= lines; i++) gfx_fill(c, 0, int16_t(ly + kDP * i), c.w, 1, kRule);
@@ -888,7 +889,7 @@ void CardsPage::paint_detail() {
         y = int16_t(y + r.height());
     }
     gfx_fill(c, 0, y, c.w, 1, kRule);
-    if (y + 14 <= kFooterY) put_line(c, kLabelFont, 8, int16_t(y + 4), c.w - 16, "Per-step results are not stored", kFaint, kBg);
+    if (y + 14 <= kFooterY) put_line(c, kLabelFont, 8, int16_t(y + 4), c.w - 16, K2_P("Per-step results are not stored"), kFaint, kBg);
 }
 
 // Sub-screen of the focused row: every value the card stores for that protocol group or range.
@@ -908,7 +909,7 @@ void CardsPage::paint_group() {
         cards_range_text(r, title);
         glyph = to_kit(tone::range(cd, r));
     } else {
-        title.put(sel.idx == 0 ? "PD fixed" : rc::group_word(sel.idx));
+        title.put(sel.idx == 0 ? K2_P("PD fixed") : rc::group_word(sel.idx));
         glyph = to_kit(tone::group(cd, sel.idx));
     }
     paint_head(glyph, title.view(), head.view(), false, true);
@@ -926,11 +927,11 @@ void CardsPage::paint_confirm() {
     StrBuf<24> t;
     cards_title_text(cur_, t);
     char fitted[kFitBuf];
-    kit::draw_alert_band(c, kit::kBodyY, false, "DELETE?");
+    kit::draw_alert_band(c, kit::kBodyY, false, K2_P("DELETE?"));
     gfx_text(c, kSmall, 8, 68, fit_text_mid(kSmall, t.view(), c.w - 16, fitted), kText, kBg);
-    put_line(c, kLabelFont, 8, 92, c.w - 16, "History of this charger is lost.", kDim, kBg);
-    put_line(c, kLabelFont, 8, 106, c.w - 16, "The next test starts a new card.", kDim, kBg);
-    draw_footer_cached(c, FooterTone::Caution, "History is lost for good", foot_);
+    put_line(c, kLabelFont, 8, 92, c.w - 16, K2_P("History of this charger is lost."), kDim, kBg);
+    put_line(c, kLabelFont, 8, 106, c.w - 16, K2_P("The next test starts a new card."), kDim, kBg);
+    draw_footer_cached(c, FooterTone::Caution, K2_P("History is lost for good"), foot_);
 }
 
 }  // namespace k2

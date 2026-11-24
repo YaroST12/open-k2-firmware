@@ -36,6 +36,7 @@
 #endif
 #include "k2/core/memstat.hpp"
 #include "k2/core/shell.hpp"
+#include "k2/core/strpack.hpp"
 #include "k2/drivers/systick.hpp"
 #include "k2/core/dbg_stream_hw.hpp"
 #include "k2/pd/pdtrace.hpp"
@@ -81,7 +82,7 @@ bool g_putting = false;        // put() is part-way through a text: the log tap 
 
 // Whole text to the host, waiting briefly for FIFO room (the help text is longer than the FIFO). The wait keeps the 1 ms PD
 // service going through the main loop's idle hook, as a long LCD draw does: a slow or stalled host must not starve PD.
-void put_impl(std::string_view s) {
+void put_raw(std::string_view s) {
     if (!g_session || usb::cdc_hold()) return;
     const std::uint32_t t0 = systick::millis();
     g_putting = true;
@@ -95,6 +96,18 @@ void put_impl(std::string_view s) {
         if (systick::millis() - t0 > kWriteTimeoutMs) break;
     }
     g_putting = false;
+}
+
+void put_impl(std::string_view s) {
+    if (!strpack::is_packed(s)) return put_raw(s);
+    strpack::Reader r(s.data());
+    char buf[64];
+    std::size_t n = 0;
+    for (int ch; (ch = r.next()) >= 0;) {
+        buf[n++] = static_cast<char>(ch);
+        if (n == sizeof(buf)) { put_raw({buf, n}); n = 0; }
+    }
+    if (n) put_raw({buf, n});
 }
 
 inline void put(std::string_view s) { detail::put(s); }
@@ -121,7 +134,7 @@ const char* fc_reason(remote::Status s) {
     if (s == remote::Status::Ok) return nullptr;
     if (s == remote::Status::Busy) return "busy";
     const fc::Fail f = fctrig::status().fail;
-    return f == fc::Fail::None ? "refused" : fc::name(f);
+    return f == fc::Fail::None ? K2_P("refused") : fc::name(f);
 }
 
 void raw_to_hiz_impl() {
@@ -197,6 +210,11 @@ struct Line {
         }
     }
     [[gnu::noinline]] void append(std::string_view sv) {
+        if (strpack::is_packed(sv)) {
+            strpack::Reader r(sv.data());
+            for (int ch; n + 1 < sizeof b && (ch = r.next()) >= 0;) b[n++] = static_cast<char>(ch);
+            return;
+        }
         const std::size_t avail = n < sizeof b ? sizeof b - 1 - n : 0;   // the same cut as fmt::format: 199 characters at most
         const std::size_t take = sv.size() < avail ? sv.size() : avail;
         for (std::size_t i = 0; i < take; i++) b[n++] = sv[i];
@@ -271,30 +289,30 @@ constexpr auto kAllowedOpts = []() {
     const lab::Opts& o = c.o;
     struct Rule { bool set; unsigned bit; const char* msg; };
     const Rule rules[] = {
-        {o.retries != 0, kRetries, "--retries is not used by this command"},
-        {o.timeout_ms != 0, kTimeout, "--timeout-ms is not used by this command"},
-        {(o.pulse_us | o.gap_us) != 0, kPulse, "--pulse-us/--gap-us are not used by this command"},
-        {o.hold_ms != 0, kHold, "--hold-ms is not used by this command"},
-        {o.watch_ms != 0, kWatch, "--watch is not used by this command"},
-        {o.sop != 0, 0, "--sop: PD message injection is not implemented in this firmware"},
-        {(o.hs_ms | o.frame_gap_us) != 0, 0, "--hs-ms/--frame-gap-us are reserved (engine timing hooks not added)"},
-        {o.hold || o.release, kKeep, "--hold/--release are not used by this command"},
+        {o.retries != 0, kRetries, K2_P("--retries is not used by this command")},
+        {o.timeout_ms != 0, kTimeout, K2_P("--timeout-ms is not used by this command")},
+        {(o.pulse_us | o.gap_us) != 0, kPulse, K2_P("--pulse-us/--gap-us are not used by this command")},
+        {o.hold_ms != 0, kHold, K2_P("--hold-ms is not used by this command")},
+        {o.watch_ms != 0, kWatch, K2_P("--watch is not used by this command")},
+        {o.sop != 0, 0, K2_P("--sop: PD message injection is not implemented in this firmware")},
+        {(o.hs_ms | o.frame_gap_us) != 0, 0, K2_P("--hs-ms/--frame-gap-us are reserved (engine timing hooks not added)")},
+        {o.hold || o.release, kKeep, K2_P("--hold/--release are not used by this command")},
     };
     for (const Rule& r : rules) if (r.set && !(ok & r.bit)) return r.msg;
     if ((o.mask || o.cycles || o.pace || o.max_s || o.max_trans) && c.id != lab::Id::PdStressStart)
-        return "--mask/--cycles/--pace/--max-s/--max-trans are used by pdstress start only";
+        return K2_P("--mask/--cycles/--pace/--max-s/--max-trans are used by pdstress start only");
     return nullptr;
 }
 
 // Nothing else may own the pins; `drives` adds the rules of the raw `dp`/`dm` commands.
 const char* lab_guard(bool drives) {
-    if (g_ui->ports_busy()) return "busy (charger test or release running)";
-    if (dpsniff::armed() || dpsniff::streaming()) return "busy (sniff active)";
-    if (fctrig::scan_running()) return "busy (scan running)";
-    if (fctrig::ufcs_probe_running()) return "busy (ufcs probe running)";
+    if (g_ui->ports_busy()) return K2_P("busy (charger test or release running)");
+    if (dpsniff::armed() || dpsniff::streaming()) return K2_P("busy (sniff active)");
+    if (fctrig::scan_running()) return K2_P("busy (scan running)");
+    if (fctrig::ufcs_probe_running()) return K2_P("busy (ufcs probe running)");
     if (drives) {
-        if (g_ui->link().inline_mode()) return "a sink is attached";
-        if (power::max_vbus_mv() == 0) return "no power monitor";
+        if (g_ui->link().inline_mode()) return K2_P("a sink is attached");
+        if (power::max_vbus_mv() == 0) return K2_P("no power monitor");
         if (loopguard::locked()) return loopguard::kLockText;   // raw D+/D- levels are legacy raises
     }
     return nullptr;
@@ -307,7 +325,7 @@ bool over_abort_mv() {
 
 const char* abort_lines() {
     raw_to_hiz();
-    return "abort: VBUS above 12 V, lines released";
+    return K2_P("abort: VBUS above 12 V, lines released");
 }
 
 void lab_vbus_line(const lab::Cmd& c) {
@@ -357,12 +375,12 @@ const char* lab_accp(const lab::Cmd& c) {
     } else {
         unsigned from = c.a[0], to = from;
         if (c.id == I::AccpRead && c.na > 1) {
-            if (c.a[1] == 0 || c.a[1] > 64) return "n is 1..64";
+            if (c.a[1] == 0 || c.a[1] > 64) return K2_P("n is 1..64");
             to = from + c.a[1] - 1;
         } else if (c.id == I::AccpDump) {
             to = c.a[1];
         }
-        if (to > 255) return "register range passes 0xFF";
+        if (to > 255) return K2_P("register range passes 0xFF");
         for (unsigned reg = from; reg <= to; reg++) {
             std::array<std::uint8_t, 3> rx{};
             fctrig::LabXfer r;
@@ -386,11 +404,11 @@ const char* lab_accp(const lab::Cmd& c) {
 const char* lab_qc_pulse(const lab::Cmd& c) {
     using I = lab::Id;
     if (const char* why = lab_guard(true)) return why;
-    if (!g_raw_dp || !g_raw_dm) return "set the baseline first: dpdm 0.6 3.3 confirm";
+    if (!g_raw_dp || !g_raw_dm) return K2_P("set the baseline first: dpdm 0.6 3.3 confirm");
     const bool plus = c.id == I::Qc3pUp || c.id == I::Qc3pDown;
     const bool up = c.id == I::Qc3Up || c.id == I::Qc3pUp;
     const unsigned n = c.na ? c.a[0] : 1;
-    if (n == 0 || n > kMaxPulses) return "pulse count is 1..200";
+    if (n == 0 || n > kMaxPulses) return K2_P("pulse count is 1..200");
     const std::uint32_t plus_hold = up ? qc::kQc3PlusPulseUs : qc::kQc3PlusDownPulseUs;
     const std::uint32_t hold = c.o.pulse_us ? c.o.pulse_us : (plus ? plus_hold : qc::kQc3PulseUs);
     const std::uint32_t gap = c.o.gap_us ? c.o.gap_us : (plus ? qc::kQc3PlusGapUs : qc::kQc3GapUs);
@@ -561,7 +579,7 @@ const char* lab_vbus(const lab::Cmd& c) {
     using I = lab::Id;
     if (const char* why = lab_guard(true)) return why;
     if (fctrig::status().state != fc::State::Idle) return "busy";
-    if (!uart2::claim()) return "USART2 busy";
+    if (!uart2::claim()) return K2_P("USART2 busy");
     std::array<std::uint8_t, 40> tx{};
     std::size_t n = 0;
     if (c.id == I::UfcsRaw) {
@@ -672,15 +690,15 @@ const char* lab_ufcs_tune(const lab::Cmd& c) {
         return nullptr;
     }
     if (const char* why = lab_guard(false)) return why;
-    if (fctrig::status().state != fc::State::Idle) return "busy (trigger running)";
+    if (fctrig::status().state != fc::State::Idle) return K2_P("busy (trigger running)");
     if (c.id == I::UfcsSet) {
         const auto f = static_cast<ufcs::Field>(c.a[1]);
         const fctrig::TuneSet s = fctrig::ufcs_set(f, c.a[0]);
-        if (s == fctrig::TuneSet::Busy) return "busy (probe running)";
-        if (s == fctrig::TuneSet::Range) return "value out of range for this field";
+        if (s == fctrig::TuneSet::Busy) return K2_P("busy (probe running)");
+        if (s == fctrig::TuneSet::Range) return K2_P("value out of range for this field");
         ufcs_tune_line(c, f);
     } else if (c.id == I::UfcsReset) {
-        if (!fctrig::ufcs_tuner_reset()) return "busy (probe running)";
+        if (!fctrig::ufcs_tuner_reset()) return K2_P("busy (probe running)");
         Line l(c, "ufcs.reset");
         l.t("ok", true);
         l.send();
@@ -690,7 +708,7 @@ const char* lab_ufcs_tune(const lab::Cmd& c) {
         l.t("started", s == ufcs::ProbeStart::Ok);
         l.s("err", ufcs::name(s));
         l.send();
-        return s == ufcs::ProbeStart::Ok ? nullptr : "probe refused (busy, inline, not 5 V, no monitor or bus resetting)";
+        return s == ufcs::ProbeStart::Ok ? nullptr : K2_P("probe refused (busy, inline, not 5 V, no monitor or bus resetting)");
     }
     return nullptr;
 }
@@ -710,14 +728,14 @@ const char* lab_pd(const lab::Cmd& c) {
         const pd::SourceCaps& caps = fusb302::caps();
         for (unsigned i = 0; caps.valid && i < caps.num_pdos && !ch.pos; i++)
             if (caps.pdos[i].type == want) ch.pos = static_cast<std::uint8_t>(i + 1);
-        if (!ch.pos) return "the source offers no such PDO";
+        if (!ch.pos) return K2_P("the source offers no such PDO");
         ch.mv = static_cast<std::uint16_t>(c.a[0]);
         ch.ma = static_cast<std::uint16_t>(c.a[1]);
     }
     pd::Err e = pd::Err::Ok;
     bool ok = true;
     if (c.id == I::PdGet) {
-        if (c.word != "source-cap") return "pd get: only source-cap";
+        if (c.word != "source-cap") return K2_P("pd get: only source-cap");
         ok = fusb302::get_source_caps(c.o.confirm);
     } else if (c.id == I::PdReread) {
         ok = fusb302::reread_start(c.na ? static_cast<std::uint8_t>(c.a[0]) : pd::kRereadDefault);   // PD mode only; the result is a [REREAD] line and a Black Box mark
@@ -730,7 +748,7 @@ const char* lab_pd(const lab::Cmd& c) {
     l.t("started", ok && e == pd::Err::Ok);
     l.s("err", pd::err_name(e));
     l.send();
-    return ok ? nullptr : "refused (no CC, or inline: an inline K2 never transmits)";
+    return ok ? nullptr : K2_P("refused (no CC, or inline: an inline K2 never transmits)");
 }
 
 // LCD SPI clock lab switch: `lcd show` reads the divider and the paint totals, `lcd spi <2|4|8>` sets it (RAM only, /4 at
@@ -739,7 +757,7 @@ const char* lab_pd(const lab::Cmd& c) {
 // during a charger test, where a lighter wire time is what is being measured.
 const char* lab_lcd(const lab::Cmd& c) {
     if (c.id == lab::Id::LcdSpi) {
-        if (!lcd::set_spi_div(c.a[0])) return "divider not changed (2, 4 or 8 only, and not while a screenshot or stream is open)";
+        if (!lcd::set_spi_div(c.a[0])) return K2_P("divider not changed (2, 4 or 8 only, and not while a screenshot or stream is open)");
         g_ui->repaint(systick::millis());
     }
     const unsigned div = lcd::spi_div();
@@ -772,7 +790,7 @@ const char* lab_pdstress(const lab::Cmd& c) {
         s.pace = static_cast<std::uint8_t>(c.o.pace);
         s.max_s = static_cast<std::uint16_t>(c.o.max_s);
         s.max_trans = static_cast<std::uint16_t>(c.o.max_trans);
-        if (g_remote->pdstress_start(s) != remote::Status::Ok) return "busy (another tool owns the ports)";
+        if (g_remote->pdstress_start(s) != remote::Status::Ok) return K2_P("busy (another tool owns the ports)");
     } else if (c.id == I::PdStressStop) {
         g_remote->pdstress_stop();
     } else if (c.id == I::PdStressResult) {
@@ -815,7 +833,7 @@ const char* lab_run(const lab::Cmd& c) {
     case I::PdStressStart: case I::PdStressStatus: case I::PdStressResult: case I::PdStressStop: return lab_pdstress(c);
 #else
     case I::PdStressStart: case I::PdStressStatus: case I::PdStressResult: case I::PdStressStop:
-        return "PD Stress is not built in (make K2_PDSTRESS=1)";
+        return K2_P("PD Stress is not built in (make K2_PDSTRESS=1)");
 #endif
     case I::LcdShow: case I::LcdSpi: return lab_lcd(c);
     case I::AccpPing: case I::AccpRead: case I::AccpWrite: case I::AccpDump: return lab_accp(c);
@@ -830,8 +848,8 @@ const char* lab_run(const lab::Cmd& c) {
     case I::UfcsSet: case I::UfcsShow: case I::UfcsReset: case I::UfcsProbe: case I::UfcsResult: return lab_ufcs_tune(c);
     case I::PdRequest: case I::PdPps: case I::PdAvs: case I::PdEpr: case I::PdGet: case I::PdReread: case I::PdVdm: return lab_pd(c);
     case I::PdHardReset:
-        return g_remote->pd_hard_reset().status == remote::Status::Ok ? nullptr : "refused (sink attached or busy)";
-    default: return "not implemented in this firmware (see docs/PROTOCOL_LAB.md)";
+        return g_remote->pd_hard_reset().status == remote::Status::Ok ? nullptr : K2_P("refused (sink attached or busy)");
+    default: return K2_P("not implemented in this firmware (see docs/PROTOCOL_LAB.md)");
     }
 }
 
@@ -914,7 +932,7 @@ unsigned twin_numbers(std::array<std::uint8_t, twin::kCapacity>& seqs) { return 
     std::array<std::uint8_t, twin::kCapacity> seqs{};
     const bool pr = c.op == shell::TwinOp::Predict;
     const unsigned n = twin_numbers(seqs);
-    if (n == 0) { put("no twins saved\r\n"); return nullptr; }
+    if (n == 0) { put(K2_P("no twins saved\r\n")); return nullptr; }
     bool shown = false;
     twin::Twin t;
     for (unsigned i = 0; i < n; i++) {
@@ -985,14 +1003,14 @@ unsigned twin_numbers(std::array<std::uint8_t, twin::kCapacity>& seqs) { return 
     return "?";
 }
 #else
-const char* twin_command(const shell::TwinCmd&) { return "unsupported"; }
+const char* twin_command(const shell::TwinCmd&) { return K2_P("unsupported"); }
 #endif
 
 // `diag`: the report the K2 shows (k2/pd/diag_live.hpp), one terminal line per report line; titles carry their
 // severity, notes are indented under them.
 const char* diag_print() {
     namespace dg = pd::diag;
-    if (dg::live::state() == dg::live::State::None) { put("no PD session yet\r\n"); return nullptr; }
+    if (dg::live::state() == dg::live::State::None) { put(K2_P("no PD session yet\r\n")); return nullptr; }
     const dg::Report& r = dg::live::report();
     tput("session %s, %u.%u s, %u finished\r\n", dg::live::state() == dg::live::State::Open ? "open" : "last",
          unsigned(r.dur_ms / 1000), unsigned(r.dur_ms % 1000 / 100), unsigned(dg::live::sessions()));
@@ -1025,11 +1043,11 @@ struct Hw final : shell::Backend {
         // One line per check: each check runs with IRQs masked (the longest about 3.5 ms), PD gets its service in between
         // instead of once after the whole run (about 13 ms of checks plus the output).
         return selftest::run_math([](std::string_view s, void*) { put(s); mainloop::idle_hook(); }, nullptr) ? nullptr
-                                                                                                           : "math selftest failed";
+                                                                                                           : K2_P("math selftest failed");
     }
 #endif
     // The guarded SuperVOOC trigger (HID remote only) drives D-: the parser keeps every D+/D- and sniffer command out.
-    const char* lines_locked() override { return fctrig::svooc_running() ? "busy (SuperVOOC trigger running)" : nullptr; }
+    const char* lines_locked() override { return fctrig::svooc_running() ? K2_P("busy (SuperVOOC trigger running)") : nullptr; }
 
     void state() override {
         char b[200];
@@ -1060,8 +1078,8 @@ struct Hw final : shell::Backend {
     const char* drive(bool dp, dpdm::Drive d) override {
         if (d != dpdm::Drive::HiZ) {
             if (fctrig::status().state != fc::State::Idle || g_ui->ports_busy()) return "busy";
-            if (g_ui->link().inline_mode()) return "a sink is attached";
-            if (power::max_vbus_mv() == 0) return "no power monitor";
+            if (g_ui->link().inline_mode()) return K2_P("a sink is attached");
+            if (power::max_vbus_mv() == 0) return K2_P("no power monitor");
             if (loopguard::locked()) return loopguard::kLockText;
         }
         if (dp) {
@@ -1075,7 +1093,7 @@ struct Hw final : shell::Backend {
     }
 
     const char* cc_open(std::uint32_t ms) override {
-        return fusb302::cc_open(ms) ? nullptr : "a sink is attached";
+        return fusb302::cc_open(ms) ? nullptr : K2_P("a sink is attached");
     }
 
     const char* pd_silent(std::uint32_t seconds) override {
@@ -1087,7 +1105,7 @@ struct Hw final : shell::Backend {
     }
 
     const char* pd_reset() override {
-        return g_remote->pd_hard_reset().status == remote::Status::Ok ? nullptr : "refused (sink attached or busy)";
+        return g_remote->pd_hard_reset().status == remote::Status::Ok ? nullptr : K2_P("refused (sink attached or busy)");
     }
 
     const char* pd_rescan() override {
@@ -1124,11 +1142,11 @@ struct Hw final : shell::Backend {
     // Read-only on the rings and the CDC port: no arming rules, nothing it could disturb.
     const char* stream(unsigned mask, unsigned hz, bool history) override {
         if (mask == 0) {
-            if (!dbg_hw::running()) return "no stream running";
+            if (!dbg_hw::running()) return K2_P("no stream running");
             stream_stop();
             return nullptr;
         }
-        if (dbg_hw::running()) return "already streaming (stream off first)";
+        if (dbg_hw::running()) return K2_P("already streaming (stream off first)");
         dbg_hw::start(static_cast<std::uint8_t>(mask), static_cast<std::uint16_t>(hz), history);
         return nullptr;
     }
@@ -1142,15 +1160,15 @@ struct Hw final : shell::Backend {
     // Same arming rules as `lab sniff arm`: nothing may own the ports, and no raw level is driven.
     const char* sniff(int mode, std::uint32_t rate) override {
         if (mode == 0) {
-            if (!dpsniff::streaming()) return "no stream running";
+            if (!dpsniff::streaming()) return K2_P("no stream running");
             sniff_stop();
             return nullptr;
         }
-        if (dpsniff::armed()) return "a capture is already armed";
+        if (dpsniff::armed()) return K2_P("a capture is already armed");
         if (mode == 1 && (g_ui->ports_busy() || fctrig::status().state != fc::State::Idle || fctrig::scan_running() ||
                           g_raw_dp || g_raw_dm || g_fc_started)) return "busy";
         const dpsniff::ArmResult r = mode == 1 ? dpsniff::arm_stream() : dpsniff::arm_synth(rate);
-        return r == dpsniff::ArmResult::Ok ? nullptr : r == dpsniff::ArmResult::NoRam ? "no RAM (drive or net mode)" : "busy";
+        return r == dpsniff::ArmResult::Ok ? nullptr : r == dpsniff::ArmResult::NoRam ? K2_P("no RAM (drive or net mode)") : "busy";
     }
 
     // Inline VOOC monitor: the same RAM switch and summary as remote FC op 4. Raw reply words in hex, no units.

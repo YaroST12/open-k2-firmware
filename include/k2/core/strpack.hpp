@@ -124,10 +124,14 @@ struct ExpTable {
     std::uint8_t bytes[160][kMaxRuleBytes]{};
     std::uint8_t len[160]{};
     std::uint8_t depth[160]{};
+    std::int16_t head[128]{};   // first rule index starting with ASCII byte c, or -1
+    std::int16_t next[160]{};   // next rule index with the same first byte, or -1
 };
 
 consteval ExpTable build_exp_table() {
     ExpTable t{};
+    for (int i = 0; i < 128; i++) t.head[i] = -1;
+    for (int i = 0; i < 160; i++) t.next[i] = -1;
     // Populate in multiple passes so topological order is guaranteed regardless of index order.
     bool progress = true;
     while (progress) {
@@ -160,6 +164,10 @@ consteval ExpTable build_exp_table() {
             append(b, db);
             t.len[i] = static_cast<std::uint8_t>(out);
             t.depth[i] = static_cast<std::uint8_t>((da > db ? da : db) + 1);
+            if (out >= 2 && t.bytes[i][0] < 128) {
+                t.next[i] = t.head[t.bytes[i][0]];
+                t.head[t.bytes[i][0]] = static_cast<std::int16_t>(i);
+            }
             progress = true;
         }
     }
@@ -195,9 +203,9 @@ consteval Encoded<N> encode_dp(const Lit<N> &lit) {
         best[i] = static_cast<std::uint16_t>(best[i + 1] + 1);
         pick_tok[i] = c0;
         pick_adv[i] = 1;
-        for (int r = 0; r < table::kTableLen; r++) {
+        for (int r = c0 < 128 ? kExp.head[c0] : -1; r >= 0; r = kExp.next[r]) {
             const std::uint8_t rl = kExp.len[r];
-            if (rl < 2 || i + rl > n || kExp.bytes[r][0] != c0) continue;
+            if (i + rl > n) continue;
             bool match = true;
             for (std::uint8_t k = 1; k < rl; k++) {
                 if (static_cast<std::uint8_t>(lit.s[i + k]) != kExp.bytes[r][k]) {
