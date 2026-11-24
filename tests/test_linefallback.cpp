@@ -162,10 +162,10 @@ void test_the_idle_wake_already_alternates_a_direct_plug_one_line_at_a_time() {
 
 // Polls every 20 ms; the ms of each "move" from t0 within span_ms.
 std::vector<int> hunt_moves(pd::RxHunt& h, std::uint32_t t0, std::uint32_t span_ms, std::int32_t vbus, bool heard = false,
-                            std::int32_t other_mv = -1, bool eligible = true) {
+                            std::int32_t other_mv = -1, bool eligible = true, std::int32_t own_mv = -1) {
     std::vector<int> at;
     for (std::uint32_t t = 0; t <= span_ms; t += 20)
-        if (h.update(t0 + t, eligible, heard, vbus, other_mv)) at.push_back(int(t));
+        if (h.update(t0 + t, eligible, heard, vbus, other_mv, own_mv)) at.push_back(int(t));
     return at;
 }
 
@@ -205,7 +205,19 @@ void test_hunt_stops_once_the_new_line_hears() {
     CHECK_EQ(int(h.moves()), 0);
 }
 
+void test_hunt_stays_on_the_cc_line_next_to_an_ra_or_open_net() {
+    pd::RxHunt h;
+    CHECK_EQ(int(hunt_moves(h, 0, 30000, 9000, false, 558, true, 1702).size()), 0);    // the other net is the cable's Ra
+    CHECK_EQ(int(hunt_moves(h, 0, 30000, 9000, false, 3300, true, 1702).size()), 0);   // the other net is open Rp / VCONN
+    CHECK_EQ(int(h.moves()), 0);
+    pd::RxHunt r;
+    CHECK_EQ(hunt_moves(r, 0, 1100, 9000, false, 1702, true, 558).size() == 1, true);  // on the Ra net: move to the CC line
+    pd::RxHunt s;
+    CHECK_EQ(hunt_moves(s, 0, 2100, 9000, false, 1650, true, 1700).size() == 2, true); // similar levels: alternate
+}
+
 int main() {
+    test_hunt_stays_on_the_cc_line_next_to_an_ra_or_open_net();
     test_hunt_above_5v_alternates_1000_1000_3000_then_every_11_s();
     test_hunt_at_5v_stops_after_four_moves();
     test_hunt_never_moves_a_heard_line_or_without_vbus_or_when_not_passive();

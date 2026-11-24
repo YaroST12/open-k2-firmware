@@ -95,6 +95,15 @@ constexpr std::uint8_t rd_window_line(std::int32_t cc1_mv, std::int32_t cc2_mv) 
     return in1 ? 1 : 2;
 }
 
+// The Ra rule: Rp over a cable's Ra (0.8-1.2 k) reads <= ~0.8 V at 3 A, ~0.18 V at 1.5 A; over a sink's Rd (5.1 k) ~1.7 V /
+// 0.9 V. So with both nets in the window, a net under half the other is the Ra one and the higher net is the CC line
+// (inline 2026-11-24: Ra 558 mV next to the sink's 1702 mV). Only valid with no Rd / VCONN of the K2's own on the nets.
+constexpr std::uint8_t ra_rule_line(std::int32_t cc1_mv, std::int32_t cc2_mv) {
+    const std::int32_t lo = cc1_mv < cc2_mv ? cc1_mv : cc2_mv, hi = cc1_mv < cc2_mv ? cc2_mv : cc1_mv;
+    if (lo < kRdWindowLoMv || hi > kRdWindowHiMv || lo * 2 >= hi) return 0;
+    return cc1_mv > cc2_mv ? 1 : 2;
+}
+
 // The Rd-window re-check target: the line the ADC levels name when it differs from the currently
 // attached `active` line, else 0 (no override). The attach scan runs before the UI has fed any levels
 // (cold boot), so when fresh levels arrive later the cross-check has to re-run outside the scan.
@@ -104,12 +113,14 @@ constexpr std::uint8_t rd_window_line(std::int32_t cc1_mv, std::int32_t cc2_mv) 
 // Inline it is the normal look of a wrong latch: the sink's second Rd grounds the unused net through the K2 (hardware
 // 2026-11-11, NOVOO -> K2 -> Legion side port: attached CC2 at 0 mV, CC1 1678 mV for 630 ms until the no-Rp detach,
 // runs/2026-11-11-integ-hw/twin/h-side-inline). The caller still confirms the new line with the comparator.
-constexpr std::uint8_t rd_window_override(std::int32_t cc1_mv, std::int32_t cc2_mv, std::uint8_t active) {
+// `ra_ok`: the K2 has no Rd or VCONN of its own on the nets, so ra_rule_line() may name the line too.
+constexpr std::uint8_t rd_window_override(std::int32_t cc1_mv, std::int32_t cc2_mv, std::uint8_t active, bool ra_ok = false) {
     if (active == 0) return 0;
     std::uint8_t l = rd_window_line(cc1_mv, cc2_mv);
     if (l == 0) {
         const std::int32_t own = active == 1 ? cc1_mv : cc2_mv, other = active == 1 ? cc2_mv : cc1_mv;
         if (own >= 0 && own < kRdWindowLoMv && other >= kRdWindowLoMv && other <= kRdWindowHiMv) l = active == 1 ? 2 : 1;
+        else if (ra_ok) l = ra_rule_line(cc1_mv, cc2_mv);
     }
     return (l != 0 && l != active) ? l : 0;
 }

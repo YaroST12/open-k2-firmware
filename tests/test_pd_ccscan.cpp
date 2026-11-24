@@ -148,5 +148,18 @@ int main() {
     CHECK_EQ(int(rd_window_override(3300, 3300, 2)), 0);   // both open
     CHECK_EQ(int(rd_window_override(-1, -1, 2)), 0);       // unknown levels (the cold-boot scan saw these)
     CHECK_EQ(int(rd_window_override(1678, 3307, 0)), 0);   // nothing attached
+    // The Ra rule (inline, far end plugged after the attach): the cable's Ra net reads under half the sink's Rd net.
+    CHECK_EQ(int(ra_rule_line(558, 1702)), 2);
+    CHECK_EQ(int(ra_rule_line(1702, 558)), 1);
+    CHECK_EQ(int(ra_rule_line(1700, 1650)), 0);            // similar levels: ambiguous
+    CHECK_EQ(int(ra_rule_line(558, 3300)), 0);             // open Rp above the window: not this rule
+    CHECK_EQ(int(ra_rule_line(100, 1702)), 0);             // a net below the window is the plain rule's
+    CHECK_EQ(int(ra_rule_line(-1, 1702)), 0);
+    CHECK_EQ(int(rd_window_override(558, 1702, 1, true)), 2);
+    CHECK_EQ(int(rd_window_override(1702, 558, 1, true)), 0);   // already on the CC line
+    CHECK_EQ(int(rd_window_override(1702, 558, 2, true)), 1);   // flipped plug
+    CHECK_EQ(int(rd_window_override(1700, 1700, 1, true)), 0);
+    CHECK_EQ(int(rd_window_override(3300, 558, 2, true)), 0);   // open Rp vs Ra: unchanged
+    CHECK_EQ(int(rd_window_override(558, 1702, 1)), 0);    // our Rd / VCONN on the line: the rule is off
     return test_report("test_pd_ccscan");
 }
