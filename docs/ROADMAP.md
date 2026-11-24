@@ -1128,6 +1128,8 @@ and the hardware check). A row leaves this list when its fix is merged and the h
 
 ## Specified work (not started)
 
+- **String packing (parked 2026-11-24)**: dictionary (128 words) + Huffman packing of constant strings, branch k2/strpack (pilot, not merged). Corpus ~41.6 KB in ~3000 literals; strings pack to ~50 % as simulated, but the fixed cost is ~1.7 KB (table 1155 B, decoder ~530 B) and every receiver of a `const char*` needs packed-type support: the pilot (34 Who's attached strings) netted +1.6 KB. Projections: pilot pool (ui/text, diag, charger test) ~3-3.5 KB net at best; full conversion 4.5-10.8 KB gross and needs a streaming `gfx_text(PStr)`. Next step if resumed: measure `diag.cpp` (3.5 KB through one `Out::s` sink, no type changes) after regenerating the table from the K2_TXT corpus (`tools/strpack.py gen`). Decode ~140 cycles/char; per-tick strings stay plain.
+
 - **Specs & offers: read a cable-limited EPR charger with the spoof** (2026-11-24). A Baseus 140W on the top plug (no cable) claims PDP 140 W but offers only 3 A (5/9/15/20 V, PPS 5-11 V and 5-21 V), so the page shows the bare-plug list, not the charger's capability. When PDO1 has the EPR bit, nothing is offered above 3 A, the PDP claim is well above the best offer (`cable-limited-offer`) and the K2 owns the contract (no device inline), the auto-read / Refresh arms the EPR e-marker spoof and does one Hard Reset re-read; the page marks the list as read with a spoofed cable. Inline: unchanged (do not disturb). Waits for flash headroom.
 
 - ~~**Charger test "Offers" depth**~~ removed (user decision 2026-11-21, k2/test-layer-reads): the Offers level (3b66351c, dc9a2eda,
