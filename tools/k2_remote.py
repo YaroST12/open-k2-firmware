@@ -154,7 +154,7 @@ PSC_FAMILY_ALIASES = {"pps-steps": "pps-avs", "pps": "pps-avs", "avs": "pps-avs"
 # ---- Loop probe (docs/LOOP_PROBE.md): constants ----
 CMD_LOOP_PROBE = 0x57     # loop probe: the stored result file /lp/last.rec, chunked read only (k2/loopprobe/loop_probe_hw.hpp)
 LOOP_CHUNK = 48           # remote::kLoopProbeChunk
-CMD_BATTERY = 0x58        # battery efficiency recorder: status / start / end / next / finish / config / list / read (k2/battery)
+CMD_BATTERY = 0x58        # battery efficiency recorder: status / start / end / next / finish / config / list / read / continue (k2/battery)
 BATTERY_CHUNK = 48        # battery::wire::kChunk
 # ---- end Loop probe constants ----
 UFCS_STATUS, UFCS_GET, UFCS_SET, UFCS_RESET, UFCS_PROBE, UFCS_STOP, UFCS_READ = range(7)

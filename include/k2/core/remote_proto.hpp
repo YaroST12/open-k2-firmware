@@ -684,7 +684,7 @@ enum class Cmd : uint8_t {
     PdStress = 0x55,        // PD Stress: status / start / result (chunked) / stop, see the layout above (0x54 is the AVS sweep)
     EmarkerProbe = 0x56,    // optional [vconn_pc]: the silent-cable-chip probe, raw ADC samples only -> see encode_ra_probe (k2/pd/ra_probe.hpp); a refusal = Busy + [raprobe::Refusal], a bad argument = BadArg + [raprobe::ArgError]
     LoopProbe = 0x57,       // off(2): the loop probe's stored result file, chunked, see the layout above
-    Battery = 0x58,         // battery efficiency recorder: status / start / end / next / finish / config / list / read, see above
+    Battery = 0x58,         // battery efficiency recorder: status / start / end / next / finish / config / list / read / continue, see above
     ChargerSvoocCap = 0x59, // [] reads, [mode(1)] sets (0 off, 1 on, 2 USB-A) the SuperVOOC ceiling stage of the next charger run (opt-in,
                          // an Options flag, not journaled). rsp [mode, end, why, asks, word(2), vmax_mv(2), stop_ms(2)]: the latest
                          // run's stage result (svooc_ceiling::End, the refusal or abort behind it, asks made, the highest 0x86 word
