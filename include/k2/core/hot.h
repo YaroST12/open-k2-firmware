@@ -10,7 +10,8 @@
  *
  *   K2_HOT       before a function: `K2_HOT void f();` or `K2_HOT static int g() {...}`, also on templates,
  *                member functions and extern "C" ISRs; on a lambda it follows the parameter list:
- *                `[](int x) K2_HOT { ... }`.
+ *                `[](int x) K2_HOT { ... }`. A lambda never inherits its enclosing function's mark or link.ld pin;
+ *                a lambda passed as a function pointer runs through an unmarked thunk, so use a named function.
  *   K2_HOT_DATA  before a small const table: `K2_HOT_DATA static const uint16_t kLut[16] = {...};`
  *
  * Why a per-use section name: GCC rejects one shared section name across a COMDAT (template, inline, in-class)

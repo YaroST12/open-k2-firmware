@@ -686,7 +686,7 @@ K2_HOT bool check_mem_ops(Out& o) {
 // fmt::format against a 32-bit reference formatter
 
 // Reference for one integer conversion: digits, then a sign and padding (zero padding puts the sign first).
-std::size_t ref_num(char* out, bool neg, std::uint32_t mag, unsigned base, unsigned width, bool zero) {
+K2_HOT std::size_t ref_num(char* out, bool neg, std::uint32_t mag, unsigned base, unsigned width, bool zero) {
     char d[12];
     unsigned nd = 0;
     do {
@@ -710,7 +710,7 @@ std::size_t ref_num(char* out, bool neg, std::uint32_t mag, unsigned base, unsig
 }
 
 template <class... A>
-bool fmt_is(const char* want, const char* f, A... a) {
+K2_HOT bool fmt_is(const char* want, const char* f, A... a) {
     char b[48];
     const std::size_t n = fmt::format(b, f, a...);
     return n == std::strlen(want) && std::strcmp(b, want) == 0;
@@ -1389,7 +1389,7 @@ K2_HOT bool run_math(WriteFn write, void* ctx, Summary* out) {
 #endif
 
     char line[96];
-    auto emit = [&](std::size_t n) {
+    auto emit = [&](std::size_t n) K2_HOT {
         if (write && n) write(std::string_view(line, n), ctx);
     };
 

@@ -93,8 +93,8 @@ SECTIONS
      * K2_HOT section attribute is dropped from an inline (COMDAT) function that is emitted out of line,
      * so these are pinned by their mangled -ffunction-sections names instead. */
     *(.text._ZN2k28blend565E* .text._ZN2k214make_blend_lutE*)
-    *(.text._ZN2k27readout*)
-    *(.text._ZN2k29smoothing*)
+    *(.text._ZN2k27readout* .text._ZZN2k27readout*)
+    *(.text._ZN2k29smoothing* .text._ZZN2k29smoothing*)
     /* pdtrace ring / collapse / capture templates (include/k2/pd/pdtrace.hpp): same COMDAT case, on the PD path */
     *(.text._ZNK2k27pdtrace4Ring* .text._ZN2k27pdtrace4Ring* .text._ZN2k27pdtrace8Collapse* .text._ZN2k27pdtrace8Captures*)
     /* 64-bit division slow path (include/k2/core/math_opt.hpp): inline + noinline, so a COMDAT section that cannot carry K2_HOT */
@@ -103,6 +103,13 @@ SECTIONS
      * lcd.cpp PaintTimer) and the TinyUSB FIFO copy loops the hidd/cdcd transfer path calls */
     *(.text._ZN2k22pd18caps_content_hash* .text._ZNK2k22pd11Interrogate7running*)
     *(.text._ZN2k23lcd12clip_to_band* .text._ZN2k23lcd12_GLOBAL__N_110PaintTimer*)
+    *(.text._ZN2k27cable_r8fmt_mohm* .text._ZZN2k27cable_r8fmt_mohm*)
+    /* K2_HOT header-inline classes and the small out-of-line helpers of the PD decoders, the power average, the scratch
+     * lease and string compares (selftest gfx_fill, pd_codec, pd_sink, power_calc reach them per call) */
+    *(.text._ZN2k29PixelSink* .text._ZNK2k29PixelSink* .text._ZN2k25power7Average* .text._ZNK2k25power7Average*)
+    *(.text._ZN2k22pd12_GLOBAL__N_14le32* .text._ZN2k27scratch7acquire* .text._ZN2k27scratch5arena*)
+    *(.text._ZSt3minIjET_St16initializer_listIS0_E* .text._ZSt6copy_nIN9__gnu_cxx17__normal_iteratorIPKmSt4span*)
+    *(.text._ZNSt7__equalILb1EE5equalIcEEbPKT_S4_S4_*)
     *(.text.tu_hwfifo_write .text.tu_hwfifo_write.* .text.tu_hwfifo_read .text.tu_hwfifo_read.*)
     /* QR encoder (src/ui/qr.cpp over the vendored generator): the share page encodes a version 13..21 symbol in one
      * blocking call, the largest compute block on a user path (selftest qr_encode). The generator is third-party C,
@@ -131,25 +138,31 @@ SECTIONS
     *(.rodata._ZN2k29kIconBitsE*)
     *(.rodata._ZN2k27font_12E* .rodata._ZN2k27font_16E* .rodata._ZN2k27font_24E* .rodata._ZN2k27font_48E* .rodata._ZN2k27font_64E*)
     *(.rodata._ZN2k212_GLOBAL__N_1L6bitmapE* .rodata._ZN2k212_GLOBAL__N_1L6glyphsE*)
-    /* Real-time PD link/limiter/passive, compression, sweep, formatting, DSP, and UI kit primitives */
+    /* Real-time PD link/limiter/passive, compression, sweep, formatting, DSP, and UI kit primitives. A lambda's section
+     * is its enclosing function's name behind _ZZ (_ZZN / _ZZNK) and does not inherit the pin: each prefix is pinned
+     * in both forms (gate step "hot" lists lambdas of hot-block functions that land past the window). */
     *(.text._ZN2k22pd4Link* .text._ZNK2k22pd4Link* .text._ZN2k22pd7Passive* .text._ZNK2k22pd7Passive*)
-    *(.text._ZN2k22pd7Limiter* .text._ZNK2k22pd7Limiter*)
-    *(.text._ZN2k22lz* .text._ZZN2k22lz* .text._ZN2k27ctsweep* .text._ZNK2k27ctsweep*)
+    *(.text._ZZN2k22pd4Link* .text._ZZNK2k22pd4Link* .text._ZZN2k22pd7Passive* .text._ZZNK2k22pd7Passive*)
+    *(.text._ZN2k22pd7Limiter* .text._ZNK2k22pd7Limiter* .text._ZZN2k22pd7Limiter* .text._ZZNK2k22pd7Limiter*)
+    *(.text._ZN2k22lz* .text._ZZN2k22lz* .text._ZN2k27ctsweep* .text._ZNK2k27ctsweep* .text._ZZN2k27ctsweep* .text._ZZNK2k27ctsweep*)
     *(.text._ZN2k210StrBufBase* .text._ZN2k23mixEmSt17basic_string_view* .text._ZN2k22pg8mix_cstr* .text._ZN2k22pg8mix_u32s* .text._ZN2k27fmt_fit* .text._ZN2k27fmt_u32* .text._ZN2k29fmt_fixed* .text._ZN2k213fmt_abs_fixed*)
     *(.text._ZN2k210fastcharge* .text._ZN2k27dpsniff* .text._ZN2k26fctrig4poll* .text._ZN2k27battery* .text._ZN2k26ripple*)
-    *(.text._ZN2k23lcd* .text._ZN2k23kit* .text._ZNK2k23kit*)
+    *(.text._ZZN2k210fastcharge* .text._ZZN2k27dpsniff* .text._ZZN2k26fctrig4poll* .text._ZZN2k27battery* .text._ZZN2k26ripple*)
+    *(.text._ZN2k23lcd* .text._ZN2k23kit* .text._ZNK2k23kit* .text._ZZN2k23lcd* .text._ZZN2k23kit* .text._ZZNK2k23kit*)
     /* Live screen update/paint paths and bezel layout helpers */
     *(.text._ZN2k213opp_slot_rect* .text._ZN2k213panel_text_dir* .text._ZN2k212opp_reversed* .text._ZN2k212_GLOBAL__N_115build_opp_cells*)
-    *(.text._ZN2k28HomePage* .text._ZNK2k28HomePage* .text._ZN2k24home*)
-    *(.text._ZN2k214ConnectionPage* .text._ZNK2k214ConnectionPage*)
+    *(.text._ZN2k28HomePage* .text._ZNK2k28HomePage* .text._ZN2k24home* .text._ZZN2k28HomePage* .text._ZZNK2k28HomePage* .text._ZZN2k24home*)
+    *(.text._ZN2k214ConnectionPage* .text._ZNK2k214ConnectionPage* .text._ZZN2k214ConnectionPage* .text._ZZNK2k214ConnectionPage*)
     *(.text._ZN2k210DetailPage* .text._ZNK2k210DetailPage* .text._ZN2k29LinesPage* .text._ZNK2k29LinesPage* .text._ZN2k210RipplePage* .text._ZNK2k210RipplePage* .text._ZN2k210GraphsPage* .text._ZNK2k210GraphsPage* .text._ZN2k211BatteryPage* .text._ZNK2k211BatteryPage*)
-    *(.text._ZN2k215ChargerTestPage13paint_running*)
+    *(.text._ZZN2k210DetailPage* .text._ZZNK2k210DetailPage* .text._ZZN2k29LinesPage* .text._ZZNK2k29LinesPage* .text._ZZN2k210RipplePage* .text._ZZNK2k210RipplePage* .text._ZZN2k210GraphsPage* .text._ZZNK2k210GraphsPage* .text._ZZN2k211BatteryPage* .text._ZZNK2k211BatteryPage*)
+    *(.text._ZN2k215ChargerTestPage13paint_running* .text._ZZN2k215ChargerTestPage13paint_running*)
     *(.text._ZNK2k210StackArenaINS_6PageIfE*2atEj*)
     *libc.a:libc_a-memcpy.o(.text .text.*)
     *libc.a:libc_a-memmove.o(.text .text.*)
     *libc.a:libc_a-memset.o(.text .text.*)
     *(.text.strlen .text.strlen.*)
     *libc.a:libc_a-strlen.o(.text .text.*)
+    *(.text.strcmp .text.strcmp.* .text.memcmp .text.memcmp.*)
     *(.rodata.hot .rodata.hot.*)
     /* K2_HOT_BLOCK_END */
     . = ALIGN(4);

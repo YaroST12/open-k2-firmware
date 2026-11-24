@@ -164,7 +164,7 @@ K2_HOT void field_draw_buf(const Surface &s, const Font &f, int16_t x, int16_t y
         return;
     }
     // a wider glyph: the keys are not the bytes, so the blanks and the text's own bytes each go to their cells
-    auto blanks = [&](int c0, int c1) {
+    auto blanks = [&](int c0, int c1) K2_HOT {
         if (c0 <= c1)
             gfx_text(s, f, x, y, std::string_view(kBlanks, static_cast<size_t>(c1 - c0 + 1)), fg, bg,
                      static_cast<int16_t>(c0 * f.adv) K2_TRUNC_ARG);

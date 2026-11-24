@@ -20,6 +20,13 @@
 
 namespace k2::shell_hw {
 
+namespace {
+// A named function, not a lambda: the function-pointer thunk of a lambda does not carry K2_HOT.
+K2_HOT void cdc_write_frame(std::span<const std::uint8_t> f) {
+    tud_cdc_write(f.data(), static_cast<std::uint32_t>(f.size()));
+}
+}  // namespace
+
 K2_HOT void poll() {
     using namespace detail;
     if (!g_remote) return;
@@ -56,9 +63,7 @@ K2_HOT void poll() {
         }
         // Debug stream (k2/core/dbg_stream.hpp): whole frames while the FIFO has room, a bounded number per pass, never waiting.
         if (dbg_hw::running())
-            dbg_hw::service(tud_cdc_write_available(), [](std::span<const std::uint8_t> f) {
-                tud_cdc_write(f.data(), static_cast<std::uint32_t>(f.size()));
-            });
+            dbg_hw::service(tud_cdc_write_available(), cdc_write_frame);
     }
     tud_cdc_write_flush();
 }

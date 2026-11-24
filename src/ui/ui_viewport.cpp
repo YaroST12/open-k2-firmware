@@ -46,12 +46,12 @@ int owner(int q, int extent, int logical) {
 }
 }  // namespace
 
-int ContentViewport::source_x(int panel_x) {
+K2_HOT int ContentViewport::source_x(int panel_x) {
     if (!active) return panel_x;
     return owner(panel_x - active->destination_.x, active->destination_.w, active->logical_w_);
 }
 
-int ContentViewport::source_y(int panel_y) {
+K2_HOT int ContentViewport::source_y(int panel_y) {
     if (!active) return panel_y;
     return owner(panel_y - active->destination_.y, active->destination_.h, active->logical_h_);
 }
@@ -103,10 +103,10 @@ ContentViewport::~ContentViewport() {
     lcd::set_sink(saved_sink_);
 }
 
-ContentViewport::Pause::Pause() : saved_(lcd::get_sink()) {
+K2_HOT ContentViewport::Pause::Pause() : saved_(lcd::get_sink()) {
     if (active) lcd::set_sink(active->previous_);
 }
-ContentViewport::Pause::~Pause() { lcd::set_sink(saved_); }
+K2_HOT ContentViewport::Pause::~Pause() { lcd::set_sink(saved_); }
 
 K2_HOT bool ContentViewport::row_in_band() const {
     if (!has_band_) return true;
