@@ -6,12 +6,7 @@
 namespace k2::oem_watts {
 namespace ct = charger_test;
 namespace {
-struct Out {
-    Text& t;
-    void put(char c) { if (t.len + 1 < step_label::kMax) t.s[t.len++] = c; t.s[t.len] = 0; }
-    void put(std::string_view s) { for (const char c : s) put(c); }
-    void num(std::uint32_t v) { char d[10]; int k = 0; do { d[k++] = char('0' + v % 10); v /= 10; } while (v && k < 10); while (k) put(d[--k]); }
-};
+using Out = step_label::TextOut;
 }  // namespace
 
 Text watts(std::uint32_t mw) {

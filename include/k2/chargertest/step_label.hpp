@@ -38,6 +38,16 @@ struct Text {
     std::string_view view() const { return {s, len}; }
 };
 
+// Appends to a Text, clipped at kMax: one copy of the helpers for step_label, mi_unlock and oem_watts.
+struct TextOut {
+    Text& t;
+    void put(char c);
+    void put(const char* s);
+    void put(std::string_view s);
+    void num(unsigned v);
+    void milli(unsigned v);   // 5000 -> "5", 3300 -> "3.3", 12140 -> "12.14" (volts or amps from milli-units, up to two decimals)
+};
+
 // The protocol word: "PD", "PPS", "EPR", "AVS", "Mi" (a Xiaomi mode), "Xiaomi" (the chain row), "QC3+", "SVOOC", "PD3.1 rev"; "PD3.x" / "PD2.0" / "EPR" / "AVS" for a
 // plan row that holds no offer.
 Text protocol(const charger_test::Step&);
