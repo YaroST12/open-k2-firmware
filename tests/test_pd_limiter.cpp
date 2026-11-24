@@ -546,6 +546,27 @@ int main() {
         CHECK_COND(!d.lim.sink_holds_forged());
     }
 
+    // ---- re-armed to a limit the charger's list already meets: the sink, still on the old forged list, gets the real one ----
+    {
+        const std::uint32_t c45[3] = {fixed(5000, 3000, kFlags1), fixed(9000, 3000), fixed(15000, 3000)};
+        TxMsg m;
+        Rig r;
+        r.lim.arm(30000, r.now);
+        r.negotiate(0, rq_fixed(3, 3000, 3000), c45);
+        CHECK_COND(r.tx(m));
+        CHECK_EQ(unsigned(m.len / 4), 2u);
+        r.request(rq_fixed(2, 3000, 3000));
+        r.accept_ready(3);
+        CHECK_EQ(int(r.lim.status().state), int(LimState::Limited));
+        CHECK_COND(r.lim.arm(45000, r.now, &r.watch));   // nothing left to clamp
+        CHECK_COND(r.tx(m, kLimGapMs));
+        CHECK_EQ(unsigned(m.len / 4), 3u);
+        CHECK_EQ(word(m, 2), c45[2]);
+        r.request(rq_fixed(3, 3000, 3000));
+        CHECK_EQ(int(r.lim.status().state), int(LimState::Limited));
+        CHECK_COND(!r.lim.sink_holds_forged());          // it was the charger's own list: off has nothing to undo
+    }
+
     // ---- the Max A picker: Max, then 1 A up in 0.25 A steps to the offer, the offer's exact maximum last ----
     {
         const auto amps = [](std::uint16_t offer) {

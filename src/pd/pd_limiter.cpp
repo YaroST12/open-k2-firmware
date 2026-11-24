@@ -422,7 +422,8 @@ bool Limiter::arm(const LimConfig& cfg, std::uint32_t now, const IqWatch* seed) 
         st_.req_mw = request_mw(c.rdo, watch_.pdos());
         std::array<std::uint32_t, 7> f{};
         std::size_t cnt = 0;
-        if (forged_differs_from_watch(f, cnt)) {
+        // an old forged list still with the sink is replaced even when the new one equals the charger's
+        if (forged_differs_from_watch(f, cnt) || (held_ && cnt > 0)) {
             st_.state = LimState::Pending;
             ready_at_ = now;
         } else {
@@ -602,7 +603,8 @@ bool Limiter::take_tx(TxMsg& m, std::uint32_t now) {
     if (st_.injections > 0 && !due(now, inj_at_, kLimGapMs)) return false;
     std::array<std::uint32_t, 7> f{};
     std::size_t cnt = 0;
-    if (!forged_differs_from_watch(f, cnt)) {
+    const bool differs = forged_differs_from_watch(f, cnt);
+    if (!differs && !(held_ && cnt > 0)) {
         st_.state = cnt == 0 ? LimState::Armed : LimState::Limited;
         if (cnt > 0) inj_at_ = now - kLimBlameMs - 1;
         return false;
@@ -621,7 +623,7 @@ bool Limiter::take_tx(TxMsg& m, std::uint32_t now) {
     st_.forged = f;
     st_.forged_n = std::uint8_t(cnt);
     st_.injections++;
-    held_ = true;
+    held_ = differs;   // the charger's own list again: nothing left to undo
     inj_at_ = now;
     st_.state = LimState::Injected;
     return true;
