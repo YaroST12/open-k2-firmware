@@ -68,6 +68,17 @@ struct LabelOut {
 };
 bool tech_constrained(const LimTech& t) { return !t.enabled || t.max_mv != 0 || t.max_ma != 0; }
 
+// A forged word forge_caps neutered: its current (power) field cleared, the masks it clears.
+bool placeholder(std::uint32_t w) {
+    switch (w >> 30) {
+        case 0: case 1: case 2: return (w & 0x3FFu) == 0;
+        default: {
+            const unsigned apdo = (w >> 28) & 3u;
+            return apdo == 0 ? (w & 0x7Fu) == 0 : apdo == 2 && (w & 0xFFFFFu) == 0;
+        }
+    }
+}
+
 }  // namespace
 
 bool lim_config_valid(const LimConfig& c) {
@@ -380,9 +391,14 @@ bool forge_differs(std::span<const std::uint32_t> real, std::span<const std::uin
     return false;
 }
 
+std::size_t Limiter::forge(std::array<std::uint32_t, 7>& f) const {
+    const auto real = watch_.pdos();
+    return forge_caps(real.first(std::min<std::size_t>(real.size(), cut_)), st_.cfg, f);
+}
+
 bool Limiter::forged_differs_from_watch(std::array<std::uint32_t, 7>& f, std::size_t& cnt) const {
     const auto real = watch_.pdos();
-    cnt = forge_caps(real, st_.cfg, f);
+    cnt = forge(f);
     return cnt > 0 && forge_differs(real, {f.data(), cnt});
 }
 
@@ -396,6 +412,7 @@ bool Limiter::arm(const LimConfig& cfg, std::uint32_t now, const IqWatch* seed) 
     last_at_ = now;
     inj_streak_ = 0;
     sink_asked_caps_ = false;
+    cut_ = 0xFF;
     if (seed && seed->contract().ready) {   // armed mid-contract: the list, the Request and the MessageID are already known
         watch_ = *seed;
         last_at_ = watch_.last_frame_at();
@@ -427,6 +444,8 @@ void Limiter::stop(LimWhy why) {
 }
 
 void Limiter::on_detach() {
+    held_ = false;
+    cut_ = 0xFF;
     if (!armed()) return;   // an off limiter's last status stays as the stop left it
     restart();
     st_.req_pos = 0;
@@ -457,13 +476,18 @@ void Limiter::saw_request(std::uint32_t rdo, std::uint32_t now) {
     st_.req_rdo = rdo;
     st_.req_pos = std::uint8_t(rdo >> 28);
     st_.req_mw = request_mw(rdo, watch_.pdos());
-    std::array<std::uint32_t, 7> f{};
-    const std::size_t cnt = forge_caps(watch_.pdos(), st_.cfg, f);
-    const bool ok = cnt > 0 && request_complies(rdo, watch_.pdos(), {f.data(), cnt}, st_.cfg);
     auto restart_neg = [&] {
         st_.state = LimState::Negotiating;
         neg_at_ = now;
     };
+    // The sink took a placeholder of the list it holds: cut it and offer again (no ignore: a 0 mA object is a legal ask).
+    if (held_ && st_.req_pos >= 2 && st_.req_pos <= st_.forged_n && placeholder(st_.forged[st_.req_pos - 1])) {
+        cut_ = std::uint8_t(st_.req_pos - 1);
+        return restart_neg();
+    }
+    std::array<std::uint32_t, 7> f{};
+    const std::size_t cnt = forge(f);
+    const bool ok = cnt > 0 && request_complies(rdo, watch_.pdos(), {f.data(), cnt}, st_.cfg);
     switch (st_.state) {
         case LimState::Armed:
             if (!watch_.pdos().empty() && !ok) restart_neg();
@@ -488,7 +512,10 @@ void Limiter::saw_request(std::uint32_t rdo, std::uint32_t now) {
 }
 
 void Limiter::on_message(Sop sop, std::uint16_t h, std::span<const std::uint8_t> payload, std::uint32_t now) {
-    if (!armed() || sop != Sop::Sop) return;
+    if (sop != Sop::Sop) return;
+    const bool real_caps = from_source(h) && !ext_of(h) && ndo_of(h) > 0 && type_of(h) == kDataSourceCap;
+    if (real_caps) held_ = false;   // the sink has the charger's own list again
+    if (!armed()) return;
     last_at_ = now;
     watch_.on_message(sop, h, payload, now);
     const std::uint8_t t = type_of(h);
@@ -535,6 +562,7 @@ void Limiter::on_message(Sop sop, std::uint16_t h, std::span<const std::uint8_t>
 // Who reset is a guess: a reset after the sink answered our list (it asked again, Limited) is the charger refusing that
 // Request; a reset with no answer is the sink refusing the list.
 void Limiter::on_hard_reset(std::uint32_t now) {
+    held_ = false;
     if (!armed()) return;
     blame_check(st_.state == LimState::Limited ? LimWhy::ChargerResets : LimWhy::SinkResets, now);
     restart();
@@ -593,6 +621,7 @@ bool Limiter::take_tx(TxMsg& m, std::uint32_t now) {
     st_.forged = f;
     st_.forged_n = std::uint8_t(cnt);
     st_.injections++;
+    held_ = true;
     inj_at_ = now;
     st_.state = LimState::Injected;
     return true;

@@ -15,6 +15,8 @@
 // The forged list takes a fresh MessageID past the charger's newest (skipping at least +1 ID so the charger's Accept uses a
 // distinct ID, advancing further on retries so the sink's duplicate filter never drops it). Our frame and the charger's GoodCRC
 // collide with the sink's: the transmit result means nothing, the Request is the proof.
+// A forged object neutered to 0 mA that the sink asks for anyway is cut: the list is offered again ending before it (the charger
+// would serve that position at its real voltage, a 0 mA Request included). The cut lasts for the attach.
 // Give-up: a Hard or Soft Reset within kLimBlameMs of our list counts against us (kLimMaxRejects, attributed to the side that
 // reset: LimWhy::ChargerResets / SinkResets), as does a list the sink answers with a non-compliant Request or not at all
 // (SinkIgnores). kLimMaxInjections per arm caps the rate. Nothing loops; the runtime state lives in RAM only (except the short-lived
@@ -150,6 +152,8 @@ public:
     void on_detach();   // the pair is gone: the limit waits for the next one, the sink's Request and our list go with the attach
     bool armed() const { return st_.state != LimState::Off; }
     bool wants_tx() const { return st_.state == LimState::Pending; }   // the driver opens its TX choke point for it
+    // A forged list went out and no real one since (no real list, reset or detach): the sink may still be limited, armed or not.
+    bool sink_holds_forged() const { return held_; }
     const LimStatus& status() const { return st_; }
 
     // Every frame the sniffer sees (GoodCRCs too, they keep the line "busy"), and each Hard Reset.
@@ -166,12 +170,15 @@ private:
     void blame_check(LimWhy cause, std::uint32_t now);  // a reset or a new list right after our list
     void saw_request(std::uint32_t rdo, std::uint32_t now);
     bool forged_differs_from_watch(std::array<std::uint32_t, 7>& f, std::size_t& cnt) const;
+    std::size_t forge(std::array<std::uint32_t, 7>& f) const;   // forge_caps on the real list up to the cut
 
     LimStatus st_{};
     IqWatch watch_{};
     std::uint32_t last_at_ = 0, neg_at_ = 0, ready_at_ = 0, inj_at_ = 0;
     std::uint8_t inj_streak_ = 0;
     bool sink_asked_caps_ = false;
+    bool held_ = false;
+    std::uint8_t cut_ = 0xFF;   // the forged list ends before this position (0-based); 0xFF = no cut
 };
 
 }  // namespace k2::pd
