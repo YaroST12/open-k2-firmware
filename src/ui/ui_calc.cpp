@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
 #include "k2/ui/ui_calc.hpp"
+
+#include "k2/core/strpack.hpp"
 #include "k2/core/math_opt.hpp"
 #include "k2/drivers/power_calc.hpp"
 #include "k2/ui/ui_elem.hpp"
@@ -184,6 +186,7 @@ void StrBufBase::clear() {
     data()[0] = '\0';
 }
 StrBufBase &StrBufBase::put(std::string_view s) {
+    if (strpack::is_packed(s)) return put(s.data());
     char *b = data();
     for (char c : s) {
         if (n_ + 1 >= cap_) break;
@@ -194,6 +197,15 @@ StrBufBase &StrBufBase::put(std::string_view s) {
 }
 StrBufBase &StrBufBase::put(const char *s) {
     char *b = data();
+    if (strpack::is_packed(s)) {
+        strpack::Reader r(s);
+        for (int c; (c = r.next()) >= 0;) {
+            if (n_ + 1 >= cap_) break;
+            b[n_++] = static_cast<char>(c);
+        }
+        b[n_] = '\0';
+        return *this;
+    }
     for (; *s; ++s) {
         if (n_ + 1 >= cap_) break;
         b[n_++] = *s;

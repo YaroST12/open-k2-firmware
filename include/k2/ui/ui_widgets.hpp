@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <string_view>
 #include "k2/core/math_opt.hpp"
+#include "k2/core/strpack.hpp"
 #include "k2/ui/gfx.hpp"
 #include "k2/ui/ui_elem.hpp"
 #include "k2/ui/ui_icons.hpp"
@@ -168,9 +169,14 @@ struct Toast {
     void show(FooterTone t, std::string_view msg, uint32_t now_ms, uint32_t dwell_ms = kToastDefaultMs) {
         if (drawn && len > ink) ink = len;
         tone = t;
-        len = static_cast<uint8_t>(msg.size() < sizeof(text) - 1 ? msg.size() : sizeof(text) - 1);
-        for (uint8_t i = 0; i < len; i++) text[i] = msg[i];
-        text[len] = '\0';
+        if (strpack::is_packed(msg)) {
+            const std::size_t n = strpack::decode(msg.data(), text, sizeof(text));
+            len = static_cast<uint8_t>(n < sizeof(text) - 1 ? n : sizeof(text) - 1);
+        } else {
+            len = static_cast<uint8_t>(msg.size() < sizeof(text) - 1 ? msg.size() : sizeof(text) - 1);
+            for (uint8_t i = 0; i < len; i++) text[i] = msg[i];
+            text[len] = '\0';
+        }
         erase_pending = erase_pending || ink > len;   // a pill the same width or wider paints over the old one
         until_ms = now_ms + dwell_ms;
         if (until_ms == 0) until_ms = 1;

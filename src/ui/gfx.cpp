@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Yaraslau Furman
 #include "k2/ui/gfx.hpp"
 #include "k2/core/hot.h"
+#include "k2/core/strpack.hpp"
 #include "k2/ui/blend.hpp"
 #include "k2/ui/text.hpp"
 #include "k2/ui/ui_viewport.hpp"
@@ -41,6 +42,8 @@ K2_HOT void gfx_fill_panel(const Rect &r, uint16_t color) {
 K2_HOT void gfx_text(const Surface &s, const Font &f, int16_t x, int16_t y, std::string_view text,
               uint16_t fg, uint16_t bg, int16_t cell_offset K2_TRUNC_DEF) {
     if (x < 0 || y < 0 || x >= s.w || y >= s.h || text.empty()) return;
+    char dec[80];
+    text = strpack::unpack(text, dec);
     int px = text_width(f, text);
     int room = s.w - x - cell_offset;
     // Landscape stretches origins but not glyphs: text anchored on the mapped right edge may start in the last source columns
@@ -91,8 +94,10 @@ K2_HOT void gfx_text(const Surface &s, const Font &f, int16_t x, int16_t y, std:
 
 K2_HOT void gfx_text_rot(const Surface &s, const Font &f, int16_t x, int16_t y, std::string_view text,
                   uint16_t fg, uint16_t bg, TextDir dir K2_TRUNC_DEF) {
-    const int tw = text_width(f, text);
     if (text.empty()) return;
+    char dec[80];
+    text = strpack::unpack(text, dec);
+    const int tw = text_width(f, text);
     if (f.height > kMaxLineH || x < 0 || y < 0 || x + f.height > s.w || y + tw > s.h) {
         K2_TRUNC_NOTE(trunc::Kind::Clip, text, s.h - y);   // nothing is drawn at all
         return;

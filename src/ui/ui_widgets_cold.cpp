@@ -2,6 +2,8 @@
 // Copyright (C) 2026 Yaraslau Furman
 // Cold/one-shot UI widgets compiled with COLD_SIZE_FLAGS (-Oz).
 #include "k2/ui/ui_widgets.hpp"
+
+#include "k2/core/strpack.hpp"
 #include "ui_widgets_internal.hpp"
 #include "k2/ui/ui_types.hpp"
 #include "k2/ui/ui_style.hpp"
@@ -179,8 +181,10 @@ void draw_top_pager(const Surface &s, int count, int current) {
 
 namespace {
 // The text itself, or its start plus "..." (the cut only; callers say whether the gate counts it).
-std::string_view cut_end(const Font &f, std::string_view text, int max_px, char (&buf)[kFitBuf]) {
-    if (text_width(f, text) <= max_px) return text;
+std::string_view cut_end(const Font &f, std::string_view text, int max_px, char (&buf)[kFitBuf], bool &cut) {
+    text = strpack::unpack(text, buf);
+    if (text_width(f, text) <= max_px) { cut = false; return text; }
+    cut = true;
     const int cells = max_px / f.adv;
     int keep = cells - 3;                               // characters kept before the dots
     size_t i = 0, len = 0;
@@ -196,11 +200,12 @@ std::string_view cut_end(const Font &f, std::string_view text, int max_px, char 
     return {buf, len + dots};
 }
 
-std::string_view cut_mid(const Font &f, std::string_view text, int max_px, char (&buf)[kFitBuf]) {
+std::string_view cut_mid(const Font &f, std::string_view text, int max_px, char (&buf)[kFitBuf], bool &cut) {
     constexpr int kTail = 4, kDots = 2;
-    if (text_width(f, text) <= max_px) return text;
+    text = strpack::unpack(text, buf);
+    if (text_width(f, text) <= max_px) { cut = false; return text; }
     const int cells = max_px / f.adv;
-    if (cells < kTail + kDots + 1) return cut_end(f, text, max_px, buf);
+    if (cells < kTail + kDots + 1) return cut_end(f, text, max_px, buf, cut);
     // Tail: the start of the last kTail whole characters.
     size_t t = text.size();
     for (int n = 0; n < kTail && t > 0; n++) {
@@ -214,7 +219,8 @@ std::string_view cut_mid(const Font &f, std::string_view text, int max_px, char 
         while (head < t && (static_cast<uint8_t>(text[head]) & 0xC0) == 0x80) head++;
     }
     const size_t tail = text.size() - t;
-    if (head + kDots + tail > kFitBuf) return cut_end(f, text, max_px, buf);   // not for 48 byte buffers
+    if (head + kDots + tail > kFitBuf) return cut_end(f, text, max_px, buf, cut);   // not for 48 byte buffers
+    cut = true;
     size_t n = 0;
     for (size_t k = 0; k < head; k++) buf[n++] = text[k];
     for (int k = 0; k < kDots; k++) buf[n++] = '.';
@@ -224,20 +230,23 @@ std::string_view cut_mid(const Font &f, std::string_view text, int max_px, char 
 }  // namespace
 
 std::string_view fit_text(const Font &f, std::string_view text, int max_px, char (&buf)[kFitBuf] K2_TRUNC_DEF) {
-    const std::string_view out = cut_end(f, text, max_px, buf);
-    if (out.data() != text.data()) K2_TRUNC_NOTE(trunc::Kind::Cut, text, max_px);
+    bool cut = false;
+    const std::string_view out = cut_end(f, text, max_px, buf, cut);
+    if (cut) K2_TRUNC_NOTE(trunc::Kind::Cut, text, max_px);
     return out;
 }
 
 std::string_view fit_data(const Font &f, std::string_view text, int max_px, char (&buf)[kFitBuf] K2_TRUNC_DEF) {
-    const std::string_view out = cut_end(f, text, max_px, buf);
-    if (out.data() != text.data()) K2_TRUNC_NOTE(trunc::Kind::Data, text, max_px);
+    bool cut = false;
+    const std::string_view out = cut_end(f, text, max_px, buf, cut);
+    if (cut) K2_TRUNC_NOTE(trunc::Kind::Data, text, max_px);
     return out;
 }
 
 std::string_view fit_text_mid(const Font &f, std::string_view text, int max_px, char (&buf)[kFitBuf] K2_TRUNC_DEF) {
-    const std::string_view out = cut_mid(f, text, max_px, buf);
-    if (out.data() != text.data()) K2_TRUNC_NOTE(trunc::Kind::Data, text, max_px);
+    bool cut = false;
+    const std::string_view out = cut_mid(f, text, max_px, buf, cut);
+    if (cut) K2_TRUNC_NOTE(trunc::Kind::Data, text, max_px);
     return out;
 }
 

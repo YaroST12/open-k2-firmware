@@ -565,7 +565,7 @@ TEST_CXX_SRCS := $(filter-out tests/test_oppo_probe.cpp tests/test_pd_sink_oppo.
 endif
 TEST_CXX_LIB  += tests/trunc_log.cpp tests/overlap_log.cpp $(SRC_DIR)/ui/orientation.cpp $(SRC_DIR)/core/shell.cpp $(SRC_DIR)/core/lab.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/pd/pd_reread.cpp $(SRC_DIR)/pd/pd_survey.cpp $(SRC_DIR)/core/held.cpp $(SRC_DIR)/pd/apple_readout.cpp
-TEST_CXX_LIB  += $(SRC_DIR)/core/idle.cpp
+TEST_CXX_LIB  += $(SRC_DIR)/core/idle.cpp $(SRC_DIR)/core/strpack.cpp
 ifeq ($(HOST_K2_OPPO_PROBE),1)
 TEST_CXX_LIB  += $(SRC_DIR)/pd/oppo_probe.cpp
 endif
@@ -622,7 +622,7 @@ $(OBJ_DIR)/ext/$(QR_DIR)/%.o: $(QR_DIR)/%.c
 $(OBJ_DIR)/ext/%.o: %.c include/k2/core/lfs_cfg.h
 	@$(call RUN,HOST_LFS_CMD)
 SCAN_TEST_LIB  = $(SRC_DIR)/drivers/fusb302.cpp $(SRC_DIR)/drivers/fusb302_cold.cpp $(SRC_DIR)/pd/pdtrace.cpp $(SRC_DIR)/pd/pdtrace_link.cpp $(SRC_DIR)/pd/pd.cpp $(SRC_DIR)/pd/pd_engine.cpp $(SRC_DIR)/pd/pd_ext.cpp $(SRC_DIR)/pd/pd_vdm.cpp $(SRC_DIR)/pd/usb_link.cpp $(SRC_DIR)/pd/pd_sink.cpp $(SRC_DIR)/pd/xiaomi_auth.cpp $(SRC_DIR)/pd/pd_identify.cpp $(SRC_DIR)/pd/pd_probe.cpp $(SRC_DIR)/pd/pd_source.cpp $(SRC_DIR)/pd/apple_readout.cpp
-SCAN_TEST_LIB += $(SRC_DIR)/pd/pd_reread.cpp $(SRC_DIR)/pd/diag.cpp
+SCAN_TEST_LIB += $(SRC_DIR)/pd/pd_reread.cpp $(SRC_DIR)/pd/diag.cpp $(SRC_DIR)/core/strpack.cpp
 SCAN_TEST_LIB += $(SRC_DIR)/pd/pd_interrogate.cpp
 SCAN_TEST_LIB += $(SRC_DIR)/pd/pd_limiter.cpp
 SCAN_TEST_LIB += $(SRC_DIR)/pd/cable_full.cpp $(SRC_DIR)/pd/emk_learn.cpp $(SRC_DIR)/pd/emrec.cpp $(SRC_DIR)/core/fmt.cpp
@@ -721,7 +721,7 @@ $(HOST_DIR)/test_net_dhcp: $(OBJ_DIR)/tests/test_net_dhcp.o $(OBJ_DIR)/net/net.o
 
 # The Black Box diagnosis as a host tool (tools/pd_trace.py diagnose runs it): the device's own analyser
 # (src/pd/diag.cpp) fed from a saved capture, so there is no second analyser in Python.
-BBDIAG_OBJS    = $(patsubst %.cpp, $(OBJ_DIR)/lib/%.o, $(SRC_DIR)/pd/diag.cpp $(SRC_DIR)/pd/pdtrace_link.cpp $(SRC_DIR)/pd/pd.cpp)
+BBDIAG_OBJS    = $(patsubst %.cpp, $(OBJ_DIR)/lib/%.o, $(SRC_DIR)/pd/diag.cpp $(SRC_DIR)/pd/pdtrace_link.cpp $(SRC_DIR)/pd/pd.cpp $(SRC_DIR)/core/strpack.cpp)
 $(OBJ_DIR)/tools/%.o: tools/%.cpp
 	@$(call RUN,HOST_CXX_CMD)
 $(HOST_DIR)/bbdiag: $(OBJ_DIR)/tools/bbdiag.o $(BBDIAG_OBJS)

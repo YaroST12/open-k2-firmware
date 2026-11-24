@@ -172,6 +172,9 @@ SECTIONS
     *(.text*)
     *(.rodata)
     *(.rodata*)
+    __start_k2_strpack = .;
+    *(k2_strpack k2_strpack.*)
+    __stop_k2_strpack = .;
     *(.glue_7)
     *(.glue_7t)
     *(.eh_frame)

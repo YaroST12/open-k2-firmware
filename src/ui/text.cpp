@@ -3,6 +3,7 @@
 #include "k2/ui/text.hpp"
 
 #include "k2/core/hot.h"
+#include "k2/core/strpack.hpp"
 
 namespace k2 {
 
@@ -97,12 +98,15 @@ K2_HOT const Glyph *find_glyph(const Font &f, uint32_t cp) {
 }
 
 K2_HOT int text_width(const Font &f, std::string_view s) {
+    if (strpack::is_packed(s)) return strpack::cells_rt(s.data()) * f.adv;
     int n = 0;
     for (size_t i = 0; i < s.size();) { next_codepoint(s, i); n++; }
     return n * f.adv;
 }
 
 K2_HOT TextBounds badge_text_bounds(const Font &f, std::string_view s) {
+    char dec[64];
+    s = strpack::unpack(s, dec);
     const Glyph *cap = lookup(f, 'H');
     const int cap_y0 = cap ? f.ascent - cap->top : 0;
     const int cap_h = cap ? cap->h : f.height;

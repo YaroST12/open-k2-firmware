@@ -14,6 +14,8 @@
 #include <cstdint>
 #include <string_view>
 
+#include "k2/core/strpack.hpp"
+
 namespace k2 {
 
 struct Font;   // font_aa.hpp (the overlap recorder below only keeps the pointer)
@@ -52,6 +54,18 @@ constexpr int longest_cells(const char *const (&table)[N]) {
     int most = 0;
     for (const char *s : table) most = text_cells(s) > most ? text_cells(s) : most;
     return most;
+}
+
+// Compile-time width checks for BPE-packed (K2_P) or plain ASCII string tables.
+constexpr bool fits_px_p(unsigned adv, const char *s, int max_px) {
+    return strpack::cells_packed(s) * static_cast<int>(adv) <= max_px;
+}
+
+template <std::size_t N>
+constexpr bool all_fit_p(const char *const (&table)[N], unsigned adv, int max_px) {
+    for (const char *s : table)
+        if (!fits_px_p(adv, s, max_px)) return false;
+    return true;
 }
 
 namespace trunc {

@@ -145,7 +145,7 @@ static void test_crossed_cc_reads_on_the_tab_and_the_bar() {
     Facts f = facts(false, false, false, Topology::CableSingleCc, false, raguard::WaitKind::DualRolePort);
     f.cross = CrossKind::Crossed;
     CHECK_STR(empty_state(Tab::Source, f).title, "CC CROSSED");
-    CHECK_EQ(std::string_view(empty_state(Tab::Source, f).hint).find("cable") != std::string_view::npos, 1);
+    { char b[64]; CHECK_EQ(strpack::unpack(empty_state(Tab::Source, f).hint, b).find("cable") != std::string_view::npos, 1); }
     StrBuf<40> s;
     StatusIn in;
     in.tab = Tab::Source; in.f = f;
@@ -255,10 +255,10 @@ static void test_silent_cable_chip_words() {
     };
     const Empty silent = empty_state(Tab::Cable, cable_f(Fact::ChipSilent));
     CHECK_STR(silent.title, "CHIP, NO ANSWER");
-    CHECK_EQ(std::string_view(silent.hint).find("charger attached") != std::string_view::npos, 1);
+    { char b[64]; CHECK_EQ(strpack::unpack(silent.hint, b).find("charger attached") != std::string_view::npos, 1); }
     const Empty none = empty_state(Tab::Cable, cable_f(Fact::NoChip));
     CHECK_STR(none.title, "NO CHIP FOUND");
-    CHECK_EQ(std::string_view(none.hint).find("e-marker") != std::string_view::npos, 1);
+    { char b[64]; CHECK_EQ(strpack::unpack(none.hint, b).find("e-marker") != std::string_view::npos, 1); }
     // NotRead (and Read, which the tab never shows as empty) keep the earlier words, topology included.
     CHECK_STR(empty_state(Tab::Cable, cable_f(Fact::NotRead)).title, "NO CABLE READ");
     CHECK_STR(empty_state(Tab::Cable, cable_f(Fact::NotRead, Topology::CableSingleCc)).title, "CABLE NOT READ");
@@ -733,7 +733,7 @@ static void test_place_actions() {
     CHECK_EQ(int(it[0].act), int(Act::ResetLink));
     CHECK_EQ(int(it[1].act), int(Act::ReadCable));
     CHECK_STR(it[1].label, "Read e-marker");
-    CHECK_STR(tx::kCableNoneL, (std::string("Actions: ") + it[1].label).c_str());
+    { char b[64]; const std::string exp = std::string("Actions: ") + std::string(strpack::unpack(it[1].label, b)); CHECK_STR(tx::kCableNoneL, exp.c_str()); }
     CHECK_STR(tx::kOffersNone, "No offers read");
     CHECK_STR(tx::kOffersNoneL, "Tests: Light, PD");
     for (int i = 0; i < n; i++) CHECK(it[std::size_t(i)].act != Act::Details);   // Read e-marker is the way to the chip sheet

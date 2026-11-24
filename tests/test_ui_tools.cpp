@@ -193,8 +193,9 @@ static void test_bench_places_cover_every_tool() {
 static std::string place_rows(conn::Tab t, const conn::ActFacts &a) {
     std::array<conn::Item, conn::kMaxItems> it{};
     const int n = conn::place_actions(t, a, it);
-    std::string s = std::string(it[0].label) + ":";
-    for (int i = 1; i < n; i++) s += std::string(i > 1 ? "," : "") + it[static_cast<size_t>(i)].label;
+    char b[64];
+    std::string s = std::string(strpack::unpack(it[0].label, b)) + ":";
+    for (int i = 1; i < n; i++) s += std::string(i > 1 ? "," : "") + std::string(strpack::unpack(it[static_cast<size_t>(i)].label, b));
     return s;
 }
 
