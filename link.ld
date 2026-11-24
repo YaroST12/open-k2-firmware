@@ -144,6 +144,7 @@ SECTIONS
     *(.text._ZN2k214ConnectionPage* .text._ZNK2k214ConnectionPage*)
     *(.text._ZN2k210DetailPage* .text._ZNK2k210DetailPage* .text._ZN2k29LinesPage* .text._ZNK2k29LinesPage* .text._ZN2k210RipplePage* .text._ZNK2k210RipplePage* .text._ZN2k210GraphsPage* .text._ZNK2k210GraphsPage* .text._ZN2k211BatteryPage* .text._ZNK2k211BatteryPage*)
     *(.text._ZN2k215ChargerTestPage13paint_running*)
+    *(.text._ZNK2k210StackArenaINS_6PageIfELj3248ELj4EE2atEj*)
     *libc.a:libc_a-memcpy.o(.text .text.*)
     *libc.a:libc_a-memmove.o(.text .text.*)
     *libc.a:libc_a-memset.o(.text .text.*)

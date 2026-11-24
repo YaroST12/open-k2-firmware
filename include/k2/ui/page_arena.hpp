@@ -67,7 +67,7 @@ public:
 
     std::size_t depth() const { return depth_; }
     std::size_t used() const { return used_; }
-    Base *at(std::size_t i) const { return i < depth_ ? e_[i].obj : nullptr; }
+    [[gnu::noinline]] Base *at(std::size_t i) const { return i < depth_ ? e_[i].obj : nullptr; }
     Base *top() const { return depth_ ? e_[depth_ - 1].obj : nullptr; }
 
     static constexpr std::size_t capacity() { return Capacity; }

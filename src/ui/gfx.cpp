@@ -183,7 +183,7 @@ K2_HOT void field_draw_buf(const Surface &s, const Font &f, int16_t x, int16_t y
     blanks(t1 + 1, last);
 }
 
-void FieldBase::init_base(const Surface &s, const Font &f, int16_t x, int16_t y, uint8_t chars, uint8_t max_chars,
+[[gnu::noinline]] void FieldBase::init_base(const Surface &s, const Font &f, int16_t x, int16_t y, uint8_t chars, uint8_t max_chars,
                           Align a, uint16_t fg, uint16_t bg) {
     surf_ = s; font_ = &f; x_ = x; y_ = y; align_ = a;
     chars_ = chars > max_chars ? max_chars : chars;
