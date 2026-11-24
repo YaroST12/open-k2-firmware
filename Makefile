@@ -877,10 +877,14 @@ stack-report:
 
 # Image size tracking (tools/size_track.py): snapshot the build, explain the size change against HEAD's snapshot
 # (functions, inlining, clones, files, objects). size-hook installs the post-commit hook (shared by all worktrees).
-.PHONY: size-track size-hook
+.PHONY: size-track size-hook commit-msg-hook
 size-track:
 	@$(PYTHON) tools/size_track.py diff --build $(BUILD_DIR)
 size-hook:
 	@hook=$$(git rev-parse --git-common-dir)/hooks/post-commit; \
 	if [ -e "$$hook" ] && ! cmp -s "$$hook" tools/hooks/post-commit; then echo "$$hook exists and differs: not replaced"; exit 1; fi; \
 	cp tools/hooks/post-commit "$$hook" && chmod +x "$$hook" && echo "installed $$hook"
+commit-msg-hook:
+	@hook=$$(git rev-parse --git-common-dir)/hooks/commit-msg; \
+	if [ -e "$$hook" ] && ! cmp -s "$$hook" tools/hooks/commit-msg; then echo "$$hook exists and differs: not replaced"; exit 1; fi; \
+	cp tools/hooks/commit-msg "$$hook" && chmod +x "$$hook" && echo "installed $$hook"

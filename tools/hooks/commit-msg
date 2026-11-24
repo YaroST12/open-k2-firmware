@@ -1,0 +1,18 @@
+#!/bin/sh
+# Remind committers to use the real model name in Co-authored-by trailers (never blocks the commit).
+msg_file="$1"
+[ -n "$msg_file" ] && [ -f "$msg_file" ] || exit 0
+
+trailers=$(grep -i '^[[:space:]]*Co-authored-by:' "$msg_file" 2>/dev/null)
+[ -n "$trailers" ] || exit 0
+
+if printf '%s\n' "$trailers" | grep -Eiq 'Gemini 3\.1 Pro|Gemini 3\.8 Flash|<Model Name>|Co-authored-by:[[:space:]]*Gemini[[:space:]]*<'; then
+    printf '\n[commit-msg] WARNING: Co-authored-by trailer appears to use an example/placeholder model name:\n' >&2
+    printf '%s\n' "$trailers" | sed 's/^/  /' >&2
+    printf '[commit-msg] Please provide the real name of the model making this commit in the Co-authored-by trailer (git commit --amend to fix).\n\n' >&2
+else
+    printf '[commit-msg] Reminder: ensure Co-authored-by names the real model making this commit:\n' >&2
+    printf '%s\n' "$trailers" | sed 's/^/  /' >&2
+fi
+
+exit 0
