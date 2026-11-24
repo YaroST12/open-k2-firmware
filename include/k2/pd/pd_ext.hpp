@@ -69,7 +69,7 @@ struct BatteryStatus {  // BSDO, 4 bytes (USB PD 3.2 table 6.24)
     bool valid = false;
     bool present = false;
     bool invalid_ref = false;
-    std::uint8_t charging = 3;      // 0 = charging, 1 = discharging, 2 = idle, 3 = unknown/invalid
+    std::uint8_t charging = 0;      // 0 = charging, 1 = discharging, 2 = idle, 3 = unknown/invalid (0 default keeps Engine/ExtInfo in .bss; read only when valid && present)
     std::uint16_t present_dwh = 0;  // 0.1 Wh; 0xFFFF = unknown
     bool capacity_known() const { return valid && present && !invalid_ref && present_dwh != 0xFFFFu; }
 };
