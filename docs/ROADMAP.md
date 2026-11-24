@@ -1110,6 +1110,8 @@ and the hardware check). A row leaves this list when its fix is merged and the h
 
 ## Specified work (not started)
 
+- **Specs & offers: read a cable-limited EPR charger with the spoof** (2026-11-24). A Baseus 140W on the top plug (no cable) claims PDP 140 W but offers only 3 A (5/9/15/20 V, PPS 5-11 V and 5-21 V), so the page shows the bare-plug list, not the charger's capability. When PDO1 has the EPR bit, nothing is offered above 3 A, the PDP claim is well above the best offer (`cable-limited-offer`) and the K2 owns the contract (no device inline), the auto-read / Refresh arms the EPR e-marker spoof and does one Hard Reset re-read; the page marks the list as read with a spoofed cable. Inline: unchanged (do not disturb). Waits for flash headroom.
+
 - ~~**Charger test "Offers" depth**~~ removed (user decision 2026-11-21, k2/test-layer-reads): the Offers level (3b66351c, dc9a2eda,
   f3693009) and its cable rule are gone; the Depth row is Light, Medium, Deep again. Light plus the PD pick lists the offers.
   Wire value 3 stays reserved: an old card/journal that carries it decodes (card "Old", journal replans as Medium).
