@@ -26,7 +26,7 @@ std::size_t status(Service &s, bool monitor, Result res, std::span<std::uint8_t>
     b[3] = std::uint8_t(r.phases());
     b[4] = std::uint8_t(res);
     const bool final_eff = r.state() == State::Done && has_efficiency(rec);
-    b[5] = std::uint8_t((s.write_failed() ? kFlagWriteFailed : 0) | (r.dirty() ? kFlagUnwritten : 0) | (monitor ? kFlagMonitor : 0) |
+    b[5] = std::uint8_t((s.write_failed() ? kFlagWriteFailed : 0) | (r.dirty() && !s.discarded() ? kFlagUnwritten : 0) | (monitor ? kFlagMonitor : 0) |
                         (final_eff ? kFlagFinalEff : 0) | (s.discarded() ? kFlagEmpty : 0));
     put16(b + 6, r.id());
     put16(b + 8, s.config().end_ma);

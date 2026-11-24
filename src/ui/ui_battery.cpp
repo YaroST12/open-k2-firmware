@@ -273,7 +273,7 @@ void BatteryPage::update(uint32_t now_ms) {
     } else if (view_ == View::Stored) {
         tone = view::footer(shown_, true, false, false, false, f);
     } else {
-        tone = view::footer(shown_, bt::hw::monitor_online(), sv.write_failed(), sv.rec().dirty(), sv.discarded(), f);
+        tone = view::footer(shown_, bt::hw::monitor_online(), sv.write_failed(), sv.rec().dirty() && !sv.discarded(), sv.discarded(), f);
     }
     const bool pill = tone != FooterTone::Info && !f.view().empty();
     // A pill floats over the rows and a new one never covers the old one's ends: repaint the rows under it first.

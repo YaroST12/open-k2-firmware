@@ -756,15 +756,18 @@ void test_service_empty_run_not_saved() {
     CHECK_EQ(int(s.start(Mode::Charge, Wiring::SamePort, true)), int(Recorder::Start::Ok));
     const std::uint16_t empty_id = s.rec().id();
     t = serve(s, t, 30'000, 5000, 0);                        // nothing flows
-    s.rec().finish();
+    Rsp r = call(s, {wire::kFinish});                        // the finish's own reply says so
+    CHECK_EQ(r.b[0], 3);
+    CHECK_EQ(r.b[5] & wire::kFlagEmpty, wire::kFlagEmpty);
+    CHECK_EQ(r.b[5] & wire::kFlagUnwritten, 0);
+    CHECK_EQ(s.discarded(), true);
     t = serve(s, t, 1000, 5000, 0);
     CHECK_EQ(int(s.rec().state()), int(State::Done));
     CHECK_EQ(s.rec().dirty(), false);
     CHECK_EQ(s.discarded(), true);
     CHECK_EQ(s.write_failed(), false);
-    Rsp r = call(s, {wire::kStatus});
+    r = call(s, {wire::kStatus});
     CHECK_EQ(r.b[5] & wire::kFlagEmpty, wire::kFlagEmpty);
-    CHECK_EQ(r.b[5] & wire::kFlagUnwritten, 0);
     std::uint16_t ids[8];
     CHECK_EQ(store::list(v.fs, ids, 8), store::kKeep);
     CHECK_EQ(ids[store::kKeep - 1], 1);                      // the oldest kept run is still there
@@ -775,8 +778,8 @@ void test_service_empty_run_not_saved() {
     CHECK_EQ(s.discarded(), false);
     t = serve(s, t, 8000, 5000, 100);
     s.rec().finish();
-    t = serve(s, t, 1000, 5000, 0);
     CHECK_EQ(s.discarded(), true);
+    t = serve(s, t, 1000, 5000, 0, false);                   // no write allowed: an empty run has nothing to wait for
     CHECK_EQ(store::load(v.fs, s.rec().id(), rec), false);
     s.start(Mode::Charge, Wiring::SamePort, true);
     t = serve(s, t, 9000, 5000, 100);

@@ -160,6 +160,7 @@ public:
     const Curve &curve() const { return curve_; }
     // The flash record is out of date (a start, a phase boundary, the end): the glue writes it when it may.
     bool dirty() const { return dirty_; }
+    bool empty() const;   // under 1 mWh both ways so far: battery::empty() of its record's sums
     void clean() { dirty_ = false; }
 
     void to_record(Record &r) const;
@@ -238,7 +239,8 @@ public:
     Wiring &wiring() { return wiring_; }       // the next run's wiring
     fs::Fs *volume() const { return fs_; }
     bool write_failed() const { return failed_; }
-    bool discarded() const { return discarded_; }   // the run ended empty (empty()): not written, its file removed
+    // The run ended empty (Recorder::empty): it is not written (a file an older firmware left goes) and waits for no write.
+    bool discarded() const { return rec_.state() == State::Done && rec_.empty(); }
 
 private:
     void checkpoint();
@@ -250,7 +252,6 @@ private:
     Wiring wiring_ = Wiring::SamePort;
     std::uint32_t ckpt_ms_ = 0, retry_ms_ = 0;
     bool failed_ = false;
-    bool discarded_ = false;
     bool may_write_ = true;       // the last poll's permission: a start flushes an unwritten earlier run only when allowed
     State ckpt_state_ = State::Idle;   // the run's state the checkpoint holds: a change is checkpointed at the next poll
 };

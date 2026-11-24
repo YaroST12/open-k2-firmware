@@ -120,9 +120,8 @@ bool Service::flush() {
     if (!fs_) return false;
     Record r;
     rec_.to_record(r);
-    if (empty(sums(r))) {   // nothing worth a kept slot: no file (an older firmware's start write goes too)
+    if (rec_.empty()) {   // nothing worth a kept slot: no file (an older firmware's start write goes too)
         if (fs_->exists(store::path_of(r.id).data())) fs_->remove(store::path_of(r.id).data());
-        discarded_ = r.state == RunState::Done;
         rec_.clean();
         return true;
     }
@@ -157,7 +156,7 @@ void Service::poll(std::uint32_t now_ms, std::int32_t mv, std::int32_t ma, bool 
 Recorder::Start Service::start(Mode m, Wiring w, bool monitor_online) {
     if (rec_.active()) return Recorder::Start::Busy;
     if (!monitor_online) return Recorder::Start::NoMonitor;
-    if (rec_.dirty() && fs_) {                    // the last run's record is not on flash yet
+    if (rec_.dirty() && fs_ && !discarded()) {    // the last run's record is not on flash yet
         if (!may_write_ || !flush()) return Recorder::Start::Busy;
     }
     std::uint16_t id = fs_ ? store::next_id(*fs_) : 1;
@@ -168,7 +167,7 @@ Recorder::Start Service::start(Mode m, Wiring w, bool monitor_online) {
         wiring_ = w;
         ckpt_ms_ = 0;
         retry_ms_ = 0;
-        failed_ = discarded_ = false;
+        failed_ = false;
     }
     return s;
 }

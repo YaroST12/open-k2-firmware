@@ -246,6 +246,15 @@ void Recorder::sample(std::uint32_t now_ms, std::int32_t mv, std::int32_t ma, bo
     last_ma_ = ma;
 }
 
+bool Recorder::empty() const {
+    Sums s;
+    for (int i = 0; i < phases_; i++) {
+        s.uwh_in += udiv64_by_u16(ph_[i].uj_in, 3600u);
+        s.uwh_out += udiv64_by_u16(ph_[i].uj_out, 3600u);
+    }
+    return battery::empty(s);
+}
+
 bool Recorder::end_phase() {
     if (state_ != State::Measuring) return false;
     close_phase(End::Manual, 0);

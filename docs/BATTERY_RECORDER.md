@@ -124,7 +124,7 @@ The same bytes are the flash file, the remote's `read` payload and the QR share 
 
 | Command | Does |
 | :--- | :--- |
-| `status` | state, mode, wiring, phases, the last op's result, flags (write failed, unwritten, monitor, final efficiency), id, settings, run and phase seconds, uWh / uAh in and out, efficiency, stored runs, the next run's wiring |
+| `status` | state, mode, wiring, phases, the last op's result, flags (write failed, unwritten, monitor, final efficiency, empty run not saved), id, settings, run and phase seconds, uWh / uAh in and out, efficiency, stored runs, the next run's wiring |
 | `start charge\|discharge\|round-trip [--wiring same-port\|moved]` | starts a run (refusals: busy, no monitor) |
 | `end`, `next`, `finish` | ends the phase, starts the discharge, ends the run |
 | `config [--end-ma N] [--end-s N] [--wiring W]` | the end rule and the next run's wiring |
