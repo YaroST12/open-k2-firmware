@@ -452,7 +452,7 @@ def keyed(snap, pred):
     for n, k, s, f, sec, a in snap["syms"]:
         if k == "O":
             n = obj_key(n)
-        if pred(k, a):
+        if pred(k, a, sec):
             key = n + "|" + (f or "")
             if key in out:
                 out[key] = (out[key][0] + s, f, sec, a)
@@ -512,18 +512,22 @@ def diff(a, b, top=25):
             rows.append([n, sa, sb, sgn(sb - sa) if sb != sa else ""])
     out += table(rows, ["region", "old", "new", "delta"])
 
-    fa, fb = keyed(a, lambda k, ad: k == "F" and is_flash(ad)), keyed(b, lambda k, ad: k == "F" and is_flash(ad))
-    oa, ob = keyed(a, lambda k, ad: k == "O" and is_flash(ad)), keyed(b, lambda k, ad: k == "O" and is_flash(ad))
-    ra, rb = keyed(a, lambda k, ad: RAM_LO <= ad < RAM_HI), keyed(b, lambda k, ad: RAM_LO <= ad < RAM_HI)
+    fa, fb = keyed(a, lambda k, ad, sec: k == "F" and is_flash(ad)), keyed(b, lambda k, ad, sec: k == "F" and is_flash(ad))
+    oa, ob = keyed(a, lambda k, ad, sec: k == "O" and is_flash(ad)), keyed(b, lambda k, ad, sec: k == "O" and is_flash(ad))
+    dta, dtb = keyed(a, lambda k, ad, sec: sec == ".data"), keyed(b, lambda k, ad, sec: sec == ".data")
+    ra, rb = keyed(a, lambda k, ad, sec: RAM_LO <= ad < RAM_HI and sec != ".data"), keyed(b, lambda k, ad, sec: RAM_LO <= ad < RAM_HI and sec != ".data")
     sfa, sfb = sum(v[0] for v in fa.values()), sum(v[0] for v in fb.values())
     soa, sob = sum(v[0] for v in oa.values()), sum(v[0] for v in ob.values())
+    sda, sdb = sum(v[0] for v in dta.values()), sum(v[0] for v in dtb.values())
     dflash = tb["flash"] - ta["flash"]
-    unatt = dflash - (sfb - sfa) - (sob - soa)
+    ddata = sdb - sda
+    unatt = dflash - (sfb - sfa) - (sob - soa) - ddata
     out.append("")
     out.append("== where the flash delta went (adds up exactly)")
     out += table([["functions", sfa, sfb, sgn(sfb - sfa)],
                   ["flash objects (tables, consts)", soa, sob, sgn(sob - soa)],
-                  ["no symbol (literals, padding, .data init)", ta["flash"] - sfa - soa, tb["flash"] - sfb - sob, sgn(unatt)],
+                  [".data init (RAM-copied symbols)", sda, sdb, sgn(ddata)],
+                  ["no symbol (literals, padding)", ta["flash"] - sfa - soa - sda, tb["flash"] - sfb - sob - sdb, sgn(unatt)],
                   ["total", ta["flash"], tb["flash"], sgn(dflash)]], ["bucket", "old", "new", "delta"])
 
     def cause(f):
@@ -647,7 +651,10 @@ def diff(a, b, top=25):
         out += table([[sgn(dd), sgn(do), sgn(do - dd), m, f] for dd, do, m, f in frows[:top]],
                      ["defined", "its code", "inl", "cause", "file"])
 
-    for title, xa, xb in (("flash objects (const tables, vtables)", oa, ob), ("RAM objects (.data/.bss/.noinit/overlays)", ra, rb)):
+    data_rows = []
+    for title, xa, xb in (("flash objects (const tables, vtables)", oa, ob),
+                          (".data init symbols (flash + RAM)", dta, dtb),
+                          ("RAM objects (.bss/.noinit/overlays)", ra, rb)):
         orow = []
         for key in set(xa) | set(xb):
             sa, sb = xa.get(key, (0,))[0], xb.get(key, (0,))[0]
@@ -655,6 +662,8 @@ def diff(a, b, top=25):
                 orow.append([sgn(sb - sa), sa, sb, short(key.split("|", 1)[0], 70)])
         if orow:
             orow.sort(key=lambda r: -abs(int(r[0])))
+            if xa is dta:
+                data_rows = orow
             out.append("")
             out.append(f"== {title}: {len(orow)} changed, {sgn(sum(int(r[0]) for r in orow))} B")
             out += table(orow[:15], ["delta", "old", "new", "object"])
@@ -670,6 +679,9 @@ def diff(a, b, top=25):
             ko = sum(r[0] for r in rows if r[5] and r[5] not in files)
             if ko:
                 bits.append(f"knock-on in untouched files {sgn(ko)}")
+    if ddata:
+        top_d = f" ({short(data_rows[0][3], 40)} {data_rows[0][0]})" if data_rows else ""
+        bits.append(f".data init {sgn(ddata)} B{top_d}")
     st = [r for r in irow if r[3]]
     if st:
         t = max(st, key=lambda r: abs(r[0]))
