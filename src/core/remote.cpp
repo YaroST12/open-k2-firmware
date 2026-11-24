@@ -1899,7 +1899,9 @@ size_t Remote::emlib(std::span<const uint8_t> p, std::span<uint8_t> out) {
         } else if (p[1] == remote::kEmSpoofBuiltin) {
             if (ui_.spoof_busy()) e = remote::kEmErrBusy;
             else {
-                e = arm_err(emk_spoof::arm(emrec::builtin_cable(p[2]), emk_quirk::builtin_quirks(p[2])));
+                emk_quirk::Quirks quirks;
+                emk_quirk::builtin_quirks(p[2], quirks);
+                e = arm_err(emk_spoof::arm(emrec::builtin_cable(p[2]), quirks));
                 spoof_seq_ = 0;
                 if (e == 0 && ctcable::valid({ctcable::Kind::Builtin, uint16_t(p[2])})) eekeep::spoof_user_armed({ctcable::Kind::Builtin, uint16_t(p[2])});
             }

@@ -224,7 +224,7 @@ __attribute__((noinline)) CableIdentityList::ArmErr CableIdentityList::arm(ctcab
     emk_quirk::Quirks quirks;
     if (c.kind == ctcable::Kind::Builtin) {
         e.rec = emrec::builtin_cable(c.seq);
-        quirks = emk_quirk::builtin_quirks(c.seq);
+        emk_quirk::builtin_quirks(c.seq, quirks);
         std::strncpy(e.name.data(), emrec::builtin_info(c.seq).label.data(), e.name.size() - 1);
     } else if (!storage::lib_get(c.seq, e, quirks)) return ArmErr::Gone;
     const auto r = emk_spoof::arm(e.rec, quirks);

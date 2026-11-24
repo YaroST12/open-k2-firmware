@@ -90,7 +90,7 @@ void release() {
     emk_quirk::Quirks quirks;
     if (c.kind == ctcable::Kind::Builtin) {
         e.rec = emrec::builtin_cable(c.seq);
-        quirks = emk_quirk::builtin_quirks(c.seq);
+        emk_quirk::builtin_quirks(c.seq, quirks);
     } else if (!storage::lib_get(c.seq, e, quirks)) return false;
     return emk_spoof::arm(e.rec, quirks) == emk_spoof::Err::Ok;
 }

@@ -21,9 +21,6 @@ bool row_valid(const Row& r) {
     return r.kind != Kind::Raw || r.nrep >= 1;
 }
 
-// Built-in identities with extra behaviour (none yet); every other id answers Discover Identity only.
-constexpr Quirks kNone{};
-
 }  // namespace
 
 std::size_t encode(const Quirks& q, std::span<std::uint8_t> out) {
@@ -78,9 +75,10 @@ bool decode(std::span<const std::uint8_t> raw, Quirks& out) {
     return true;
 }
 
-const Quirks& builtin_quirks(unsigned id) {
+// Built-in identities with extra behaviour (none yet); every other id answers Discover Identity only.
+void builtin_quirks(unsigned id, Quirks& out) {
     (void)id;
-    return kNone;
+    out = Quirks{};
 }
 
 std::size_t encode_seen(const SeenLog& log, unsigned index, std::span<std::uint8_t> out) {

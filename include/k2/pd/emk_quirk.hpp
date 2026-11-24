@@ -118,8 +118,9 @@ std::size_t encode(const Quirks& q, std::span<std::uint8_t> out);
 // Parses and validates a block (exact length); false and `out` untouched on any structural fault.
 bool decode(std::span<const std::uint8_t> raw, Quirks& out);
 
-// The extra behaviour of built-in identity `id` (k2/pd/emrec.hpp builtin ids); an id without extras is empty.
-const Quirks& builtin_quirks(unsigned id);
+// The extra behaviour of built-in identity `id` (k2/pd/emrec.hpp builtin ids) into `out`; an id without extras
+// leaves it empty. An out-parameter: a returned reference needs a 420 B all-zero object in flash.
+void builtin_quirks(unsigned id, Quirks& out);
 
 // ---- unmatched-request log ----
 // The last few SOP'/SOP'' messages a fake cable received and did not answer by a row or its identity, newest

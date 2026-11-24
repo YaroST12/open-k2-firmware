@@ -225,13 +225,18 @@ static void test_seen_log() {
 
 static void test_builtin_quirks_are_valid() {
     for (unsigned id = 0; id < emrec::kBuiltinCount; id++) {
-        const Quirks& q = emk_quirk::builtin_quirks(id);
+        Quirks q;
+        q.count = 1;   // proves the call overwrites what was there
+        emk_quirk::builtin_quirks(id, q);
         std::array<std::uint8_t, emk_quirk::kMaxBlock> buf{};
         const std::size_t n = emk_quirk::encode(q, buf);
         Quirks back;
         CHECK_EQ(emk_quirk::decode({buf.data(), n}, back), true);
     }
-    CHECK_EQ(emk_quirk::builtin_quirks(99).empty(), true);
+    Quirks none;
+    none.flags = 1;
+    emk_quirk::builtin_quirks(99, none);
+    CHECK_EQ(none.empty(), true);
 }
 
 int main() {
