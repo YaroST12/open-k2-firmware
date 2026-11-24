@@ -406,6 +406,8 @@ def resolve(ref):
         raise SystemExit(f"{ref}: not a snapshot, build dir or commit")
     cands = sorted(store_dir().glob(f"*-{sha}_*.json.gz"), key=lambda q: q.stat().st_mtime)
     if not cands:
+        cands = sorted(store_dir().glob(f"*-{sha}-ovf_*.json.gz"), key=lambda q: q.stat().st_mtime)
+    if not cands:
         cands = sorted(store_dir().glob(f"*-{sha}-dirty_*.json.gz"), key=lambda q: q.stat().st_mtime)
         if cands:
             print(f"note: {ref} has only a dirty snapshot ({cands[-1].name})", file=sys.stderr)
@@ -483,6 +485,9 @@ def diff(a, b, top=25):
         warn.append("build configs differ (flags/Makefile switches): part of the delta is the config, not the code")
     if ma["toolchain"] != mb["toolchain"]:
         warn.append(f"toolchains differ: {ma['toolchain']} vs {mb['toolchain']}")
+    for m, tag in ((ma, "old"), (mb, "new")):
+        if m.get("overflow"):
+            warn.append(f"{tag} does NOT fit: FLASH overflowed by {m['overflow']} B (measured with a +64 KB FLASH link)")
     if ma.get("priv") != mb.get("priv"):
         warn.append("one build has priv/ key tables and the other the zero stubs")
     for m, tag in ((ma, "old"), (mb, "new")):
@@ -764,7 +769,7 @@ def cmd_backfill(a):
                 gitfile.unlink()
     for ref in a.refs:
         sha = git("rev-parse", "--short=8", ref + "^{commit}")
-        if list(store_dir().glob(f"*-{sha}_*.json.gz")):
+        if list(store_dir().glob(f"*-{sha}_*.json.gz")) or list(store_dir().glob(f"*-{sha}-ovf_*.json.gz")):
             print(f"{ref} ({sha}): already have a snapshot")
             continue
         git("checkout", "--detach", "--quiet", sha, cwd=wt)
@@ -772,10 +777,33 @@ def cmd_backfill(a):
         log = store_dir() / f"build-{sha}.log"
         with open(log, "w") as f:
             r = subprocess.run(["make", "docker-build"], cwd=wt, stdout=f, stderr=subprocess.STDOUT)
+        probe = None
         if r.returncode:
-            raise SystemExit(f"build of {sha} failed: {log}")
+            over = re.search(r"region .FLASH' overflowed by (\d+) bytes", log.read_text(errors="replace"))
+            if not over:
+                raise SystemExit(f"build of {sha} failed: {log}")
+            # It does not fit: link once more with 64 KB more FLASH so the overflow can be explained, then restore.
+            ld = wt / "link.ld"
+            text = ld.read_text()
+            ld.write_text(re.sub(r"(FLASH \(rx\)\s*:\s*ORIGIN = 0x[0-9A-Fa-f]+, LENGTH = )(\d+)K",
+                                 lambda m: f"{m.group(1)}{int(m.group(2)) + 64}K", text, count=1))
+            try:
+                with open(log, "a") as f:
+                    r = subprocess.run(["make", "docker-build"], cwd=wt, stdout=f, stderr=subprocess.STDOUT)
+            finally:
+                ld.write_text(text)
+            if r.returncode:
+                raise SystemExit(f"build of {sha} failed even with 64 KB more FLASH: {log}")
+            probe = int(over.group(1))
+            print(f"  overflows by {probe} B; linked with FLASH +64 KB to measure it")
         s = snapshot(wt / "build")
-        if s["meta"]["commit"] is None or not sha.startswith(s["meta"]["commit"]) or s["meta"]["dirty"]:
+        if probe is not None:               # dirty only by the link.ld patch above
+            s["meta"]["version"] = s["meta"]["version"].replace("-dirty", "")
+            s["meta"]["dirty"] = False
+            s["meta"]["overflow"] = probe
+            s["meta"]["cfg"] += "-ovf"
+            s["meta"]["version"] += "-ovf"
+        if s["meta"]["commit"] is None or not sha.startswith(s["meta"]["commit"].split("-")[0]) or s["meta"]["dirty"]:
             raise SystemExit(f"{sha}: the image says {s['meta']['version']}, not this commit; not saved")
         print(f"  -> {save(s)}")
 
