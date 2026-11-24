@@ -413,7 +413,7 @@ uint16_t measured_cable_limit_mv(const Input& in, Algorithm algorithm) {
     // abort (48 V ceiling + 5 % = 50.4 V) could be reached.
     return limit == 20000 ? 21000 : limit == 21000 ? 22050 : limit == 50000 ? 50400 : limit;
 }
-Reason limit_reason(unsigned mv, Input in, Algorithm algorithm) {
+[[gnu::noinline]] Reason limit_reason(unsigned mv, const Input& in, Algorithm algorithm) {
     return !pd::fits_monitor(mv, in.cap_mv) ? Reason::OverCap : mv > cable_limit_mv(in, algorithm) ? Reason::CableLimit : Reason::None;
 }
 Reason refusal(Options o, Input in, bool busy, bool confirmed) {

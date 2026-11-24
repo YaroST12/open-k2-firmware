@@ -250,6 +250,7 @@ void Analyzer::hold_to(std::uint32_t ms) {
     }
 }
 
+[[gnu::noinline]]
 static std::uint32_t sat_add(std::uint32_t a, std::uint64_t b) {
     const std::uint64_t s = std::uint64_t(a) + b;
     return s > 0xFFFFFFFFu ? 0xFFFFFFFFu : std::uint32_t(s);

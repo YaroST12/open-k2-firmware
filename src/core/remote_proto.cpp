@@ -549,7 +549,7 @@ size_t encode_svooc(std::span<uint8_t> out, const SvoocSnapshot &v) {
     Writer w(out);
     const svooc::Report &r = v.report;
     const svooc::Log &lg = v.log;
-    const auto u16c = [](std::int64_t x) { return static_cast<uint16_t>(x < 0 ? 0 : x > 0xFFFF ? 0xFFFF : x); };
+    const auto u16c = [](std::int64_t x) __attribute__((noinline)) { return static_cast<uint16_t>(x < 0 ? 0 : x > 0xFFFF ? 0xFFFF : x); };
     w.u8(static_cast<uint8_t>(v.stage)); w.u8(static_cast<uint8_t>(r.refusal)); w.u8(static_cast<uint8_t>(r.abort));
     w.u8(r.tries);
     w.u8(static_cast<uint8_t>((r.accepted ? 1 : 0) | (r.exit_checked ? 2 : 0) | (r.exit_ok ? 4 : 0) | (v.driving ? 8 : 0) |

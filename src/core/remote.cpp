@@ -1641,7 +1641,7 @@ bool Remote::qrtest_stop() {
 
 remote::CableRInfo Remote::cable_r_info() {
     remote::CableRInfo i;
-    auto u16 = [](int32_t v) { return static_cast<uint16_t>(v < 0 ? 0 : v > 65535 ? 65535 : v); };
+    auto u16 = [](int32_t v) __attribute__((noinline)) { return static_cast<uint16_t>(v < 0 ? 0 : v > 65535 ? 65535 : v); };
     if (ui_.cable_mode() == cable_r::Mode::Kelvin) {
         const auto &k = ui_.kelvin();
         i.flags = static_cast<uint8_t>((k ? 2 : 0) | 4);

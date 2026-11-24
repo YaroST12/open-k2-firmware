@@ -330,7 +330,7 @@ public:
     // run is dropped. A run that was started on a charger-powered K2 resumes by itself once VBUS is steady (poll()).
     bool boot_restore(bool cancel = false);
     void cancel();
-    bool busy() const { return runner_.busy(); }
+    [[gnu::noinline]] bool busy() const { return runner_.busy(); }   // 31 callers: one copy, not 31
     // The remote START (Cmd::ChargerTest [4, flags]): the device's own START, the second OK on Review included. It goes to
     // Review (the "All tests" preset first when asked), opens the confirm window through the first press's path (its preview
     // refusals come back at once), and poll() confirms it through the second press's path once the Ra guard's window is full
