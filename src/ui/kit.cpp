@@ -476,7 +476,7 @@ bool ActionCell::draw_ticket(uint32_t tag, std::string_view head, std::string_vi
     });
 }
 
-bool ActionCell::draw_idle(std::string_view verb, std::string_view hint, PaintBudget *bg, bool focused) {
+[[gnu::noinline]] bool ActionCell::draw_idle(std::string_view verb, std::string_view hint, PaintBudget *bg, bool focused) {
     return draw_ticket(focused ? 0 : 2, verb, hint,
                        focused ? kTicket : kBg, focused ? kOnTicket : kInk2, focused ? kTicketFrame : kRule, false, bg);
 }

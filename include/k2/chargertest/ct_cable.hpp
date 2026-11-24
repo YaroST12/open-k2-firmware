@@ -36,7 +36,7 @@ constexpr size_t kNameLen = 24;                            // name field of the 
 struct Choice {
     Kind kind = Kind::Off;
     uint16_t seq = 0;   // library id, Saved only
-    constexpr bool operator==(const Choice&) const = default;
+    [[gnu::noinline]] constexpr bool operator==(const Choice&) const = default;
 };
 
 // What the dialog and the Spoof list select while nothing was ever chosen (no /cable.cfg record): the EPR 50 V / 5 A cable, so the

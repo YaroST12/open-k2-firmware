@@ -36,7 +36,7 @@ inline constexpr Variant kFirst = kTable[0];
 
 // Structured VDM request header: SVID, structured bit, version (SVDM 2.0 = major 1 in bits 14:13), command,
 // object position 0.
-constexpr std::uint32_t vdm_header(std::uint16_t svid, std::uint8_t cmd, Variant v) {
+[[gnu::noinline]] constexpr std::uint32_t vdm_header(std::uint16_t svid, std::uint8_t cmd, Variant v) {
     return (std::uint32_t(svid) << 16) | 0x8000u | (v.svdm >= 2 ? 0x2000u : 0u) | (cmd & 0x1Fu);
 }
 

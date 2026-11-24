@@ -35,12 +35,12 @@ struct Item {
     std::string_view text;        // Text: points at storage the page keeps alive while the item is painted
 };
 
-constexpr Item fill(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color) {
+[[gnu::noinline]] constexpr Item fill(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color) {
     Item i;
     i.kind = ItemKind::Fill; i.x = x; i.y = y; i.w = w; i.h = h; i.color = color;
     return i;
 }
-constexpr Item text(const Font &f, int16_t x, int16_t top, std::string_view s, uint16_t color) {
+[[gnu::noinline]] constexpr Item text(const Font &f, int16_t x, int16_t top, std::string_view s, uint16_t color) {
     Item i;
     i.kind = ItemKind::Text; i.x = x; i.y = top; i.font = &f; i.text = s; i.color = color;
     return i;

@@ -67,7 +67,7 @@ ProtoInfo from_pd(const ProtoSource &s) {
     return p;
 }
 
-ProtoInfo fixed_info(ProtoKind k, uint32_t mv, uint32_t ma, uint32_t max_mv) {
+[[gnu::noinline]] ProtoInfo fixed_info(ProtoKind k, uint32_t mv, uint32_t ma, uint32_t max_mv) {
     ProtoInfo p;
     p.kind = k; p.mv = mv; p.ma = ma; p.max_mv = max_mv;
     return p;
