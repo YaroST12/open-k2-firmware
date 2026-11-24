@@ -1166,13 +1166,16 @@ and the hardware check). A row leaves this list when its fix is merged and the h
   - Per phase Wh and mAh in and out plus time; Round trip efficiency = Wh out / Wh in. Its own signed integrator
     (`k2/battery/battery.hpp`), so the same-port discharge counts the reverse flow; `EnergyMeter` is unchanged.
   - Phase end: under 50 mA for 60 s (settable, RAM-only) or by hand; a 60-point downsampled V/I curve; a 246 B record.
-  - The newest 3 runs on flash (`/bt<id>.rec`, inline in the root pair, 0 blocks), written only at phase boundaries;
-    a warm reset resumes from a `.noinit` checkpoint, a cold boot marks a measuring phase Lost.
+  - The newest 3 runs on flash (`/bt<id>.rec`, inline in the root pair, 0 blocks), written at phase boundaries and
+    every 10 s while a phase measures (in place, `Fs::rewrite_file`; record v2, 250 B); a warm reset resumes from the
+    `.noinit` checkpoint (preferred), a cold boot resumes the measuring phase from its last save (resumes + known gap
+    seconds stored; the off time and up to 10 s before the cut are not measured). An end/finish is final once written.
+    Built and host-tested on k2/battresume (2026-11-24), NOT hardware-verified. Wear: 90 root-pair erases/h, 446 B/save.
   - Shell `k2_remote.py [--json] battery status|start|end|next|finish|config|list|read` (CMD_BATTERY 0x58), QR share
     `BATT`, `k2_remote.py page battery`.
   - Validate on hardware: a short charge of a power bank from the bench charger (Wh in against the Home Wh counter),
     a same-port round trip into a resistive load, a warm reboot mid-phase (`[BATT] boot resumed`), a power cut
-    mid-phase (`[BATT] boot lost`, `Cut short`), heartbeat `stack_free` with the Battery page open.
+    mid-phase (`[BATT] boot continued`, totals within 10 s of the cut, `battery read` shows the resume), heartbeat `stack_free` with the Battery page open.
   - **Battery efficiency test** (planned 2026-11-18, not run yet; no record exported). A real bank, two runs:
     1. Discharge, wiring moved: the full bank (10K / 100 W) on the K2 input, the laptop on the output (forward = out).
        Load: `runs/battery/load-loop.sh` (the sanitizer pass in a loop; `touch runs/battery/STOP` ends it). The phase

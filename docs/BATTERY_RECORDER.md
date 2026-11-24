@@ -36,7 +36,7 @@ only says which way the bank's outflow runs relative to its charge, which a roun
 - The sign does not say which port the bank is on, so each phase takes the direction that carried more energy as its own:
   in for a charge, out for a discharge (the two columns swap, Wh and mAh together, when the other direction overtakes). A
   round trip's discharge waits for the outflow in the direction the charge and the wiring give (after a cold boot, the
-  charge's direction comes from the sign of its curve).
+  record's direction bit; a version 1 record's from the sign of its curve).
 - Every main-loop pass takes the latest sample (`power::read_raw()`, the monitor's 10 mA dead band already applied) and
   integrates the step since the previous one: trapezoid over the real time (mW x ms = uJ, mA x ms = uC). A step whose
   current changes sign is split at the zero crossing, so the two directions never cancel.
@@ -61,22 +61,23 @@ only says which way the bank's outflow runs relative to its charge, which a roun
 starts at 10 s and doubles (pairs averaged) whenever the buffer fills, so any run length fits. Only measured time feeds
 it, not the wait between two phases; `split` marks the discharge's first point.
 
-## The record (246 bytes, little endian)
+## The record (250 bytes, little endian)
 
 | Offset | Field |
 | ---: | :--- |
 | 0 | `'B' 'R'` |
-| 2 | version (1) |
+| 2 | version (2; version 1, 246 bytes without the flag bits and the gap, still reads) |
 | 3 | mode, wiring << 4 |
-| 4 | state: 0 measuring, 1 between, 2 done |
+| 4 | state: 0 measuring, 1 between, 2 done; bit 7: the end rule is armed (measuring) |
 | 5 | phases (bits 0..1), resumes << 2 |
 | 6 | id u16 |
 | 8, 10 | end threshold mA u16, end time s u16 |
 | 12 | curve interval s u16 |
 | 14, 15 | points, split (0xFF none) |
-| 16, 40 | phase 0, phase 1 (24 bytes each): kind, end (0 running, 1 auto, 2 manual, 3 lost), gaps u16, seconds u32, uWh in u32, uWh out u32, uAh in u32, uAh out u32 |
+| 16, 40 | phase 0, phase 1 (24 bytes each): kind (bit 7: the bank's in is the reverse current), end (0 running, 1 auto, 2 manual, 3 lost), gaps u16, seconds u32, uWh in u32, uWh out u32, uAh in u32, uAh out u32 |
 | 64 | curve points (60 x 3) |
-| 244 | CRC-16/CCITT of bytes 0..243 |
+| 244 | gap seconds u32: the time the resumes are known to have lost (a lower bound, see below) |
+| 248 | CRC-16/CCITT of bytes 0..247 |
 
 The same bytes are the flash file, the remote's `read` payload and the QR share (type `BATT`, schema 1).
 
@@ -87,10 +88,16 @@ The same bytes are the flash file, the remote's `read` payload and the QR share 
 - An empty run (under 1 mWh in and out: `0.000Wh` both ways) is not saved: no file, no kept run pruned for it. The footer
   says `Empty run, not saved`; `battery status` says `empty run, not saved` (status flag 16). Budget: 0 blocks (`tests/test_volume_budget.cpp`, the volume table in
   `docs/ARCHITECTURE.md`); a fourth run would split the root pair (4 blocks).
-- Writes happen only at a phase boundary (a phase end, the discharge's start, the finish; not the start, so a run takes a
-  slot only once it measured something), and only when the
-  main loop allows an erase (no charger test or PD Stress run owns the ports, the PD link quiet for the erase window). A
-  phase that measures never writes. A failed write is retried every 10 s; the footer says `Run not saved to flash`.
+- Writes happen at a phase boundary (a phase end, the discharge's start, the finish; not the start, so a run takes a
+  slot only once it measured something) and every 10 s (`kSaveMs`) while a phase measures and holds energy, and only
+  when the main loop allows an erase (no charger test or PD Stress run owns the ports, the PD link quiet for the erase
+  window); a refused save goes out at the next allowed pass. A failed write is retried every 10 s; the footer says
+  `Run not saved to flash`.
+- Every write rewrites the run's file in place (`Fs::rewrite_file`: one metadata commit, no `.tmp` and rename; a power
+  cut leaves the old record or the new one). Cost, measured in `tests/test_battery.cpp` on a device-like root (settings
+  and two kept runs): 360 saves an hour, 446 B programmed per save, 90 erases of the root pair an hour (45 per 2 KB
+  block), about 19 s of flash time an hour (~50 ms per save, ~130-170 ms when the save compacts the pair). littlefs moves
+  the pair after 500 erases (`block_cycles`), so about every 11 h of recording, onto free blocks of the volume.
 - A new run waits for the previous run's write: `start` refuses with Busy while that record is unwritten and a write is not
   allowed now.
 
@@ -98,12 +105,13 @@ The same bytes are the flash file, the remote's `read` payload and the QR share 
 
 | Event | What happens |
 | :--- | :--- |
-| Warm reset (a pin, software or watchdog reset with the board powered: the reboot chord, `k2_remote reboot`) during a run | The SRAM checkpoint (`.noinit`, magic + CRC-16, rewritten every second and at every state change) still holds the recorder: the run goes on where it was; the reset gap is one counted gap, not integrated. `[BATT] boot resumed` |
+| Warm reset (a pin, software or watchdog reset with the board powered: the reboot chord, `k2_remote reboot`) during a run | The SRAM checkpoint (`.noinit`, magic + CRC-16, rewritten every second and at every state change) still holds the recorder; it is fresher than the flash, so it wins: the run goes on where it was; the reset gap is one counted gap, not integrated, and the end rule's quiet timer starts again. `[BATT] boot resumed` |
 | Warm reset after a run ended but before its write | The checkpoint has the ended run: it is written at the first allowed moment. `[BATT] boot closed` |
-| Cold boot (power cut, VBUS dark; SRAM does not survive one on this board) while a first phase measured | Nothing was written yet: the run is gone. `[BATT] boot nothing` |
-| Cold boot while a round trip's discharge measured | The newest file says measuring: the discharge is marked Lost and the run is closed (the charge's totals; the discharge's were never written). The screen says `Cut short`. `[BATT] boot lost` |
+| Cold boot (power cut, VBUS dark; SRAM does not survive one on this board) while a phase measured | The newest file says measuring: the same phase goes on from its last save (one resume and one gap counted; the end rule's quiet timer starts again, so a bank that stopped ends the phase `end_s` after the boot). Lost: the samples since the last save (up to 10 s) and the whole off time; the K2 keeps no clock while off, so the record's gap seconds only count the time from the boot to the first sample (a lower bound) and `battery read` says so. `[BATT] boot continued` |
+| Cold boot while a phase measured, version 1 record (an older firmware) | No direction or end rule state to go on with: the phase is marked Lost and the run is closed. The screen says `Cut short`. `[BATT] boot lost` |
+| Cold boot after an end or finish whose write had not gone out yet (a charger test or PD traffic held the flash) | The flash still says measuring: the run resumes. An end or finish is final only once written, normally the next main-loop pass. |
 | Cold boot while a round trip waited between its phases | The run comes back between its phases; with moved wiring the swap counts as seen (moving the bank is usually what cut the power). `[BATT] boot waiting` |
-| Cold boot after a finished run | Nothing to resume; the run is on flash. |
+| Cold boot after a finished run | Nothing to resume; the run is on flash. A finished or ended run never resumes. |
 | Firmware update (DFU) | The app wipes SRAM before it enters the bootloader: a cold boot as above. |
 
 ## Screen (ring page 9 Battery)
