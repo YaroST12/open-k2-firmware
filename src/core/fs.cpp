@@ -311,6 +311,22 @@ Err Fs::write_chunks(const char* path, std::size_t total, Fill fill, void* ctx) 
     return r;
 }
 
+Err Fs::rewrite_file(const char* path, std::span<const std::uint8_t> data) {
+    if (data.size() > kInlineMax || !exists(path)) return write_file(path, data);
+    lfs_file_t f{};
+    // an existing file opened without O_CREAT commits nothing until the close, which writes the new inline data in one commit
+    if (Err e = open(f, path, LFS_O_WRONLY | LFS_O_TRUNC); e != Err::Ok) return e;
+    Err r = Err::Ok;
+    if (!data.empty()) {
+        const lfs_ssize_t w = lfs_file_write(&lfs_, &f, data.data(), lfs_size_t(data.size()));
+        if (w < 0) r = map(w);
+        else if (std::size_t(w) != data.size()) r = Err::NoSpace;
+    }
+    const int c = lfs_file_close(&lfs_, &f);
+    changed();
+    return r != Err::Ok ? r : map(c);
+}
+
 Err Fs::append_file(const char* path, std::span<const std::uint8_t> data) {
     lfs_file_t f{};
     if (Err e = open(f, path, LFS_O_WRONLY | LFS_O_CREAT | LFS_O_APPEND); e != Err::Ok) return e;

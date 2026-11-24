@@ -86,6 +86,10 @@ public:
     static constexpr std::size_t kChunk = 64;
     using Fill = void (*)(void* ctx, std::size_t off, std::span<std::uint8_t> out);
     Err write_chunks(const char* path, std::size_t total, Fill fill, void* ctx);
+    // write_file for a file of at most kInlineMax bytes that exists: replaced in place in one metadata commit (no .tmp, no
+    // rename: about half the log bytes, and no second entry in the directory meanwhile); a power cut leaves the old content
+    // or the new. A new or larger file goes through write_file.
+    Err rewrite_file(const char* path, std::span<const std::uint8_t> data);
     Err append_file(const char* path, std::span<const std::uint8_t> data);
     Err remove(const char* path);
     Err rename(const char* from, const char* to);

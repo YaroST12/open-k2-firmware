@@ -164,6 +164,68 @@ void test_power_cut_sweep_atomic_replace() {
     }
 }
 
+// rewrite_file: an existing small file is replaced in one commit (no .tmp, no rename), so it programs fewer bytes than
+// write_file, and a power cut at any program or erase leaves the old content or the new one, never an empty file.
+void test_rewrite_in_place() {
+    const std::string oldv(200, 'o'), newv(200, 'n');
+    std::uint64_t replace_hw = 0, rewrite_hw = 0;
+    {
+        RamDisk d(kBlocks);
+        fs::Fs f(d, kBlocks);
+        bool fm;
+        f.mount_or_format(fm);
+        CHECK_EQ(int(f.rewrite_file("/r.rec", sv(oldv))), int(fs::Err::Ok));   // not there yet: created
+        CHECK_EQ(slurp(f, "/r.rec") == oldv, 1);
+        d.reset_counters();
+        f.write_file("/r.rec", sv(newv));
+        replace_hw = d.halfwords;
+        d.reset_counters();
+        CHECK_EQ(int(f.rewrite_file("/r.rec", sv(oldv))), int(fs::Err::Ok));
+        rewrite_hw = d.halfwords;
+        CHECK_EQ(slurp(f, "/r.rec") == oldv, 1);
+        const std::string big(fs::kInlineMax + 1, 'b');                          // over the inline limit: write_file
+        CHECK_EQ(int(f.rewrite_file("/r.rec", sv(big))), int(fs::Err::Ok));
+        CHECK_EQ(slurp(f, "/r.rec") == big, 1);
+    }
+    CHECK_COND(rewrite_hw * 3 < replace_hw * 2);
+    // after `pre` earlier rewrites the log fills, so some of these commits compact the pair (an erase in the sweep)
+    bool compacted = false;
+    for (int pre = 0; pre < 12; ++pre) {
+        auto setup = [&](RamDisk& d, fs::Fs& f) {
+            bool fm;
+            f.mount_or_format(fm);
+            f.write_file("/r.rec", sv(oldv));
+            for (int i = 0; i < pre; ++i) f.rewrite_file("/r.rec", sv(oldv));
+        };
+        int total = 0;
+        {
+            RamDisk d(kBlocks);
+            fs::Fs f(d, kBlocks);
+            setup(d, f);
+            d.reset_counters();
+            f.rewrite_file("/r.rec", sv(newv));
+            total = d.ops_done();
+            compacted |= d.erases > 0;
+        }
+        for (int cut = 0; cut <= total; ++cut) {
+            RamDisk d(kBlocks);
+            {
+                fs::Fs f(d, kBlocks);
+                setup(d, f);
+                d.cut_after(cut);
+                f.rewrite_file("/r.rec", sv(newv));
+            }
+            d.revive();
+            fs::Fs g(d, kBlocks);
+            CHECK_EQ(g.mount() == fs::Err::Ok, 1);
+            const std::string got = slurp(g, "/r.rec");
+            CHECK_EQ(got == oldv || got == newv, 1);
+            if (cut == total) CHECK_EQ(got == newv, 1);
+        }
+    }
+    CHECK_EQ(compacted, true);
+}
+
 // A torn append leaves the old content (a littlefs commit is all or nothing).
 void test_power_cut_sweep_append() {
     int total = 0;
@@ -401,6 +463,7 @@ int main() {
     test_clean_tmp();
     test_power_cut_sweep_atomic_replace();
     test_power_cut_sweep_append();
+    test_rewrite_in_place();
     test_full_disk_reports_no_space_and_recovers();
     test_wear_levelling_spreads_erases();
     test_write_chunks_round_trip();
