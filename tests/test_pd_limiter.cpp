@@ -498,6 +498,18 @@ int main() {
         r.request(rq_fixed(3, 3000, 3000));
         CHECK_EQ(int(r.lim.status().state), int(LimState::Limited));
         CHECK_EQ(r.lim.status().ignores, 0);
+        // a sink that asks position 4 again asks outside its list: offered again, then counted (two answers like it end the limit)
+        {
+            Rig x = r;
+            x.request(kRdo0mA);
+            CHECK_EQ(int(x.lim.status().state), int(LimState::Negotiating));
+            x.accept_ready(5);
+            CHECK_COND(x.tx(m, kLimGapMs));
+            CHECK_EQ(unsigned(m.len / 4), 3u);
+            x.request(kRdo0mA);
+            CHECK_EQ(x.lim.status().ignores, 1);
+            CHECK_COND(x.lim.armed());
+        }
         // the cut holds across a Hard Reset (same charger) and ends with the attach
         r.lim.on_hard_reset(r.now += 1000);
         r.negotiate(0, rq_fixed(4, 0, 0, 1u << 24), bank);

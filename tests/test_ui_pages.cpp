@@ -2647,6 +2647,15 @@ static void test_pd_limit_off_resets_while_the_sink_holds_the_list() {
     CHECK_EQ(int(ui.pd_limit_set(pd::LimConfig{}, true, true, t + 10)), int(Ui::LimitSet::DoneReset));
     CHECK_EQ(g_stub.hard_resets, 1);
     CHECK_EQ(g_stub.lab_hard_resets, 1);                // the inline Hard Reset
+    // no inline latch and no sniffed contract (a far-sink attach): the held list alone is the evidence, the reset is inline
+    idle_link();
+    g_stub.hard_resets = g_stub.lab_hard_resets = 0;
+    g_stub.lim_held = true;
+    CHECK_EQ(int(ui.pd_limit_set(pd::LimConfig{}, true, false, t + 12)), int(Ui::LimitSet::NeedConfirm));
+    CHECK_EQ(int(ui.pd_limit_set(pd::LimConfig{}, true, true, t + 14)), int(Ui::LimitSet::DoneReset));
+    CHECK_EQ(g_stub.lab_hard_resets, 1);
+    live_contract();
+    g_stub.hard_resets = 1;
     // armed, nothing forged yet: off just disarms
     g_stub.lim_held = false;
     g_stub.lim_offs = 0;
