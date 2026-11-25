@@ -60,6 +60,7 @@ unsigned label_text(char (&out)[24], const SlotLabel &l, unsigned max_chars);
 // entries (sl::Open, sl::BackDel, ...) and the panel resolves them when it paints. Entry order is free; ids are not stored
 // anywhere (no persistence), so adding one is only an append here. Columns: name, short, long, long fallback, dim.
 namespace sl {
+// k2-plain-begin: label words compared byte-wise (label_violation)
 #define K2_SLOT_POOL(X)                                                                                                \
     X(None, "", "", "", false)                                                                                         \
     X(Dim, "", "", "", true)                                                                                           \
@@ -161,6 +162,7 @@ namespace sl {
     X(HeroPrev, "Hero-", "", "", false)                                                                                \
     X(HeroNext, "Hero+", "", "", false)                                                                                \
     X(ZoomReset, "Zoom", "Reset", "", false)
+// k2-plain-end
 
 enum Id : uint8_t {
 #define K2_SLOT_ENUM(name, ...) name,

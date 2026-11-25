@@ -35,14 +35,12 @@
 namespace k2 {
 
 // The footer a run puts on the page that is up, 8 px a character in 220 px: every form must fit (the widest family, two-digit counts).
-// k2-plain-begin: fit-check samples, never drawn
 inline constexpr const char* kPdSpecFooters[] = {
-    "PD Spec: Transitions 56/56",
-    "PD Spec: PPS/AVS 16/16",
-    "PD Spec: stopping",
+    K2_P("PD Spec: Transitions 56/56"),
+    K2_P("PD Spec: PPS/AVS 16/16"),
+    K2_P("PD Spec: stopping"),
 };
-// k2-plain-end
-static_assert(all_fit(kPdSpecFooters, 8, 220), "a PD Spec Check footer is wider than the footer band");
+static_assert(all_fit_p(kPdSpecFooters, 8, 220), "a PD Spec Check footer is wider than the footer band");
 
 class PdSpecSession final : private pdspec::Env {
 public:

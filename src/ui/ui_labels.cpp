@@ -95,6 +95,7 @@ PanelLabels resolve(const Strip &s) {
 }
 
 namespace {
+// k2-plain-begin: label words compared byte-wise; messages printed by tests
 constexpr const char *kOkVerbs[] = {
     "Scan", "Listen", "Run", "Force", "Start", "Stop", "Send", "Rescan", "Clear", "Open", "Reset",
     "Next", "Select", "View", "Delete", "Arm", "Disarm", "Toggle", "Cycle", "Apply", "Refresh", "Scrub", "Ask",
@@ -147,7 +148,7 @@ const char *label_violation(const PanelLabels &p) {
         for (const char *v : kOkVerbs) verb = verb || eq(ok.shrt, v);
         if (!verb) return "OK must be a verb";
     }
-    return nullptr;
+    return nullptr;   // k2-plain-end
 }
 
 bool footer_is_clean(const char *s) {

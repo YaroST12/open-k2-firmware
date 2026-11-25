@@ -88,9 +88,6 @@ include/k2/twin/live.hpp  backlog: K2_P sweep pending
 include/k2/twin/twin_hw.hpp  backlog: K2_P sweep pending
 include/k2/twin/usbdata.hpp  backlog: K2_P sweep pending
 include/k2/ui/run_layout.hpp  backlog: K2_P sweep pending
-include/k2/ui/spec_text.hpp  backlog: K2_P sweep pending
-include/k2/ui/ui_labels.hpp  backlog: K2_P sweep pending
-include/k2/ui/ui_trigger.hpp  backlog: K2_P sweep pending
 src/battery/battery_hw.cpp  backlog: K2_P sweep pending
 src/chargertest/cablepref.cpp  backlog: K2_P sweep pending
 src/chargertest/charger_journal.cpp  backlog: K2_P sweep pending
@@ -162,7 +159,6 @@ src/ui/ui_cabler.cpp  backlog: K2_P sweep pending
 src/ui/ui_cards.cpp  backlog: K2_P sweep pending
 src/ui/ui_charger_test.cpp  backlog: K2_P sweep pending
 src/ui/ui_connection_page.cpp  backlog: K2_P sweep pending
-src/ui/ui_labels.cpp  backlog: K2_P sweep pending
 src/ui/ui_lines.cpp  backlog: K2_P sweep pending
 src/ui/ui_match.cpp  backlog: K2_P sweep pending
 src/ui/ui_pages.cpp  backlog: K2_P sweep pending
