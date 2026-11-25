@@ -567,11 +567,11 @@ Strip EmarkerPage::labels() const {
     Strip l = base_labels();
     switch (menu_.view) {
     case EmView::List:
-        l = menu_.count > 1 ? list_strip(l) : still_strip(l);   // the list wraps: only a single cable has nowhere to go
+        l = list_strip(l, menu_.idx, menu_.count);
         l[Button::Ok] = n_seqs_ > 0 ? sl::View : sl::None;
         break;
     case EmView::Detail:
-        l = menu_.count > 1 ? list_strip(l) : still_strip(l);
+        l = list_strip(l, menu_.idx, menu_.count);
         l[Button::Ok] = sl::DeleteShare;
         break;
     case EmView::Confirm:

@@ -591,6 +591,40 @@ static void test_cable_tab_save_and_list() {
     g_stub = StubState();
 }
 
+// Two saved cables: the list and the detail stop at their ends, Up dim on the first cable, Dn on the last.
+static void test_saved_cables_stop_at_ends() {
+    Ui &ui = fresh_ui();
+    g_stub = StubState();
+    for (uint16_t s = 1; s <= 2; s++) {
+        emlib::Entry e;
+        e.seq = s;
+        e.name[0] = char('A' + s);
+        g_stub.lib.push_back(e);
+    }
+    uint32_t t = 26000;
+    CHECK_EQ(ui.push_menu(Menu::Emarker, t += 100), 1);
+    ui.tick(t += 50);
+    const auto dim = [&](Button b) { return ui.labels().b[static_cast<int>(b)].dim; };
+    const auto key = [&](Button b) { ui.on_button(b, ButtonEvent::Short, t += 50); ui.tick(t += 10); };
+    CHECK_EQ(dim(Button::Minus), true);  CHECK_EQ(dim(Button::Plus), false);
+    key(Button::Minus);                                     // no wrap to the last
+    CHECK_EQ(dim(Button::Minus), true);  CHECK_EQ(dim(Button::Plus), false);
+    key(Button::Plus);
+    CHECK_EQ(dim(Button::Minus), false); CHECK_EQ(dim(Button::Plus), true);
+    key(Button::Plus);                                      // no wrap to the first
+    CHECK_EQ(dim(Button::Minus), false); CHECK_EQ(dim(Button::Plus), true);
+    key(Button::Ok);                                        // the last cable's detail
+    CHECK_STR(label(ui, Button::Ok), "Delete");
+    CHECK_EQ(dim(Button::Minus), false); CHECK_EQ(dim(Button::Plus), true);
+    key(Button::Plus);
+    CHECK_EQ(dim(Button::Minus), false); CHECK_EQ(dim(Button::Plus), true);
+    key(Button::Minus);
+    CHECK_EQ(dim(Button::Minus), true);  CHECK_EQ(dim(Button::Plus), false);
+    key(Button::Minus);
+    CHECK_EQ(dim(Button::Minus), true);  CHECK_EQ(dim(Button::Plus), false);
+    g_stub = StubState();
+}
+
 static void test_spoof_tool() {
     Ui &ui = fresh_ui();
     g_stub = StubState();
@@ -3045,6 +3079,45 @@ static void dump_ui(const char *name, int rot) {
     }
 }
 
+// K2_DUMP=dir: Saved cables and Ripple settings at their ends (k2/cablewrap), every rotation.
+static void test_list_end_renders() {
+    if (!std::getenv("K2_DUMP")) return;
+    for (int rot = 0; rot < 4; rot++) {
+        Ui &ui = fresh_ui();
+        g_stub = StubState();
+        for (uint16_t s = 1; s <= 3; s++) {
+            emlib::Entry e;
+            e.seq = s;
+            const char nm[] = "Cable-1";
+            for (std::size_t i = 0; i < sizeof nm; i++) e.name[i] = nm[i];
+            e.name[6] = char('0' + s);
+            e.rec = emrec::make({std::array<uint32_t, 5>{0xFF00A041, (3u << 27) | 0x05ACu, 0, 0x12340005u + s, (2u << 21) | (3u << 9) | (2u << 5)}.data(), 5}, 2);
+            g_stub.lib.push_back(e);
+        }
+        uint32_t t = 50000;
+        ui.set_rotation(uint8_t(rot), t);
+        const auto shot = [&](const char *n) { for (int i = 0; i < 4; i++) ui.tick(t += 100); t = settle(ui, t); dump_ui(n, rot); };
+        const auto key = [&](Button b) { ui.on_button(b, ButtonEvent::Short, t += 50); t = settle(ui, t); };
+        ui.goto_page(static_cast<uint8_t>(Page::Lines), t += 100);
+        ui.push_menu(Menu::Emarker, t += 100);
+        shot("saved_cables_first");
+        key(Button::Plus); key(Button::Plus);
+        shot("saved_cables_last");
+        key(Button::Ok);
+        shot("saved_cable_detail_last");
+        key(Button::Minus); key(Button::Minus);
+        shot("saved_cable_detail_first");
+        ui.goto_page(static_cast<uint8_t>(Page::Ripple), t += 100);
+        key(Button::Ok);                                     // the settings rows
+        shot("ripple_settings_first");
+        for (int i = 0; i < 3; i++) key(Button::Plus);
+        shot("ripple_settings_last");
+        key(Button::Back);
+        g_stub = StubState();
+        ui.goto_page(uint8_t(Page::Home), t += 100);
+    }
+}
+
 static void test_strip_fix_renders() {
     if (!std::getenv("K2_DUMP")) return;
     for (int rot = 0; rot < 4; rot++) {
@@ -3159,6 +3232,7 @@ static void test_pd_limit_renders() {
 int main() {
     test_pd_limit_renders();
     test_strip_fix_renders();
+    test_list_end_renders();
     test_pd_limit_live_contract_resets_then_arms();
     test_pd_limit_confirm_window();
     test_pd_limit_no_live_contract_no_reset();
@@ -3180,6 +3254,7 @@ int main() {
     test_fc_pill_text();
     test_home_gauges_and_footer();
     test_cable_tab_save_and_list();
+    test_saved_cables_stop_at_ends();
     test_spoof_tool();
     test_spoof_external_identity();
     test_spoof_text();
