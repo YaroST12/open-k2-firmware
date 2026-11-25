@@ -53,7 +53,7 @@ Shown shown(const Record &r, bool any);
 struct Pair {
     uint16_t eff = kNoRatio;
     uint16_t lo = 0, hi = 0;     // the ids it spans
-    uint64_t uwh_out = 0, uwh_in = 0;
+    uint32_t uwh_out = 0, uwh_in = 0;   // a record's u32 fields: three kept runs stay far under 4294 Wh
 };
 Pair pair(const Shown *runs, int n);
 

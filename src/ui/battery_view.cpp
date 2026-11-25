@@ -105,7 +105,7 @@ Shown shown(const Record &r, bool any) {
 
 Pair pair(const Shown *runs, int n) {
     Pair p;
-    uint64_t sum[2] = {};
+    uint32_t sum[2] = {};
     Mode m[2] = {};
     int k = -1;   // the stretch being summed: 0 the newest, 1 the one before it
     for (int i = 0; i < n; i++) {
@@ -115,7 +115,7 @@ Pair pair(const Shown *runs, int n) {
         if (s.mode == Mode::RoundTrip || (next && k == 1)) break;
         if (s.lost) return {};   // part of a stretch, short by what it lost
         if (next) m[++k] = s.mode;
-        sum[k] += s.mode == Mode::Discharge ? s.sum.uwh_out : s.sum.uwh_in;
+        sum[k] += static_cast<uint32_t>(s.mode == Mode::Discharge ? s.sum.uwh_out : s.sum.uwh_in);
         if (!p.hi) p.hi = s.id;
         p.lo = s.id;
     }
