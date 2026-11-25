@@ -565,8 +565,12 @@ static void test_cable_tab_save_and_list() {
     CHECK_EQ(ui.menu() == Menu::Emarker, 1);
     CHECK_EQ(ui.menu_depth(), 2u);                          // Connection > Saved cables (opened from Home, no Tools under it)
     CHECK_STR(label(ui, Button::Ok), "View");
+    CHECK_EQ(ui.labels().b[static_cast<int>(Button::Minus)].dim, true);   // one cable: nothing to move to
+    CHECK_EQ(ui.labels().b[static_cast<int>(Button::Plus)].dim, true);
     ui.on_button(Button::Ok, ButtonEvent::Short, 24300);    // detail card
     CHECK_STR(label(ui, Button::Ok), "Delete");
+    CHECK_EQ(ui.labels().b[static_cast<int>(Button::Minus)].dim, true);
+    CHECK_EQ(ui.labels().b[static_cast<int>(Button::Plus)].dim, true);
     ui.on_button(Button::Ok, ButtonEvent::Short, 24400);    // ask
     CHECK_EQ(g_stub.lib_removes, 0);
     ui.on_button(Button::Back, ButtonEvent::Short, 24500);  // keep
@@ -2445,7 +2449,7 @@ static void test_pd_limit_picker() {
     press(ui, Button::Plus, ButtonEvent::Short, t += 10);    // 9V
     press(ui, Button::Ok, ButtonEvent::Short, t += 10);      // on to 9V's Max A list
     CHECK_EQ(ui.list_state().count, 10);                     // Max, 1..3A in 0.25A steps
-    press(ui, Button::Back, ButtonEvent::Short, t += 10);    // back to the voltages, nothing committed
+    press(ui, Button::Back, ButtonEvent::Short, t += 10);    // back to the voltages, 9V kept
     CHECK_EQ(ui.list_state().count, 5);
     press(ui, Button::Ok, ButtonEvent::Short, t += 10);      // 9V again
     press(ui, Button::Ok, ButtonEvent::Short, t += 10);      // Max: commit 9V / Max A, return to EditFixed
@@ -3060,7 +3064,7 @@ static void test_strip_fix_renders() {
         }
         fill_pdos(3);
         ui.goto_page(kPdPage, t += 100);
-        shot("spec_fits");
+        shot("sheet_no_charger");
         g_stub.caps = {};
         ui.goto_page(static_cast<uint8_t>(Page::ChargerTest), t += 100);
         for (int i = 0; i < 8; i++) key(Button::Minus);
@@ -3079,6 +3083,15 @@ static void test_strip_fix_renders() {
         shot("cabler_live");
         ui.set_cable_mode(cable_r::Mode::Passive);
         g_stub.pm = {};
+        ui.goto_page(static_cast<uint8_t>(Page::Lines), t += 100);   // Link left on Cable, the ring walked, OK: Cable again
+        for (int i = 0; i < 4; i++) key(Button::Plus);
+        key(Button::Ok);
+        key(Button::Plus);
+        ui.on_button(Button::Back, ButtonEvent::Long, t += 50);
+        key(Button::Plus);
+        key(Button::Minus);
+        key(Button::Ok);
+        shot("link_kept_cable");
         set_caps_65w();
         t = open_limit_row(ui, t + 100);
         key(Button::Ok);                                     // PickLimit
