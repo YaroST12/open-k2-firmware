@@ -24,11 +24,12 @@ public:
     bool on_event(Event e) override;
     Strip labels() const override;
     void invalidate() override;
-    void enter() override { sel_ = 0; }
+    void enter() override;
+    void leave() override;
     const ListState &list_state() const { return ctx_.rows.state(); }
     int selected() const { return sel_; }
-    // The page is what the ring view shows of it as it stands: nothing selected away or scrolled.
-    bool ring_rest() const { return sel_ == 0 && ctx_.rows.state().offset == 0; }
+    // The ring view shows the page as it stands (browse mutes the focus), so the focused row and scroll stay.
+    bool ring_rest() const { return true; }
     // The Log place (Bench > Log): the title and icon of the place, the verdict as a stamp over the findings, and a last row
     // that drills into the Black Box. Called before enter() and the first paint.
     void as_place();

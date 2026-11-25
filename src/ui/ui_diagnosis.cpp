@@ -59,6 +59,16 @@ kit::Verdict DiagnosisPage::stamp_of(const diag::Report &r) {
 }
 
 // The stamp: the band in the verdict's fill around the glyph cell and the word, each pixel once; repainted on a change.
+// The Log place keeps its row as every place does (ctx_.keep.place_sel), so a rebuilt page lands where it was left.
+void DiagnosisPage::enter() {
+    const int keep = ctx_.keep.place_sel[static_cast<int>(bench::Place::Log)];
+    sel_ = place_ ? std::clamp(keep, 0, std::max(0, list_rows() - 1)) : 0;
+}
+
+void DiagnosisPage::leave() {
+    if (place_) ctx_.keep.place_sel[static_cast<int>(bench::Place::Log)] = static_cast<uint8_t>(sel_);
+}
+
 void DiagnosisPage::paint_stamp() {
     const diag::Report &r = live::report();
     char w[screen::kLabelChars + 8] = {};

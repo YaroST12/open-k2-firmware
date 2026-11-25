@@ -1729,6 +1729,7 @@ static void test_blackbox_submenu() {
 static void test_log_place() {
     Ui &ui = fresh_ui();
     pdtrace::init();
+    ui.context().keep.place_sel[static_cast<int>(bench::Place::Log)] = 0;   // an earlier test left the place on another row
     ui.open_place(bench::Place::Log, kT0);
     const uint32_t t_open = settle(ui, kT0);
     CHECK_EQ(ui.menu() == Menu::Diagnosis, 1);

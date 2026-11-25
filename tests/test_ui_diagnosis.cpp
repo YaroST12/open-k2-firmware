@@ -238,6 +238,39 @@ static void test_sink_verdict_is_no_standing_pill() {
     CHECK_EQ(pill, 0);
 }
 
+// Every ring page keeps its focused row: Long Back to the ring then OK, or a walk round the ring and back, lands on it again.
+static void test_place_keeps_row() {
+    g_stub.diag_report = diag_fixture::case1();
+    g_stub.diag_state = 1;
+    Ui &ui = fresh_ui();
+    ui.tick(1000);
+    std::uint32_t t = 1100;
+    ui.open_place(bench::Place::Log, t);
+    ui.tick(t += 100);
+    while (ui.painting()) ui.tick(t += 20);
+    CHECK(ui.diagnosis_page().list_state().count >= 3);
+    ui.on_button(Button::Plus, ButtonEvent::Short, t += 10);
+    ui.on_button(Button::Plus, ButtonEvent::Short, t += 10);
+    CHECK_EQ(ui.diagnosis_page().selected(), 2);
+    ui.on_button(Button::Back, ButtonEvent::Long, t += 10);
+    CHECK(ui.ring_view());
+    ui.on_button(Button::Ok, ButtonEvent::Short, t += 10);
+    CHECK(!ui.ring_view());
+    CHECK_EQ(ui.diagnosis_page().selected(), 2);
+    // out to the ring, one page on and back: the menu is rebuilt, the row stays
+    ui.on_button(Button::Back, ButtonEvent::Long, t += 10);
+    ui.on_button(Button::Plus, ButtonEvent::Short, t += 10);
+    ui.tick(t += 100);
+    while (ui.painting()) ui.tick(t += 20);
+    ui.on_button(Button::Minus, ButtonEvent::Short, t += 10);
+    ui.tick(t += 100);
+    while (ui.painting()) ui.tick(t += 20);
+    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Log));
+    ui.on_button(Button::Ok, ButtonEvent::Short, t += 10);
+    CHECK_EQ(ui.diagnosis_page().selected(), 2);
+    ui.on_button(Button::Back, ButtonEvent::Long, t += 10);
+}
+
 int main() {
     test_cell_of();
     test_tone_of();
@@ -247,5 +280,6 @@ int main() {
     test_place_stamp_replaces_top();
     test_verdict_toast_times_out();
     test_sink_verdict_is_no_standing_pill();
+    test_place_keeps_row();
     return test_report("test_ui_diagnosis");
 }
