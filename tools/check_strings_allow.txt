@@ -47,14 +47,6 @@ include/k2/core/rd_intent.hpp  backlog: K2_P sweep pending
 include/k2/core/ripple.hpp  backlog: K2_P sweep pending
 include/k2/core/shell.hpp  backlog: K2_P sweep pending
 include/k2/core/stage_meter.hpp  backlog: K2_P sweep pending
-include/k2/pdstress/dist.hpp  backlog: K2_P sweep pending
-include/k2/pdstress/plan.hpp  backlog: K2_P sweep pending
-include/k2/pdstress/score.hpp  backlog: K2_P sweep pending
-include/k2/twin/learn.hpp  backlog: K2_P sweep pending
-include/k2/twin/library.hpp  backlog: K2_P sweep pending
-include/k2/twin/live.hpp  backlog: K2_P sweep pending
-include/k2/twin/twin_hw.hpp  backlog: K2_P sweep pending
-include/k2/twin/usbdata.hpp  backlog: K2_P sweep pending
 src/chargertest/cablepref.cpp  backlog: K2_P sweep pending
 src/chargertest/charger_journal.cpp  backlog: K2_P sweep pending
 src/chargertest/charger_journal_core.cpp  backlog: K2_P sweep pending

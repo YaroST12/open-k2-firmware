@@ -28,8 +28,8 @@ inline constexpr std::size_t kBins = 8;
 
 constexpr const char* metric_name(Metric m) {
     switch (m) {
-        case Metric::Accept: return "accept";
-        case Metric::PsRdy: return "psrdy";
+        case Metric::Accept: return "accept"; // k2-plain: blob token parsed by pdstress_blob.py
+        case Metric::PsRdy: return "psrdy"; // k2-plain: blob token parsed by pdstress_blob.py
         case Metric::Band: return "band";
         case Metric::Over: return "over";
         case Metric::Count: break;
@@ -39,7 +39,7 @@ constexpr const char* metric_name(Metric m) {
 constexpr const char* metric_unit(Metric m) {
     switch (m) {
         case Metric::Accept:
-        case Metric::PsRdy: return "0.1ms";
+        case Metric::PsRdy: return "0.1ms"; // k2-plain: unit parsed by pdstress_blob.py
         case Metric::Band: return "ms";
         case Metric::Over: return "mV";
         case Metric::Count: break;

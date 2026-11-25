@@ -19,6 +19,7 @@
 #include "k2/pd/pd_vdm.hpp"
 #include "k2/twin/predict.hpp"
 #include "k2/twin/twin.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::twin {
 
@@ -33,15 +34,15 @@ inline std::array<char, kNameMax + 1> auto_name(std::uint16_t vid, std::uint32_t
     std::array<char, kNameMax + 1> out{};
     std::size_t n = 0;
     auto put = [&](const char* s, std::size_t cap) {
-        while (*s != 0 && n < cap) out[n++] = *s++;
+        strpack::for_chars(s, [&](char ch) { if (n < cap) out[n++] = ch; });
     };
     if (vid == 0) {
-        put("Device", kAutoVendorMax);
+        put(K2_P("Device"), kAutoVendorMax);
     } else if (const pd::VendorName vendor = pd::vendor_find(vid); !vendor.empty()) {
         put(vendor.c_str(), kAutoVendorMax);
     } else {
         put("VID ", kAutoVendorMax);
-        for (int sh = 12; sh >= 0; sh -= 4) out[n++] = "0123456789ABCDEF"[(vid >> sh) & 0xF];
+        for (int sh = 12; sh >= 0; sh -= 4) out[n++] = "0123456789ABCDEF"[(vid >> sh) & 0xF]; // k2-plain: indexed digit table
     }
     while (n > 0 && out[n - 1] == ' ') out[--n] = 0;
     if (want_w != 0) {

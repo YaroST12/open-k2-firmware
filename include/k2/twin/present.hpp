@@ -21,6 +21,7 @@
 
 #include "k2/twin/live.hpp"
 #include "k2/twin/predict.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::twin::present {
 
@@ -34,7 +35,7 @@ struct Out {
     void ch(char c) {
         if (n + 1 < b.size()) { b[n++] = c; b[n] = '\0'; }
     }
-    void str(const char* s) { while (*s) ch(*s++); }
+    void str(const char* s) { strpack::for_chars(s, [this](char c) { ch(c); }); }
     void num(std::uint32_t v) {
         char t[10];
         int k = 0;
