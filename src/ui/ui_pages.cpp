@@ -265,12 +265,13 @@ void fc_pill_text(fastcharge::Protocol p, StrBuf<6> &out) {
     case P::PdLikely: out.put("PD?"); return;
     default: break;
     }
-    const char *n = fastcharge::short_name(p);
-    int len = 0;
-    while (n[len] != '\0' && n[len] != ' ' && len < 4) len++;
+    char dec[12];
+    const std::string_view n = strpack::unpack(fastcharge::short_name(p), dec);
+    std::size_t len = 0;
+    while (len < n.size() && n[len] != ' ' && len < 4) len++;
     if (len == 4 && n[3] == '.') len = 3;                           // "QC3.0" -> "QC3"
     if (len >= 3 && n[len - 1] == '.') len--;
-    out.put(std::string_view(n, static_cast<size_t>(len)));
+    out.put(n.substr(0, len));
 }
 
 void home_contract_text(const pd::Contract &c, fastcharge::Protocol p, int32_t vbus_mv, StrBuf<13> &out) {

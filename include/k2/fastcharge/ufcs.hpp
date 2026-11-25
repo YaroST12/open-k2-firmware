@@ -12,6 +12,7 @@
 #include <span>
 
 #include "k2/fastcharge/ufcs_tune.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::ufcs {
 
@@ -191,11 +192,11 @@ enum class Why : std::uint8_t { None, NoSync, Type, Length, Crc, Overflow };
 
 constexpr const char* why_name(Why w) {
     switch (w) {
-    case Why::NoSync: return "nosync";
+    case Why::NoSync: return K2_P("nosync");
     case Why::Type: return "type";
-    case Why::Length: return "length";
+    case Why::Length: return K2_P("length");
     case Why::Crc: return "crc";
-    case Why::Overflow: return "overflow";
+    case Why::Overflow: return K2_P("overflow");
     case Why::None: break;
     }
     return "none";
@@ -315,12 +316,12 @@ constexpr bool decode_refuse(std::span<const std::uint8_t> p, Refusal& out) {
 // The reason of a Refuse in plain words (table 24); "reserved" for a code the table does not define.
 constexpr const char* refuse_name(std::uint8_t reason) {
     switch (reason) {
-    case kRefuseUnknown: return "not recognised";
-    case kRefuseUnsupported: return "not supported";
+    case kRefuseUnknown: return K2_P("not recognised");
+    case kRefuseUnsupported: return K2_P("not supported");
     case kRefuseBusy: return "busy";
-    case kRefuseRange: return "out of range";
-    case kRefuseOther: return "other";
-    default: return "reserved";
+    case kRefuseRange: return K2_P("out of range");
+    case kRefuseOther: return K2_P("other");
+    default: return K2_P("reserved");
     }
 }
 

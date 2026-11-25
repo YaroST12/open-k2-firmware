@@ -14,6 +14,7 @@
 #include "k2/fastcharge/fastcharge_classify.hpp"
 #include "k2/pd/pd.hpp"
 #include "k2/ui/ui_calc.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::ai {
 
@@ -82,15 +83,15 @@ inline Banner recognise(fastcharge::Protocol p, const pd::SourceCaps &caps, std:
                 (d.type == pd::PdoType::Fixed || (d.type == pd::PdoType::Avs && (d.raw >> 28) == 0xD));
         }
         b.source = Source::Pd;
-        b.line1.put(spr_avs ? "PD3.2+" : epr ? "PD3.1+" : pd::wire_revision_name(caps.spec_rev))
+        b.line1.put(spr_avs ? K2_P("PD3.2+") : epr ? K2_P("PD3.1+") : pd::wire_revision_name(caps.spec_rev))
             .put_char(' ').put_u32(top).put_char('W');
         if (w.epr_fixed_w == 0 && w.avs_w > 0) {   // AVS without EPR fixed: show the SPR fixed ceiling next to it
-            b.line2.put("FIX:").put_u32(w.fixed_w).put("W AVS:").put_u32(w.avs_w).put_char('W');
+            b.line2.put("FIX:").put_u32(w.fixed_w).put(K2_P("W AVS:")).put_u32(w.avs_w).put_char('W');
         } else if (epr) {
-            b.line2.put("EPR:").put_u32(w.epr_fixed_w).put("W AVS:").put_u32(w.avs_w).put_char('W');
+            b.line2.put("EPR:").put_u32(w.epr_fixed_w).put(K2_P("W AVS:")).put_u32(w.avs_w).put_char('W');
         } else {
             b.line2.put("FIX:").put_u32(w.fixed_w).put_char('W');
-            if (w.pps_w > 0) b.line2.put(" PPS:").put_u32(w.pps_w).put_char('W');
+            if (w.pps_w > 0) b.line2.put(K2_P(" PPS:")).put_u32(w.pps_w).put_char('W');
         }
         return b;
     }
@@ -106,7 +107,7 @@ inline const char *home_text(fastcharge::Protocol p, std::uint32_t now_ms) {
     switch ((now_ms / kDotMs) % 3) {
     case 0:  return "AI.";
     case 1:  return "AI..";
-    default: return "AI...";
+    default: return "AI..."; // k2-plain: animation frame, siblings under 5 B
     }
 }
 

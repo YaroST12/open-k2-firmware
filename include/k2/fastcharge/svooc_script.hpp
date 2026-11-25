@@ -50,6 +50,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include "k2/core/strpack.hpp"
 
 namespace k2::svooc {
 
@@ -92,9 +93,9 @@ inline constexpr std::size_t kAsksMax = 8;
 enum class Profile : std::uint8_t { Fixed, Phone, Probe };
 constexpr const char* name(Profile p) {
     switch (p) {
-    case Profile::Fixed: return "fixed";
-    case Profile::Phone: return "phone";
-    case Profile::Probe: return "probe";
+    case Profile::Fixed: return K2_P("fixed");
+    case Profile::Phone: return K2_P("phone");
+    case Profile::Probe: return K2_P("probe");
     }
     return "?";
 }
@@ -175,10 +176,10 @@ enum class Escape : std::uint8_t { Off, Armed, Sent, Got86, NoGet86 };
 constexpr const char* name(Escape e) {
     switch (e) {
     case Escape::Off: return "off";
-    case Escape::Armed: return "armed";
+    case Escape::Armed: return K2_P("armed");
     case Escape::Sent: return "sent";
-    case Escape::Got86: return "got 86";
-    case Escape::NoGet86: return "no 86";
+    case Escape::Got86: return K2_P("got 86");
+    case Escape::NoGet86: return K2_P("no 86");
     }
     return "?";
 }

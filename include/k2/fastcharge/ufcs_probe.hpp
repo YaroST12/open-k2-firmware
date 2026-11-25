@@ -26,6 +26,7 @@
 #include "k2/fastcharge/ufcs.hpp"
 #include "k2/fastcharge/ufcs_diag.hpp"
 #include "k2/fastcharge/ufcs_tune.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::ufcs {
 
@@ -42,14 +43,14 @@ enum class ProbeVerdict : std::uint8_t { None, NoHandshake, Silent, Garbage, Ans
 
 constexpr const char* name(ProbeVerdict v) {
     switch (v) {
-    case ProbeVerdict::NoHandshake: return "no-handshake";
-    case ProbeVerdict::Silent: return "silent";
-    case ProbeVerdict::Garbage: return "garbage";
-    case ProbeVerdict::Answered: return "answered";
-    case ProbeVerdict::Overvoltage: return "overvoltage";
-    case ProbeVerdict::SourceLost: return "source-lost";
-    case ProbeVerdict::Inline: return "inline";
-    case ProbeVerdict::Stopped: return "stopped";
+    case ProbeVerdict::NoHandshake: return K2_P("no-handshake");
+    case ProbeVerdict::Silent: return K2_P("silent");
+    case ProbeVerdict::Garbage: return K2_P("garbage");
+    case ProbeVerdict::Answered: return K2_P("answered");
+    case ProbeVerdict::Overvoltage: return K2_P("overvoltage");
+    case ProbeVerdict::SourceLost: return K2_P("source-lost");
+    case ProbeVerdict::Inline: return K2_P("inline");
+    case ProbeVerdict::Stopped: return K2_P("stopped");
     case ProbeVerdict::None: break;
     }
     return "none";
@@ -59,10 +60,10 @@ constexpr const char* name(ProbeStart s) {
     switch (s) {
     case ProbeStart::Ok: return "ok";
     case ProbeStart::Busy: return "busy";
-    case ProbeStart::Inline: return "inline";
-    case ProbeStart::NotFiveVolts: return "not-5v";
-    case ProbeStart::NoMonitor: return "no-monitor";
-    case ProbeStart::Resetting: return "resetting";
+    case ProbeStart::Inline: return K2_P("inline");
+    case ProbeStart::NotFiveVolts: return K2_P("not-5v");
+    case ProbeStart::NoMonitor: return K2_P("no-monitor");
+    case ProbeStart::Resetting: return K2_P("resetting");
     }
     return "?";
 }

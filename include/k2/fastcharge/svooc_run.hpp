@@ -34,6 +34,7 @@
 #include <cstdint>
 
 #include "k2/pd/inline_cause.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::svooc {
 
@@ -183,17 +184,17 @@ struct Report {
 constexpr const char* name(Refusal r) {
     switch (r) {
     case Refusal::None: return "none";
-    case Refusal::NotConfirmed: return "not confirmed";
-    case Refusal::Busy: return "D+/D- busy";
-    case Refusal::NoHost: return "no host link";
-    case Refusal::NoMonitor: return "no power monitor";
-    case Refusal::Sink: return "sink on the bottom port";
-    case Refusal::Inline: return "inline mode";
-    case Refusal::PdContract: return "PD contract not own 5 V";
-    case Refusal::Current: return "current over 50 mA";
-    case Refusal::NotFiveVolts: return "VBUS not 5 V";
-    case Refusal::NoRam: return "no RAM: USB drive enabled";
-    case Refusal::UsbAWithPd: return "USB-A waiver but PD is active";
+    case Refusal::NotConfirmed: return K2_P("not confirmed");
+    case Refusal::Busy: return K2_P("D+/D- busy");
+    case Refusal::NoHost: return K2_P("no host link");
+    case Refusal::NoMonitor: return K2_P("no power monitor");
+    case Refusal::Sink: return K2_P("sink on the bottom port");
+    case Refusal::Inline: return K2_P("inline mode");
+    case Refusal::PdContract: return K2_P("PD contract not own 5 V");
+    case Refusal::Current: return K2_P("current over 50 mA");
+    case Refusal::NotFiveVolts: return K2_P("VBUS not 5 V");
+    case Refusal::NoRam: return K2_P("no RAM: USB drive enabled");
+    case Refusal::UsbAWithPd: return K2_P("USB-A waiver but PD is active");
     }
     return "?";
 }
@@ -201,19 +202,19 @@ constexpr const char* name(Refusal r) {
 constexpr const char* name(Abort a) {
     switch (a) {
     case Abort::None: return "none";
-    case Abort::Overvoltage: return "VBUS over 12 V";
-    case Abort::Current: return "current over 50 mA";
-    case Abort::OffScript: return "charger off-script";
-    case Abort::HostGone: return "host gone";
-    case Abort::NoMonitor: return "power monitor lost";
-    case Abort::Sink: return "sink appeared";
-    case Abort::PdContract: return "PD contract appeared";
-    case Abort::Storm: return "D+/D- edge storm";
-    case Abort::NoAdapter: return "no adapter answer";
-    case Abort::TimeCap: return "time cap";
-    case Abort::Stopped: return "stopped";
-    case Abort::ContractLost: return "PD contract lost";
-    case Abort::ContractChanged: return "PD contract changed";
+    case Abort::Overvoltage: return K2_P("VBUS over 12 V");
+    case Abort::Current: return K2_P("current over 50 mA");
+    case Abort::OffScript: return K2_P("charger off-script");
+    case Abort::HostGone: return K2_P("host gone");
+    case Abort::NoMonitor: return K2_P("power monitor lost");
+    case Abort::Sink: return K2_P("sink appeared");
+    case Abort::PdContract: return K2_P("PD contract appeared");
+    case Abort::Storm: return K2_P("D+/D- edge storm");
+    case Abort::NoAdapter: return K2_P("no adapter answer");
+    case Abort::TimeCap: return K2_P("time cap");
+    case Abort::Stopped: return K2_P("stopped");
+    case Abort::ContractLost: return K2_P("PD contract lost");
+    case Abort::ContractChanged: return K2_P("PD contract changed");
     }
     return "?";
 }
@@ -221,15 +222,15 @@ constexpr const char* name(Abort a) {
 // The exit watch's verdict in words for the log: under kFiveMinMv the adapter switched its output off (hardware 2026-11-15: the
 // OnePlus 120 W at 2.09 V once its sink's Rd went away), which is not "back at 5 V".
 constexpr const char* exit_word(const Report& r) {
-    if (!r.exit_ok) return "STILL HIGH";
-    return r.vbus_exit_mv < kFiveMinMv ? "VBUS gone" : "back at 5 V";
+    if (!r.exit_ok) return K2_P("STILL HIGH");
+    return r.vbus_exit_mv < kFiveMinMv ? K2_P("VBUS gone") : K2_P("back at 5 V");
 }
 
 constexpr const char* name(Contract c) {
     switch (c) {
     case Contract::None: return "none";
-    case Contract::Own5V: return "own 5 V";
-    case Contract::Other: return "other";
+    case Contract::Own5V: return K2_P("own 5 V");
+    case Contract::Other: return K2_P("other");
     }
     return "?";
 }
