@@ -373,6 +373,88 @@ static void test_continue_page() {
     bt::hw::poll(t += 1000, true);
 }
 
+// Continue is only ever where the user moved the cursor: not where it lands after End, not on a row that turned into Continue
+// under a parked cursor when the end rule closed the run, not on the place's remembered row (run 6 of 2026-11-25).
+static void test_continue_never_under_the_cursor() {
+    Ui &ui = fresh_ui();
+    std::uint32_t t = 1000;
+    ui.tick(t);
+    bt::hw::service().start(bt::Mode::Charge, bt::Wiring::SamePort, true);
+    g_stub.pm.vbus_mv = 5000;
+    g_stub.pm.current_ma = 1000;
+    for (int i = 0; i < 5; i++) bt::hw::poll(t += 1000, true);
+    open_settled(ui, bench::Place::Battery, t);
+    const BatteryPage *p = ui.battery_page();
+    CHECK(p != nullptr);
+    if (!p) return;
+    CHECK(find_row(ui, p, view::Act::EndPhase, t));
+    press(ui, Button::Ok, t);
+    press(ui, Button::Ok, t);                                                       // End charge, confirmed
+    CHECK_EQ(int(bt::hw::service().rec().state()), int(bt::State::Done));
+    CHECK(p->act() != view::Act::Continue);
+    press(ui, Button::Ok, t);
+    press(ui, Button::Ok, t);                                                       // the same two presses again
+    CHECK_EQ(int(bt::hw::service().rec().state()), int(bt::State::Done));
+    // a parked cursor on End charge while the end rule closes the run
+    bt::hw::service().rec().finish();
+    bt::hw::poll(t += 1000, true);
+    bt::hw::service().start(bt::Mode::Charge, bt::Wiring::SamePort, true);
+    g_stub.pm.current_ma = 1000;
+    for (int i = 0; i < 5; i++) bt::hw::poll(t += 1000, true);
+    press(ui, Button::Back, t);
+    open_settled(ui, bench::Place::Battery, t);
+    p = ui.battery_page();
+    if (!p) return;
+    CHECK(find_row(ui, p, view::Act::EndPhase, t));
+    g_stub.pm.current_ma = 0;
+    for (int i = 0; i < 65; i++) {
+        bt::hw::poll(t += 1000, true);
+        ui.tick(t);
+    }
+    CHECK_EQ(int(bt::hw::service().rec().state()), int(bt::State::Done));
+    CHECK(p->act() != view::Act::Continue);
+    press(ui, Button::Ok, t);
+    press(ui, Button::Ok, t);
+    CHECK_EQ(int(bt::hw::service().rec().state()), int(bt::State::Done));
+    // left on End charge, the run ends elsewhere, the place opens again
+    bt::hw::service().rec().finish();
+    bt::hw::poll(t += 1000, true);
+    bt::hw::service().start(bt::Mode::Charge, bt::Wiring::SamePort, true);
+    g_stub.pm.current_ma = 1000;
+    for (int i = 0; i < 5; i++) bt::hw::poll(t += 1000, true);
+    while (ui.painting()) ui.tick(t += 20);
+    CHECK(find_row(ui, p, view::Act::EndPhase, t));
+    press(ui, Button::Back, t);
+    g_stub.pm.current_ma = 0;
+    for (int i = 0; i < 65; i++) bt::hw::poll(t += 1000, true);
+    CHECK_EQ(int(bt::hw::service().rec().state()), int(bt::State::Done));
+    open_settled(ui, bench::Place::Battery, t);
+    p = ui.battery_page();
+    if (!p) return;
+    CHECK(p->act() != view::Act::Continue);
+    press(ui, Button::Ok, t);
+    press(ui, Button::Ok, t);
+    CHECK_EQ(int(bt::hw::service().rec().state()), int(bt::State::Done));
+    // the newest stored run open on Share while a run started elsewhere (the remote) measures and then ends empty: the
+    // stored run's Continue row comes back under the cursor
+    CHECK(find_row(ui, p, view::Act::Runs, t));
+    press(ui, Button::Ok, t);
+    press(ui, Button::Ok, t);
+    CHECK(p->viewing_stored());
+    CHECK(find_row(ui, p, view::Act::Share, t));
+    bt::hw::service().start(bt::Mode::Charge, bt::Wiring::SamePort, true);
+    for (int i = 0; i < 3; i++) bt::hw::poll(t += 1000, true);
+    ui.tick(t += 1000);
+    while (ui.painting()) ui.tick(t += 20);
+    bt::hw::service().rec().end_phase();
+    bt::hw::poll(t += 1000, true);
+    ui.tick(t += 1000);
+    while (ui.painting()) ui.tick(t += 20);
+    CHECK(p->act() != view::Act::Continue);
+    press(ui, Button::Ok, t);
+    press(ui, Button::Ok, t);
+    CHECK_EQ(int(bt::hw::service().rec().state()), int(bt::State::Done));
+}
 
 // K2_DUMP=dir: the screen as k2_bt_<name>_r<rot>.panel (tools/panel2png.py), for the renders of a change.
 static void dump(const char *name, int rot) {
@@ -508,6 +590,7 @@ int main() {
     test_ident_and_footer();
     test_page();
     test_continue_page();
+    test_continue_never_under_the_cursor();
     test_rows_have_no_marker();
     test_classic();
     test_long_ident_lines();

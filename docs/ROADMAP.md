@@ -82,6 +82,23 @@ Everything is C++23; there are no C files left in `src/` (TinyUSB and lwIP under
 
 ## Current bugs
 
+- **A Done battery run was measuring again, unasked** (2026-11-25, run 6: ended by the end rule, read back done after;
+  later it read resumed 2x, 2 gaps, manual end, +888 s with 13.144 Wh out, the inline laptop's draw; times inferred, local
+  UTC+2). The counters fit one `reopen()` (Continue) plus one cold-boot resume (PIN POR at ~02:32:30; cause unlogged), or two
+  reopens in one boot. `reopen()` is reachable only through Continue (Battery page, second OK within 5 s; `battery continue`,
+  wire op 8; no op id collision found). The manual end: after Continue the cursor sits on End charge, so one OK pair ends it.
+  Hazards found and fixed on k2/battbugs (host tests only, not verified on hardware): after End the cursor landed on Continue
+  and a row that turned into Continue under a parked cursor (end rule, re-entry, stored view) took the next OK pair
+  (25998a55); a clean running warm checkpoint of a run flash holds as Done resumed it and rewrote the record (fdfa74db). The
+  v1 column fix (f0175176) does not touch version 2 records (test). Open: which press or op reopened it; `battery read 6
+  --json` `gap_s` and the last curve points tell the readings apart (a same-boot reopen adds the whole stopped time to
+  `gap_s`, a cold resume about a second), as would the device log's `[BATT]` lines from 01:45-02:32.
+- **Home / state energy stayed 0 with negative current** (2026-11-25, charger on the top port, up to 57 W for ~40 min:
+  `energy_mwh` 0, Home Wh/Ah 0, diagnose "Draws 0 W at 19.7 V, peak 0 mA"). Not a regression: EnergyMeter clamped negative
+  power and current to 0 since the first release, and `pd::diag` took only positive windows. Fixed on k2/battbugs (c5887406,
+  host tests only, not verified on hardware): both count magnitudes. Verify: charger on the top port, Home Wh/Ah and
+  `state` energy_mwh grow, diagnose shows the draw and its peak.
+
 - **Selftest slower than the 1.0.2 perf baseline** (2026-11-24, selftest images built with K2_SELFTEST=1 K2_PDSPEC=0 K2_WEBUSB=0 to fit). Against tools/perf_baseline.json (1.0.2-155, 2026-11-16): sweep_sum +60 %, fmt_line +31 %, gfx_fill +6 %, pd_sink +5-7 %, pd_codec +3 %, power_calc +2 %; rd_slow 19 % faster. The same image built at 30236902 (this morning) shows the same numbers, so the day's work (icons, V/A picker, flash carve, limiter, battery) is within ~1.3 % of it; the drift happened between 1.0.2 and 1.2.0-297. Open: bisect sweep_sum and fmt_line before refreshing the baseline. Cause found (not verified on hardware): lambdas of pinned/K2_HOT functions and strcmp, PixelSink, pd le32 and other callees sat past 0x08040000; pinned in 8531d244, gate step "hot" now fails on such lambdas (6599c925). Remeasure on the K2.
 
 - **Volume budget understates the root pair** (2026-11-24, found on k2/battresume). `tests/test_volume_budget.cpp` fills each store alone, so the three `/bt<id>.rec` show 0 blocks; with the device's real root (settings, the six store directories, `/log.txt`) the root pair splits (+2 blocks) at the first compaction after the third run file, on the base firmware too (246 B records, write_file at phase boundaries). Addressed on k2/battresume: the runs moved to their own `/bt` pair (2 blocks, budget row updated) and `test_battery_runs_and_the_real_root` fills the real root. Open: a K2_PDSTRESS=1 build with every store at cap is now 2 blocks short (the largest `/jr` misses).

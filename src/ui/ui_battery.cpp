@@ -77,11 +77,13 @@ BatteryPage::BatteryPage(UiContext &c) : PageBase(c, Page::Count, rail::kBattery
 
 void BatteryPage::enter() {
     view_ = View::Main;
+    armed_until_ = 0;
     build();
-    sel_ = std::clamp(static_cast<int>(ctx_.keep.place_sel[static_cast<int>(bench::Place::Battery)]), 0, count() - 1);
+    focus(ctx_.keep.place_sel[static_cast<int>(bench::Place::Battery)]);   // the remembered index may be Continue by now
 }
 
 void BatteryPage::leave() {
+    armed_until_ = 0;
     if (view_ == View::Main) ctx_.keep.place_sel[static_cast<int>(bench::Place::Battery)] = static_cast<uint8_t>(sel_);
 }
 
@@ -89,11 +91,13 @@ void BatteryPage::build() {
     if (view_ == View::Stored) {
         shown_ = view::shown(rec_, true);
         rows_ = view::rows(shown_, true, runs_sel_ == 0 && !bt::hw::service().rec().active());   // only the newest continues
+        follow();
         return;
     }
     bt::hw::service().rec().to_record(rec_);
     shown_ = view::shown(rec_, live_any());
     rows_ = view::rows(shown_, false);
+    follow();
 }
 
 int BatteryPage::count() const {
@@ -104,6 +108,22 @@ int BatteryPage::count() const {
 Act BatteryPage::act() const {
     if (view_ == View::Runs) return Act::Runs;
     return sel_ >= 0 && sel_ < rows_.n ? rows_.a[sel_] : Act::In;
+}
+
+// Continue only by the user's own Plus / Minus: a pair of OKs meant for End (or a row that turned into Continue when the run
+// ended) never reopens a run.
+void BatteryPage::focus(int sel) {
+    sel_ = std::clamp(sel, 0, count() - 1);
+    if (act() == Act::Continue) sel_ = 0;
+    cur_ = act();
+}
+
+void BatteryPage::follow() {
+    if (view_ == View::Runs || act() == cur_) return;
+    armed_until_ = 0;
+    for (int i = 0; i < rows_.n; i++)
+        if (rows_.a[i] == cur_) { sel_ = i; return; }
+    focus(0);
 }
 
 bool BatteryPage::armed() const {
@@ -129,7 +149,7 @@ void BatteryPage::set_view(View v, int sel) {
     armed_until_ = 0;
     bar_valid_ = false;
     build();
-    sel_ = std::clamp(sel, 0, count() - 1);
+    focus(sel);
     ctx_.rows.restart();
     ctx_.rows.invalidate();
 }
@@ -340,7 +360,7 @@ void BatteryPage::ok() {
         switch (sv.start(m, sv.wiring(), bt::hw::monitor_online())) {
         case bt::Recorder::Start::Ok:
             build();
-            sel_ = rows_.facts;   // the first thing to do now: End charge
+            focus(rows_.facts);   // the first thing to do now: End charge
             ctx_.rows.invalidate();
             break;
         case bt::Recorder::Start::NoMonitor: refuse(K2_P("No power monitor"), FooterTone::Error); break;
@@ -370,13 +390,13 @@ void BatteryPage::ok() {
             set_view(View::Main, 0);
         }
         build();
-        sel_ = rows_.facts;
+        focus(rows_.facts);   // End charge after a continue; after an end the In row (focus skips Continue)
         ctx_.rows.invalidate();
         return;
     case Act::Next:
         sv.rec().next();
         build();
-        sel_ = rows_.facts;
+        focus(rows_.facts);
         ctx_.rows.invalidate();
         return;
     case Act::Wiring:
@@ -415,6 +435,7 @@ bool BatteryPage::on_event(Event e) {
     if (e.press != Press::Short) return false;
     if (e.button == Button::Plus || e.button == Button::Minus) {
         sel_ = std::clamp(sel_ + (e.button == Button::Plus ? 1 : -1), 0, count() - 1);
+        cur_ = act();
         armed_until_ = 0;   // moving off disarms a hand end
         update(ctx_.now);   // the Ui re-reads labels() after the event: the OK verb follows the row
         return true;
@@ -430,6 +451,7 @@ bool BatteryPage::on_event(Event e) {
             set_view(View::Main, 0);
             for (int i = 0; i < rows_.n; i++)
                 if (rows_.a[i] == Act::Runs) sel_ = i;
+            cur_ = act();
             update(ctx_.now);
             return true;
         }

@@ -110,11 +110,18 @@ std::uint32_t crc_of(const Recorder &r) {
 }
 }  // namespace
 
+// A clean running checkpoint whose run is Done on flash predates the end (the end is written before the next checkpoint):
+// SRAM an older firmware left. Only Continue reopens a Done run.
+bool Service::stale(const Recorder &r) const {
+    Record d;
+    return fs_ && r.active() && !r.dirty() && store::load(*fs_, r.id(), d) && d.state == RunState::Done;
+}
+
 Service::Boot Service::boot(fs::Fs *f, Checkpoint *ckpt, bool warm) {
     fs_ = f && f->ready() ? f : nullptr;
     ckpt_ = ckpt;
     rec_ = Recorder{};
-    if (warm && ckpt_ && ckpt_->magic == kMagic && ckpt_->crc == crc_of(ckpt_->rec)) {
+    if (warm && ckpt_ && ckpt_->magic == kMagic && ckpt_->crc == crc_of(ckpt_->rec) && !stale(ckpt_->rec)) {
         if (ckpt_->rec.active()) {
             std::memcpy(static_cast<void *>(&rec_), &ckpt_->rec, sizeof rec_);
             rec_.resumed();

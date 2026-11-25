@@ -52,6 +52,8 @@ private:
     void load_runs();                  // runs_ from the volume
     int count() const;                 // the list's rows in the current view
     void set_view(View v, int sel);
+    void focus(int sel);               // the cursor on row sel; never on Continue unless the user moved it there
+    void follow();                     // the rows changed under the cursor: it keeps its row, else goes to the top
     void ok();
     void refuse(const char *text, FooterTone tone);
     bool armed() const;
@@ -67,6 +69,7 @@ private:
     int n_runs_ = 0;
     battery::view::Pair pair_{};       // the efficiency of the runs_ recorded apart (view::pair), shown atop Saved runs
     int runs_sel_ = 0;                 // the Runs view's selection, kept while a stored run is open
+    battery::view::Act cur_ = battery::view::Act::In;   // the row the cursor is on (follow)
     battery::view::Act armed_act_ = battery::view::Act::In;
     uint32_t armed_until_ = 0;         // a hand end waits for its second OK until then (0 = none armed)
     StrBuf<28> note_;                  // a refusal in the footer until note_until_
