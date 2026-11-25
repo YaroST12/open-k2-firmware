@@ -6,8 +6,16 @@
 #include <string_view>
 #include <vector>
 
+#include "k2/core/strpack.hpp"
 #include "k2/pdspec/result.hpp"
 #include "test_util.h"
+
+// Names and keys may be K2_P-packed: compare their text.
+static std::string_view txt(const char* s) {
+    static char b[4][64];
+    static unsigned i;
+    return k2::strpack::unpack(s, b[i++ & 3]);
+}
 
 using namespace k2::pdspec;
 
@@ -76,7 +84,7 @@ void inferred_limits_are_unverified() {
     // meter's resolution) is the one unverified check left.
     CHECK_COND(def(Check::PpsSettle).inferred);
     for (std::size_t k = 0; k < kChecks; ++k) CHECK_COND(def(Check(k)).inferred == (Check(k) == Check::PpsSettle));
-    CHECK_COND(std::string_view(verdict_name(Verdict::Unverified)) == "unverified");
+    CHECK_COND(txt(verdict_name(Verdict::Unverified)) == "unverified");
     Agg slow;
     slow.add(Kind::Max, {40000, 1000, 0, 25000});
     CHECK_COND(verdict(Check::PpsSettle, slow) == Verdict::Unverified);
@@ -102,18 +110,18 @@ void inferred_limits_are_unverified() {
 void defs_are_complete() {
     for (const auto& d : kDefs) {
         CHECK_COND(d.key != nullptr && d.label != nullptr);
-        CHECK_COND(std::string_view(d.label).size() <= 13);
+        CHECK_COND(txt(d.label).size() <= 13);
     }
-    CHECK_COND(std::string_view(def(Check::SourceReset).key) == "source_reset");
+    CHECK_COND(txt(def(Check::SourceReset).key) == "source_reset");
     // PSC1 readers see the first 21 checks in their old order; the new ones are appended.
     CHECK_EQ(int(Check::SourceReset) + 1, int(kChecksPsc1));
-    CHECK_COND(std::string_view(def(Check::ReattachCaps).key) == "reattach_caps");
+    CHECK_COND(txt(def(Check::ReattachCaps).key) == "reattach_caps");
     // The verified limits are judged: the detach pair (Type-C) and the programmable band / PS_RDY; the 20 mV settle stays unverified.
     for (const Check c : {Check::DetachSafe0V, Check::Reattach, Check::PpsBand, Check::PpsPsRdy, Check::PpsStatus, Check::AvsBand})
         CHECK_COND(!def(c).inferred);
     CHECK_COND(def(Check::PpsSettle).inferred);
     CHECK_COND(avs_check(Check::AvsTrack) && !avs_check(Check::PpsTrack));
-    for (std::size_t k = 0; k < kChecks; ++k) CHECK_COND(avs_check(Check(k)) == (std::string_view(kDefs[k].key).substr(0, 4) == "avs_"));
+    for (std::size_t k = 0; k < kChecks; ++k) CHECK_COND(avs_check(Check(k)) == (txt(kDefs[k].key).substr(0, 4) == "avs_"));
 }
 
 void blob_layout() {
