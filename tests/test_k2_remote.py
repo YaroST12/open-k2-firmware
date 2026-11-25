@@ -2111,6 +2111,10 @@ class PdLimitCli(unittest.TestCase):
         self.assertIn("forged pos 2: PDO 0x0002D0C8", text)
         off = self.run_cmd(["off"], self.status(0, 5), [])["pd_limit"]
         self.assertIn("pd-limit off (the charger resets)", kr.render("pd-limit", {"pd_limit": off}))
+        self.assertEqual(off["limit_mw"], 30000)   # the K2 keeps the last arm's limit; off shows none of it
+        self.assertIn("pd-limit off (the charger resets), limit none, ", kr.render("pd-limit", {"pd_limit": off}))
+        volts = dict(r, limit_mw=0)                # a per-tech limit (Max V) has no watt ceiling
+        self.assertIn("pd-limit limited, no watt cap, 2 lists", kr.render("pd-limit", {"pd_limit": volts}))
         nofit = self.run_cmd(["set", "--fixed", "off"], self.status(0, 8, 0, 0, ()), [])["pd_limit"]   # Fixed off, 9 V before the PPS
         self.assertIn("pd-limit off (not on this charger)", kr.render("pd-limit", {"pd_limit": nofit}))
 

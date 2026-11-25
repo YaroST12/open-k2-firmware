@@ -4369,7 +4369,9 @@ def cmd_pd_limit(link, a):
 def render_pd_limit(r):
     s = r["pd_limit"]
     head = f"pd-limit {s['state']}" + (f" ({s['why']})" if s["state"] == "off" and s["why"] != "none" else "")
-    lines = [head + f", limit {s['limit_mw'] / 1000:g} W, {s['injections']} lists, {s['rejects']} rejected, {s['ignores']} ignored"]
+    # Off keeps the last arm's numbers on the K2: the limit is none then. A per-tech limit (Max V/A) has no watt ceiling.
+    limit = "limit none" if s["state"] == "off" else f"limit {s['limit_mw'] / 1000:g} W" if s["limit_mw"] else "no watt cap"
+    lines = [head + f", {limit}, {s['injections']} lists, {s['rejects']} rejected, {s['ignores']} ignored"]
     if s["req_pos"]:
         lines.append(f"  sink Request pos {s['req_pos']}: {s['req_mw'] / 1000:g} W (RDO 0x{s['req_rdo']:08X})")
     lines += [f"  forged pos {i + 1}: PDO 0x{x:08X}" for i, x in enumerate(s["forged"])]
