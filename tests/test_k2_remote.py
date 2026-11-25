@@ -1322,6 +1322,19 @@ class ActivePd(unittest.TestCase):
         self.assertIn("held=True ", kr.render("pd", user))
         self.assertFalse(kr.decode_pd_trigger(bytes(base))["auto_hold"])   # firmware before the mark: 20 bytes
 
+    def test_pd_status_reports_the_observed_inline_contract(self):
+        # 27 bytes: ..., auto_hold u8, then the contract the K2 sniffed inline: flags u8 (bit0 valid), pos u8, mv u16, ma u16.
+        # Inline the K2 is not the sink: its own trigger reads "hard-reset 5 V" after a limiter-off reset; the live one is this.
+        base = bytes(self.TRIG + bytes([2, 0, 0, 0]) + bytes([0]) + bytes([0, 0]) + bytes([0]))
+        r = kr.decode_pd_trigger(base + bytes([1, 3]) + (12000).to_bytes(2, "little") + (3000).to_bytes(2, "little"))
+        self.assertEqual((r["observed"], r["obs_pos"], r["obs_mv"], r["obs_ma"]), (True, 3, 12000, 3000))
+        text = kr.render("pd", r)
+        self.assertIn("contract pdo=3 12 V 3 A (observed inline)", text)
+        self.assertNotIn("pdo=", text.split("contract")[0])   # the K2's own sink snapshot is not shown
+        old = kr.decode_pd_trigger(base)                   # firmware before: 21 bytes, the K2's own snapshot
+        self.assertFalse(old["observed"])
+        self.assertNotIn("observed", kr.render("pd", old))
+
     def test_request_without_confirm_sends_flag_zero(self):
         link = self.Link({kr.CMD_PD_TRIGGER_STATUS: self.TRIG})
         kr.cmd_pd(link, self.args(pd_cmd="request", pos=2, mv=0, ma=0, confirm=False))

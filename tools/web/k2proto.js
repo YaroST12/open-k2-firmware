@@ -657,7 +657,10 @@ var K2Proto = (function () {
     var v = dv(p);
     return { state: name(SINK_STATES, p[0]), result: name(SINK_RESULTS, p[1]), held: !!p[2], epr: !!p[3], pos: p[4],
              mv: v.getUint16(5, true), ma: v.getUint16(7, true), hard_resets: v.getUint32(9, true),
-             auto_hold: p.length > 20 ? !!p[20] : false };   // byte 20: the hold is the K2's own PDO 1 answer
+             auto_hold: p.length > 20 ? !!p[20] : false,   // byte 20: the hold is the K2's own PDO 1 answer
+             // bytes 21..26: the contract the K2 observed inline (flags bit0 valid, pos, mv u16, ma u16)
+             observed: p.length > 26 ? !!(p[21] & 1) : false, obs_pos: p.length > 26 ? p[22] : 0,
+             obs_mv: p.length > 26 ? v.getUint16(23, true) : 0, obs_ma: p.length > 26 ? v.getUint16(25, true) : 0 };
   }
 
   // MEMORY: 11 u32 (MEMORY_FIELDS), u16 fs block bytes, u8 flags (bit0 fs measured, bit1 the firmware has polled).

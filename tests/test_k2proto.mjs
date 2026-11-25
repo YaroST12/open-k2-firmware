@@ -1504,10 +1504,14 @@ test("match decodes the verdict, flags and row states", () => {
 
 test("pd trigger status decodes 13 bytes", () => {
   const t = P.decodePdTrigger(u8(5, 1, 1, 0, 4, 0x20, 0x4E, 0xB8, 0x0B, 1, 0, 0, 0));
-  assert.deepEqual(t, { state: "ready", result: "ok", held: true, epr: false, pos: 4, mv: 20000, ma: 3000, hard_resets: 1, auto_hold: false });
+  assert.deepEqual(t, { state: "ready", result: "ok", held: true, epr: false, pos: 4, mv: 20000, ma: 3000, hard_resets: 1, auto_hold: false,
+                       observed: false, obs_pos: 0, obs_mv: 0, obs_ma: 0 });
   // byte 20 (21-byte frame): the hold is the K2's own PDO 1 answer
   const a = P.decodePdTrigger(u8(5, 1, 1, 0, 1, 0x88, 0x13, 0xB8, 0x0B, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1));
   assert.equal(a.held, true); assert.equal(a.auto_hold, true);
+  // bytes 21..26 (27-byte frame): the contract observed inline, 12 V 3 A at position 3
+  const o = P.decodePdTrigger(u8(0, 6, 0, 0, 0, 0x88, 0x13, 0xB8, 0x0B, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 3, 0xE0, 0x2E, 0xB8, 0x0B));
+  assert.equal(o.observed, true); assert.equal(o.obs_pos, 3); assert.equal(o.obs_mv, 12000); assert.equal(o.obs_ma, 3000);
   assert.throws(() => P.decodePdTrigger(u8(1, 2)), P.FrameError);
 });
 
