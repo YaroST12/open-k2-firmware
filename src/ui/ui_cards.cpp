@@ -621,10 +621,10 @@ Strip CardsPage::labels() const {
         l[Button::Back] = n_ > 0 ? sl::BackDel : sl::Back;
         break;
     case Mode::Detail:
-        l = list_strip({{sl::BackDel, sl::Up, sl::OpenShare, sl::Dn}}, row_, rows());
+        l = {{sl::BackDel, sl::Up, sl::OpenShare, sl::Dn}};
         break;
     case Mode::Group:
-        l = list_strip({{sl::Back, sl::Up, sl::Dim, sl::Dn}}, row_, rows());
+        l = {{sl::Back, sl::Up, sl::Dim, sl::Dn}};
         break;
     case Mode::Confirm:
         l = {{sl::Back, sl::Dim, sl::Delete, sl::Dim}};
