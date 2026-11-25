@@ -12,6 +12,7 @@
 #include "fake_lcd.h"
 #include "k2/chargertest/report_card_hw.hpp"
 #include "test_util.h"
+#include "k2/core/strpack.hpp"
 #include "k2/ui/ui.hpp"
 #include "ui_stubs.h"
 #include "k2/ui/ui_style.hpp"
@@ -318,7 +319,7 @@ static void test_tools_hub_lists_cards() {
     CHECK_STR(tool_name(11), "Device twins");
     CHECK_EQ(tool_menu(11) == Menu::Twin, 1);
     CHECK_EQ(int(tool_readiness(11, SetupState{}, false).level), int(ToolLevel::Ready));
-    CHECK_EQ(std::strlen(tool_hint(11)) <= 24 && std::strlen(tool_hint(11)) > 0, 1);
+    CHECK_EQ(k2::strpack::cells_rt(tool_hint(11)) <= 24 && std::strlen(tool_hint(11)) > 0, 1);
     CHECK_STR(tool_name(8), "PD diagnosis");
     CHECK_EQ(tool_menu(8) == Menu::Diagnosis, 1);
     CHECK_STR(tool_name(9), "Report cards");
@@ -327,7 +328,7 @@ static void test_tools_hub_lists_cards() {
     CHECK_EQ(tool_menu(10) == Menu::Diag, 1);
     CHECK_EQ(int(tool_readiness(8, SetupState{}, false).level), int(ToolLevel::Ready));
     CHECK_EQ(int(tool_readiness(9, SetupState{}, false).level), int(ToolLevel::Ready));
-    CHECK_EQ(std::strlen(tool_hint(9)) <= 24 && std::strlen(tool_hint(9)) > 0, 1);
+    CHECK_EQ(k2::strpack::cells_rt(tool_hint(9)) <= 24 && std::strlen(tool_hint(9)) > 0, 1);
 }
 
 // K2_DUMP=dir: the FH22 card (#18, from the golden fixtures) as the user sees it, 1:1 at rotation 3 (buttons at the bottom), into

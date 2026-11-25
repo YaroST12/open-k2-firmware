@@ -7,6 +7,7 @@
 // External data (saved names, vendor strings, PDO lists read off the device) uses fit_data and is only counted.
 // A truncation is fixed by rewording the copy (docs/UI_DESIGN.md section 6), not by hiding it here.
 #include "test_util.h"
+#include "k2/core/strpack.hpp"
 #include "card_fixtures.h"
 #include "diag_fixture.h"
 #include "fake_lcd.h"
@@ -844,7 +845,7 @@ void test_reach_words() {
                                                      result_layout::Tone::Skip, result_layout::Tone::Pending};
     unsigned too_long = 0, shapes = 0;
     for (const auto a : kRanges) {
-        const size_t label = std::strlen(result_layout::display_name(a));
+        const size_t label = static_cast<size_t>(k2::strpack::cells_rt(result_layout::display_name(a)));   // packed: the decoded name
         for (const uint16_t lo : kLos)
             for (unsigned adv = 6000; adv <= 48000; adv += 1000)
                 for (unsigned hi = lo; hi <= adv; hi += 100)
@@ -867,7 +868,7 @@ void test_reach_words() {
     CHECK_EQ(too_long, 0u);
     CHECK_EQ(shapes > 1000, true);
     // The merged row's toast names its sweep's peak: "<label>: peak 48.0V@48.0V" (the fold's words take the whole line instead).
-    for (const auto a : kRanges) CHECK_EQ(std::strlen(result_layout::display_name(a)) + 2 + std::strlen("peak 48.0V@48.0V") <= static_cast<size_t>(kToastCells), true);
+    for (const auto a : kRanges) CHECK_EQ(static_cast<size_t>(k2::strpack::cells_rt(result_layout::display_name(a))) + 2 + std::strlen("peak 48.0V@48.0V") <= static_cast<size_t>(kToastCells), true);
     trunc::context("");
 }
 

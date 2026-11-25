@@ -622,8 +622,8 @@ static void test_actions() {
         all.attached = all.caps_valid = all.cable_valid = true;
         const int c = actions(static_cast<Tab>(t), all, it);
         for (int i = 0; i < c; i++) {
-            CHECK_EQ(std::strlen(it[std::size_t(i)].label) <= 24, 1);
-            CHECK_EQ(std::strlen(it[std::size_t(i)].why) <= 24, 1);
+            CHECK_EQ(k2::strpack::cells_rt(it[std::size_t(i)].label) <= 24, 1);
+            CHECK_EQ(k2::strpack::cells_rt(it[std::size_t(i)].why) <= 24, 1);
         }
     }
 }
