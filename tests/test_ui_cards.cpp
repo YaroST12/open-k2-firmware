@@ -396,7 +396,8 @@ static void test_sheet_ufcs_modes() {
     CardSheet s;
     cards_sheet(c, false, kUfcs, s);
     std::string rows;
-    for (unsigned i = 0; i < s.n; ++i) rows += std::string(s.row[i].key) + "=" + std::string(s.row[i].line[0]) + ";";
+    char kb[24];   // keys are packed
+    for (unsigned i = 0; i < s.n; ++i) rows += std::string(strpack::unpack(s.row[i].key, kb)) + "=" + std::string(s.row[i].line[0]) + ";";
     CHECK(rows.find("Mode 1=3.3-5.5V 5A;Mode 2=5-11V 3A;Mode 3=5-20V 3A;") != std::string::npos);
     CHECK(rows.find("Detail code") == std::string::npos);                         // a pass has no cause and no detail code
 
@@ -405,7 +406,7 @@ static void test_sheet_ufcs_modes() {
     for (auto &m : old.ufcs) m = {};
     CardSheet o;
     cards_sheet(old, false, kUfcs, o);
-    for (unsigned i = 0; i < o.n; ++i) CHECK(std::strncmp(o.row[i].key, "Mode", 4) != 0);
+    for (unsigned i = 0; i < o.n; ++i) CHECK(!strpack::unpack(o.row[i].key, kb).starts_with("Mode"));
 
     rc::Card wide = c;                                                             // the widest text each field can hold
     wide.ufcs[0] = {255, 511, 127};

@@ -101,7 +101,7 @@ constexpr const char* kReattachConfirm = K2_P("Press again, K2 blinks once");
 static_assert(fits_px_p(kSmallAdvPx, kReattachConfirm, 216), "the re-attach confirmation is wider than the footer");
 // Depth row's note on Tests (charger_test::Level order: Medium, Light, Deep).
 // A build with the PD spec stage (K2_PDSPEC) says so on Deep; the default image has no such stage and keeps the old words.
-constexpr const char *kLevelItems[ct::kLevelCount] = {"Light", K2_P("Medium"), "Deep"};
+constexpr const char *kLevelItems[ct::kLevelCount] = {K2_P("Light"), K2_P("Medium"), "Deep"};
 constexpr int level_segment(ct::Level l) { return l == ct::Level::Light ? 0 : l == ct::Level::Medium ? 1 : 2; }
 static_assert(level_segment(ct::next_level(ct::Level::Light)) == 1 && level_segment(ct::next_level(ct::Level::Medium)) == 2 &&
               level_segment(ct::next_level(ct::Level::Deep)) == 0, "OK steps the level to the right and wraps");
@@ -114,11 +114,13 @@ const char *level_note(ct::Level l) { return kLevelNotes[unsigned(l) < ct::kLeve
 // does not serve, Runner::paint_blocked; Engine::blocks_paint names the protocols). One Info footer line says why, painted before
 // the engine starts and left alone until the window ends. Protocols with no such window say nothing: the QC2 / QC3 / QC3+ handshake
 // is served from the idle hook and never stops the screen. Footer text: 27 cells at most.
+// k2-plain-begin: tests search the footer for these words
 constexpr const char* kFcpWords = "FCP: handshake";
 constexpr const char* kScpWords = "SCP: handshake";
 constexpr const char* kVoocWords = "VOOC: listening";
 constexpr const char* kUfcsWords = "UFCS: handshake";
 constexpr const char* kVivoWords = "VIVO: handshake";
+// k2-plain-end
 constexpr const char* kHandshakeWords[] = {kFcpWords, kScpWords, kVoocWords, kUfcsWords, kVivoWords};
 static_assert(all_fit(kHandshakeWords, kSmallAdvPx, 216), "a handshake footer line is wider than the footer");
 const char* handshake_words(fc::Proto p) {
@@ -186,7 +188,7 @@ unsigned entries(uint32_t mask) {
     return selected(mask & ~kFamilies[kFamPd]) + bool(mask & ct::kPdFixedAlgorithms) + bool(mask & ct::kPpsAlgorithms);
 }
 // The footer's words for a D+/D- row skipped because the lines read open: both causes (a one-sided plug, a charge-only cable) in the footer's cells.
-constexpr std::string_view kLinesOpenFooter = "Open: flip or data cable";
+constexpr std::string_view kLinesOpenFooter = "Open: flip or data cable";   // k2-plain: size() checked below
 static_assert(kLinesOpenFooter.size() <= static_cast<size_t>(kFooterCells), "the lines-open footer is wider than the footer line");
 const char* detail_name(const ct::Step& s) {
     if (s.reason != ct::Reason::Request) return ct::explanation(s);
@@ -344,13 +346,13 @@ void ChargerTestSession::detach() {
     fusb302::unit_detach();
 }
 void ChargerTestSession::attach(ct::Mode m) {
-    K2LOG("[TEST] unit attach: Rd on, %s\n", m == ct::Mode::Legacy ? "PD-silent" : "PD");
+    K2LOG("[TEST] unit attach: Rd on, %s\n", m == ct::Mode::Legacy ? K2_P("PD-silent") : "PD");
     runev::emit(runev::Code::Attach, ctx_.now, static_cast<uint8_t>(m));
     fusb302::unit_attach(m == ct::Mode::Legacy);
 }
 // A self-powered K2's boundary: the pinned Rd stays, CC stays closed, VBUS stays up (Soft_Reset for a Pd unit, PD-silent for a Legacy one).
 void ChargerTestSession::hold(ct::Mode m) {
-    K2LOG("[TEST] unit hold: Rd kept, %s\n", m == ct::Mode::Legacy ? "PD-silent" : "Soft_Reset");
+    K2LOG("[TEST] unit hold: Rd kept, %s\n", m == ct::Mode::Legacy ? K2_P("PD-silent") : K2_P("Soft_Reset"));
     runev::emit(runev::Code::Hold, ctx_.now, static_cast<uint8_t>(m));
     fusb302::unit_hold(m == ct::Mode::Legacy);
 }
@@ -634,7 +636,7 @@ void ChargerTestSession::decide_reattach() {
     reattach_plan_ = held && rdintent::plan_reattach(run_cable_, run_facts_, fusb302::pin_rd(), fusb302::self_powered(), true);
     K2LOG("[CT] re-attach decision: claim %u W, best offer %u W, nothing above 3 A=%u -> %s\n", unsigned(claim),
           unsigned(rdintent::best_power_w(fusb302::caps())), unsigned(!rdintent::offers_above_ceiling(fusb302::caps())),
-          reattach_plan_ ? "blink" : "no blink");
+          reattach_plan_ ? K2_P("blink") : K2_P("no blink"));
 }
 // The planned re-attach (the K2 lives on the charger's VBUS and the charger skipped the cable at its attach): the run is journaled,
 // the identity armed. The intent marker goes to the volume first, then the Rd drops for kReattachGapMs with the Ra kept. The
@@ -663,7 +665,7 @@ void ChargerTestSession::reattach_step(uint32_t now) {
     // rd_glitch_end forgot the old contract, so Ready here is the charger's new one: this K2 outlived the gap.
     const bool ready = fusb302::sink_status().state == pd::SinkState::Ready;
     if (!ready && now - reattach_t0_ < kReattachWaitMs) return;
-    K2LOG("[TEST] planned re-attach: %s after %u ms, the run goes on\n", ready ? "new contract" : "no new contract", unsigned(now - reattach_t0_));
+    K2LOG("[TEST] planned re-attach: %s after %u ms, the run goes on\n", ready ? K2_P("new contract") : K2_P("no new contract"), unsigned(now - reattach_t0_));
     reattach_drop();
     runner_.hold(false);
 }
@@ -745,7 +747,7 @@ bool ChargerTestSession::boot_load(bool cancel) {
         // The replay (~2.6 KB) is transient: it is leased from the scratch arena only while its fields move into the Runner and
         // the page (steps, options, cable identity); a pending resume keeps those copies, never the Replay. The lease covers
         // pure copies and a log line, nothing that leases again; the journal write below runs after it is released.
-        const scratch::Lease lease("cjrn.boot");
+        const scratch::Lease lease("cjrn.boot");   // k2-plain: scratch owner tag
         auto& r = scratch::make<cj::Replay>();
         if (!cj::hw::load(r)) {
             if (fusb302::rd_inherited()) fusb302::self_power_release();
@@ -773,7 +775,7 @@ bool ChargerTestSession::boot_load(bool cancel) {
         resume_rd_ = resume_hold_ = resume_refused_ = false; resume_judged_ = 0; guard_.clear();
         K2LOG("[TEST] journal: run %u unfinished, %u steps, phase %u, lost %u, resumed %u -> %s\n", unsigned(r.run_id), unsigned(r.count),
                      unsigned(r.phase), unsigned(r.attempts), unsigned(r.resumed),
-                     cancel ? "cancelled (BACK held)" : !resume_pending_ ? "nothing to resume" : auto_resume_ ? "auto-resume" : "resume?");
+                     cancel ? K2_P("cancelled (BACK held)") : !resume_pending_ ? K2_P("nothing to resume") : auto_resume_ ? K2_P("auto-resume") : K2_P("resume?"));
     }
     if (!resume_pending_) {
         // A run that cannot go on is closed in the journal, so the next boot does not find it again.
@@ -842,7 +844,7 @@ void ChargerTestSession::resume_rd_step(uint32_t now) {
     if (resume_rd_) {
         if (!wait_paused_ && wait_.state() != State::Waiting) return;   // settled: the gate decides from here
         if (wait_tick(now) != State::Waiting) K2LOG("[TEST] resume: charger wait over (%s), VBUS %d mV\n",
-                                                    wait_.state() == State::Ready ? "up" : "timeout", int(ctx_.vbus_fast_mv));
+                                                    wait_.state() == State::Ready ? "up" : K2_P("timeout"), int(ctx_.vbus_fast_mv));
         return;
     }
     // Self-supplied (pinned Rd, or fed through the A port): VBUS comes without our help. Not decided: the supply is unknown.
@@ -853,7 +855,7 @@ void ChargerTestSession::resume_rd_step(uint32_t now) {
         if (resume_judged_ != 0 && static_cast<int32_t>(now - resume_judged_) < static_cast<int32_t>(raguard::kSampleMs)) return;
         resume_judged_ = now;
         const auto t = guard_topology(now, false);
-        if (t != topology_) K2LOG("[TEST] resume: lines say %s, identity %s\n", raguard::name(t), raguard::spoof_allowed(t) ? "armed" : "waits");
+        if (t != topology_) K2LOG("[TEST] resume: lines say %s, identity %s\n", raguard::name(t), raguard::spoof_allowed(t) ? K2_P("armed") : K2_P("waits"));
         topology_ = t;
         resume_refused_ = !raguard::spoof_allowed(t);
         if (resume_refused_) return;   // behind a cable (or nothing plugged in): the identity cannot answer, wait for a direct plug
@@ -1000,7 +1002,7 @@ bool ChargerTestSession::present_rd(uint32_t now) {
         // The log says what the cable turned out to be, not only whether it was read: a chip that stayed silent (pull-down
         // seen, no answer) is not "no e-marker". Log only: the limits still treat an unread cable as unread (cable_observed).
         K2LOG("[TEST] START e-marker scan (VCONN, VBUS %d mV): %s, cable %s %u mV %u mA\n", int(ctx_.vbus_fast_mv),
-              found ? "found" : "no answer",
+              found ? K2_P("found") : K2_P("no answer"),
               cablefact::name(cablefact::classify(cable.observed, fusb302::last_cable_read(), fusb302::pull_down())),
               unsigned(cable.max_mv), unsigned(cable.max_ma));
     } else K2LOG("[TEST] START: no e-marker scan (VBUS %d mV, Rp on the wire %d), cable not read\n", int(ctx_.vbus_fast_mv), int(rp));
@@ -1066,7 +1068,7 @@ void ChargerTestSession::wait_done(uint32_t now) {
         pdtrace::mark(pdtrace::kMarkStartWait, uint16_t(std::clamp<int32_t>(ctx_.vbus_fast_mv, 0, 0xFFFF)),
                       uint16_t(waited | (up ? 0x8000u : 0u)));
     }
-    K2LOG("[TEST] Rd for the start: VBUS %d mV (%s)\n", int(ctx_.vbus_fast_mv), up ? "up" : "timeout");
+    K2LOG("[TEST] Rd for the start: VBUS %d mV (%s)\n", int(ctx_.vbus_fast_mv), up ? "up" : K2_P("timeout"));
     launch();   // the wait was the last stage: the run starts by itself (or the preflight refuses, back on Review)
 }
 // BACK, a second OK or leaving the page during the wait: nothing started, the Rd (and the dialog's identity) goes back.
@@ -1709,7 +1711,7 @@ void ChargerTestPage::build_grid(bool running_grid, bool note_cuts) {
                                          s_.runner_.reason(), {}, 0, s_.runner_.sweep_view());
     oem.headers = false;   // the grid is units only: no separator rows between the sections
     oem.vendor = result_layout::vendor_oem_name(s_.card_id_.vid);
-    if (!oem.vendor && facts.xiaomi_seen) oem.vendor = "Xiaomi";   // SVID 0x2717 seen on the wire even without a VID
+    if (!oem.vendor && facts.xiaomi_seen) oem.vendor = K2_P("Xiaomi");   // SVID 0x2717 seen on the wire even without a VID
     oem.mi_auth = facts.mi_auth;
     oem.oppo_svid = report_card::oppo_note(card) != nullptr;
     oem.rebalanced = s_.runner_.evidence().rebalanced;   // the source re-split its budget mid-run this many times
@@ -1739,7 +1741,7 @@ void ChargerTestPage::build_grid(bool running_grid, bool note_cuts) {
     line_n_ = result_layout::build_compact(layout_, kGridMetrics, lines_, s_.runner_.steps(), oem, s_.runner_.sweep_view());
     split_ = specsec::split(ev.spec, s_.runner_.spec_apdo(), result_layout::range_positions(s_.runner_.steps()));
     // build_compact() counts a row label or word it had to shorten: the gate fails on it like on any other cut.
-    if (note_cuts && layout_.cuts) K2_TRUNC_NOTE_HERE(trunc::Kind::Cut, "results grid label or word", layout_.cuts);
+    if (note_cuts && layout_.cuts) K2_TRUNC_NOTE_HERE(trunc::Kind::Cut, "results grid label or word", layout_.cuts);   // k2-plain: host truncation note
 }
 void ChargerTestPage::build_results() {
     build_grid(false, true);
@@ -2041,7 +2043,7 @@ const char *cc_word(int mv) {
     if (mv < 200) return "open";
     if (mv < 660) return K2_P("Rp USB");
     if (mv < 1230) return K2_P("Rp 1.5A");
-    if (mv < 2200) return "Rp 3A";
+    if (mv < 2200) return K2_P("Rp 3A");
     return "open";
 }
 using waitplus::cc_open;   // the same ladder cut as cc_word's "open" (and the footer's choice)
@@ -2146,7 +2148,7 @@ static kit::Verdict range_verdict(specsec::RangeTone t) {
     }
     if (!detail) f.put(name).put(": ");
     if (c.fails) {
-        f.put("fail ").put_u32(c.fails);
+        f.put(K2_P("fail ")).put_u32(c.fails);
         if (detail && c.detailed()) f.put(" of ").put_u32(c.n).put(K2_P(" measured"));
         return FooterTone::Caution;
     }
@@ -2195,7 +2197,7 @@ static FooterTone range_footer(StrBuf<32> &f, const ct::Runner &runner, A algo, 
     if (spec_bad && !lost) { f.clear(); spectext::range_footer(f, *sp, rs); return FooterTone::Caution; }
     if (has_pts && (lost || rc.tone == result_layout::Tone::Pass)) {   // both 5 V parts
         char v[12] = {};
-        f.put("peak ");
+        f.put(K2_P("peak "));
         f.put(std::string_view(v, ctsweep::format_mv(rw->sum.peak_mv, v))).put("V@");
         f.put(std::string_view(v, ctsweep::format_mv(rw->sum.peak_at_mv, v))).put_char('V');
         return lost || dev ? FooterTone::Caution : FooterTone::Ok;
@@ -2417,7 +2419,7 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
     switch (s_.stage_) {
     case Stage::Algorithms:
         if (index == kDepthRow) {
-            out.text = "Depth";
+            out.text = K2_P("Depth");
             out.tail = kLevelItems[level_segment(s_.options_.level)];
             out.tail_color = kFocus;
             if (focused) out.note = level_note(s_.options_.level);
@@ -2491,7 +2493,7 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
     case Stage::Resume:
         if (index == 0) {
             const auto c = counts(s_.runner_);
-            row_text_.put("Run ").put_u32(s_.runner_.run_id()).put(": ").put_u32(c.pass + c.fail + c.skip + c.caution).put_char('/').put_u32(c.total).put(" done");
+            row_text_.put("Run ").put_u32(s_.runner_.run_id()).put(": ").put_u32(c.pass + c.fail + c.skip + c.caution).put_char('/').put_u32(c.total).put(K2_P(" done"));
         } else if (index == 1) {
             out.text = ct::refusal_words(s_.runner_.reason());
             out.text_color = kCaution;
@@ -2513,7 +2515,7 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
         } else {
             row_text_.put(report_card::detail::alg_label(d.index));
             if (d.kind == DL::RangeMax || (d.was_dv && d.now_dv)) {
-                row_text_.put(d.kind == DL::RangeMax ? " max" : " fail");
+                row_text_.put(d.kind == DL::RangeMax ? " max" : K2_P(" fail"));
                 pg::put_dv(row_tail_, d.was_dv);
                 row_tail_.put(" > ");
                 pg::put_dv(row_tail_, d.now_dv);
@@ -2854,12 +2856,12 @@ void ChargerTestPage::paint_review() {
     };
     StrBuf<48> buf;
     // the PD spec stage's checks (Deep, K2_PDSPEC) are tests too
-    buf.put_u32(s_.summary_.runnable + s_.summary_.spec_checks).put(K2_P(" run, ")).put_u32(s_.summary_.skipped).put(" skip");
-    if (!kv(0, "Tests", buf.view(), s_.summary_.runnable ? kText : kCaution)) return;
+    buf.put_u32(s_.summary_.runnable + s_.summary_.spec_checks).put(K2_P(" run, ")).put_u32(s_.summary_.skipped).put(K2_P(" skip"));
+    if (!kv(0, K2_P("Tests"), buf.view(), s_.summary_.runnable ? kText : kCaution)) return;
     buf.clear();
     buf.put(kLevelItems[level_segment(s_.options_.level)]);
     if (s_.options_.pps_sweep || s_.options_.avs_sweep) buf.put_char(' ').put(ctsweep::depth_name(s_.options_.sweep_depth));   // the sweep's step, when a sweep runs
-    if (!kv(1, "Depth", buf.view(), kText)) return;
+    if (!kv(1, K2_P("Depth"), buf.view(), kText)) return;
 
     buf.clear();
     const auto sel = ctx_.cables.selected();
@@ -2869,7 +2871,7 @@ void ChargerTestPage::paint_review() {
         buf.put(row_.text.view());
         if (!row_.rating.empty()) buf.put_char(' ').put(row_.rating);
     }
-    if (!kv(2, "Spoof", buf.view(), kText)) return;
+    if (!kv(2, K2_P("Spoof"), buf.view(), kText)) return;
 
     // The best advertised level (what the charger offers), then who powers the K2.
     buf.clear();
@@ -2891,7 +2893,7 @@ void ChargerTestPage::paint_review() {
         buf.put("--");
     }
     if (!kv(3, "Peak", buf.view(), buf.view() == "--" ? kDim : kText)) return;
-    if (!kv(4, "Power", self_supplied() ? K2_P("From the charger") : K2_P("K2 on USB"), kText)) return;
+    if (!kv(4, K2_P("Power"), self_supplied() ? K2_P("From the charger") : K2_P("K2 on USB"), kText)) return;
 
     if (s_.confirming_) {
         const int32_t left = std::max<int32_t>(0, static_cast<int32_t>(s_.confirm_until_ - ctx_.now));
@@ -2900,7 +2902,8 @@ void ChargerTestPage::paint_review() {
         buf.put(K2_P("closes in ")).put_u32(static_cast<uint32_t>((left + 999) / 1000)).put_char('s');
         action_.draw_armed(K2_P("CONFIRM"), buf.view(), permille, pbg);
     } else {
-        action_.draw_idle("START", K2_P("other port must be empty"), pbg, true);
+        action_.draw_idle("START",   // k2-plain: verb measured by the ticket
+                       K2_P("other port must be empty"), pbg, true);
     }
 }
 
@@ -3415,7 +3418,7 @@ void ChargerTestPage::draw_capture(const transcap::Meta &m) {
     draw_range_trace(ctx_.content, kX, kTop, static_cast<int>(transcap::kThumbCols), kScale, kHeight, m.thumb.lo.data(), m.thumb.hi.data(),
                      m.thumb.accept_col, kCaution, m.thumb.trig_col, kError, kVolt, kBg);
     StrBuf<40> cap;
-    cap.put("Peak ").put_fixed(m.thumb.vmax_mv, 2).put("V ").put(transcap::reason_name(m.reason));
+    cap.put(K2_P("Peak ")).put_fixed(m.thumb.vmax_mv, 2).put("V ").put(transcap::reason_name(m.reason));
     char fitted[kFitBuf];
     gfx_text(ctx_.content, kLabelFont, 6, kTop + kHeight + 1, fit_text(kLabelFont, cap.view(), 150, fitted), kDim, kBg);
     if (m.thumb.accept_col != 0xFF) gfx_text(ctx_.content, kLabelFont, 160, kTop + kHeight + 1, K2_P("|Accept"), kCaution, kBg);
@@ -3472,7 +3475,7 @@ void ChargerTestPage::paint_detail() {
             const auto modes = s_.runner_.mi_modes();
             for (int n = 0; n < 4; ++n) {
                 StrBuf<40> line;
-                if (n == 0) line.put("Auth ").put(mi_unlock::chain_text(s.detail).view());
+                if (n == 0) line.put(K2_P("Auth ")).put(mi_unlock::chain_text(s.detail).view());
                 else if (n == 1 && mi_unlock::chain_done(s.detail)) {
                     if (modes.empty()) line.put(K2_P("No new modes"));
                     else line.put_u32(static_cast<uint32_t>(modes.size())).put(modes.size() == 1 ? K2_P(" mode unlocked") : K2_P(" modes unlocked"));
@@ -3555,12 +3558,12 @@ void ChargerTestPage::paint_detail() {
             break;
         default:
             if (ct::is_mi_mode(s)) {   // the offer the chain unlocked (the row's own PDO)
-                key = "After";
+                key = K2_P("After");
                 val.put(mi_unlock::mode_text({0, s.pdo, s.pos}, false, kDet.value_chars).view());
                 sv = val.view();
                 break;
             }
-            key = "Scope";
+            key = K2_P("Scope");
             sv = K2_P("Voltage hold");
             break;
         }
@@ -3584,7 +3587,7 @@ void ChargerTestPage::paint_spec_detail() {
             if (ctx_.budget && !ctx_.budget->admit(static_cast<int>(c.w) * 36, true)) return;
             const bool fail = spec_list_.fails != 0;
             StrBuf<20> cnt;
-            if (fail) cnt.put_u32(spec_list_.fails).put(" of ").put_u32(spec_list_.n).put(" fail");
+            if (fail) cnt.put_u32(spec_list_.fails).put(" of ").put_u32(spec_list_.n).put(K2_P(" fail"));
             else cnt.put_u32(spec_list_.n).put(K2_P(" within limit"));
             draw_band(c, fail ? kit::Verdict::Fail : kit::Verdict::Pass, fail ? "FAIL" : "PASS", false, cnt.view());
             detail_step_ = 1;
