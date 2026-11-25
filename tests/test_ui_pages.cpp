@@ -591,6 +591,40 @@ static void test_cable_tab_save_and_list() {
     g_stub = StubState();
 }
 
+// Two saved cables: the list and the detail stop at their ends, Up dim on the first cable, Dn on the last.
+static void test_saved_cables_stop_at_ends() {
+    Ui &ui = fresh_ui();
+    g_stub = StubState();
+    for (uint16_t s = 1; s <= 2; s++) {
+        emlib::Entry e;
+        e.seq = s;
+        e.name[0] = char('A' + s);
+        g_stub.lib.push_back(e);
+    }
+    uint32_t t = 26000;
+    CHECK_EQ(ui.push_menu(Menu::Emarker, t += 100), 1);
+    ui.tick(t += 50);
+    const auto dim = [&](Button b) { return ui.labels().b[static_cast<int>(b)].dim; };
+    const auto key = [&](Button b) { ui.on_button(b, ButtonEvent::Short, t += 50); ui.tick(t += 10); };
+    CHECK_EQ(dim(Button::Minus), true);  CHECK_EQ(dim(Button::Plus), false);
+    key(Button::Minus);                                     // no wrap to the last
+    CHECK_EQ(dim(Button::Minus), true);  CHECK_EQ(dim(Button::Plus), false);
+    key(Button::Plus);
+    CHECK_EQ(dim(Button::Minus), false); CHECK_EQ(dim(Button::Plus), true);
+    key(Button::Plus);                                      // no wrap to the first
+    CHECK_EQ(dim(Button::Minus), false); CHECK_EQ(dim(Button::Plus), true);
+    key(Button::Ok);                                        // the last cable's detail
+    CHECK_STR(label(ui, Button::Ok), "Delete");
+    CHECK_EQ(dim(Button::Minus), false); CHECK_EQ(dim(Button::Plus), true);
+    key(Button::Plus);
+    CHECK_EQ(dim(Button::Minus), false); CHECK_EQ(dim(Button::Plus), true);
+    key(Button::Minus);
+    CHECK_EQ(dim(Button::Minus), true);  CHECK_EQ(dim(Button::Plus), false);
+    key(Button::Minus);
+    CHECK_EQ(dim(Button::Minus), true);  CHECK_EQ(dim(Button::Plus), false);
+    g_stub = StubState();
+}
+
 static void test_spoof_tool() {
     Ui &ui = fresh_ui();
     g_stub = StubState();
@@ -3180,6 +3214,7 @@ int main() {
     test_fc_pill_text();
     test_home_gauges_and_footer();
     test_cable_tab_save_and_list();
+    test_saved_cables_stop_at_ends();
     test_spoof_tool();
     test_spoof_external_identity();
     test_spoof_text();

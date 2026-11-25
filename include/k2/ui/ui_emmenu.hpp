@@ -4,6 +4,7 @@
 // opens on the list; OK opens a cable's detail, OK there asks to delete, OK on the question deletes. BACK steps one level
 // out and leaves the page from the list (the Ui pops it). Spoofing is its own tool.
 #pragma once
+#include <algorithm>
 #include <cstdint>
 
 #include "k2/ui/ui_events.hpp"
@@ -36,7 +37,7 @@ struct EmMenu {
             return true;
         case Button::Plus:
         case Button::Minus:
-            if (view != EmView::Confirm && count > 0) idx = (idx + count + (e.button == Button::Plus ? 1 : -1)) % count;
+            if (view != EmView::Confirm && count > 0) idx = std::clamp(idx + (e.button == Button::Plus ? 1 : -1), 0, count - 1);   // stops at its ends
             return true;
         case Button::Ok:
             if (view == EmView::List) {
