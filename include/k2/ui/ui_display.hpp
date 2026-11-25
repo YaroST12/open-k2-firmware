@@ -10,6 +10,7 @@
 #include <string_view>
 
 #include "k2/core/idle.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::uidisp {
 
@@ -46,6 +47,10 @@ constexpr std::size_t put_num(std::span<char> out, std::size_t n, unsigned v) {
     return n;
 }
 constexpr std::size_t put_str(std::span<char> out, std::size_t n, std::string_view s) {
+    if !consteval {
+        strpack::for_chars(s, [&](char c) { if (n + 1 < out.size()) out[n++] = c; });
+        return n;
+    }
     for (char c : s) if (n + 1 < out.size()) out[n++] = c;
     return n;
 }

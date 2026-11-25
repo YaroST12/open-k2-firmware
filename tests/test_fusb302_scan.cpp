@@ -11,6 +11,7 @@
 //     40 ms of VCONN, then three Discover Identity attempts; afterwards PC13 low, Rd back on.
 //   - Sniff mode (a source is attached): CC switches, VCONN and Rd are never touched.
 #include "test_util.h"
+#include "k2/core/fmt.hpp"
 #include "k2/core/strpack.hpp"
 #include "k2/drivers/fusb302.hpp"
 #include "k2/drivers/regs.hpp"
@@ -297,7 +298,7 @@ void log_fmt(const char* fmt, ...) {
     char b[160];
     std::va_list ap;
     va_start(ap, fmt);
-    std::vsnprintf(b, sizeof b, fmt, ap);
+    k2::fmt::vformat(b, fmt, ap);   // as on the device: packed %s arguments decode
     va_end(ap);
     g_usb.emplace_back(b);
     g_usb_fmt.emplace_back(fmt);

@@ -3,6 +3,7 @@
 // The Graphs page: four stacked graphs (W, V, A, Wh) over the shared trend, their header rows and one info line
 // (include/k2/ui/ui_graphs.hpp). Pure parts: graphs_model.hpp (tests/test_graphs_model.cpp); the scroll-diff draw is
 // checked pixel for pixel against a full repaint in tests/test_ui_graphs.cpp.
+#include "k2/core/strpack.hpp"
 #include "k2/ui/ui_graphs.hpp"
 
 #include <span>
@@ -31,7 +32,10 @@ constexpr const char *kLabel[kBands] = {"POWER", "VBUS", "IBUS", "ENERGY"};
 constexpr int kElChars = 5;   // hm::fmt_elapsed: never over five characters
 constexpr uint8_t kNoRow = GraphsPage::kNoRow, kUnknown = GraphsPage::kUnknown;
 
-int16_t text_px(std::string_view s) { return static_cast<int16_t>(s.size() * kSmall.adv); }
+int16_t text_px(std::string_view s) {
+    K2_EXPECT_PLAIN(s);
+    return static_cast<int16_t>(s.size() * kSmall.adv);
+}
 
 // The cost of a ground with text on it: the fill around the holes is a solid stream (a quarter of the units, PaintBudget::units),
 // the glyph cells are composed pixels.

@@ -47,7 +47,8 @@ bool valid_text(std::string_view s) {   // ASCII text, tabs/newlines and well-fo
     for (std::size_t i = 0; i < s.size();) {
         const auto b = static_cast<std::uint8_t>(s[i]);
         if (b < 0x80) {
-            if ((b < 0x20 && b != '\t' && b != '\n' && b != '\r') || b == 0x7F) return false;
+            // \x01 / \x02 are the UI's check / cross marks (k2/ui/text.hpp), the only control bytes plain text carries
+            if ((b < 0x20 && b > 0x02 && b != '\t' && b != '\n' && b != '\r') || b == 0x7F) return false;
             i++;
             continue;
         }

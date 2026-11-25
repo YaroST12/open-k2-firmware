@@ -58,6 +58,8 @@ struct PackWork {
 bool ShareRecord::begin(qrshare::Type type, std::uint8_t schema, std::string_view title, std::size_t len, std::span<const std::uint8_t> ext) {
     type_ = type;
     schema_ = schema;
+    char dec[kTitleMax + 1];
+    title = strpack::unpack(title, dec);
     title_len_ = std::min(title.size(), kTitleMax);
     std::memcpy(title_buf_.data(), title.data(), title_len_);
     title_buf_[title_len_] = '\0';

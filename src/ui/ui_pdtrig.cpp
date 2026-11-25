@@ -126,7 +126,8 @@ int identify_rows(const pd::IdStatus &st, const pd::VdmInfo &vdm, IdRow *rows) {
 namespace {
 template <size_t N>
 void put_cut(StrBuf<N> &s, const char *t, size_t max) {
-    for (size_t i = 0; t && t[i] && i < max; i++) s.put_char(t[i]);
+    size_t i = 0;
+    if (t) strpack::for_chars(t, [&](char c) { if (i++ < max) s.put_char(c); });
 }
 constexpr int kIdSvids = 4;
 // Rows for the decoded product type and the USB role, each only when the ID header says something.

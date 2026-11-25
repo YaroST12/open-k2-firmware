@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
+#include "k2/core/strpack.hpp"
 #include "k2/ui/home_model.hpp"
 
 #include "k2/pd/diag_screen.hpp"
@@ -9,6 +10,7 @@ namespace {
 
 int put_text(std::span<char> out, std::string_view s) {
     size_t n = 0;
+    K2_EXPECT_PLAIN(s);   // hot: home text stays plain
     for (char c : s) {
         if (n + 1 >= out.size()) break;
         out[n++] = c;

@@ -30,6 +30,7 @@
 #include <new>
 #include <span>
 
+#include "k2/core/strpack.hpp"
 #include "k2/pd/pd_sink.hpp"
 #include "k2/pd/prog_track.hpp"
 #include "k2/pd/pd_spec_timing.hpp"
@@ -87,16 +88,16 @@ struct Snapshot {
 enum class Stop : std::uint8_t { None, Done, Cancelled, Overvoltage, Load, NoRecovery, Stuck, NoPd, Inline, Timeout };
 constexpr const char* stop_name(Stop s) {
     switch (s) {
-        case Stop::None: return "running";
+        case Stop::None: return K2_P("running");
         case Stop::Done: return "done";
-        case Stop::Cancelled: return "cancelled";
-        case Stop::Overvoltage: return "VBUS over the limit";
-        case Stop::Load: return "load on the output";
-        case Stop::NoRecovery: return "source did not come back";
-        case Stop::Stuck: return "step stuck";
-        case Stop::NoPd: return "no PD contract";
-        case Stop::Inline: return "link inline";
-        case Stop::Timeout: return "run time cap";
+        case Stop::Cancelled: return K2_P("cancelled");
+        case Stop::Overvoltage: return K2_P("VBUS over the limit");
+        case Stop::Load: return K2_P("load on the output");
+        case Stop::NoRecovery: return K2_P("source did not come back");
+        case Stop::Stuck: return K2_P("step stuck");
+        case Stop::NoPd: return K2_P("no PD contract");
+        case Stop::Inline: return K2_P("link inline");
+        case Stop::Timeout: return K2_P("run time cap");
     }
     return "?";
 }
@@ -105,12 +106,12 @@ enum class StartResult : std::uint8_t { Ok, Busy, NoCaps, Inline, SelfPowered, N
 constexpr const char* start_name(StartResult r) {
     switch (r) {
         case StartResult::Ok: return "ok";
-        case StartResult::Busy: return "ports busy";
-        case StartResult::NoCaps: return "no PD source";
-        case StartResult::Inline: return "link inline";
-        case StartResult::SelfPowered: return "K2 powered by the charger";
-        case StartResult::NoMonitor: return "no power monitor";
-        case StartResult::Running: return "already running";
+        case StartResult::Busy: return K2_P("ports busy");
+        case StartResult::NoCaps: return K2_P("no PD source");
+        case StartResult::Inline: return K2_P("link inline");
+        case StartResult::SelfPowered: return K2_P("K2 powered by the charger");
+        case StartResult::NoMonitor: return K2_P("no power monitor");
+        case StartResult::Running: return K2_P("already running");
     }
     return "?";
 }
@@ -123,12 +124,12 @@ inline constexpr std::size_t kFamilies = static_cast<std::size_t>(Family::Count)
 inline constexpr std::uint8_t kAllFamilies = (1u << kFamilies) - 1;
 constexpr const char* family_name(Family f) {
     switch (f) {
-        case Family::Transitions: return "Transitions";
-        case Family::Pps: return "PPS/AVS";
-        case Family::PpsKeepAlive: return "PPS timeout";
-        case Family::EprKeepAlive: return "EPR timeout";
-        case Family::HardReset: return "Hard Reset";
-        case Family::Detach: return "Detach";
+        case Family::Transitions: return K2_P("Transitions");
+        case Family::Pps: return K2_P("PPS/AVS");
+        case Family::PpsKeepAlive: return K2_P("PPS timeout");
+        case Family::EprKeepAlive: return K2_P("EPR timeout");
+        case Family::HardReset: return K2_P("Hard Reset");
+        case Family::Detach: return K2_P("Detach");
         case Family::Count: break;
     }
     return "?";

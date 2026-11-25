@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
+#include "k2/core/strpack.hpp"
 #include "k2/pd/emrec.hpp"
 
 #include <algorithm>
@@ -32,6 +33,8 @@ std::uint8_t checksum(const Record& rec) { return sum_bias(rec.data(), kChecksum
 
 Record make(std::span<const std::uint32_t> vdos, std::uint8_t spec_rev, std::string_view name) {
     Record r{};
+    char dec[kNameLen];
+    name = strpack::unpack(name, dec);
     const std::size_t n = std::min(name.size(), kNameLen - 1);
     std::memcpy(r.data(), name.data(), n);
     r[kRevAt] = spec_rev;

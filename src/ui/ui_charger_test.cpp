@@ -3297,9 +3297,10 @@ void ChargerTestPage::grid_row(int index, kit::ResultRowSpec &out) {
     const size_t r_idx = ln.row();
     const auto &row = layout_.rows[r_idx];
     if (ln.head() || header) {   // the Steps header repeats the label on a block's continuation line
-        const char *lbl = result_layout::row_label(layout_, r_idx);
+        char dec[sizeof cell_lbl_];
+        const std::string_view lbl = strpack::unpack(result_layout::row_label(layout_, r_idx), dec);
         std::memset(cell_lbl_, 0, sizeof cell_lbl_);
-        std::memcpy(cell_lbl_, lbl, std::min<size_t>(std::strlen(lbl), sizeof cell_lbl_ - 1));
+        std::memcpy(cell_lbl_, lbl.data(), std::min(lbl.size(), sizeof cell_lbl_ - 1));
         out.label = cell_lbl_;
     }
     result_layout::RowTokens rt;
@@ -3876,9 +3877,10 @@ __attribute__((noinline)) void ChargerTestPage::ok_event() {
                 s_.result_family_ = fam;
                 s_.spec_range_ = line_range_pos(s_.selection_);
                 s_.result_row_ = row;   // a PD row opens its own steps (a range, a level family, a sweep), the others their family
-                const char *lbl = result_layout::row_label(layout_, lines_[static_cast<size_t>(s_.selection_)].row());
+                char dec[sizeof s_.result_label_];
+                const std::string_view lbl = strpack::unpack(result_layout::row_label(layout_, lines_[static_cast<size_t>(s_.selection_)].row()), dec);
                 std::memset(s_.result_label_, 0, sizeof s_.result_label_);
-                std::memcpy(s_.result_label_, lbl, std::min<size_t>(std::strlen(lbl), sizeof s_.result_label_ - 1));
+                std::memcpy(s_.result_label_, lbl.data(), std::min(lbl.size(), sizeof s_.result_label_ - 1));
                 set_stage(Stage::Steps);
             }
         }

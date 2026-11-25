@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
+#include "k2/core/strpack.hpp"
 #include "k2/ui/graphs_model.hpp"
 
 #include "k2/core/math_opt.hpp"
@@ -15,6 +16,7 @@ uint32_t pick(const uint32_t (&list)[N], uint32_t x) {
 }
 int put(std::span<char> out, std::string_view s) {
     size_t n = 0;
+    K2_EXPECT_PLAIN(s);   // hot: graph labels stay plain
     for (; n < s.size() && n < out.size(); n++) out[n] = s[n];
     return static_cast<int>(n);
 }

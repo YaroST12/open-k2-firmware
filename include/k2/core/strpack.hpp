@@ -134,6 +134,17 @@ inline std::string_view unpack(std::string_view s, char (&buf)[N]) {
     return unpack_rt(s, buf, N);
 }
 
+// Feeds each decoded char of `s` (packed or plain) to `f`: the bufferless sink for byte copiers.
+template <class F>
+inline void for_chars(std::string_view s, F &&f) {
+    if (is_packed(s)) {
+        Reader r(s.data());
+        for (int c; (c = r.next()) >= 0;) f(static_cast<char>(c));
+    } else {
+        for (const char c : s) f(c);
+    }
+}
+
 // Decoded cell count (UTF-8 code points) of a BPE-packed or plain ASCII string (constexpr for static_assert width checks).
 constexpr int cells_packed(const char *s) {
     if consteval {

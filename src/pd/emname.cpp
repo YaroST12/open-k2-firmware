@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
+#include "k2/core/strpack.hpp"
 #include "k2/pd/emname.hpp"
 
 #include <algorithm>
@@ -17,8 +18,7 @@ struct Out {
     std::array<char, kMaxLen + 1> buf{};
     std::size_t n = 0;
     void put(std::string_view s) {
-        for (char c : s)
-            if (n < buf.size() - 1) buf[n++] = c;
+        strpack::for_chars(s, [this](char c) { if (n < buf.size() - 1) buf[n++] = c; });
     }
 };
 

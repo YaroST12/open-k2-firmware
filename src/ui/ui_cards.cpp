@@ -274,7 +274,7 @@ void cards_range_status_text(const rc::Card &c, const rc::Range &r, StrBuf<16> &
 
 void cards_pd_why_text(const rc::GroupResult &r, StrBuf<24> &out) {
     const char *why = rc::group_why(0, r);
-    if (fits_px(kLabelFont.adv, why, kPdWhyPx)) out.put(why);
+    if (fits_px_p(kLabelFont.adv, why, kPdWhyPx)) out.put(why);
     else out.put(K2_P("see detail"));   // "source shut off (needs replug)" is 30 cells: the detail screen spells it out, nothing is cut
 }
 
@@ -364,6 +364,7 @@ void cards_id_text(const rc::Card &c, StrBuf<32> &out) {
 // ---- the detail sheet ---------------------------------------------------------------------------
 
 unsigned cards_wrap(std::string_view text, unsigned cells, std::string_view *lines, unsigned max_lines) {
+    K2_EXPECT_PLAIN(text);
     unsigned n = 0;
     for (;;) {
         while (!text.empty() && text.front() == ' ') text.remove_prefix(1);
@@ -387,6 +388,17 @@ namespace {
 // Adds a row (undone by --n when the sheet would outgrow its screen: rows are added most important first, so the last ones go).
 SheetRow *sheet_add(CardSheet &s, const char *key, uint16_t color, std::string_view v) {
     if (s.n >= unsigned(kSheetRows)) return nullptr;
+    if (strpack::is_packed(v)) {   // a packed name decodes into the row's own box, or a sheet text slot when longer
+        char *dst = s.row[s.n].num;
+        std::size_t cap = sizeof s.row[s.n].num;
+        if (strpack::cells_rt(v.data()) > kSheetBox) {
+            if (s.texts == std::size(s.text)) return nullptr;
+            dst = s.text[s.texts++];
+            cap = sizeof s.text[0];
+        }
+        v = strpack::unpack_rt(v, dst, cap);
+    }
+    K2_EXPECT_PLAIN(v);
     SheetRow &r = s.row[s.n++];
     r.key = key;
     r.verdict = false;

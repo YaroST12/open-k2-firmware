@@ -476,7 +476,7 @@ class Decoders(unittest.TestCase):
         import re
         hdr = (ROOT / "include/k2/pd/pd_sink.hpp").read_text()
         enum = re.search(r"enum class BusyWhy[^{]*\{([^}]*)\}", hdr).group(1).split(",")
-        src = (ROOT / "src/pd/pd_sink.cpp").read_text()
+        src = re.sub(r'K2_P\(\s*("(?:[^"\\]|\\.)*")\s*\)', r"\1", (ROOT / "src/pd/pd_sink.cpp").read_text())   # names may be K2_P-packed
         body = src[src.index("const char* busy_why_name"):]
         body = body[:body.index('return "?";')]
         self.assertEqual(re.findall(r'return "((?:[^"\\]|\\.)*)";', body), kr.BUSY_WHYS)

@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <span>
 #include <string_view>
+#include "k2/core/strpack.hpp"
 #include "k2/ui/font_aa.hpp"
 #include "k2/ui/home_model.hpp"
 
@@ -172,6 +173,7 @@ struct DigitField {
     // Takes the new text (right-aligned, space-padded). Returns false when nothing needs a repaint;
     // otherwise [px0, px1] is the pixel x range of the changed characters (the whole field when invalid).
     bool set(std::string_view s, int16_t &px0, int16_t &px1) {
+        K2_EXPECT_PLAIN(s);   // hot: cell text stays plain
         char next[9];
         const size_t len = s.size() < chars ? s.size() : chars;
         for (size_t i = 0; i < chars; i++) next[i] = ' ';

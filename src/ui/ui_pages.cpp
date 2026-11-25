@@ -70,6 +70,7 @@ void clear_body(const Surface &c, int16_t y0) {
 }
 
 std::string_view stash_str(char *dst, std::size_t cap, std::string_view s) {
+    K2_EXPECT_PLAIN(s);
     const std::size_t n = std::min(s.size(), cap - 1);
     std::memcpy(dst, s.data(), n);
     dst[n] = 0;

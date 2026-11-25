@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
+#include "k2/core/strpack.hpp"
 #include "k2/pd/pd_vdm.hpp"
 
 #include <algorithm>
@@ -12,21 +13,21 @@ namespace k2::pd {
 const char* id_product_type(std::uint32_t h) {
     switch ((h >> 27) & 7u) {
         case 1: return "Hub";
-        case 2: return "Peripheral";
-        case 3: return "Power bank";
+        case 2: return K2_P("Peripheral");
+        case 3: return K2_P("Power bank");
         default: break;
     }
     switch ((h >> 23) & 7u) {
         case 1: return "Hub";
         case 2: return "Host";
-        case 3: return "Charger";
+        case 3: return K2_P("Charger");
         default: return "";
     }
 }
 
 const char* id_usb_role(std::uint32_t h) {
     const bool host = h >> 31, dev = (h >> 30) & 1u;
-    return host && dev ? "Host+Device" : host ? "Host" : dev ? "Device" : "";
+    return host && dev ? K2_P("Host+Device") : host ? "Host" : dev ? K2_P("Device") : "";
 }
 
 namespace {
@@ -40,24 +41,24 @@ struct Named { std::uint16_t id; const char* name; };
 // SVIDs that are protocol IDs, not a company's VID (0x5FC9 is the UFCS SVID); every vendor VID is named by
 // vendor_name() from the one USB-IF-verified table.
 constexpr std::array<Named, 4> kSvids{{
-    {0x8087, "INTEL/TB"}, {0xFF00, "PD SID"}, {0xFF01, "DISPLAYPORT"}, {0x5FC9, "UFCS"},
+    {0x8087, K2_P("INTEL/TB")}, {0xFF00, K2_P("PD SID")}, {0xFF01, K2_P("DISPLAYPORT")}, {0x5FC9, "UFCS"},
 }};
 
 constexpr std::array<Named, 44> kApple{{
-    {0x7108, "iPad Air 4"}, {0x710C, "iPad mini 6"}, {0x710D, "iPad Air 5"}, {0x710E, "iPad Pro 11"},
-    {0x7112, "iPad 10"}, {0x7116, "iPad mini A17 Pro"}, {0x0707, "iPad Air"}, {0x711D, "iPad Air"},
-    {0x7117, "iPad Pro"}, {0x711E, "iPad Pro"}, {0x711B, "iPad A16"}, {0x711C, "iPad Air 11 M2"},
-    {0x7309, "MacBook Pro 16"}, {0x7315, "MacBook Pro 16"}, {0x731E, "MacBook Pro 16"},
-    {0x730B, "MacBook Air"}, {0x7310, "MacBook Air"}, {0x7318, "MacBook Air"}, {0x731B, "MacBook Air"},
-    {0x7311, "MacBook Pro 14"}, {0x7319, "MacBook Pro 14"}, {0x731D, "MacBook Pro 14"},
-    {0x731A, "MacBook Pro 14/16"}, {0x7321, "MacBook Neo"}, {0x7323, "MacBook Air 13"},
-    {0x7507, "iPhone 13 mini"}, {0x7509, "iPhone 13"}, {0x750A, "iPhone 13 PM"},
-    {0x750D, "iPhone 14 Plus"}, {0x750E, "iPhone 14"}, {0x750F, "iPhone 14 PM"},
-    {0x7510, "iPhone 15"}, {0x7511, "iPhone 15 Plus"}, {0x7512, "iPhone 15 Pro"},
-    {0x7513, "iPhone 15 PM"}, {0x7515, "iPhone 16/16Plus"}, {0x7517, "iPhone 16 P/PM"},
-    {0x7518, "iPhone Air"}, {0x7519, "iPhone 17 P/PM"}, {0x751B, "iPhone 17"},
-    {0x0159, "iPhone 17e"}, {0x751C, "iPhone 16e"}, {0x751F, "iPhone 18 Pro"},
-    {0x7522, "iPhone 18 PM"},
+    {0x7108, K2_P("iPad Air 4")}, {0x710C, K2_P("iPad mini 6")}, {0x710D, K2_P("iPad Air 5")}, {0x710E, K2_P("iPad Pro 11")},
+    {0x7112, K2_P("iPad 10")}, {0x7116, K2_P("iPad mini A17 Pro")}, {0x0707, K2_P("iPad Air")}, {0x711D, K2_P("iPad Air")},
+    {0x7117, K2_P("iPad Pro")}, {0x711E, K2_P("iPad Pro")}, {0x711B, K2_P("iPad A16")}, {0x711C, K2_P("iPad Air 11 M2")},
+    {0x7309, K2_P("MacBook Pro 16")}, {0x7315, K2_P("MacBook Pro 16")}, {0x731E, K2_P("MacBook Pro 16")},
+    {0x730B, K2_P("MacBook Air")}, {0x7310, K2_P("MacBook Air")}, {0x7318, K2_P("MacBook Air")}, {0x731B, K2_P("MacBook Air")},
+    {0x7311, K2_P("MacBook Pro 14")}, {0x7319, K2_P("MacBook Pro 14")}, {0x731D, K2_P("MacBook Pro 14")},
+    {0x731A, K2_P("MacBook Pro 14/16")}, {0x7321, K2_P("MacBook Neo")}, {0x7323, K2_P("MacBook Air 13")},
+    {0x7507, K2_P("iPhone 13 mini")}, {0x7509, K2_P("iPhone 13")}, {0x750A, K2_P("iPhone 13 PM")},
+    {0x750D, K2_P("iPhone 14 Plus")}, {0x750E, K2_P("iPhone 14")}, {0x750F, K2_P("iPhone 14 PM")},
+    {0x7510, K2_P("iPhone 15")}, {0x7511, K2_P("iPhone 15 Plus")}, {0x7512, K2_P("iPhone 15 Pro")},
+    {0x7513, K2_P("iPhone 15 PM")}, {0x7515, K2_P("iPhone 16/16Plus")}, {0x7517, K2_P("iPhone 16 P/PM")},
+    {0x7518, K2_P("iPhone Air")}, {0x7519, K2_P("iPhone 17 P/PM")}, {0x751B, K2_P("iPhone 17")},
+    {0x0159, K2_P("iPhone 17e")}, {0x751C, K2_P("iPhone 16e")}, {0x751F, K2_P("iPhone 18 Pro")},
+    {0x7522, K2_P("iPhone 18 PM")},
 }};
 
 template <std::size_t N>

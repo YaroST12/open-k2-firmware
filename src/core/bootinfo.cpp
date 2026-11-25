@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Yaraslau Furman
 // Pure formatter of the boot-info text (see k2/core/bootinfo.hpp).
 #include "k2/core/bootinfo.hpp"
+#include "k2/core/strpack.hpp"
 
 #include <algorithm>
 
@@ -17,7 +18,7 @@ struct Out {
     std::size_t n = 0;
 
     void put(char c) { if (n < cap) buf[n++] = c; }
-    void str(std::string_view s) { for (const char c : s) put(c); }
+    void str(std::string_view s) { strpack::for_chars(s, [this](char c) { put(c); }); }
     void dec(std::uint32_t v) {
         char t[10];
         int k = 0;
@@ -126,6 +127,7 @@ std::size_t format(const Snapshot& s, std::span<char> out) {
 }
 
 std::string_view field(std::string_view text, std::string_view key) {
+    K2_EXPECT_PLAIN(text);
     std::size_t pos = 0;
     while (pos < text.size()) {
         const std::size_t end = std::min(text.find(' ', pos), text.size());

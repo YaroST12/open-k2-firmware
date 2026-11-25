@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <span>
 #include <string_view>
+#include "k2/core/strpack.hpp"
 
 namespace k2::pdtabs {
 
@@ -108,7 +109,13 @@ struct Cat {   // a bounded append into a caller's buffer, NUL-terminated by end
     std::span<char> out;
     std::size_t n = 0;
     constexpr void p(char ch) { if (n + 1 < out.size()) out[n++] = ch; }
-    constexpr void s(std::string_view v) { for (char ch : v) p(ch); }
+    constexpr void s(std::string_view v) {
+        if !consteval {
+            strpack::for_chars(v, [this](char ch) { p(ch); });
+            return;
+        }
+        for (char ch : v) p(ch);
+    }
     constexpr void w(std::int32_t x) { n += fmt_watts(out.subspan(n), x); }
     constexpr void r(std::int32_t x) { n += fmt_rate(out.subspan(n), x); }
     constexpr std::size_t end() { if (!out.empty()) out[n] = '\0'; return n; }

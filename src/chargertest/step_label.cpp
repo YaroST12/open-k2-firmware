@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
 #include "k2/chargertest/step_label.hpp"
+#include "k2/core/strpack.hpp"
 #include "k2/pd/pd.hpp"
 
 namespace k2::step_label {
@@ -9,7 +10,7 @@ using A = ct::Algorithm;
 
 void TextOut::put(char c) { if (t.len + 1 < kMax) t.s[t.len++] = c; t.s[t.len] = 0; }
 void TextOut::put(const char* s) { while (*s) put(*s++); }
-void TextOut::put(std::string_view s) { for (const char c : s) put(c); }
+void TextOut::put(std::string_view s) { strpack::for_chars(s, [this](char c) { put(c); }); }
 void TextOut::num(unsigned v) { char d[10]; int k = 0; do { d[k++] = char('0' + v % 10); v /= 10; } while (v && k < 10); while (k) put(d[--k]); }
 void TextOut::milli(unsigned v) {
     num(v / 1000);

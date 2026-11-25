@@ -59,7 +59,8 @@ static void test_empty_states() {
     CHECK_STR(e(Tab::Source, Topology::Unknown).hint, "Use either port");
     {   // the empty Source tab is one line of 26 cells (the page paints the hint at 8 px advance in 224 - 16 px)
         std::array<std::string_view, 4> ln{};
-        CHECK_EQ(wrap(e(Tab::Source, Topology::NoSource).hint, 26, ln), 1);
+        char d[64];
+        CHECK_EQ(wrap(k2::strpack::unpack(e(Tab::Source, Topology::NoSource).hint, d), 26, ln), 1);
     }
     // The topology word alone no longer says "waiting": the classifier (Facts::wait) decides, see
     // test_source_tab_reads_the_waiting_classifier - with no verdict yet (Unknown) the tab says NO CHARGER.
@@ -317,7 +318,8 @@ static void test_source_tab_reads_the_waiting_classifier() {
     CHECK_EQ(std::strlen(ph.title) <= 18, 1);
     {   // the hint wraps into at most 4 lines of 27 cells
         std::array<std::string_view, 4> ln{};
-        const int n = wrap(ph.hint, 27, ln);
+        char d[64];
+        const int n = wrap(k2::strpack::unpack(ph.hint, d), 27, ln);
         CHECK_EQ(n >= 1 && n <= 4, 1);
     }
     CHECK_STR(empty_state(Tab::Source, facts(false, false, false, Topology::CableSingleCc, false, raguard::WaitKind::NoSource)).title,

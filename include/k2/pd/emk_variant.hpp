@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
+#include "k2/core/strpack.hpp"
 
 namespace k2::emk_variant {
 
@@ -85,6 +86,10 @@ struct Text {
     constexpr std::string_view view() const { return {s.data(), n}; }
     constexpr const char* c_str() const { return s.data(); }
     constexpr void add(std::string_view t) {
+        if !consteval {
+            strpack::for_chars(t, [this](char c) { if (n + 1u < s.size()) s[n++] = c; });
+            return;
+        }
         for (const char c : t) if (n + 1u < s.size()) s[n++] = c;
     }
     constexpr void add(char c) { add(std::string_view(&c, 1)); }

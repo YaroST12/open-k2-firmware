@@ -9,6 +9,7 @@ namespace k2::battery::view {
 
 namespace {
 void app(Num &x, std::string_view s) {
+    K2_EXPECT_PLAIN(s);   // hot: readout text stays plain
     for (char c : s)
         if (x.n + 1u < sizeof x.b) x.b[x.n++] = c;
 }
