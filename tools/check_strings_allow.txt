@@ -151,10 +151,3 @@ src/pd/power_source.cpp  backlog: K2_P sweep pending
 src/pd/transcap.cpp  backlog: K2_P sweep pending
 src/pd/usb_link.cpp  backlog: K2_P sweep pending
 src/pdspec/engine.cpp  backlog: K2_P sweep pending
-src/ui/battery_view.cpp  backlog: K2_P sweep pending
-src/ui/home_cards.cpp  backlog: K2_P sweep pending
-src/ui/ui.cpp  backlog: K2_P sweep pending
-src/ui/ui_connection_page.cpp  backlog: K2_P sweep pending
-src/ui/ui_lines.cpp  backlog: K2_P sweep pending
-src/ui/ui_pages.cpp  backlog: K2_P sweep pending
-src/ui/ui_tools.cpp  backlog: K2_P sweep pending

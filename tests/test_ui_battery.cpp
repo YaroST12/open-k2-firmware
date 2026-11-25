@@ -26,6 +26,8 @@ namespace bt = k2::battery;
 namespace view = k2::battery::view;
 
 static bool eq(std::string_view a, std::string_view b) {
+    char dec[64];
+    a = strpack::unpack(a, dec);   // names may be packed
     if (a != b) std::printf("  got \"%.*s\", want \"%.*s\"\n", int(a.size()), a.data(), int(b.size()), b.data());
     return a == b;
 }

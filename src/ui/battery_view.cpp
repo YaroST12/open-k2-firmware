@@ -149,19 +149,19 @@ const char *act_name(Act a, const Shown &s) {
     case Act::In: return "In";
     case Act::Out: return "Out";
     case Act::Time: return "Time";
-    case Act::Eff: return "Efficiency";
-    case Act::StartCharge: return "Start charge";
-    case Act::StartDischarge: return "Start discharge";
-    case Act::StartRoundTrip: return "Start round trip";
-    case Act::EndPhase: return s.kind == Kind::Charge ? "End charge" : "End discharge";
-    case Act::Next: return "Start discharge";
-    case Act::Finish: return "Finish run";
-    case Act::Wiring: return "Wiring";
-    case Act::EndMa: return "End below";
-    case Act::EndS: return "End after";
-    case Act::Runs: return "Saved runs";
-    case Act::Share: return "Share as QR";
-    case Act::Continue: return "Continue run";
+    case Act::Eff: return K2_P("Efficiency");
+    case Act::StartCharge: return K2_P("Start charge");
+    case Act::StartDischarge: return K2_P("Start discharge");
+    case Act::StartRoundTrip: return K2_P("Start round trip");
+    case Act::EndPhase: return s.kind == Kind::Charge ? K2_P("End charge") : K2_P("End discharge");
+    case Act::Next: return K2_P("Start discharge");
+    case Act::Finish: return K2_P("Finish run");
+    case Act::Wiring: return K2_P("Wiring");
+    case Act::EndMa: return K2_P("End below");
+    case Act::EndS: return K2_P("End after");
+    case Act::Runs: return K2_P("Saved runs");
+    case Act::Share: return K2_P("Share as QR");
+    case Act::Continue: return K2_P("Continue run");
     }
     return "";
 }
@@ -187,7 +187,7 @@ uint16_t next_step(const uint16_t *steps, int n, uint16_t cur) {
 }
 
 namespace {
-const char *wiring_word(Wiring w) { return w == Wiring::Moved ? "Moved" : K2_P("Same port"); }
+const char *wiring_word(Wiring w) { return w == Wiring::Moved ? K2_P("Moved") : K2_P("Same port"); }
 }  // namespace
 
 void bench_status(const Shown &s, StrBuf<29> &out) {

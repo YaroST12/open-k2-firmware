@@ -137,6 +137,7 @@ static_assert(sizeof kBlanks == FieldBase::kMaxChars + 1);
 K2_HOT void field_draw_buf(const Surface &s, const Font &f, int16_t x, int16_t y, uint8_t chars, Align a,
                            uint16_t fg, uint16_t bg, bool &valid, char *cur,
                            std::string_view text K2_TRUNC_DEF) {
+    K2_EXPECT_PLAIN(text);   // a Field diffs raw bytes: callers decode first
     if (chars > FieldBase::kMaxChars) chars = FieldBase::kMaxChars;
     char next[FieldBase::kMaxChars];
     int len = 0;
