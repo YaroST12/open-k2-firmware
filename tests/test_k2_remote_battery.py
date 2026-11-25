@@ -126,13 +126,15 @@ class Battery(unittest.TestCase):
     def test_read_and_list(self):
         rec = fixture_record()
         link = FakeLink(records={7: rec})
-        self.assertEqual(run(link, "list"), {"battery_runs": [7]})
+        self.assertEqual(run(link, "list"), {"battery_runs": [7], "battery_pair": None})
         r = run(link, "read", "7")["battery_record"]
         self.assertEqual(r, br.decode_record(rec))
+        link.calls.clear()
+        run(link, "read", "7")
         self.assertEqual(sum(1 for c in link.calls if c[0] == 7), -(-len(rec) // kr.BATTERY_CHUNK))   # stops at `total`
         text = kr.render("battery", {"battery_record": r})
         self.assertIn("efficiency 80.0 %", text)   # 7.998 Wh / 10.001 Wh
-        self.assertEqual(run(link, "read", "--all")["battery_records"], [r])
+        self.assertEqual(run(link, "read", "--all"), {"battery_records": [r], "battery_pair": None})
         with self.assertRaises(SystemExit):
             run(link, "read", "9")
 
@@ -164,6 +166,65 @@ class Battery(unittest.TestCase):
         rec[20] ^= 1
         with self.assertRaises(SystemExit):
             run(FakeLink(records={7: bytes(rec)}), "read", "7")
+
+
+def make_record(rid, mode, kind, end, secs, uwh_in, uwh_out, uah_in, uah_out, ver=2):
+    """A one-phase record as the firmware encodes it (battery::encode); ver 1 = the 246-byte format."""
+    b = bytearray(br.HEAD_BYTES + 3 * br.POINTS)
+    b[0:3] = b"BR" + bytes([ver])
+    b[3] = br.MODES.index(mode)
+    b[4] = 2                                                     # done
+    b[5] = 1
+    struct.pack_into("<4H", b, 6, rid, 50, 60, 10)
+    b[15] = 0xFF
+    struct.pack_into("<BBHIIIII", b, 16, br.KINDS.index(kind), br.ENDS.index(end), 0, secs, uwh_in, uwh_out, uah_in, uah_out)
+    if ver == 2:
+        b += struct.pack("<I", 0)
+    return bytes(b) + struct.pack("<H", br.crc16(b))
+
+
+# The runs of 2026-11-24/25 (runs/battery): ids 3..5 are version 1, the discharge from before the in/out fix with its energy
+# in the "in" column; the same vectors as tests/test_battery_synth.cpp test_real_runs_pair.
+REAL = {
+    3: make_record(3, "discharge", "discharge", "auto", 3170, 30994272, 0, 1538604, 0, ver=1),
+    4: make_record(4, "charge", "charge", "auto", 3006, 23804464, 0, 1205674, 0, ver=1),
+    5: make_record(5, "charge", "charge", "auto", 1592, 13075722, 0, 673138, 0, ver=1),
+    6: make_record(6, "charge", "charge", "auto", 3011, 19404226, 0, 980452, 0),
+}
+
+
+class TestBatteryPair(unittest.TestCase):
+    def test_v1_discharge_reads_out(self):
+        r = br.decode_record(REAL[3])
+        self.assertEqual((r["totals"]["out_uwh"], r["totals"]["in_uwh"], r["totals"]["out_uah"]), (30994272, 0, 1538604))
+        v2 = br.decode_record(make_record(3, "discharge", "discharge", "auto", 10, 5, 0, 5, 0))
+        self.assertEqual(v2["totals"]["in_uwh"], 5)              # version 2 is taken as written
+
+    def test_real_runs(self):
+        recs = [br.decode_record(REAL[i]) for i in (5, 4, 3)]
+        self.assertEqual(br.pair(recs), {"from_id": 3, "to_id": 5, "out_uwh": 30994272, "in_uwh": 36880186,
+                                         "efficiency_permille": 840})
+        self.assertEqual(br.pair(recs[1:])["efficiency_permille"], 1302)   # half the charge: id 4 alone
+        self.assertIsNone(br.pair([br.decode_record(REAL[i]) for i in (6, 5, 4)]))   # the discharge pruned
+
+    def test_rules(self):
+        def rec(rid, mode, uwh, end="auto"):
+            kind = "discharge" if mode == "discharge" else "charge"
+            return br.decode_record(make_record(rid, mode, kind, end, 60, 0 if kind == "discharge" else uwh,
+                                                uwh if kind == "discharge" else 0, 0, 0))
+        self.assertEqual(br.pair([rec(9, "charge", 30000000), rec(8, "discharge", 24000000)])["efficiency_permille"], 800)
+        p = br.pair([rec(9, "discharge", 8000000), rec(8, "discharge", 0), rec(7, "charge", 10000000), rec(6, "discharge", 9)])
+        self.assertEqual((p["efficiency_permille"], p["from_id"], p["to_id"]), (800, 7, 9))
+        self.assertIsNone(br.pair([rec(3, "discharge", 10**6), rec(2, "round-trip", 10**6), rec(1, "charge", 10**6)]))
+        self.assertIsNone(br.pair([rec(3, "discharge", 10**6), rec(2, "charge", 10**6, end="lost")]))
+
+    def test_list_shows_pair(self):
+        link = FakeLink(records={i: REAL[i] for i in (3, 4, 5)})
+        out = run(link, "list")
+        self.assertEqual(out["battery_runs"], [5, 4, 3])
+        self.assertEqual(out["battery_pair"]["efficiency_permille"], 840)
+        self.assertIn("efficiency of runs 3..5: 84.0 %", kr.render("battery", out))
+        self.assertEqual(run(link, "read", "--all")["battery_pair"]["efficiency_permille"], 840)
 
 
 if __name__ == "__main__":

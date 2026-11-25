@@ -103,6 +103,30 @@ Shown shown(const Record &r, bool any) {
     return s;
 }
 
+Pair pair(const Shown *runs, int n) {
+    Pair p;
+    uint64_t sum[2] = {};
+    Mode m[2] = {};
+    int k = -1;   // the stretch being summed: 0 the newest, 1 the one before it
+    for (int i = 0; i < n; i++) {
+        const Shown &s = runs[i];
+        if (!s.any || empty(s.sum)) continue;
+        const bool next = k < 0 || s.mode != m[k];
+        if (s.mode == Mode::RoundTrip || (next && k == 1)) break;
+        if (s.lost) return {};   // part of a stretch, short by what it lost
+        if (next) m[++k] = s.mode;
+        sum[k] += s.mode == Mode::Discharge ? s.sum.uwh_out : s.sum.uwh_in;
+        if (!p.hi) p.hi = s.id;
+        p.lo = s.id;
+    }
+    if (k < 1) return {};
+    const bool dis = m[0] == Mode::Discharge;
+    p.uwh_out = sum[dis ? 0 : 1];
+    p.uwh_in = sum[dis ? 1 : 0];
+    p.eff = ratio_permille(p.uwh_out, p.uwh_in);
+    return p;
+}
+
 bool is_fact(Act a) { return a == Act::In || a == Act::Out || a == Act::Time || a == Act::Eff; }
 
 Rows rows(const Shown &s, bool stored, bool cont) {

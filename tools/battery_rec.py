@@ -92,7 +92,10 @@ def decode_record(rec):
     for i in range(nphases):
         o = 16 + i * PHASE_BYTES
         kind, end, gaps, secs, uwh_in, uwh_out, uah_in, uah_out = struct.unpack_from("<BBHIIIII", rec, o)
-        phases.append({"kind": _name(KINDS, kind & ~flag, "kind"), "end": _name(ENDS, end, "end"), "gaps": gaps, "time_s": secs,
+        kind = _name(KINDS, kind & ~flag, "kind")
+        if ver == 1 and (uwh_out > uwh_in if kind == "charge" else uwh_in > uwh_out):   # decode(): v1 kept columns by sign
+            uwh_in, uwh_out, uah_in, uah_out = uwh_out, uwh_in, uah_out, uah_in
+        phases.append({"kind": kind, "end": _name(ENDS, end, "end"), "gaps": gaps, "time_s": secs,
                        "in_uwh": uwh_in, "out_uwh": uwh_out, "in_uah": uah_in, "out_uah": uah_out})
     curve = []
     for i in range(points):
@@ -108,6 +111,41 @@ def decode_record(rec):
         "charge_ratio_permille": ratio_permille(tot["out_uah"], tot["in_uah"]) if final else None,
         "curve_interval_s": interval_s, "curve": curve,
     }
+
+
+EMPTY_UWH = 1000                                        # battery::kEmptyUwh
+
+
+def pair(records):
+    """k2::battery::view::pair: the efficiency of separate runs. Over decoded records newest first, the newest stretch of
+    charge or discharge runs and the stretch of the other kind just before it, each summed; None without such a pair."""
+    sums, modes, lo, hi = [], [], None, None
+    for r in records:
+        t = r["totals"]
+        if not r["phases"] or (t["in_uwh"] < EMPTY_UWH and t["out_uwh"] < EMPTY_UWH):
+            continue
+        nxt = not modes or r["mode"] != modes[-1]
+        if r["mode"] == "round-trip" or (nxt and len(modes) == 2):
+            break
+        if any(p["end"] == "lost" for p in r["phases"]):
+            return None
+        if nxt:
+            modes.append(r["mode"])
+            sums.append(0)
+        sums[-1] += t["out_uwh"] if r["mode"] == "discharge" else t["in_uwh"]
+        hi = hi or r["id"]
+        lo = r["id"]
+    if len(modes) < 2:
+        return None
+    out, inp = (sums[0], sums[1]) if modes[0] == "discharge" else (sums[1], sums[0])
+    return {"from_id": lo, "to_id": hi, "out_uwh": out, "in_uwh": inp, "efficiency_permille": ratio_permille(out, inp)}
+
+
+def render_pair(p):
+    if p is None:
+        return "efficiency of separate runs: none (needs a charge and a discharge run next to each other)"
+    return (f"efficiency of runs {p['from_id']}..{p['to_id']}: {p['efficiency_permille'] / 10:.1f} % "
+            f"({_wh(p['out_uwh'])} out / {_wh(p['in_uwh'])} in)")
 
 
 def decode_status(p):
