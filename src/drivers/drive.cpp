@@ -49,32 +49,32 @@ std::size_t Drive::render(std::uint32_t id, std::span<char> out) {
     TextBuf t(out);
     switch (id) {
     case kReadme:
-        t.put("K2 drive\n========\n");
-        t.put_raw("Firmware ");
+        t.put_raw(K2_P("K2 drive\n========\nFirmware "));
         t.put_raw(env_.version);
         t.put_raw(" (");
         t.put_raw(env_.git);
         t.put_raw(")\n\n");
-        t.put("This drive is read-only. It is computed by the firmware; nothing here is a real\n");
-        t.put("file system in flash. Re-mount it to see changes.\n\n");
-        t.put("STATUS.TXT    live readings at the time you read the file\n");
-        t.put("LOG.TXT       recent USB log lines\n");
-        t.put("SAVEDLOG.TXT  log saved to flash (store save-log)\n");
-        t.put("RIPPLE.CSV    last ripple capture (not recorded yet)\n");
-        t.put("BLACKBOX/     CAPn.JSN trigger captures of the PD black box, a meta line (identity), then one JSON line per record\n");
-        t.put("CARDS.JSON    charger report cards, newest first (name them with k2_remote.py cards rename)\n");
-        t.put("SUMMARY.md    the same cards as short text, one block per charger\n");
-        t.put("CABLES/       saved cables, one JSON file each (name.json)\n");
-        t.put("NATIVE/       the e-marker library already on the unit, when it has one\n\n");
-        t.put("Save the cable on the port from the E-marker tool (OK), or with\n");
-        t.put("k2_remote.py emarker save. List: emarker list. Rename: emarker rename.\n");
+        t.put_raw(K2_P(
+            "This drive is read-only. It is computed by the firmware; nothing here is a real\n"
+            "file system in flash. Re-mount it to see changes.\n\n"
+            "STATUS.TXT    live readings at the time you read the file\n"
+            "LOG.TXT       recent USB log lines\n"
+            "SAVEDLOG.TXT  log saved to flash (store save-log)\n"
+            "RIPPLE.CSV    last ripple capture (not recorded yet)\n"
+            "BLACKBOX/     CAPn.JSN trigger captures of the PD black box, a meta line (identity), then one JSON line per record\n"
+            "CARDS.JSON    charger report cards, newest first (name them with k2_remote.py cards rename)\n"
+            "SUMMARY.md    the same cards as short text, one block per charger\n"
+            "CABLES/       saved cables, one JSON file each (name.json)\n"
+            "NATIVE/       the e-marker library already on the unit, when it has one\n\n"
+            "Save the cable on the port from the E-marker tool (OK), or with\n"
+            "k2_remote.py emarker save. List: emarker list. Rename: emarker rename.\n"));
         return t.size();
     case kStatus:
         return env_.status ? env_.status(env_.ctx, out) : 0;
     case kLog:
         return env_.log ? env_.log(env_.ctx, out) : 0;
     case kRipple:
-        t.put("# no capture recorded yet\nt_us,mV,mA\n");
+        t.put_raw(K2_P("# no capture recorded yet\nt_us,mV,mA\n"));
         return t.size();
     case kSavedLog: {
         const std::size_t n = std::min(out.size(), env_.saved_log.size());
@@ -97,7 +97,7 @@ std::size_t Drive::render(std::uint32_t id, std::span<char> out) {
 std::size_t Drive::render_native(std::span<char> out) {
     if (const std::size_t n = emrec::describe_native_page(native_page_, out)) return n;
     TextBuf t(out);
-    t.put("The library page does not parse as an e-marker table (see LIBRARY.BIN).\n");
+    t.put_raw(K2_P("The library page does not parse as an e-marker table (see LIBRARY.BIN).\n"));
     return t.size();
 }
 

@@ -5,6 +5,7 @@
 #pragma once
 #include <cstdint>
 
+#include "k2/core/bss_zero.hpp"
 #include "k2/pd/pd_spec_timing.hpp"
 
 namespace k2::pd {
@@ -137,8 +138,8 @@ public:
     }
 private:
     static constexpr std::int32_t kHrDarkMv = 1000;   // above vSafe0V with room: a source back on its way up is not dark
-    bool armed_ = false, dropped_ = false;
-    std::uint32_t due_ = 0;
+    bool armed_ K2_BSS_INIT(false), dropped_ K2_BSS_INIT(false);
+    std::uint32_t due_ K2_BSS_INIT(0);
 };
 
 // Trigger gate, one for the wizard and the remote. A live sink on the far side already has a contract

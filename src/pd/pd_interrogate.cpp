@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
 #include "k2/pd/pd_interrogate.hpp"
+#include "k2/core/strpack.hpp"
 
 #include <algorithm>
 
@@ -22,12 +23,12 @@ const char* iq_phase_name(IqPhase p) {
         case IqPhase::Idle: return "idle";
         case IqPhase::Reset1: return "reset";
         case IqPhase::Sniff1: return "sniff";
-        case IqPhase::Settle: return "settle";
+        case IqPhase::Settle: return K2_P("settle");
         case IqPhase::Ask: return "ask";
-        case IqPhase::Reset2: return "reset back";
-        case IqPhase::Sniff2: return "sniff back";
+        case IqPhase::Reset2: return K2_P("reset back");
+        case IqPhase::Sniff2: return K2_P("sniff back");
         case IqPhase::Done: return "done";
-        case IqPhase::Aborted: return "aborted";
+        case IqPhase::Aborted: return K2_P("aborted");
     }
     return "?";
 }
@@ -54,53 +55,53 @@ const char* iq_step_name(IqStep s) {
 const char* iq_why_name(IqWhy w) {
     switch (w) {
         case IqWhy::None: return "none";
-        case IqWhy::Stopped: return "stopped";
-        case IqWhy::Detached: return "detached";
-        case IqWhy::NotInline: return "inline link lost";
-        case IqWhy::NoContract: return "no renegotiation";
-        case IqWhy::Resets: return "too many resets";
-        case IqWhy::Timeout: return "time limit";
-        case IqWhy::SourceResets: return "charger resets when asked";
-        case IqWhy::SourceRestarts: return "charger restarts when asked";
+        case IqWhy::Stopped: return K2_P("stopped");
+        case IqWhy::Detached: return K2_P("detached");
+        case IqWhy::NotInline: return K2_P("inline link lost");
+        case IqWhy::NoContract: return K2_P("no renegotiation");
+        case IqWhy::Resets: return K2_P("too many resets");
+        case IqWhy::Timeout: return K2_P("time limit");
+        case IqWhy::SourceResets: return K2_P("charger resets when asked");
+        case IqWhy::SourceRestarts: return K2_P("charger restarts when asked");
     }
     return "?";
 }
 
 const char* iq_result_name(IqResult r) {
     switch (r) {
-        case IqResult::Pending: return "pending";
-        case IqResult::Answered: return "device answered";
-        case IqResult::Refused: return "device refused";
-        case IqResult::ChargerOnly: return "only the charger spoke";
-        case IqResult::GoodCrcOnly: return "device GoodCRC only";
-        case IqResult::Nothing: return "nothing";
-        case IqResult::SourceReset: return "charger Hard Reset";
-        case IqResult::SourceRestart: return "charger restarted";
+        case IqResult::Pending: return K2_P("pending");
+        case IqResult::Answered: return K2_P("device answered");
+        case IqResult::Refused: return K2_P("device refused");
+        case IqResult::ChargerOnly: return K2_P("only the charger spoke");
+        case IqResult::GoodCrcOnly: return K2_P("device GoodCRC only");
+        case IqResult::Nothing: return K2_P("nothing");
+        case IqResult::SourceReset: return K2_P("charger Hard Reset");
+        case IqResult::SourceRestart: return K2_P("charger restarted");
     }
     return "?";
 }
 
 const char* iq_refusal_name(IqRefusal r) {
     switch (r) {
-        case IqRefusal::None: return "started";
-        case IqRefusal::Running: return "another PD tool is running";
-        case IqRefusal::NoCc: return "no CC line attached";
-        case IqRefusal::NotInline: return "no device inline";
-        case IqRefusal::Busy: return "a test or trigger owns the ports";
-        case IqRefusal::OwnContract: return "the K2 holds its own contract";
-        case IqRefusal::SelfPowered: return "the K2 runs on this VBUS";
-        case IqRefusal::NeedConfirm: return "needs the confirm";
-        case IqRefusal::BadSpoof: return "the spoof target is unknown";
+        case IqRefusal::None: return K2_P("started");
+        case IqRefusal::Running: return K2_P("another PD tool is running");
+        case IqRefusal::NoCc: return K2_P("no CC line attached");
+        case IqRefusal::NotInline: return K2_P("no device inline");
+        case IqRefusal::Busy: return K2_P("a test or trigger owns the ports");
+        case IqRefusal::OwnContract: return K2_P("the K2 holds its own contract");
+        case IqRefusal::SelfPowered: return K2_P("the K2 runs on this VBUS");
+        case IqRefusal::NeedConfirm: return K2_P("needs the confirm");
+        case IqRefusal::BadSpoof: return K2_P("the spoof target is unknown");
     }
     return "?";
 }
 
 const char* iq_match_name(IqMatch m) {
     switch (m) {
-        case IqMatch::Unknown: return "unknown";
-        case IqMatch::Same: return "same contract";
-        case IqMatch::Differs: return "contract changed";
-        case IqMatch::NoSecond: return "no contract after the reset";
+        case IqMatch::Unknown: return K2_P("unknown");
+        case IqMatch::Same: return K2_P("same contract");
+        case IqMatch::Differs: return K2_P("contract changed");
+        case IqMatch::NoSecond: return K2_P("no contract after the reset");
     }
     return "?";
 }

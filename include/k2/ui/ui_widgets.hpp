@@ -7,6 +7,7 @@
 #pragma once
 #include <cstdint>
 #include <string_view>
+#include "k2/core/bss_zero.hpp"
 #include "k2/core/math_opt.hpp"
 #include "k2/core/strpack.hpp"
 #include "k2/ui/gfx.hpp"
@@ -158,13 +159,13 @@ constexpr int kToastCells = (kTwinContentW - 24) / static_cast<int>(kLabelAdv); 
 constexpr int kToastTextPx = kToastCells * static_cast<int>(kLabelAdv);           // 180 px
 
 struct Toast {
-    char text[32] = {};
-    uint8_t len = 0;
+    char text[32] K2_BSS_ZERO;
+    uint8_t len K2_BSS_INIT(0);
     FooterTone tone = FooterTone::Info;
-    uint32_t until_ms = 0;
-    bool drawn = false;
-    bool erase_pending = false;   // pixels of a longer or dropped pill are on screen: the page under them needs repainting
-    uint8_t ink = 0;              // the longest pill drawn since the last restore (a pill is centred and its width follows its length)
+    uint32_t until_ms K2_BSS_INIT(0);
+    bool drawn K2_BSS_INIT(false);
+    bool erase_pending K2_BSS_INIT(false);   // pixels of a longer or dropped pill are on screen: the page under them needs repainting
+    uint8_t ink K2_BSS_INIT(0);              // the longest pill drawn since the last restore (a pill is centred and its width follows its length)
 
     void show(FooterTone t, std::string_view msg, uint32_t now_ms, uint32_t dwell_ms = kToastDefaultMs) {
         if (drawn && len > ink) ink = len;

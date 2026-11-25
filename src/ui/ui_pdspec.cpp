@@ -44,8 +44,8 @@ bool PdSpecSession::self_supplied() const { return fusb302::self_powered() || po
 // Another tool on the ports (a PD Stress run and a twin proof included: foreign_busy() leaves those to their own callers).
 const char* PdSpecSession::foreign_busy() const {
     if (const char* b = ctx_.ui->foreign_busy()) return b;
-    if (ctx_.ui->twin_live_busy()) return "Twin proof: stop it";
-    if (ctx_.ui->pdstress_active()) return "PD Stress: stop it";
+    if (ctx_.ui->twin_live_busy()) return K2_P("Twin proof: stop it");
+    if (ctx_.ui->pdstress_active()) return K2_P("PD Stress: stop it");
     return nullptr;
 }
 
@@ -161,7 +161,7 @@ void PdSpecSession::on_finish(sc::Stop why) {
     // The checks, the programmable passes and the caps note are in the blob only (`k2_remote pd-spec result`, report.txt): no log line
     // per check, for the flash budget of the K2_PDSPEC build.
     K2LOG("[PDSPEC] finish %s score=%u elapsed_ms=%u restore=%s\n", sc::stop_name(why), unsigned(e.score()),
-          unsigned(e.elapsed_ms(0)), e.release_unconfirmed() ? "unconfirmed" : "5V");
+          unsigned(e.elapsed_ms(0)), e.release_unconfirmed() ? K2_P("unconfirmed") : "5V");
     capture_stop();
     rd_off(false);   // the engine already put the Rd back; this only closes a gap the session still thinks open
     // Every end of a run comes through here, after the 5 V release. The run gives the line back the way the charger test does: the
@@ -397,7 +397,7 @@ void PdSpecSession::update_footer() {
     foot_.clear();
     switch (kind) {
         case 1:
-            foot_.put("PD Spec: ").put(sc::family_name(static_cast<sc::Family>(fam)));
+            foot_.put(K2_P("PD Spec: ")).put(sc::family_name(static_cast<sc::Family>(fam)));
             if (items > 1) foot_.put(" ").put_u32(std::min<unsigned>(item + 1u, items)).put("/").put_u32(items);
             break;
         case 2: foot_.put(kPdSpecFooters[2]); break;

@@ -21,6 +21,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include "k2/core/bss_zero.hpp"
 #include <span>
 #include <utility>
 
@@ -160,9 +161,9 @@ private:
     UiContext& ctx_;
     ChargerTestSession& ct_;
     Slot slot_;                          // Engine and pending boot-restore Image never coexist
-    SlotKind slot_kind_ = SlotKind::Empty;
+    SlotKind slot_kind_ K2_BSS_INIT(SlotKind::Empty);
     charger_journal::ResumeGate gate_;
-    Restore restore_ = Restore::None;
+    Restore restore_ K2_BSS_INIT(Restore::None);
     std::uint32_t restore_t0_ K2_BSS_INIT(0);
     bool journal_on_ K2_BSS_INIT(false);            // this run writes a journal (self-supplied K2, the store worked)
     bool cancel_asked_ K2_BSS_INIT(false);

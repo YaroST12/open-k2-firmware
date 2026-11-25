@@ -95,10 +95,10 @@ struct UiContext {
     // Stale lifecycle (design 6.6): when VBUS goes away the screens keep the last live reading.
     LiveTracker live;                                            // when VBUS was last present
     struct Frozen {
-        power::Metrics pm{};
+        power::Metrics pm K2_BSS_ZERO;
         std::optional<adc::Reading> analog;
-        uint32_t elapsed_s = 0;
-        home::ProtoInfo proto{};                                 // the protocol row of that reading
+        uint32_t elapsed_s K2_BSS_INIT(0);
+        home::ProtoInfo proto K2_BSS_ZERO;                       // the protocol row of that reading
     } last;   // the last steady live snapshot (Ui::note_last: a falling VBUS or a released contract never lands here)
     // The one cable-identity list: its selection (what the next charger-test START presents), its saved-clone cache and its
     // armed marker. The wizard's Cable step and Tools -> Spoof both read and change this, so they always agree.
@@ -158,10 +158,10 @@ struct UiContext {
     bool em_quiet K2_BSS_INIT(false);          // the last listen window ended without a cable reply
     bool inline_mode K2_BSS_INIT(false);    // a live sink is attached: active operations are gated (refused, no confirm)
     bool plus_key K2_BSS_INIT(false);       // the physical + key is down right now (Waiting watches it: it is wired to the CC pins)
-    fastcharge::Protocol fc = fastcharge::Protocol::Pending;     // passive D+/D- verdict
-    fastcharge::Protocol fc_lines = fastcharge::Protocol::Pending;   // the pair alone (fastcharge::lines())
+    fastcharge::Protocol fc K2_BSS_INIT(fastcharge::Protocol::Pending);     // passive D+/D- verdict
+    fastcharge::Protocol fc_lines K2_BSS_INIT(fastcharge::Protocol::Pending);   // the pair alone (fastcharge::lines())
     bool trig_armed K2_BSS_INIT(false);     // trigger above 5 V: first OK given, waiting for the second
-    cable_r::Mode cable_mode = cable_r::Mode::Passive;           // Cable R submenu: passive meter or Kelvin 8-wire
+    cable_r::Mode cable_mode K2_BSS_INIT(cable_r::Mode::Passive);           // Cable R submenu: passive meter or Kelvin 8-wire
     bool id_no_device K2_BSS_INIT(false);   // Identify was refused: nothing on CC, VBUS low (clears itself once something appears)
     // The pure precheck over the live readings (unknown = -1): is there a device to ask at all?
     bool no_device() const {
@@ -315,9 +315,11 @@ public:
     enum class Stage : uint8_t { Algorithms, Group, Cable, Identity, Review, Running, Results, Steps, Detail, Resume, Changes, Ask, Refuse, Waiting, Custom, SpecDetail };
     using Proposal = std::array<uint32_t, pd::kMaxPdos + 24>;
     explicit ChargerTestSession(UiContext& c) : ctx_(c), runner_(*this) {
+#ifndef __arm__
         card_name_[0] = '\0';
         mfr_[0] = '\0';
         run_cable_name_[0] = '\0';
+#endif
     }
     void enter();                  // the page is (re)entered: the wizard starts at Algorithms, or at Resume for a journaled run
     // The page's paint writes every content pixel (Ui::page_opaque): only the Algorithms list (rows from kBodyY, the empty

@@ -13,6 +13,7 @@
 #pragma once
 #include <cstddef>
 #include <cstdint>
+#include "k2/core/bss_zero.hpp"
 #include <new>
 #include <type_traits>
 #include <utility>
@@ -98,8 +99,8 @@ private:
 
     alignas(std::max_align_t) std::uint8_t buf_[Capacity];
     Entry e_[Depth];
-    std::size_t used_ = 0;
-    std::size_t depth_ = 0;
+    std::size_t used_ K2_BSS_INIT(0);
+    std::size_t depth_ K2_BSS_INIT(0);
 };
 
 }  // namespace k2

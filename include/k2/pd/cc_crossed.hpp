@@ -21,6 +21,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include "k2/core/bss_zero.hpp"
 
 #include "k2/pd/ra_guard.hpp"
 
@@ -90,9 +91,9 @@ private:
         bool toggling() const { return edges >= kToggleEdges; }
         bool quiet() const { return hi - lo <= kQuietRangeMv && hi < kRpMinMv && !steady_loaded(); }
     };
-    std::array<S, kSamples> s_{};
-    std::size_t n_ = 0, head_ = 0;
-    std::uint32_t first_ms_ = 0;
+    std::array<S, kSamples> s_ K2_BSS_ZERO;
+    std::size_t n_ K2_BSS_INIT(0), head_ K2_BSS_INIT(0);
+    std::uint32_t first_ms_ K2_BSS_INIT(0);
 };
 
 }  // namespace k2::raguard

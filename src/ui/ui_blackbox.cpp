@@ -25,10 +25,10 @@ constexpr int16_t kEmptyListY = 92;     // the Live link row under the empty-pag
 constexpr kit::KvLayout kLinkLayout = {44, kit::kRowH, 6, &kLabelFont, nullptr, 92, 16, Align::Left};
 
 // A capture row is the trigger name (the tail is a time span of at most 7 cells and a gap) in the kit row's text box.
-constexpr const char *kTriggerNames[] = {"Contract", "Hard reset", "VBUS dip", "Detach", "D+/D- edges", "6 A refused", "-"};
-static_assert(all_fit(kTriggerNames, kSmallAdvPx, kit::kTailX - 8 - 7 * kSmallAdvPx - kit::kTextX), "a trigger name is wider than its row");
-constexpr const char *kLinkNames[] = {"USB", "Thunderbolt", "DisplayPort", "Cable", "Partner USB"};
-static_assert(all_fit(kLinkNames, 6, 92 - 6 - 6), "a link key is wider than its column");
+constexpr const char *kTriggerNames[] = {K2_P("Contract"), K2_P("Hard reset"), K2_P("VBUS dip"), K2_P("Detach"), K2_P("D+/D- edges"), K2_P("6 A refused"), "-"};
+static_assert(all_fit_p(kTriggerNames, kSmallAdvPx, kit::kTailX - 8 - 7 * kSmallAdvPx - kit::kTextX), "a trigger name is wider than its row");
+constexpr const char *kLinkNames[] = {"USB", K2_P("Thunderbolt"), K2_P("DisplayPort"), "Cable", K2_P("Partner USB")};
+static_assert(all_fit_p(kLinkNames, 6, 92 - 6 - 6), "a link key is wider than its column");
 
 struct TrigMeta { const char *name; uint16_t color; Icon icon; };
 constexpr TrigMeta kTrigMeta[7] = {
@@ -160,8 +160,8 @@ void BlackBoxPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
     out.marker = kit::Marker::Icon;
     if (i >= p.nrows_) {
         out.icon = Icon::Cable;
-        out.text = "Live link";
-        out.tail = pdtrace::live_link().any() ? "seen" : "not seen";
+        out.text = K2_P("Live link");
+        out.tail = pdtrace::live_link().any() ? "seen" : K2_P("not seen");
         return;
     }
     const Row &r = p.rows_[i];
@@ -198,9 +198,9 @@ void BlackBoxPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
 
 void BlackBoxPage::paint_empty_text() {
     const Surface &c = ctx_.content;
-    gfx_text(c, kSmall, 8, 30, "No captures yet", kText, kBg);
-    gfx_text(c, kLabelFont, 8, 54, "Contract, hard reset,", kDim, kBg);
-    gfx_text(c, kLabelFont, 8, 68, "VBUS dip or detach", kDim, kBg);
+    gfx_text(c, kSmall, 8, 30, K2_P("No captures yet"), kText, kBg);
+    gfx_text(c, kLabelFont, 8, 54, K2_P("Contract, hard reset,"), kDim, kBg);
+    gfx_text(c, kLabelFont, 8, 68, K2_P("VBUS dip or detach"), kDim, kBg);
 }
 
 void BlackBoxPage::paint_list() {
@@ -263,16 +263,16 @@ void BlackBoxPage::paint_link() {
     const view::Link l = link_live_ ? pdtrace::live_link() : view::link_of(data());
     const view::LinkText t = view::link_text(l);
     StrBuf<16> dp;
-    if (t.dp[0]) dp.put("DP alt ").put_char(t.dp[0]);
+    if (t.dp[0]) dp.put(K2_P("DP alt ")).put_char(t.dp[0]);
     const char *const rows[5] = {t.usb, t.tbt, dp.c_str(), t.cable, t.peer};
     uint32_t sig = 2166136261u ^ (link_live_ ? 1u : 0u);
     for (int i = 0; i < 5; i++) sig = pg::mix_cstr(sig, rows[i]);
     if (link_painted_ && sig == link_sig_) return;
     pg::clear_body(c);
-    gfx_text(c, kSmall, 8, kTlHeadY, link_live_ ? "Live link" : "Link", kText, kBg);
+    gfx_text(c, kSmall, 8, kTlHeadY, link_live_ ? K2_P("Live link") : "Link", kText, kBg);
     for (int i = 0; i < 5; i++) {
         const bool seen = rows[i][0] != 0;
-        kit::kv_row(c, kLinkLayout, kit::kv_row_y(kLinkLayout, i), kLinkNames[i], seen ? rows[i] : "not seen", seen ? kText : kDim);
+        kit::kv_row(c, kLinkLayout, kit::kv_row_y(kLinkLayout, i), kLinkNames[i], seen ? rows[i] : K2_P("not seen"), seen ? kText : kDim);
     }
     gfx_fill(c, 0, kit::kv_row_y(kLinkLayout, 5), c.w, 1, kRule);
     link_painted_ = true;
@@ -289,7 +289,7 @@ void BlackBoxPage::draw_strip() {
     const view::Strip st =
         view::vbus_strip(recs, std::span<uint8_t>(sc_.heights, size_t(strip_w_)), uint8_t(kStripH - 1));
     if (!st.valid) {
-        gfx_text(c, kLabelFont, kStripX, kStripY + 8, "no VBUS samples", kDim, kBg);
+        gfx_text(c, kLabelFont, kStripX, kStripY + 8, K2_P("no VBUS samples"), kDim, kBg);
         return;
     }
     for (int x = 0; x < strip_w_; x++) {

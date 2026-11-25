@@ -55,6 +55,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include "k2/core/bss_zero.hpp"
 #include <cstring>
 #include <memory>
 #include <span>
@@ -449,8 +450,8 @@ public:
     bool ready(std::uint32_t now) const { return stable_ && now - since_ >= kResumeStableMs; }
     void reset() { stable_ = false; }
 private:
-    bool stable_ = false;
-    std::uint32_t since_ = 0, last_ = 0;
+    bool stable_ K2_BSS_INIT(false);
+    std::uint32_t since_ K2_BSS_INIT(0), last_ K2_BSS_INIT(0);
 };
 
 }  // namespace k2::charger_journal

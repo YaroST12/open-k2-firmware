@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include "k2/core/bss_zero.hpp"
 #include <cstdint>
 
 namespace k2::raguard {
@@ -156,8 +157,8 @@ public:
 
 private:
     struct S { std::uint32_t t; bool rp; };
-    std::array<S, kSamples> s_{};
-    std::size_t n_ = 0, head_ = 0;
+    std::array<S, kSamples> s_ K2_BSS_ZERO;
+    std::size_t n_ K2_BSS_INIT(0), head_ K2_BSS_INIT(0);
 };
 
 // ---- the slow dual-role toggle detector -----------------------------------------------------------
@@ -201,9 +202,9 @@ public:
 
 private:
     struct E { std::uint32_t t; bool rising; };   // rising = the level after the edge is high
-    std::array<E, kMaxEdges> e_{};
-    std::size_t n_ = 0, head_ = 0;
-    bool have_ = false, high_ = false, was_high_ = false;
+    std::array<E, kMaxEdges> e_ K2_BSS_ZERO;
+    std::size_t n_ K2_BSS_INIT(0), head_ K2_BSS_INIT(0);
+    bool have_ K2_BSS_INIT(false), high_ K2_BSS_INIT(false), was_high_ K2_BSS_INIT(false);
 };
 
 // The refusal the dialog shows, one row per line (no wrapping inside a row).

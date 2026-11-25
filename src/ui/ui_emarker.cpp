@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
 #include "k2/ui/ui_emarker.hpp"
+#include "k2/core/strpack.hpp"
 #include <cstring>
 
 namespace k2 {
@@ -35,11 +36,11 @@ void emarker_watts_text(const pd::Emarker &e, StrBuf<8> &out) { out.put_u32(e.ma
 void emarker_speed_pill(const pd::Emarker &e, StrBuf<12> &out) {
     const char *s = e.speed_str ? e.speed_str : "USB 2.0";
     if (!std::strncmp(s, "Thunderbolt", 11)) out.put("TBT");
-    else if (!std::strncmp(s, "USB 3.2 Gen1", 12)) out.put("USB3.2 G1");
-    else if (!std::strncmp(s, "USB 3.2 Gen2", 12)) out.put("USB3.2 G2");
-    else if (!std::strncmp(s, "USB4 Gen3", 9)) out.put("USB4 G3");
-    else if (!std::strncmp(s, "USB4 Gen4", 9)) out.put("USB4 G4");
-    else out.put("USB2.0");
+    else if (!std::strncmp(s, "USB 3.2 Gen1", 12)) out.put(K2_P("USB3.2 G1"));
+    else if (!std::strncmp(s, "USB 3.2 Gen2", 12)) out.put(K2_P("USB3.2 G2"));
+    else if (!std::strncmp(s, "USB4 Gen3", 9)) out.put(K2_P("USB4 G3"));
+    else if (!std::strncmp(s, "USB4 Gen4", 9)) out.put(K2_P("USB4 G4"));
+    else out.put(K2_P("USB2.0"));
 }
 
 int emarker_kv_count(const pd::Emarker &e, bool tbt) {
@@ -52,32 +53,32 @@ void emarker_kv(const pd::Emarker &e, bool tbt, int i, StrBuf<12> &key, StrBuf<2
     const int n = layout(e, tbt, k);
     if (i < 0 || i >= n) return;
     switch (k[i]) {
-    case Vendor: key.put("Vendor"); val.put(e.vendor_str.empty() ? "Unknown" : e.vendor_str.c_str()); break;
+    case Vendor: key.put(K2_P("Vendor")); val.put(e.vendor_str.empty() ? K2_P("Unknown") : e.vendor_str.c_str()); break;
     case Vid: key.put("VID"); val.put_hex(e.vid, 4); break;
     case Pid: key.put("PID"); val.put_hex(e.pid, 4); break;
     case HwFw: key.put("HW/FW"); val.put_u32(e.hw_rev).put(" / ").put_u32(e.fw_rev); break;
     case Length:
-        key.put("Length");
+        key.put(K2_P("Length"));
         if (e.latency_code >= 1 && e.latency_code <= 7) val.put("~").put_u32(e.latency_code).put(" m");
         else if (e.latency_code == 8) val.put(">7 m");
         else val.put("n/a");
         break;
-    case Latency: key.put("Latency"); latency_short(e.latency_str, val); break;
+    case Latency: key.put(K2_P("Latency")); latency_short(e.latency_str, val); break;
     case Term:
         key.put("Term");
-        val.put(e.termination == 1 ? "VCONN req" : e.termination == 2 ? "active 1" : e.termination == 3 ? "active 2" : "passive");
+        val.put(e.termination == 1 ? K2_P("VCONN req") : e.termination == 2 ? K2_P("active 1") : e.termination == 3 ? K2_P("active 2") : K2_P("passive"));
         break;
     case Xid: key.put("XID"); val.put_hex(e.xid, 8); break;
     case Sop:
         key.put("SOP");
-        val.put(e.sop == 2 ? "''" : "'").put(e.spec_rev == 1 ? " PD2.0" : " PD3.x");
+        val.put(e.sop == 2 ? "''" : "'").put(e.spec_rev == 1 ? K2_P(" PD2.0") : K2_P(" PD3.x"));
         break;
     case Temp: key.put("Temp"); val.put_u32(e.max_temp_c).put_char('/').put_u32(e.shutdown_temp_c).put_char('C'); break;
     case Usb4:
         key.put("USB4");
         val.put(e.usb4_supported ? "yes " : "no ").put_u32(e.usb_lanes).put("ln");
         break;
-    case Tbt: key.put("TBT"); val.put("SVID 8087"); break;
+    case Tbt: key.put("TBT"); val.put(K2_P("SVID 8087")); break;
     default: {
         int idx = 0;
         for (int j = 0; j < i; j++) if (k[j] == Vdo) idx++;

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
 #include "k2/ui/ui_wizard.hpp"
+#include "k2/core/strpack.hpp"
 
 #include <algorithm>
 
@@ -145,7 +146,7 @@ void Wizard::title(const pd::SourceCaps &caps, StrBuf<24> &out) const {
         out.put("LIVE");
         return;
     }
-    static constexpr const char *kNames[] = {"OFFER", "VOLTAGE", "CURRENT", "CONFIRM"};
+    static constexpr const char *kNames[] = {"OFFER", K2_P("VOLTAGE"), K2_P("CURRENT"), K2_P("CONFIRM")};
     out.put("Step ").put_u32(uint32_t(number(caps))).put_char('/').put_u32(uint32_t(total(caps)));
     out.put(": ").put(kNames[uint8_t(step)]);
 }
@@ -153,14 +154,14 @@ void Wizard::title(const pd::SourceCaps &caps, StrBuf<24> &out) const {
 void Wizard::footer(const pd::SourceCaps &caps, uint32_t cap_mv, bool armed, StrBuf<32> &out) const {
     switch (step) {
         // Facts about the step, never the keys: the panel strip already names what each button does.
-        case WizStep::Offer: out.put("Pick an offer"); break;
-        case WizStep::Voltage: out.put_u32(volt_step_mv(caps)).put("mV steps"); break;
-        case WizStep::Current: out.put("50mA steps"); break;
+        case WizStep::Offer: out.put(K2_P("Pick an offer")); break;
+        case WizStep::Voltage: out.put_u32(volt_step_mv(caps)).put(K2_P("mV steps")); break;
+        case WizStep::Current: out.put(K2_P("50mA steps")); break;
         case WizStep::Confirm:
-            if (!trigger_needs_confirm(caps, choice(caps), cap_mv)) out.put("Ready to send");
-            else out.put(armed ? "Above 5V! Send again" : "Above 5V: send twice");
+            if (!trigger_needs_confirm(caps, choice(caps), cap_mv)) out.put(K2_P("Ready to send"));
+            else out.put(armed ? K2_P("Above 5V! Send again") : K2_P("Above 5V: send twice"));
             break;
-        case WizStep::Live: out.put("Exit releases to 5V"); break;
+        case WizStep::Live: out.put(K2_P("Exit releases to 5V")); break;
     }
 }
 
@@ -187,7 +188,7 @@ bool wiz_summary(const pd::SourceCaps &caps, pd::Choice c, uint32_t cap_mv, WizS
     out.volts.put_fixed(int32_t(p.mv), 2).put_char('V');
     out.amps.put_fixed(int32_t(p.ma), 2).put_char('A');
     out.watts.put_fixed(int32_t(out.req_mw), 1).put_char('W');
-    out.line.put("Request ").put(out.kind.view()).put_char(' ').put(out.volts.view()).put_char(' ')
+    out.line.put(K2_P("Request ")).put(out.kind.view()).put_char(' ').put(out.volts.view()).put_char(' ')
         .put(out.amps.view()).put(" = ").put(out.watts.view());
     return true;
 }
@@ -216,14 +217,14 @@ LiveState live_state(const pd::SinkStatus &s) {
 
 const char *live_name(LiveState s) {
     switch (s) {
-        case LiveState::Requesting: return "Requesting";
-        case LiveState::Accepted: return "Accepted";
-        case LiveState::PsRdy: return "PS_RDY";
-        case LiveState::Rejected: return "Rejected";
-        case LiveState::HardReset: return "Hard reset";
-        case LiveState::Failed: return "Failed";
-        case LiveState::Dropping: return "Back to 5V";
-        case LiveState::Released: return "Released";
+        case LiveState::Requesting: return K2_P("Requesting");
+        case LiveState::Accepted: return K2_P("Accepted");
+        case LiveState::PsRdy: return K2_P("PS_RDY");
+        case LiveState::Rejected: return K2_P("Rejected");
+        case LiveState::HardReset: return K2_P("Hard reset");
+        case LiveState::Failed: return K2_P("Failed");
+        case LiveState::Dropping: return K2_P("Back to 5V");
+        case LiveState::Released: return K2_P("Released");
     }
     return "";
 }

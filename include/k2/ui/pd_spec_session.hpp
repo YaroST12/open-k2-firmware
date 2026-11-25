@@ -22,6 +22,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include "k2/core/bss_zero.hpp"
 #include <optional>
 #include <span>
 
@@ -125,7 +126,7 @@ private:
     void update_footer();
 
     UiContext& ctx_;
-    std::span<std::uint8_t> pool_{};     // borrowed from ChargerTestSession when standalone (!test_run_)
+    std::span<std::uint8_t> pool_ K2_BSS_ZERO;     // borrowed from ChargerTestSession when standalone (!test_run_)
     std::optional<pdspec::Engine> engine_;
     bool captured_ K2_BSS_INIT(false);              // the capture is ours (armed by capture_start, not yet stopped)
     bool rd_away_ K2_BSS_INIT(false);               // the detach gap is open (rd_off(true) without the matching rd_off(false))
@@ -137,16 +138,16 @@ private:
     // The moves of a Deep run before its stage (test_move): the one in flight, and per APDO position the sweep points offered and
     // judged; a sweep handed over (nearly) whole marks its APDO covered.
     struct Feed {
-        pdspec::ProgMove mv{};
-        std::uint32_t t = 0;
-        std::uint8_t flags = 0;
-        bool pending = false, release = false, last_ok = false;
+        pdspec::ProgMove mv K2_BSS_ZERO;
+        std::uint32_t t K2_BSS_INIT(0);
+        std::uint8_t flags K2_BSS_INIT(0);
+        bool pending K2_BSS_INIT(false), release K2_BSS_INIT(false), last_ok K2_BSS_INIT(false);
     };
-    Feed feed_{};
+    Feed feed_ K2_BSS_ZERO;
     std::uint32_t fed_run_ K2_BSS_INIT(0);
     std::uint16_t covered_ K2_BSS_INIT(0);
-    std::array<std::uint8_t, 16> sw_off_{}, sw_ok_{};   // by APDO position (EPR AVS up to 11)
-    pd::Pdo epr_avs_{};                                  // start_in_test(): the run's EPR AVS APDO, for the engine's scan
+    std::array<std::uint8_t, 16> sw_off_ K2_BSS_ZERO, sw_ok_ K2_BSS_ZERO;   // by APDO position (EPR AVS up to 11)
+    pd::Pdo epr_avs_ K2_BSS_ZERO;                                            // start_in_test(): the run's EPR AVS APDO, for the engine's scan
     std::uint8_t epr_pos_ K2_BSS_INIT(0);
 };
 

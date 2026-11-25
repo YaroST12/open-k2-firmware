@@ -838,9 +838,9 @@ public:
     }
 private:
     static constexpr unsigned kCap = 20;   // 300 ms of samples at the 15 ms worst-case poll cadence
-    std::array<uint32_t, kCap> t_{};
-    std::array<int, kCap> v_{};
-    unsigned n_ = 0;
+    std::array<uint32_t, kCap> t_ K2_BSS_ZERO;
+    std::array<int, kCap> v_ K2_BSS_ZERO;
+    unsigned n_ K2_BSS_INIT(0);
 };
 
 class Runner {
@@ -1104,7 +1104,7 @@ private:
     uint16_t sweep_mv_ K2_BSS_INIT(0), sweep_lo_ K2_BSS_INIT(0), sweep_hi_ K2_BSS_INIT(0);   // the Request out (a point or a step-back one) / the row's cell range
     // The row's depth plan and the points it measured (the record holds the on-grid ones only). The fold rule runs live over every point
     // (sweep_scan_); the first finding is stepped back from once per row (sweep_ref_), the located fold goes into the row's summary.
-    ctsweep::Plan sweep_plan_{};
+    ctsweep::Plan sweep_plan_ K2_BSS_ZERO;
     uint16_t sweep_pts_ K2_BSS_INIT(0), sweep_prev_mv_ K2_BSS_INIT(0), sweep_prev_lv_ K2_BSS_INIT(0), sweep_resume_mv_ K2_BSS_INIT(0);
     bool sweep_refining_ K2_BSS_INIT(false), sweep_refined_ K2_BSS_INIT(false), sweep_fed_ K2_BSS_INIT(false);   // sweep_fed_: the last move went to the spec stage
     pd::TrackScan sweep_scan_;
@@ -1117,8 +1117,8 @@ private:
     void fold_caution(Step& sweep, const ctsweep::Summary&);   // a fold: the sweep row and the APDO's fixed rows above it read Reason::Folded
     bool xiaomi_seen_ K2_BSS_INIT(false), xiaomi_reset_ K2_BSS_INIT(false), x_svid_ K2_BSS_INIT(false), x_authed_ K2_BSS_INIT(false); uint32_t tail_at_ K2_BSS_INIT(0), hr_count_ K2_BSS_INIT(0);
     size_t cut_index_ = SIZE_MAX;   // a low programmable row whose source went dark: Releasing decides replug-or-carry-on
-    State state_ = State::Idle;
-    Reason reason_ = Reason::None;
+    State state_ K2_BSS_INIT(State::Idle);
+    Reason reason_ K2_BSS_INIT(Reason::None);
     uint16_t refusal_mv_ K2_BSS_INIT(0);   // the measured VBUS of the last preflight refusal (note_preflight_refusal)
     uint32_t release_ms_ K2_BSS_INIT(0), phase_ms_ K2_BSS_INIT(0), stable_ms_ K2_BSS_INIT(0), last_ms_ K2_BSS_INIT(0), session_ K2_BSS_INIT(0), resets_ K2_BSS_INIT(0);
     uint32_t run_id_ K2_BSS_INIT(0), revision_ K2_BSS_INIT(0);
@@ -1156,7 +1156,7 @@ private:
     uint32_t dip_ms_ K2_BSS_INIT(0), dip_back_ms_ K2_BSS_INIT(0); bool dip_open_ K2_BSS_INIT(false), dip_back_ K2_BSS_INIT(false); uint8_t dips_ K2_BSS_INIT(0);
     // A casualty whose cut is still in progress waits in Releasing (cut_wait_) for VBUS to come back: the row is Pending, the verdict it
     // would have had is kept here (cut_v_ / cut_why_ / cut_detail_ / cut_mv_ = the VBUS of that moment), cut_final_ = the retries of this row are used up.
-    bool cut_wait_ K2_BSS_INIT(false), cut_final_ K2_BSS_INIT(false); Verdict cut_v_ = Verdict::Fail; Reason cut_why_ = Reason::None; uint8_t cut_detail_ K2_BSS_INIT(0); int cut_mv_ K2_BSS_INIT(0);
+    bool cut_wait_ K2_BSS_INIT(false), cut_final_ K2_BSS_INIT(false); Verdict cut_v_ = Verdict::Fail; Reason cut_why_ K2_BSS_INIT(Reason::None); uint8_t cut_detail_ K2_BSS_INIT(0); int cut_mv_ K2_BSS_INIT(0);
     // pattern legacy-start-races-announcement: a unit that started inside the source's announcement (PD quiet under kLegacyQuietMs at its
     // first fast-charge request) asks its first step once more after real quiet when it fails with a race-type reason (race_hold).
     // race_seen_ = the unit's first request was made, race_idx_ its row, race_tried_ = the one retry is used, race_wait_ = the retry's
@@ -1180,7 +1180,7 @@ private:
     std::array<Unit, kMaxUnits> order_ K2_BSS_ZERO;
     uint8_t n_order_ K2_BSS_INIT(0);
     Unit unit_ = Unit::Count;
-    Mode mode_ = Mode::Pd;
+    Mode mode_ K2_BSS_INIT(Mode::Pd);
     bool attached_ K2_BSS_INIT(false);       // the unit's attach is done: its rows may run
     bool detached_ K2_BSS_INIT(false);       // the last act was a detach (Rd off): the next unit attaches without detaching again
     bool ending_ K2_BSS_INIT(false);         // the running detach ends the unit (not a Legacy retry)
@@ -1212,7 +1212,7 @@ private:
     uint32_t time_ms_ K2_BSS_INIT(0);                                    // the poll the split last counted to (0 = idle)
     bool time_pending_ K2_BSS_INIT(false);                               // a run started and its split is not logged yet
     uint32_t pre_ms_ K2_BSS_INIT(0);                 // extra quiet before the unit's first handshake, on top of the 500 ms baseline settle
-    enum class Att : uint8_t { Caps, Contract } att_ = Att::Caps;
+    enum class Att : uint8_t { Caps, Contract } att_ K2_BSS_INIT(Att::Caps);
     bool rp_restart_ K2_BSS_INIT(false);   // the attach wait was restarted once after a source-side Rp drop (pattern slow-rp-wake)
     bool contract_wrong_ K2_BSS_INIT(false);   // latched in poll_attach: PS_RDY at PDO 1 was seen during this attach wait with VBUS outside vSafe5V
                                     // (pattern shared-bus-split). The source may tear the port down before the timeout, so the
@@ -1233,7 +1233,7 @@ private:
     bool spec_feed(const Input&, const Step&, int from_mv, int to_mv, uint8_t cls, uint8_t flags);   // true: wait, the stage takes the move
     uint32_t feed_ms_ K2_BSS_INIT(0);          // a move was handed to the spec stage, which is still judging it (0 = none)
     uint16_t prog_from_mv_ K2_BSS_INIT(0);     // the row's Request came from this set point of its own APDO (0 = from another level)
-    enum class Probe : uint8_t { Off, Pending, Closing, Running } probe_ = Probe::Off;
+    enum class Probe : uint8_t { Off, Pending, Closing, Running } probe_ K2_BSS_INIT(Probe::Off);
     uint32_t probe_ms_ K2_BSS_INIT(0);
     Options opts_{};
     uint32_t caps_gone_ms_ K2_BSS_INIT(0);   // when the source caps went invalid (a hard reset re-announces them); 0 = valid

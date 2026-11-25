@@ -7,6 +7,7 @@
 #include <cstring>
 
 #include "k2/core/fmt.hpp"
+#include "k2/core/strpack.hpp"
 #include "k2/drivers/lcd.hpp"
 #include "k2/core/lz.hpp"
 #include "k2/core/scratch.hpp"
@@ -211,7 +212,7 @@ void SharePage::paint_info() {
     qrview::draw_line_in(a, y, link_ ? link_caption(type()).data() : "K2 data code");   // link_caption() is NUL terminated text
     y += kPitch;
     if (n_ > 0) {
-        fmt::format(text, "QR version %d, %d px modules", version(), look_.px);
+        fmt::format(text, K2_P("QR version %d, %d px modules"), version(), look_.px);
         qrview::draw_line_in(a, y, text);
         y += kPitch;
         const std::string_view hint = hint_for(look_);

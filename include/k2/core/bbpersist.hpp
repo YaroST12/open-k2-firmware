@@ -40,24 +40,24 @@ inline constexpr std::uint32_t kRareBudget = 2;   // rare-kind captures written 
 inline constexpr std::uint32_t kEraseGapMs = 1000;   // between two maintenance erases (each stops the main loop ~35 ms)
 
 struct Status {
-    bool ready = false;                // the ring was mounted
-    bool idle = false;                 // idle gate closed: captures are not written
-    bool held = false;                 // a charger test runs: the per-row captures wait
-    std::uint32_t waiting = 0;         // finished captures the hold kept back at the last scan
-    std::uint32_t dropped = 0;         // waiting captures a newer one overwrote (every RAM slot was waiting)
-    std::uint32_t deferred = 0;        // rare-kind captures the run budget made wait (they are written after the run)
-    std::array<std::uint32_t, 8> by_kind{};  // captures written, by pdtrace::Trigger
-    unsigned last_kind = 0;            // trigger of the last save
-    bool last_while_held = false;      // the hold was up when it was written (a held kind written anyway = a bug)
-    std::uint32_t made_room = 0;       // captures dropped by maintenance (the oldest sector erased)
-    std::uint32_t erases = 0;          // maintenance erases since boot
-    int entries = 0;                   // captures in flash (the newest kMaxEntries counted)
-    std::uint32_t used_bytes = 0, free_bytes = 0;
-    std::uint32_t skipped = 0;         // captures dropped while idle, too big or with no room in the ring
-    std::uint32_t errors = 0;          // flash errors
-    std::uint32_t saves = 0;           // captures written
-    std::uint32_t last_ms = 0;         // duration of the last save (the main loop was blocked this long)
-    std::uint32_t max_ms = 0;          // the longest save since boot
+    bool ready K2_BSS_INIT(false);                // the ring was mounted
+    bool idle K2_BSS_INIT(false);                 // idle gate closed: captures are not written
+    bool held K2_BSS_INIT(false);                 // a charger test runs: the per-row captures wait
+    std::uint32_t waiting K2_BSS_INIT(0);         // finished captures the hold kept back at the last scan
+    std::uint32_t dropped K2_BSS_INIT(0);         // waiting captures a newer one overwrote (every RAM slot was waiting)
+    std::uint32_t deferred K2_BSS_INIT(0);        // rare-kind captures the run budget made wait (they are written after the run)
+    std::array<std::uint32_t, 8> by_kind K2_BSS_ZERO;  // captures written, by pdtrace::Trigger
+    unsigned last_kind K2_BSS_INIT(0);            // trigger of the last save
+    bool last_while_held K2_BSS_INIT(false);      // the hold was up when it was written (a held kind written anyway = a bug)
+    std::uint32_t made_room K2_BSS_INIT(0);       // captures dropped by maintenance (the oldest sector erased)
+    std::uint32_t erases K2_BSS_INIT(0);          // maintenance erases since boot
+    int entries K2_BSS_INIT(0);                   // captures in flash (the newest kMaxEntries counted)
+    std::uint32_t used_bytes K2_BSS_INIT(0), free_bytes K2_BSS_INIT(0);
+    std::uint32_t skipped K2_BSS_INIT(0);         // captures dropped while idle, too big or with no room in the ring
+    std::uint32_t errors K2_BSS_INIT(0);          // flash errors
+    std::uint32_t saves K2_BSS_INIT(0);           // captures written
+    std::uint32_t last_ms K2_BSS_INIT(0);         // duration of the last save (the main loop was blocked this long)
+    std::uint32_t max_ms K2_BSS_INIT(0);          // the longest save since boot
 };
 
 class Persister {

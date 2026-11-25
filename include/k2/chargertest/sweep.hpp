@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <optional>
+#include "k2/core/bss_zero.hpp"
 #include <span>
 #include "k2/pd/pd.hpp"
 #include "k2/pd/prog_track.hpp"
@@ -206,10 +207,10 @@ size_t format_point(unsigned set_mv, int measured_mv, std::span<char> out);
 class Refiner {
 public:
     struct Located {
-        bool found = false;
-        pd::Track kind = pd::Track::None;
-        uint16_t ok_mv = 0, ok_level_mv = 0;     // the last request that tracked and what it settled to
-        uint16_t bad_mv = 0, bad_level_mv = 0;   // the first request the rule names and what it settled to
+        bool found K2_BSS_INIT(false);
+        pd::Track kind K2_BSS_INIT(pd::Track::None);
+        uint16_t ok_mv K2_BSS_INIT(0), ok_level_mv K2_BSS_INIT(0);     // the last request that tracked and what it settled to
+        uint16_t bad_mv K2_BSS_INIT(0), bad_level_mv K2_BSS_INIT(0);   // the first request the rule names and what it settled to
     };
     // good = the last measured point before the finding, bad = the point the rule named (request, settled level).
     void begin(Kind k, pd::Track kind, int good_req, int good_level, int bad_req, int bad_level) {
@@ -258,9 +259,9 @@ private:
     }
     pd::TrackScan scan_;
     Located res_;
-    Phase phase_ = Phase::Idle;
+    Phase phase_ K2_BSS_INIT(Phase::Idle);
     unsigned floor_ = kFineMv, f_ = kFineMv;
-    int a_ = 0, a_lv_ = 0, b_ = 0, b_lv_ = 0, cur_ = 0, prev_ = 0, prev_lv_ = 0;
+    int a_ K2_BSS_INIT(0), a_lv_ K2_BSS_INIT(0), b_ K2_BSS_INIT(0), b_lv_ K2_BSS_INIT(0), cur_ K2_BSS_INIT(0), prev_ K2_BSS_INIT(0), prev_lv_ K2_BSS_INIT(0);
 };
 
 // One finished (or in-flight) sweep row: which APDO, where its points sit in the record, and the summary so far.

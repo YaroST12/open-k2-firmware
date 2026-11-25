@@ -7,6 +7,7 @@
 #pragma once
 
 #include <cstdint>
+#include "k2/core/bss_zero.hpp"
 
 namespace k2::shell {
 
@@ -37,8 +38,8 @@ public:
     void reset() { *this = Band{}; }
 
 private:
-    uint32_t until_ = 0;
-    bool on_ = false, owned_ = false, prev_run_ = false;
+    uint32_t until_ K2_BSS_INIT(0);
+    bool on_ K2_BSS_INIT(false), owned_ K2_BSS_INIT(false), prev_run_ K2_BSS_INIT(false);
 };
 
 }  // namespace k2::shell

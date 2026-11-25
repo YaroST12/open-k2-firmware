@@ -147,8 +147,8 @@ protected:
 // the session that reads it got its answer, and it stays after the session ends.
 struct Caps {
     accp::ScpCaps scp;
-    std::array<ufcs::Cap, ufcs::kMaxCaps> ufcs{};
-    std::uint8_t ufcs_n = 0;
+    std::array<ufcs::Cap, ufcs::kMaxCaps> ufcs K2_BSS_ZERO;
+    std::uint8_t ufcs_n K2_BSS_INIT(0);
 };
 
 class Engine {

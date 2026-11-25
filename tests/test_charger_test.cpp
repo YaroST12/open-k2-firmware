@@ -1975,7 +1975,7 @@ static void test_qc3plus_without_response_is_a_distinct_skip() {
     }
     CHECK_EQ(failed, 0u);
     CHECK_EQ(skipped > 0, true);
-    CHECK_EQ(std::string(ct::name(ct::Reason::NoQc3Plus)) == "no QC3+ response", true);
+    CHECK_STR(ct::name(ct::Reason::NoQc3Plus), "no QC3+ response");
 
     Fake g; g.caps = {}; g.no_response_proto = fc::Proto::Qc3;
     ct::Runner q(g);
@@ -2947,7 +2947,7 @@ static void test_class_b_on_a_class_a_charger_is_a_neutral_skip() {
         if (a == A::Qc2ClassB) { CHECK_EQ(skipped, 1u); CHECK_EQ(passed, 0u); }
         else { CHECK_EQ(skipped, 3u); CHECK_EQ(passed, 2u); }   // 5 V and 12 V pass; 20 V, 12 V, 5 V skip
     }
-    CHECK_EQ(std::string(ct::name(ct::Reason::ClassAOnly)) == "Class A only (12 V max)", true);
+    CHECK_STR(ct::name(ct::Reason::ClassAOnly), "Class A only (12 V max)");
     // The default run: QC2 / QC3 pass, Class B reads as skips, the run has no failed row.
     Fake f; f.caps = {}; f.fc_max_mv = 12000;
     ct::Runner r(f);
@@ -2975,7 +2975,7 @@ static void test_qc2_class_b_miss_on_a_qc3_class_b_charger_is_a_fail() {
         }
         CHECK_EQ(qc2b && qc3b20, true);
     }
-    CHECK_EQ(std::string(ct::name(ct::Reason::Qc3Only20V)) == "20 V via QC3 only", true);
+    CHECK_STR(ct::name(ct::Reason::Qc3Only20V), "20 V via QC3 only");
 }
 // JT-P18 USB-C (2026-11-07): the port speaks no QC, QC2 5/9/12 V all end "no handshake". "Class A only" claims the charger does QC2
 // and tops out at 12 V: with no QC2 handshake in the run the Class B 20 V row is "no reply" like the Class A rows (a skip, dim, not
@@ -5894,7 +5894,7 @@ static void test_every_retry_cut_is_a_skip_not_a_fail() {
     CHECK_EQ(count_verdict_any(r, ct::Verdict::Fail), 0u);
     CHECK_EQ(count_verdict(r, ct::Group::Qc2, ct::Verdict::Pass), qc2_rows(r) - 1);   // the levels after it still ran: no chain skip
     CHECK_EQ(unsigned(r.evidence().cut_retries), unsigned(ct::kCutRetries));   // three retries, never a fourth
-    CHECK_EQ(std::string_view(ct::name(ct::Reason::PortCuts)) == "port cuts without load", true);
+    CHECK_STR(ct::name(ct::Reason::PortCuts), "port cuts without load");
 }
 // The retry count belongs to the row: the next row that meets a cut gets its own three.
 static void test_the_retries_are_counted_per_row() {

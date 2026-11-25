@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Yaraslau Furman
 // The Battery place, pure half: see k2/ui/battery_view.hpp.
 #include "k2/ui/battery_view.hpp"
+#include "k2/core/strpack.hpp"
 #include "k2/core/math_opt.hpp"
 
 namespace k2::battery::view {
@@ -185,82 +186,82 @@ uint16_t next_step(const uint16_t *steps, int n, uint16_t cur) {
 }
 
 namespace {
-const char *wiring_word(Wiring w) { return w == Wiring::Moved ? "Moved" : "Same port"; }
+const char *wiring_word(Wiring w) { return w == Wiring::Moved ? "Moved" : K2_P("Same port"); }
 }  // namespace
 
 void bench_status(const Shown &s, StrBuf<29> &out) {
     if (!s.any) return;
     switch (s.state) {
     case RunState::Measuring:
-        out.put(s.kind == Kind::Charge ? "Charging " : "Discharging ").put(hm(s.phase_secs).view()).put(", ");
+        out.put(s.kind == Kind::Charge ? K2_P("Charging ") : K2_P("Discharging ")).put(hm(s.phase_secs).view()).put(", ");
         out.put(wh(s.phase_uwh).view());
         return;
     case RunState::Between:
-        out.put("Charged ").put(wh(s.sum.uwh_in).view()).put(", waiting");
+        out.put(K2_P("Charged ")).put(wh(s.sum.uwh_in).view()).put(K2_P(", waiting"));
         return;
     case RunState::Done:
         break;
     }
-    if (s.eff_final) { out.put("Round trip ").put(pct(s.eff).view()); return; }
+    if (s.eff_final) { out.put(K2_P("Round trip ")).put(pct(s.eff).view()); return; }
     const uint64_t e = s.mode == Mode::Discharge ? s.sum.uwh_out : s.sum.uwh_in;
-    if (s.lost) out.put("Cut short, ");
-    else out.put(s.mode == Mode::Discharge ? "Discharged " : "Charged ");
+    if (s.lost) out.put(K2_P("Cut short, "));
+    else out.put(s.mode == Mode::Discharge ? K2_P("Discharged ") : K2_P("Charged "));
     out.put(wh(e).view());
 }
 
 void ident(const Shown &s, kit::Ident &out) {
     using K = kit::Ident;
     if (!s.any) {
-        out.head.put("No run");
+        out.head.put(K2_P("No run"));
         out.dim = true;
-        out.line.put("Charge, discharge or round trip");
+        out.line.put(K2_P("Charge, discharge or round trip"));
         return;
     }
     const bool trip = s.mode == Mode::RoundTrip;
     switch (s.state) {
     case RunState::Measuring:
-        out.head.put(s.kind == Kind::Charge ? "Charging" : "Discharging");
-        if (trip) out.add(s.phases == 1 ? "1 of 2" : "2 of 2", K::Solid);
+        out.head.put(s.kind == Kind::Charge ? K2_P("Charging") : K2_P("Discharging"));
+        if (trip) out.add(s.phases == 1 ? K2_P("1 of 2") : K2_P("2 of 2"), K::Solid);
         out.line.put(wiring_word(s.wiring)).put(", ").put(hms(s.phase_secs).view()).put(", ").put(wh(s.phase_uwh).view());
         out.line.put(s.kind == Kind::Charge ? " in" : " out");
         return;
     case RunState::Between:
-        out.head.put("Charged");
-        out.add("1 of 2", K::Solid);
-        out.line.put(s.wiring == Wiring::Moved ? "Move the bank to the input port" : "Unplug the charger, load the bank");
+        out.head.put(K2_P("Charged"));
+        out.add(K2_P("1 of 2"), K::Solid);
+        out.line.put(s.wiring == Wiring::Moved ? K2_P("Move the bank to the input port") : K2_P("Unplug the charger, load the bank"));
         return;
     case RunState::Done:
         break;
     }
     if (s.eff_final) {
         out.head.put(pct(s.eff).view());
-        out.add("Round trip", K::Ok);
+        out.add(K2_P("Round trip"), K::Ok);
     } else {
         out.head.put(wh(s.mode == Mode::Discharge ? s.sum.uwh_out : s.sum.uwh_in).view());
-        if (s.lost) out.add("Cut short", K::Outline);
-        else out.add(s.mode == Mode::Charge ? "Charged" : s.mode == Mode::Discharge ? "Discharged" : "Round trip", K::Solid);
+        if (s.lost) out.add(K2_P("Cut short"), K::Outline);
+        else out.add(s.mode == Mode::Charge ? K2_P("Charged") : s.mode == Mode::Discharge ? K2_P("Discharged") : K2_P("Round trip"), K::Solid);
     }
     out.line.put("Run ").put_u32(s.id).put(", ").put(hms(s.secs).view()).put(", ").put(wiring_word(s.wiring));
 }
 
 FooterTone footer(const Shown &s, bool monitor, bool write_failed, bool unwritten, bool discarded, StrBuf<28> &out) {
-    if (!monitor) { out.put("No power monitor"); return FooterTone::Error; }
-    if (write_failed) { out.put("Run not saved to flash"); return FooterTone::Caution; }
-    if (!s.any) { out.put("Nothing measuring"); return FooterTone::Info; }
+    if (!monitor) { out.put(K2_P("No power monitor")); return FooterTone::Error; }
+    if (write_failed) { out.put(K2_P("Run not saved to flash")); return FooterTone::Caution; }
+    if (!s.any) { out.put(K2_P("Nothing measuring")); return FooterTone::Info; }
     switch (s.state) {
     case RunState::Measuring:
-        out.put("Ends under ").put_u32(s.cfg.end_ma).put("mA for ").put_u32(s.cfg.end_s).put_char('s');
+        out.put(K2_P("Ends under ")).put_u32(s.cfg.end_ma).put(K2_P("mA for ")).put_u32(s.cfg.end_s).put_char('s');
         return FooterTone::Info;
     case RunState::Between:
-        out.put("Discharge starts by itself");
+        out.put(K2_P("Discharge starts by itself"));
         return FooterTone::Info;
     case RunState::Done:
         break;
     }
-    if (discarded) { out.put("Empty run, not saved"); return FooterTone::Caution; }
-    if (s.lost) { out.put("Phase cut by a power loss"); return FooterTone::Caution; }
-    if (s.eff_final) { out.put("Round trip ").put(pct(s.eff).view()).put(" efficient"); return FooterTone::Ok; }
-    out.put("Run ").put_u32(s.id).put(unwritten ? " done, not saved" : " saved");
+    if (discarded) { out.put(K2_P("Empty run, not saved")); return FooterTone::Caution; }
+    if (s.lost) { out.put(K2_P("Phase cut by a power loss")); return FooterTone::Caution; }
+    if (s.eff_final) { out.put(K2_P("Round trip ")).put(pct(s.eff).view()).put(K2_P(" efficient")); return FooterTone::Ok; }
+    out.put("Run ").put_u32(s.id).put(unwritten ? K2_P(" done, not saved") : K2_P(" saved"));
     return FooterTone::Ok;
 }
 

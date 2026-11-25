@@ -552,7 +552,7 @@ private:
     bool restore_under_toast();   // false: only the band was wiped (no page repaint queued)
     shell::Band shell_;
     pclink::Tracker pc_;
-    pclink::State pc_state_ = pclink::State::None;   // the Back slot's corner icon (slot_sig mixes it in)
+    pclink::State pc_state_ K2_BSS_INIT(pclink::State::None);   // the Back slot's corner icon (slot_sig mixes it in)
     void draw_release_notice();   // the toast notices every page shares, and the battery recorder's running dot
     bool battery_dot() const;     // a battery run is in progress and the page may carry its dot
     static constexpr int16_t kBattDot = 5;
@@ -587,7 +587,7 @@ private:
     int hold_px_ = -1;              // progress fill drawn so far
     int hold_left_ = -1;            // countdown drawn so far
     uint32_t hold_ms_ K2_BSS_INIT(0);          // chord held time at the last card draw
-    UiContext::Frozen snap_prev_{}; // the live reading one snapshot window ago (note_last compares the next one with it)
+    UiContext::Frozen snap_prev_ K2_BSS_ZERO; // the live reading one snapshot window ago (note_last compares the next one with it)
     uint32_t snap_ms_ K2_BSS_INIT(0);          // when snap_prev_ was taken
     uint32_t sag_level_ms_ K2_BSS_INIT(0);     // last refresh of ctx_.sag_level_mv
     home::SettledLevel sag_settle_; // the contract level counts for the sag once it has held 1 s
@@ -652,10 +652,10 @@ private:
     int16_t clear_y_ K2_BSS_INIT(0);
     int16_t clear_y1_ K2_BSS_INIT(0);
     Orientation orient_ = kDefaultOrientation;
-    Page page_ = Page::Home;
+    Page page_ K2_BSS_INIT(Page::Home);
     Menu stack_[3] = {Menu::Count, Menu::Count, Menu::Count};
-    raguard::CrossKind cross_seen_ = raguard::CrossKind::None;   // the crossed-CC verdict last logged ([LINK] cc cross=...)
-    pd::PdVerdict pd_verdict_seen_ = pd::PdVerdict::Pending;     // the PD verdict last logged ([LINK] pd verdict=...)
+    raguard::CrossKind cross_seen_ K2_BSS_INIT(raguard::CrossKind::None);   // the crossed-CC verdict last logged ([LINK] cc cross=...)
+    pd::PdVerdict pd_verdict_seen_ K2_BSS_INIT(pd::PdVerdict::Pending);     // the PD verdict last logged ([LINK] pd verdict=...)
     bool rotation_lock_ K2_BSS_INIT(false);
     bool rotation_chord_ K2_BSS_INIT(false);
     bool rotate_buttons_ K2_BSS_INIT(false);

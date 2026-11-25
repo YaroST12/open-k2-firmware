@@ -8,6 +8,7 @@
 #pragma once
 
 #include <cstdint>
+#include "k2/core/bss_zero.hpp"
 
 namespace k2::waitplus {
 
@@ -75,8 +76,8 @@ public:
     std::uint32_t t0() const { return down_at_; }
 
 private:
-    bool active_ = false, down_ = false;
-    std::uint32_t down_at_ = 0, last_ = 0, until_ = 0;
+    bool active_ K2_BSS_INIT(false), down_ K2_BSS_INIT(false);
+    std::uint32_t down_at_ K2_BSS_INIT(0), last_ K2_BSS_INIT(0), until_ K2_BSS_INIT(0);
 };
 
 }  // namespace k2::waitplus

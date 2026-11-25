@@ -9,6 +9,7 @@
 #include "ramdisk.hpp"
 #include "ramflash.hpp"
 #include "k2/core/fs.hpp"
+#include "k2/core/fmt.hpp"
 #include "ui_stubs.h"
 #include "k2/core/bbpersist.hpp"
 #include "k2/core/eekeep.hpp"
@@ -804,12 +805,12 @@ void log_fmt(const char* fmt, ...) {
     char buf[256];
     std::va_list ap;
     va_start(ap, fmt);
-    const int n = vsnprintf(buf, sizeof buf, fmt, ap);
+    const std::size_t n = k2::fmt::vformat(buf, fmt, ap);
     va_end(ap);
-    if (n <= 0) return;
+    if (n == 0) return;
     if (g_stub.on_log) g_stub.on_log(buf);
     if (g_stub.log_text.size() > 64 * 1024) g_stub.log_text.clear();
-    g_stub.log_text.append(buf, std::min<std::size_t>(static_cast<std::size_t>(n), sizeof buf - 1));
+    g_stub.log_text.append(buf, n);
     if (g_stub.log_fmts.size() > 64 * 1024) g_stub.log_fmts.clear();
     g_stub.log_fmts.append(fmt); g_stub.log_fmts.push_back('\n');
 }

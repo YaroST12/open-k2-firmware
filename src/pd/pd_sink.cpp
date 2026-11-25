@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
 #include "k2/pd/pd_sink.hpp"
+#include "k2/core/strpack.hpp"
 
 #include <algorithm>
 
@@ -121,13 +122,13 @@ const char* busy_why_name(BusyWhy w) {
 const char* state_name(SinkState s) {
     switch (s) {
         case SinkState::Idle: return "idle";
-        case SinkState::EprEntering: return "entering EPR";
-        case SinkState::EprWaitCaps: return "reading EPR caps";
-        case SinkState::Requesting: return "requesting";
-        case SinkState::Transition: return "transition";
+        case SinkState::EprEntering: return K2_P("entering EPR");
+        case SinkState::EprWaitCaps: return K2_P("reading EPR caps");
+        case SinkState::Requesting: return K2_P("requesting");
+        case SinkState::Transition: return K2_P("transition");
         case SinkState::Ready: return "ready";
-        case SinkState::Aborting: return "back to 5V";
-        case SinkState::Failed: return "failed";
+        case SinkState::Aborting: return K2_P("back to 5V");
+        case SinkState::Failed: return K2_P("failed");
     }
     return "?";
 }

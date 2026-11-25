@@ -204,7 +204,7 @@ void DetailPage::paint_flow(bool live, power::Flow flow) {
     if (sig != 0x80) {
         const bool fwd = flow == power::Flow::Forward;
         StrBuf<16> t;
-        t.put(kArrow[home::arrow_dir(fwd, ctx_.rotation)]).put(fwd ? " to top" : " bottom");
+        t.put(kArrow[home::arrow_dir(fwd, ctx_.rotation)]).put(fwd ? K2_P(" to top") : K2_P(" bottom"));
         const std::string_view v = t.view();
         for (size_t i = 0; i < v.size() && i < sizeof buf; i++) buf[i] = v[i];
         s = {buf, v.size() < sizeof buf ? v.size() : sizeof buf};

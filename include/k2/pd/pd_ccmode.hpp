@@ -13,6 +13,7 @@
 //     Rd on the ACTIVE line only, for its duration, and never while a sink is downstream (inline).
 #pragma once
 #include <cstdint>
+#include "k2/core/bss_zero.hpp"
 #include "k2/pd/pd_link.hpp"
 
 namespace k2::pd {
@@ -148,9 +149,9 @@ public:
     }
     State state() const { return st_; }
 private:
-    std::uint32_t t0_ = 0, t_up_ = 0, t_caps_ = 0;
-    bool up_ = false, caps_ = false;
-    State st_ = State::Idle;
+    std::uint32_t t0_ K2_BSS_INIT(0), t_up_ K2_BSS_INIT(0), t_caps_ K2_BSS_INIT(0);
+    bool up_ K2_BSS_INIT(false), caps_ K2_BSS_INIT(false);
+    State st_ K2_BSS_INIT(State::Idle);
 };
 
 }  // namespace k2::pd

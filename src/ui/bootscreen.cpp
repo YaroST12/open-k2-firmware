@@ -8,6 +8,7 @@
 #include <string_view>
 
 #include "k2/core/fmt.hpp"
+#include "k2/core/strpack.hpp"
 #include "k2/ui/qr.hpp"
 #include "k2/ui/qrshare.hpp"
 #include "k2/ui/qrview.hpp"
@@ -31,13 +32,13 @@ const char* rd_name(std::uint8_t pin) { return pin == 1 ? "CC1" : pin == 2 ? "CC
 }  // namespace
 
 void format_lines(const bootinfo::Snapshot& s, std::uint32_t frame, Lines& out) {
-    fmt::format(out.id, "fw %s p%u", s.fw, unsigned(s.proto));   // the version string carries the hash; the raw git is in the QR line
-    fmt::format(out.up, "up %u.%u s  frame %u", unsigned(s.t_ms / 1000), unsigned(s.t_ms % 1000 / 100), unsigned(frame));
+    fmt::format(out.id, K2_P("fw %s p%u"), s.fw, unsigned(s.proto));   // the version string carries the hash; the raw git is in the QR line
+    fmt::format(out.up, K2_P("up %u.%u s  frame %u"), unsigned(s.t_ms / 1000), unsigned(s.t_ms % 1000 / 100), unsigned(frame));
     const char* m = s.mode == bootmode::Mode::PlusRdCc2 ? "plus" : s.mode == bootmode::Mode::OkRdCc1 ? "ok" : "plain";
     if (s.move.moved)
-        fmt::format(out.mode, "%s  Rd %s>%s at %u ms", m, rd_name(s.move.from), rd_name(s.move.to), unsigned(s.move.ms));
+        fmt::format(out.mode, K2_P("%s  Rd %s>%s at %u ms"), m, rd_name(s.move.from), rd_name(s.move.to), unsigned(s.move.ms));
     else
-        fmt::format(out.mode, "%s  Rd %s, no move", m, rd_name(s.pin_now));
+        fmt::format(out.mode, K2_P("%s  Rd %s, no move"), m, rd_name(s.pin_now));
 }
 
 void draw(const bootinfo::Snapshot& s, std::uint32_t frame) {

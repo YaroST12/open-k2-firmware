@@ -4,6 +4,7 @@
 #include "k2/chargertest/prog_check.hpp"
 #include "k2/core/fmt.hpp"
 #include "k2/core/log.hpp"
+#include "k2/core/strpack.hpp"
 #include "k2/fastcharge/accp.hpp"
 #include "k2/pd/link_guard.hpp"
 #include "k2/pd/pd_link.hpp"
@@ -26,9 +27,9 @@ Group group(Algorithm a) {
 }
 const char* name(Algorithm a) {
     constexpr const char* names[] = {
-        "PD2.0 fixed", "PD3.x fixed", "PD3.1+ EPR", "PD3.2+ SPR AVS", "PPS (PD3.x)",
-        "QC2", "QC3", "QC3+", "AFC", "FCP", "SCP", "VOOC 5V handshake", "SVOOC 5V handshake",
-        "SVOOC65 5V handshake", "UFCS", "VIVO", "PD3.0 revision", "PD3.1 revision", "PD3.2 revision", "EPR AVS", "QC2 Class B", "QC3 Class B"
+        K2_P("PD2.0 fixed"), K2_P("PD3.x fixed"), K2_P("PD3.1+ EPR"), K2_P("PD3.2+ SPR AVS"), K2_P("PPS (PD3.x)"),
+        "QC2", "QC3", "QC3+", "AFC", "FCP", "SCP", K2_P("VOOC 5V handshake"), K2_P("SVOOC 5V handshake"),
+        K2_P("SVOOC65 5V handshake"), "UFCS", "VIVO", K2_P("PD3.0 revision"), K2_P("PD3.1 revision"), K2_P("PD3.2 revision"), K2_P("EPR AVS"), K2_P("QC2 Class B"), K2_P("QC3 Class B")
     };
     static_assert(std::size(names) == unsigned(Algorithm::Count));
     return a < Algorithm::Count ? names[unsigned(a)] : "?";
@@ -48,27 +49,27 @@ const char* name(Level l) {
 }
 const char* name(Reason r) {
     static constexpr const char* names[] = {
-        "", "disabled", "not advertised", "over voltage cap", "not implemented", "confirm no load",
-        "no power monitor", "no source", "load attached", "tool busy", "fake offers",
-        "request failed", "timeout", "voltage outside band", "hard reset", "source lost",
-        "cancelled", "5V release failed", "offers changed", "PD active: use QC port",
-        "revision cannot be forced", "select at least one test", "physical cable limit", "unsupported PDO layout",
-        "charger stayed in PD", "rebooted during request", "rebooted during handover", "EPR entry refused",
-        "no contract", "source shut off (needs replug)", "no PD after re-attach", "VBUS cut, source recovered",
-        "blocked by PD", "no QC3+ response", "rebooted 3x", "needs external power", "PD gave up before START",
-        "Class A only (12 V max)", "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target",
-        "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution",
-        "HID-cable loop: 5V lock", "advertised", "light run: not asked", "port cuts without load",
-        "output folds back", "Xiaomi chain", "transition check", "D+/D- open: flip or data cable"   // flipping fixes a one-sided plug, a data cable fixes a charge-only one; 30 = the toast pill's cells
+        "", K2_P("disabled"), K2_P("not advertised"), K2_P("over voltage cap"), K2_P("not implemented"), K2_P("confirm no load"),
+        "no power monitor", K2_P("no source"), K2_P("load attached"), K2_P("tool busy"), K2_P("fake offers"),
+        K2_P("request failed"), "timeout", K2_P("voltage outside band"), "hard reset", "source lost",
+        K2_P("cancelled"), K2_P("5V release failed"), K2_P("offers changed"), "PD active: use QC port",
+        "revision cannot be forced", "select at least one test", K2_P("physical cable limit"), "unsupported PDO layout",
+        K2_P("charger stayed in PD"), "rebooted during request", "rebooted during handover", K2_P("EPR entry refused"),
+        K2_P("no contract"), "source shut off (needs replug)", "no PD after re-attach", "VBUS cut, source recovered",
+        K2_P("blocked by PD"), K2_P("no QC3+ response"), K2_P("rebooted 3x"), K2_P("needs external power"), "PD gave up before START",
+        "Class A only (12 V max)", K2_P("not unlocked"), K2_P("20 V via QC3 only"), K2_P("PD only (output off)"), K2_P("capped below target"),
+        K2_P("withdrawn by source"), "wrong voltage on 5V contract", K2_P("needs load"), K2_P("floored above target"), K2_P("step resolution"),
+        "HID-cable loop: 5V lock", K2_P("advertised"), K2_P("light run: not asked"), "port cuts without load",
+        K2_P("output folds back"), K2_P("Xiaomi chain"), K2_P("transition check"), "D+/D- open: flip or data cable"   // flipping fixes a one-sided plug, a data cable fixes a charge-only one; 30 = the toast pill's cells
     };
     static_assert(std::size(names) == unsigned(Reason::LinesOpen) + 1);
     return names[static_cast<unsigned>(r)];
 }
 const char* refusal_words(Reason r) {
     switch (r) {
-    case Reason::Release: return "VBUS not safe 5V";
-    case Reason::ShutOff: return "Source shut off: replug";
-    case Reason::WrongVoltage: return "wrong V on 5V contract";
+    case Reason::Release: return K2_P("VBUS not safe 5V");
+    case Reason::ShutOff: return K2_P("Source shut off: replug");
+    case Reason::WrongVoltage: return K2_P("wrong V on 5V contract");
     default: return name(r);
     }
 }
@@ -77,13 +78,9 @@ size_t refusal_footer_text(Reason r, int vbus_mv, std::span<char> out) {
         // The 27-cell footer line: "VBUS 8.5 V on a 5V contract" (8470 mV reads 8.5 V). The log line carries the full
         // "(shared bus)" phrase, so screen and log name the same case.
         const int tenths = (vbus_mv + 50) / 100;
-        return fmt::format(out, "VBUS %d.%d V on a 5V contract", tenths / 10, tenths % 10);
+        return fmt::format(out, K2_P("VBUS %d.%d V on a 5V contract"), tenths / 10, tenths % 10);
     }
-    const char* w = refusal_words(r);
-    size_t n = 0;
-    for (; w[n] && n + 1 < out.size(); ++n) out[n] = w[n];
-    if (n < out.size()) out[n] = '\0';
-    return n;
+    return fmt::format(out, "%s", refusal_words(r));
 }
 void Runner::note_preflight_refusal(Reason r, int vbus_mv, const char* detail) {
     if (busy()) return;   // only a refusal outside a run is recorded (the run id stays where it was)
@@ -106,7 +103,7 @@ void Runner::note_preflight_refusal(Reason r, int vbus_mv, const char* detail) {
     }
 }
 const char* name(State s) {
-    static constexpr const char* names[] = {"Setup", "Verify 5V", "Negotiating", "Hold", "Return to 5V", "Complete", "Stopped", "UNSAFE: unplug source", "Detach charger", "Initializing...", "SVOOC ceiling", "PD spec"};
+    static constexpr const char* names[] = {"Setup", K2_P("Verify 5V"), K2_P("Negotiating"), "Hold", K2_P("Return to 5V"), K2_P("Complete"), K2_P("Stopped"), K2_P("UNSAFE: unplug source"), K2_P("Detach charger"), K2_P("Initializing..."), K2_P("SVOOC ceiling"), K2_P("PD spec")};
     return names[static_cast<unsigned>(s)];
 }
 const char* name(Unit u) {
@@ -174,44 +171,44 @@ const char* epr_detail_name(uint8_t d) {
 }
 const char* explanation(const Step& s) {
     if (s.reason == Reason::RevisionUntestable) {
-        if (s.algorithm == Algorithm::Pd30Revision) return "No independent PD3.0 test";
-        if (s.algorithm == Algorithm::Pd31Revision) return "No independent PD3.1 test";
-        if (s.algorithm == Algorithm::Pd32Revision) return "No independent PD3.2 test";
+        if (s.algorithm == Algorithm::Pd30Revision) return K2_P("No independent PD3.0 test");
+        if (s.algorithm == Algorithm::Pd31Revision) return K2_P("No independent PD3.1 test");
+        if (s.algorithm == Algorithm::Pd32Revision) return K2_P("No independent PD3.2 test");
     }
     const bool epr_row = s.algorithm == Algorithm::Epr || s.algorithm == Algorithm::EprAvs;
     // Every EPR skip names its cause (results page, card): the row's `detail` says which monitor ceiling (OverCap) or which
     // Enter_Failed data the source sent (EprRefused), see kDetailEprFail.
-    if (epr_row && s.reason == Reason::OverCap) return epr_detail_name(s.detail) ? epr_detail_name(s.detail) : "EPR: above the K2's monitor";
-    if (s.reason == Reason::NoOffer && s.pos) return "No allowed current at target";
+    if (epr_row && s.reason == Reason::OverCap) return epr_detail_name(s.detail) ? epr_detail_name(s.detail) : K2_P("EPR: above the K2's monitor");
+    if (s.reason == Reason::NoOffer && s.pos) return K2_P("No allowed current at target");
     if (epr_row && s.reason == Reason::CableLimit)
         return epr_detail_name(s.detail) && (s.detail == kDetailEprOffered || s.detail == kDetailEprWithheld || s.detail >= kDetailEprOfferedRefused)
-                   ? epr_detail_name(s.detail) : "EPR: cable not 50V 5A";
-    if (epr_row && s.reason == Reason::NoOffer) return "EPR: not offered";
-    if (s.reason == Reason::CableLimit) return "cable limit";   // a mode over the cable's current (a Xiaomi 6 A mode); 16-cell column
-    if (s.reason == Reason::EprRefused) return epr_detail_name(s.detail) ? epr_detail_name(s.detail) : "EPR: entry refused";
+                   ? epr_detail_name(s.detail) : K2_P("EPR: cable not 50V 5A");
+    if (epr_row && s.reason == Reason::NoOffer) return K2_P("EPR: not offered");
+    if (s.reason == Reason::CableLimit) return K2_P("cable limit");   // a mode over the cable's current (a Xiaomi 6 A mode); 16-cell column
+    if (s.reason == Reason::EprRefused) return epr_detail_name(s.detail) ? epr_detail_name(s.detail) : K2_P("EPR: entry refused");
     if (s.reason == Reason::LinesOpen) return kLinesOpenCell;
-    if (s.reason == Reason::Capped) return "output capped";   // the Detail value column is 16 cells; name() is the long form
-    if (s.reason == Reason::Floored) return "output floored";   // the reached floor is the row's measured_mv
-    if (s.reason == Reason::Folded) return "folds back";   // the fold note itself ("folds to 19.4V above 19.9V") is the row's note line
-    if (s.reason == Reason::StepResolution) return s.detail ? "step resolution" : "steps ignored";
+    if (s.reason == Reason::Capped) return K2_P("output capped");   // the Detail value column is 16 cells; name() is the long form
+    if (s.reason == Reason::Floored) return K2_P("output floored");   // the reached floor is the row's measured_mv
+    if (s.reason == Reason::Folded) return K2_P("folds back");   // the fold note itself ("folds to 19.4V above 19.9V") is the row's note line
+    if (s.reason == Reason::StepResolution) return s.detail ? K2_P("step resolution") : K2_P("steps ignored");
     if (s.reason == Reason::ProgCheck && s.detail) return progcheck::flag_text(s.detail);   // the first finding; caution_text counts the rest
-    if (s.reason == Reason::NoContract) return "EPR: no PD contract";
+    if (s.reason == Reason::NoContract) return K2_P("EPR: no PD contract");
     if (s.reason == Reason::NotUnlocked) return epr_detail_name(s.detail) ? epr_detail_name(s.detail) : name(s.reason);
     if (s.reason == Reason::MiChain) {   // the 16-cell value column; the Xiaomi detail page spells the step out (mi_unlock::chain_text)
         switch (mi_unlock::chain_of(s.detail)) {
-        case mi_unlock::Chain::NoSvid: return "no 0x2717 SVID";
-        case mi_unlock::Chain::NoAnswer: return "chain: no answer";
-        case mi_unlock::Chain::Stalled: return "chain stalled";
-        case mi_unlock::Chain::Verified: return "chain verified";
-        case mi_unlock::Chain::Finished: return "chain done 020A";
+        case mi_unlock::Chain::NoSvid: return K2_P("no 0x2717 SVID");
+        case mi_unlock::Chain::NoAnswer: return K2_P("chain: no answer");
+        case mi_unlock::Chain::Stalled: return K2_P("chain stalled");
+        case mi_unlock::Chain::Verified: return K2_P("chain verified");
+        case mi_unlock::Chain::Finished: return K2_P("chain done 020A");
         case mi_unlock::Chain::None: break;
         }
         return name(s.reason);
     }
-    if (s.reason == Reason::NoOffer && s.algorithm == Algorithm::SprAvs) return "SPR AVS not advertised";
-    if (s.reason == Reason::NoOffer && s.algorithm == Algorithm::Pps) return "PPS not advertised";
+    if (s.reason == Reason::NoOffer && s.algorithm == Algorithm::SprAvs) return K2_P("SPR AVS not advertised");
+    if (s.reason == Reason::NoOffer && s.algorithm == Algorithm::Pps) return K2_P("PPS not advertised");
     if (s.reason == Reason::UnsupportedOffer && s.avs)
-        return s.pos < 8 ? "EPR AVS in an SPR slot" : "SPR APDO in an EPR slot";
+        return s.pos < 8 ? K2_P("EPR AVS in an SPR slot") : K2_P("SPR APDO in an EPR slot");
     return name(s.reason);
 }
 size_t caution_text(const Step& s, std::span<char> out) {

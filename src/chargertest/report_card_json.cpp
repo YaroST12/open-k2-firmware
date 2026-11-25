@@ -12,57 +12,57 @@ namespace k2::report_card {
 
 namespace {
 constexpr const char* kVerdict[] = {"none", "pass", "fail", "skip"};
-constexpr const char* kHandover[] = {"not tried", "fell back", "stayed PD", "fault", "reboot", "in PD contract"};
+constexpr const char* kHandover[] = {K2_P("not tried"), K2_P("fell back"), K2_P("stayed PD"), "fault", K2_P("reboot"), K2_P("in PD contract")};
 }  // namespace
 
 // The card name is restricted to [A-Za-z0-9 -_.] by valid_name, so it needs no escaping.
 std::size_t render_json(const Card& c, std::span<char> out) {
     TextBuf t(out);
-    t.put("{\"no\":%u,\"name\":\"%s\",\"fp\":\"%08x\",\"vid\":%u,\"pid\":%u,",
-          unsigned(c.card_no), c.name, unsigned(c.id.fp), unsigned(c.id.vid), unsigned(c.id.pid));
+    K2_TPUT(t, "{\"no\":%u,\"name\":\"%s\",\"fp\":\"%08x\",\"vid\":%u,\"pid\":%u,",
+            unsigned(c.card_no), c.name, unsigned(c.id.fp), unsigned(c.id.vid), unsigned(c.id.pid));
     // Identity extras only when known, so a card without them renders as before (tools/report_card.py does the same).
-    if (const pd::VendorName b = pd::vendor_find(c.id.vid); !b.empty()) t.put("\"brand\":\"%s\",", b.c_str());
-    if (c.id.pdp_w) t.put("\"pdp_w\":%u,", unsigned(c.id.pdp_w));
-    if (c.name_auto) t.put("\"name_auto\":true,");
+    if (const pd::VendorName b = pd::vendor_find(c.id.vid); !b.empty()) K2_TPUT(t, "\"brand\":\"%s\",", b.c_str());
+    if (c.id.pdp_w) K2_TPUT(t, "\"pdp_w\":%u,", unsigned(c.id.pdp_w));
+    if (c.name_auto) t.put_raw(K2_P("\"name_auto\":true,"));
     // The passive OEM label's bare name (tools/report_card.py and the results page write the same); the fact line behind it is UI text.
-    if (const QcLabel l = qc_label(c); l != QcLabel::None) t.put("\"qc\":\"%s\",", qc_label_name(l));
-    t.put("\"runs\":%u,\"boots\":%u,\"uptime_s\":%u,", unsigned(c.runs), unsigned(c.boots), unsigned(c.uptime_s));
+    if (const QcLabel l = qc_label(c); l != QcLabel::None) K2_TPUT(t, "\"qc\":\"%s\",", qc_label_name(l));
+    K2_TPUT(t, "\"runs\":%u,\"boots\":%u,\"uptime_s\":%u,", unsigned(c.runs), unsigned(c.boots), unsigned(c.uptime_s));
     // Repeats of the stored run (v7), only when there were any: how many identical runs and when the newest one was.
     if (c.times > 1)
-        t.put("\"times\":%u,\"last_boots\":%u,\"last_uptime_s\":%u,", unsigned(c.times), unsigned(c.last_boots), unsigned(c.last_uptime_s));
+        K2_TPUT(t, "\"times\":%u,\"last_boots\":%u,\"last_uptime_s\":%u,", unsigned(c.times), unsigned(c.last_boots), unsigned(c.last_uptime_s));
     // v8: how often the source re-announced its list mid-run and the PD rows were re-planned (budget-reannounce-mid-run).
     if (c.format >= 8 && c.rebalanced)
-        t.put("\"rebalanced\":%u,", unsigned(c.rebalanced));
+        K2_TPUT(t, "\"rebalanced\":%u,", unsigned(c.rebalanced));
     // The run's level (v8 spare byte): only a Light or Deep run names it, so every older card reads as Medium.
-    if (c.level != ct::Level::Medium) t.put("\"level\":\"%s\",", c.level == ct::Level::Light ? "light" : c.level == ct::Level::Deep ? "deep" : "old");
-    t.put("\"fw\":\"%08x\",\"state\":\"%s\",\"reason\":\"%s\",\"pdos\":%u,\"spec_rev\":%u,", unsigned(c.fw), ct::name(c.state),
-          ct::name(c.reason), unsigned(c.num_pdos), unsigned(c.spec_rev));
-    t.put("\"handover\":\"%s\",\"handover_ms\":%u,\"groups\":{", kHandover[unsigned(c.handover)], unsigned(c.handover_ds) * 100u);
+    if (c.level != ct::Level::Medium) K2_TPUT(t, "\"level\":\"%s\",", c.level == ct::Level::Light ? "light" : c.level == ct::Level::Deep ? "deep" : "old");
+    K2_TPUT(t, "\"fw\":\"%08x\",\"state\":\"%s\",\"reason\":\"%s\",\"pdos\":%u,\"spec_rev\":%u,", unsigned(c.fw), ct::name(c.state),
+            ct::name(c.reason), unsigned(c.num_pdos), unsigned(c.spec_rev));
+    K2_TPUT(t, "\"handover\":\"%s\",\"handover_ms\":%u,\"groups\":{", kHandover[unsigned(c.handover)], unsigned(c.handover_ds) * 100u);
     bool first = true;
     for (unsigned g = 0; g < kGroups; ++g) {
         const GroupResult& r = c.group[g];
         if (r.verdict == GV::None) continue;
-        t.put("%s\"%s\":{\"verdict\":\"%s\"", first ? "" : ",", ct::name(ct::Group(g)), kVerdict[unsigned(r.verdict)]);
+        K2_TPUT(t, "%s\"%s\":{\"verdict\":\"%s\"", first ? "" : ",", ct::name(ct::Group(g)), kVerdict[unsigned(r.verdict)]);
         first = false;
-        if (g == unsigned(ct::Group::Pd) && c.pd_ma) t.put(",\"max_ma\":%u", unsigned(c.pd_ma));
-        if (r.max_mv) t.put(",\"max_mv\":%u", unsigned(r.max_mv));
-        if (r.fail_mv) t.put(",\"fail_mv\":%u", unsigned(r.fail_mv));
-        if (r.reason) t.put(",\"reason\":\"%s\"", ct::name(ct::Reason(r.reason)));
-        if (r.detail) t.put(",\"detail\":%u,\"why\":\"%s\"", unsigned(r.detail), group_why(g, r));
+        if (g == unsigned(ct::Group::Pd) && c.pd_ma) K2_TPUT(t, ",\"max_ma\":%u", unsigned(c.pd_ma));
+        if (r.max_mv) K2_TPUT(t, ",\"max_mv\":%u", unsigned(r.max_mv));
+        if (r.fail_mv) K2_TPUT(t, ",\"fail_mv\":%u", unsigned(r.fail_mv));
+        if (r.reason) K2_TPUT(t, ",\"reason\":\"%s\"", ct::name(ct::Reason(r.reason)));
+        if (r.detail) K2_TPUT(t, ",\"detail\":%u,\"why\":\"%s\"", unsigned(r.detail), group_why(g, r));
         t.put("}");
     }
-    t.put("},\"ranges\":[");
+    t.put_raw(K2_P("},\"ranges\":["));
     for (unsigned i = 0; i < c.n_ranges && i < kMaxRanges; ++i) {
         const Range& r = c.range[i];
-        t.put("%s{\"alg\":\"%s\",\"lo_mv\":%u,\"hi_mv\":%u,\"max_mv\":%u,\"fail_mv\":%u", i ? "," : "",
-              ct::name(ct::Algorithm(r.alg)), unsigned(r.lo_dv) * 100u, unsigned(r.hi_dv) * 100u, unsigned(r.max_dv) * 100u,
-              unsigned(r.fail_dv) * 100u);
-        if (r.ma) t.put(",\"max_ma\":%u", unsigned(r.ma));
+        K2_TPUT(t, "%s{\"alg\":\"%s\",\"lo_mv\":%u,\"hi_mv\":%u,\"max_mv\":%u,\"fail_mv\":%u", i ? "," : "",
+                ct::name(ct::Algorithm(r.alg)), unsigned(r.lo_dv) * 100u, unsigned(r.hi_dv) * 100u, unsigned(r.max_dv) * 100u,
+                unsigned(r.fail_dv) * 100u);
+        if (r.ma) K2_TPUT(t, ",\"max_ma\":%u", unsigned(r.ma));
         if (c.format >= 9) {   // v9: the setpoint error in mV per passed level, low to high (key only when there is one)
             bool any = false;
             for (unsigned k = 0; k < kSpreadLevels; ++k) any |= c.spread[i][k] != kSpreadNone;
             if (any) {
-                t.put(",\"err_mv\":[");
+                t.put_raw(K2_P(",\"err_mv\":["));
                 bool first_err = true;
                 for (unsigned k = 0; k < kSpreadLevels; ++k) {
                     if (c.spread[i][k] == kSpreadNone) continue;
@@ -74,55 +74,55 @@ std::size_t render_json(const Card& c, std::span<char> out) {
         }
         if (c.format >= 10 && c.sweep[i].peak_dv) {   // v10: the deep sweep of this APDO (key only when it ran)
             const auto& w = c.sweep[i];
-            t.put(",\"sweep\":{\"min_mv\":%d,\"max_mv\":%d,\"worst_mv\":%d,\"worst_at_mv\":%u,\"peak_mv\":%u,\"peak_at_mv\":%u",
-                  int(w.min_err), int(w.max_err), int(w.worst_err), unsigned(w.worst_dv) * 100u,
-                  unsigned(w.peak_dv) * 100u, unsigned(w.peak_at_dv) * 100u);
-            if (w.fold_dv) t.put(",\"fold_mv\":%u,\"fold_from_mv\":%u", unsigned(w.fold_dv) * 100u, unsigned(w.fold_from_dv) * 100u);
+            K2_TPUT(t, ",\"sweep\":{\"min_mv\":%d,\"max_mv\":%d,\"worst_mv\":%d,\"worst_at_mv\":%u,\"peak_mv\":%u,\"peak_at_mv\":%u",
+                    int(w.min_err), int(w.max_err), int(w.worst_err), unsigned(w.worst_dv) * 100u,
+                    unsigned(w.peak_dv) * 100u, unsigned(w.peak_at_dv) * 100u);
+            if (w.fold_dv) K2_TPUT(t, ",\"fold_mv\":%u,\"fold_from_mv\":%u", unsigned(w.fold_dv) * 100u, unsigned(w.fold_from_dv) * 100u);
             t.put("}");
         }
         t.put("}");
     }
     t.put("]");
     if (c.format >= 4) {   // v4 cards carry per-EPR-level verdicts; older formats render as before
-        t.put(",\"epr_levels\":{");
+        t.put_raw(K2_P(",\"epr_levels\":{"));
         bool first_epr = true;
         for (unsigned i = 0; i < kEprLevels; ++i) {
             const EprLevel& e = c.epr[i];
             if (e.dv == 0) continue;   // no EPR at this level
             if (!first_epr) t.put(",");
             first_epr = false;
-            t.put("\"%uV\":{\"verdict\":\"%s\"", e.dv * 100u, kVerdict[unsigned(e.r.verdict)]);
-            if (e.r.max_mv) t.put(",\"max_mv\":%u", unsigned(e.r.max_mv));
-            if (e.r.fail_mv) t.put(",\"fail_mv\":%u", unsigned(e.r.fail_mv));
-            if (e.r.reason) t.put(",\"reason\":\"%s\"", ct::name(ct::Reason(e.r.reason)));
-            if (e.r.detail) t.put(",\"detail\":%u,\"why\":\"%s\"", unsigned(e.r.detail), group_why(unsigned(ct::Group::Pd), e.r));
+            K2_TPUT(t, "\"%uV\":{\"verdict\":\"%s\"", e.dv * 100u, kVerdict[unsigned(e.r.verdict)]);
+            if (e.r.max_mv) K2_TPUT(t, ",\"max_mv\":%u", unsigned(e.r.max_mv));
+            if (e.r.fail_mv) K2_TPUT(t, ",\"fail_mv\":%u", unsigned(e.r.fail_mv));
+            if (e.r.reason) K2_TPUT(t, ",\"reason\":\"%s\"", ct::name(ct::Reason(e.r.reason)));
+            if (e.r.detail) K2_TPUT(t, ",\"detail\":%u,\"why\":\"%s\"", unsigned(e.r.detail), group_why(unsigned(ct::Group::Pd), e.r));
             t.put("}");
         }
         t.put("}");
     }
     if (c.format >= 5) {   // v5 cards carry the cable of the run; older formats render as before
         const Cable& cb = c.cable;
-        t.put(",\"cable\":{");
-        if (cb.seq) t.put("\"seq\":%u,", unsigned(cb.seq));
-        t.put("\"vid\":%u,\"pid\":%u,\"max_mv\":%u,\"max_ma\":%u,\"kind\":%u,\"observed\":%u,\"spoofed\":%u",
-              unsigned(cb.vid), unsigned(cb.pid), unsigned(cb.max_mv), unsigned(cb.max_ma), unsigned(cb.kind),
-              unsigned((cb.flags & kCableObserved) != 0), unsigned((cb.flags & kCableSpoofed) != 0));
-        if (cb.flags & kCableSelfPowered) t.put(",\"self_powered\":1");   // only then: every other card renders as before
+        t.put_raw(K2_P(",\"cable\":{"));
+        if (cb.seq) K2_TPUT(t, "\"seq\":%u,", unsigned(cb.seq));
+        K2_TPUT(t, "\"vid\":%u,\"pid\":%u,\"max_mv\":%u,\"max_ma\":%u,\"kind\":%u,\"observed\":%u,\"spoofed\":%u",
+                unsigned(cb.vid), unsigned(cb.pid), unsigned(cb.max_mv), unsigned(cb.max_ma), unsigned(cb.kind),
+                unsigned((cb.flags & kCableObserved) != 0), unsigned((cb.flags & kCableSpoofed) != 0));
+        if (cb.flags & kCableSelfPowered) t.put_raw(K2_P(",\"self_powered\":1"));   // only then: every other card renders as before
         // The Ra guard's reading when the identity was started (cards before this field: absent), and "started anyway".
         if (const unsigned g = (cb.flags & kCableGuardMask) >> kCableGuardShift; g && g <= 4)
-            t.put(",\"guard\":\"%s\"", raguard::name(raguard::Topology(g - 1)));
-        if (cb.flags & kCableGuardBypassed) t.put(",\"guard_bypassed\":1");
-        if (cb.flags & kCableReattach) t.put(",\"reattach\":1");   // only then: every other card renders as before
+            K2_TPUT(t, ",\"guard\":\"%s\"", raguard::name(raguard::Topology(g - 1)));
+        if (cb.flags & kCableGuardBypassed) t.put_raw(K2_P(",\"guard_bypassed\":1"));
+        if (cb.flags & kCableReattach) t.put_raw(K2_P(",\"reattach\":1"));   // only then: every other card renders as before
         t.put("}");
-        if (c.src_flags & kSrcOppoSvid) t.put(",\"oppo_svid\":1");   // only then: every other card renders as before
-        if (const unsigned ma = scp_cap_ma(c)) t.put(",\"scp_ma\":%u", ma);   // the adapter's SCP current limit, when it was read
+        if (c.src_flags & kSrcOppoSvid) t.put_raw(K2_P(",\"oppo_svid\":1"));   // only then: every other card renders as before
+        if (const unsigned ma = scp_cap_ma(c)) K2_TPUT(t, ",\"scp_ma\":%u", ma);   // the adapter's SCP current limit, when it was read
     }
     if (const unsigned n = ufcs_modes(c)) {   // v6 cards carry the UFCS modes (voltage range and the mode's current); none on older cards
-        t.put(",\"ufcs\":[");
+        t.put_raw(K2_P(",\"ufcs\":["));
         for (unsigned i = 0; i < n; ++i) {
             const UfcsRange& u = c.ufcs[i];
-            t.put("%s{\"lo_mv\":%u,\"hi_mv\":%u", i ? "," : "", unsigned(u.lo_dv) * 100u, unsigned(u.hi_dv) * 100u);
-            if (u.ma) t.put(",\"max_ma\":%u", unsigned(u.ma));
+            K2_TPUT(t, "%s{\"lo_mv\":%u,\"hi_mv\":%u", i ? "," : "", unsigned(u.lo_dv) * 100u, unsigned(u.hi_dv) * 100u);
+            if (u.ma) K2_TPUT(t, ",\"max_ma\":%u", unsigned(u.ma));
             t.put("}");
         }
         t.put("]");
@@ -168,17 +168,17 @@ constexpr unsigned kHandshakeMv = 5500;   // a group whose highest passing volta
 std::size_t render_summary(const Card& c, std::span<char> out) {
     TextBuf t(out);
     const Counts n = c.counts();
-    t.put("Card %u \xC2\xB7 %s \xC2\xB7 %u PDOs \xC2\xB7 %u runs", unsigned(c.card_no), c.name[0] ? c.name : "(unnamed)",
+    t.put("Card %u \xC2\xB7 %s \xC2\xB7 %u PDOs \xC2\xB7 %u runs", unsigned(c.card_no), c.name[0] ? c.name : K2_P("(unnamed)"),
           unsigned(c.num_pdos), unsigned(c.runs));
     if (const pd::VendorName b = pd::vendor_find(c.id.vid); !b.empty()) t.put(" \xC2\xB7 %s", b.c_str());
-    t.put(" %04X:%04X", unsigned(c.id.vid), unsigned(c.id.pid));
+    K2_TPUT(t, " %04X:%04X", unsigned(c.id.vid), unsigned(c.id.pid));
     if (c.id.pdp_w) t.put(" \xC2\xB7 %u W", unsigned(c.id.pdp_w));
     t.put(" \xC2\xB7 fw %08x\n", unsigned(c.fw));
     // counts() counts group verdicts, not steps: say so, or the header reads "1 pass" next to a run summary's "25 pass".
     // A Light run measured 5 V only: the PD group is "advertised" (a tick: card_tone.hpp reads it green), a legacy group that answered is
     // "detected" (the noted tone), never a tick.
     const bool light = c.level == ct::Level::Light;
-    t.put("%u %s, %u fail, %u skip of %u groups \xC2\xB7 %s", unsigned(n.pass), light ? "detected" : "pass", unsigned(n.fail),
+    t.put("%u %s, %u fail, %u skip of %u groups \xC2\xB7 %s", unsigned(n.pass), light ? K2_P("detected") : "pass", unsigned(n.fail),
           unsigned(n.skip), unsigned(kGroups), ct::name(c.state));
     if (c.reason != ct::Reason::None) t.put(" (%s)", ct::name(c.reason));
     t.put("\nIdentity %08X \xC2\xB7 boot %u \xC2\xB7 uptime %u s", unsigned(c.id.fp), unsigned(c.boots), unsigned(c.uptime_s));
@@ -189,21 +189,21 @@ std::size_t render_summary(const Card& c, std::span<char> out) {
     if (c.level != ct::Level::Medium) t.put(" \xC2\xB7 %s run", ct::name(c.level));
     t.put("\n");
     if (c.handover != ct::HandoverOutcome::NotTried) {
-        t.put("Handover: %s after ", kHandover[unsigned(c.handover)]);
-        t.put("%u.%u s\n", unsigned(c.handover_ds) / 10, unsigned(c.handover_ds) % 10);
+        K2_TPUT(t, "Handover: %s after ", kHandover[unsigned(c.handover)]);
+        K2_TPUT(t, "%u.%u s\n", unsigned(c.handover_ds) / 10, unsigned(c.handover_ds) % 10);
     }
     t.put("\n");
     bool any_skip = false, any_silent = false;
     for (unsigned g = 0; g < kGroups; ++g) {
         const GroupResult& r = c.group[g];
         if (folded(c, g)) continue;   // the VOOC family is one line, its lead's (group_word)
-        if (r.verdict == GV::Skip && r.reason == uint8_t(ct::Reason::NoQc3Plus)) { t.put("- %s: no QC3+\n", group_word(g)); continue; }   // not folded into "skipped"
+        if (r.verdict == GV::Skip && r.reason == uint8_t(ct::Reason::NoQc3Plus)) { K2_TPUT(t, "- %s: no QC3+\n", group_word(g)); continue; }   // not folded into "skipped"
         if (r.verdict == GV::Skip) { (silent_skip(g, r) ? any_silent : any_skip) = true; continue; }
         if (r.verdict != GV::Pass && r.verdict != GV::Fail) continue;
-        t.put("- %s: ", group_word(g));
+        K2_TPUT(t, "- %s: ", group_word(g));
         const bool handshake = r.max_mv && r.max_mv <= kHandshakeMv;
         if (light && r.verdict == GV::Pass) {
-            t.put(g == 0 ? "\xE2\x9C\x93 advertised" : "detected");
+            t.put_raw(g == 0 ? "\xE2\x9C\x93 advertised" : K2_P("detected"));
         } else if (group_handshake_ok(r)) {
             t.put("\xE2\x9C\x93 handshake ok");
         } else if (group_detected(r)) {
@@ -213,7 +213,7 @@ std::size_t render_summary(const Card& c, std::span<char> out) {
             else if (r.max_mv) { t.put("\xE2\x9C\x93 up to "); volts(t, r.max_mv); t.put(" V"); if (g == 0 && c.pd_ma) { t.put(", "); volts(t, c.pd_ma); t.put(" A"); } }
             else t.put("\xE2\x9C\x93");
         } else {
-            if (handshake) t.put("5 V only, ");
+            if (handshake) t.put_raw(K2_P("5 V only, "));
             else if (r.max_mv) { t.put("\xE2\x9C\x93 up to "); volts(t, r.max_mv); t.put(" V, "); }
             const char* why = r.detail ? group_why(g, r) : r.reason ? ct::name(ct::Reason(r.reason)) : "";
             t.put("\xE2\x9C\x97");
@@ -232,24 +232,24 @@ std::size_t render_summary(const Card& c, std::span<char> out) {
             t.put("%s%s", first ? "" : ", ", group_word(g));
             first = false;
         }
-        t.put(silent ? ": skipped, no reply\n" : ": skipped\n");
+        t.put_raw(silent ? K2_P(": skipped, no reply\n") : K2_P(": skipped\n"));
     }
     for (unsigned i = 0; i < c.n_ranges && i < kMaxRanges; ++i) {
         const Range& r = c.range[i];
         // "- PPS 3.3-11V 3A: ...", the same words as the Results chip (step_label).
         ct::Step row;
         row.algorithm = ct::Algorithm(r.alg);
-        t.put("- %s %s: ", step_label::protocol(row).c_str(),
-              step_label::range(unsigned(r.lo_dv) * 100u, unsigned(r.hi_dv) * 100u, r.ma).c_str());
+        K2_TPUT(t, "- %s %s: ", step_label::protocol(row).c_str(),
+                step_label::range(unsigned(r.lo_dv) * 100u, unsigned(r.hi_dv) * 100u, r.ma).c_str());
         if (r.fail_dv) {
             t.put("\xE2\x9C\x97 at "); volts(t, unsigned(r.fail_dv) * 100u); t.put(" V");
-            if (r.max_dv) { t.put(", reached "); volts(t, unsigned(r.max_dv) * 100u); t.put(" V"); }
+            if (r.max_dv) { t.put_raw(K2_P(", reached ")); volts(t, unsigned(r.max_dv) * 100u); t.put(" V"); }
         } else if (r.max_dv >= r.hi_dv) {
             t.put("\xE2\x9C\x93 whole range");
         } else if (r.max_dv) {
-            t.put("reached "); volts(t, unsigned(r.max_dv) * 100u); t.put(" V");
+            t.put_raw(K2_P("reached ")); volts(t, unsigned(r.max_dv) * 100u); t.put(" V");
         } else {
-            t.put(light ? "\xE2\x9C\x93 advertised" : "no step measured");
+            t.put_raw(light ? "\xE2\x9C\x93 advertised" : K2_P("no step measured"));
         }
         t.put("\n");
     }

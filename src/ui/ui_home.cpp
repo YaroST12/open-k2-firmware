@@ -395,8 +395,8 @@ uint32_t HomePage::qty_head(int si, hm::Qty q, const Frame &f, QtyHead &h, hm::I
         pill = near_ ? hm::Pill::None : hm::pill_of(m, hm::Alarm::None, f.pin);
         switch (pill) {
         case hm::Pill::Last:   ptxt.put("LAST ").put_age(ctx_.live.age_s(f.now)); break;
-        case hm::Pill::NoVbus: ptxt.put("NO VBUS"); break;
-        case hm::Pill::Pin:    ptxt.put("Rd pin CC").put_char(static_cast<char>('0' + f.pin)); break;
+        case hm::Pill::NoVbus: ptxt.put(K2_P("NO VBUS")); break;
+        case hm::Pill::Pin:    ptxt.put(K2_P("Rd pin CC")).put_char(static_cast<char>('0' + f.pin)); break;
         case hm::Pill::Over: case hm::Pill::None: break;
         }
         if (pill != hm::Pill::None) {
@@ -414,7 +414,7 @@ uint32_t HomePage::qty_head(int si, hm::Qty q, const Frame &f, QtyHead &h, hm::I
         const bool has_pk = shown_pk > 0;
         if (hero) {
             if (has_max && has_pk) {
-                mtxt.put("Max/Peak ");
+                mtxt.put(K2_P("Max/Peak "));
                 put_compact_val(mtxt, shown_max, uc);
                 mtxt.put_char('/');
                 put_compact_val(mtxt, shown_pk, uc);
@@ -961,7 +961,7 @@ void HomePage::paint_info(const Frame &f) {
     hm::ProtoText pt;
     const bool starting = m == hm::Mode::NoMeter && hm::meter_starting(false, f.now);
     if (m == hm::Mode::NoMeter) {
-        pt.value.put(starting ? "Power meter starting" : "Power meter not found");
+        pt.value.put(starting ? K2_P("Power meter starting") : K2_P("Power meter not found"));
     } else if (m == hm::Mode::Idle) {
         hm::format_idle_wait(ctx_.ui->link().wait_kind(), pt);
     } else {

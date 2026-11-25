@@ -20,6 +20,7 @@
 #pragma once
 
 #include <cstdint>
+#include "k2/core/bss_zero.hpp"
 
 namespace k2::lease {
 
@@ -124,15 +125,15 @@ public:
 private:
     bool pending_valid(std::uint32_t now) const { return pending_set_ && now - pending_at_ < kPendingMs; }
 
-    bool armed_ = false;
-    bool safe_ = false;
-    bool pending_set_ = false;
-    End ended_ = End::None;
+    bool armed_ K2_BSS_INIT(false);
+    bool safe_ K2_BSS_INIT(false);
+    bool pending_set_ K2_BSS_INIT(false);
+    End ended_ K2_BSS_INIT(End::None);
     std::uint32_t len_ms_ = kDefaultMs;
-    std::uint32_t last_ = 0;
-    std::uint32_t safe_since_ = 0;
+    std::uint32_t last_ K2_BSS_INIT(0);
+    std::uint32_t safe_since_ K2_BSS_INIT(0);
     std::uint32_t pending_ms_ = kDefaultMs;
-    std::uint32_t pending_at_ = 0;
+    std::uint32_t pending_at_ K2_BSS_INIT(0);
 };
 
 }  // namespace k2::lease

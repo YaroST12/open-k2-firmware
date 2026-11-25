@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <optional>
+#include "k2/core/bss_zero.hpp"
 
 #include "k2/fastcharge/fc_safety.hpp"
 #include "k2/fastcharge/fc_seq.hpp"
@@ -134,9 +135,9 @@ public:
     }
 
 private:
-    int s_[3] = {};
-    int head_ = 0, n_ = 0;
-    std::uint32_t last_ms_ = 0;
+    int s_[3] K2_BSS_ZERO;
+    int head_ K2_BSS_INIT(0), n_ K2_BSS_INIT(0);
+    std::uint32_t last_ms_ K2_BSS_INIT(0);
 };
 
 // Total signed pulses that bring `vbus` into the pass band. QC3.0 steps are coarse (200 mV or more): hold inside the

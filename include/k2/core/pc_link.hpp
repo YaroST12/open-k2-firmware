@@ -7,6 +7,7 @@
 
 #include <cstdint>
 
+#include "k2/core/bss_zero.hpp"
 #include "k2/core/loop_guard.hpp"
 
 namespace k2::pclink {
@@ -38,7 +39,7 @@ public:
     }
 
 private:
-    bool up_ = false;
+    bool up_ K2_BSS_INIT(false);
 };
 
 }  // namespace k2::pclink

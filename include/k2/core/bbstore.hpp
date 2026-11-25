@@ -21,6 +21,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include "k2/core/bss_zero.hpp"
 #include <cstring>
 #include <span>
 
@@ -153,9 +154,9 @@ public:
 
 private:
     ringlog::Ring& ring_;
-    std::uint16_t boot_ = 0;
-    unsigned count_ = 0;
-    std::uint32_t used_ = 0;
+    std::uint16_t boot_ K2_BSS_INIT(0);
+    unsigned count_ K2_BSS_INIT(0);
+    std::uint32_t used_ K2_BSS_INIT(0);
 
     static void put16(std::uint8_t* p, std::uint16_t v) { p[0] = std::uint8_t(v); p[1] = std::uint8_t(v >> 8); }
     static std::uint16_t get16(const std::uint8_t* p) { return std::uint16_t(p[0] | p[1] << 8); }

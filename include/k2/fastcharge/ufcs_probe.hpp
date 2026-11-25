@@ -86,14 +86,14 @@ inline constexpr std::uint8_t kProbeBlobVersion = 1;
 inline constexpr std::uint8_t kEventTx = 0, kEventRx = 1;
 
 struct ProbeResult {
-    ProbeVerdict verdict = ProbeVerdict::None;
-    HsClass hs_class = HsClass::NoAnswer;
+    ProbeVerdict verdict K2_BSS_INIT(ProbeVerdict::None);
+    HsClass hs_class K2_BSS_INIT(HsClass::NoAnswer);
     Handshake hs{{-1, -1}, {-1, -1}, -1};
-    int tx_frames = 0, rx_frames = 0, rx_bytes = 0;
-    UartErrors err{};
-    int vbus_start = 0, vbus_min = 0, vbus_max = 0;
-    int total_ms = 0;
-    bool truncated = false;
+    int tx_frames K2_BSS_INIT(0), rx_frames K2_BSS_INIT(0), rx_bytes K2_BSS_INIT(0);
+    UartErrors err K2_BSS_ZERO;
+    int vbus_start K2_BSS_INIT(0), vbus_min K2_BSS_INIT(0), vbus_max K2_BSS_INIT(0);
+    int total_ms K2_BSS_INIT(0);
+    bool truncated K2_BSS_INIT(false);
 };
 
 struct ProbeEnv {

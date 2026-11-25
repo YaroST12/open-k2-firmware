@@ -5,6 +5,7 @@
 #include <algorithm>
 
 #include "k2/core/eekeep.hpp"
+#include "k2/core/strpack.hpp"
 #include "k2/pd/emk_spoof.hpp"
 #include "k2/ui/ui.hpp"
 #include "k2/ui/ui_elem.hpp"
@@ -15,8 +16,8 @@ namespace k2 {
 namespace {
 // Header: S12 keys at x28, S16 values at x112 (13 chars, to x216).
 constexpr kit::KvLayout kSpKv{kit::kBodyY, kit::kRowH, kit::kTextX, &kLabelFont, nullptr, 112, 13, Align::Left};
-constexpr const char *kSpKeys[SpoofPage::kHeaderRows] = {"State", "Asked/Replied"};
-static_assert(all_fit(kSpKeys, kLabelAdv, 112 - kit::kTextX - 4), "a spoof key is wider than its column");
+constexpr const char *kSpKeys[SpoofPage::kHeaderRows] = {"State", K2_P("Asked/Replied")};
+static_assert(all_fit_p(kSpKeys, kLabelAdv, 112 - kit::kTextX - 4), "a spoof key is wider than its column");
 }  // namespace
 
 void spoof_counts_text(uint32_t requests, uint32_t replies, StrBuf<24> &out) {
@@ -60,20 +61,20 @@ void SpoofPage::activate() {
     const ctcable::Choice c = cl.choice_at(sel_);
     if (c.kind == ctcable::Kind::Off) {
         cl.select({});
-        if (emk_spoof::active()) { cl.disarm(); say("Spoof off", kDim); }
-        else say("Next run: no identity", kDim);
+        if (emk_spoof::active()) { cl.disarm(); say(K2_P("Spoof off"), kDim); }
+        else say(K2_P("Next run: no identity"), kDim);
         return;
     }
-    if (cl.armed_choice() == c) { cl.disarm(); say("Spoof off", kDim); return; }
-    if (!cl.select(c)) { say("Saved cable gone", kCaution); return; }
-    if (ctx_.ui->spoof_busy()) { say("Tool / handover busy", kCaution); return; }
+    if (cl.armed_choice() == c) { cl.disarm(); say(K2_P("Spoof off"), kDim); return; }
+    if (!cl.select(c)) { say(K2_P("Saved cable gone"), kCaution); return; }
+    if (ctx_.ui->spoof_busy()) { say(K2_P("Tool / handover busy"), kCaution); return; }
     ctcable::Facts facts{};
     char name[emlib::kNameMax + 1] = {};
     switch (cl.arm(c, facts, name)) {
-    case CableIdentityList::ArmErr::Ok: eekeep::spoof_user_armed(c); say("Spoof on", kOk); break;
-    case CableIdentityList::ArmErr::Gone: say("Saved cable gone", kCaution); break;
-    case CableIdentityList::ArmErr::Inline: say("Live sink: unplug load", kCaution); break;
-    case CableIdentityList::ArmErr::Invalid: say("Bad saved record", kCaution); break;
+    case CableIdentityList::ArmErr::Ok: eekeep::spoof_user_armed(c); say(K2_P("Spoof on"), kOk); break;
+    case CableIdentityList::ArmErr::Gone: say(K2_P("Saved cable gone"), kCaution); break;
+    case CableIdentityList::ArmErr::Inline: say(K2_P("Live sink: unplug load"), kCaution); break;
+    case CableIdentityList::ArmErr::Invalid: say(K2_P("Bad saved record"), kCaution); break;
     }
 }
 
@@ -147,9 +148,9 @@ void SpoofPage::update(uint32_t now_ms) {
     StrBuf<27> st;
     FooterTone tone = FooterTone::Info;   // neutral by default; Ok only while spoofing is active
     if (note_.view().size()) { tone = footer_tone_of(note_color_); st.put(note_.view()); }
-    else if (sink) { tone = FooterTone::Caution; st.put("Live sink: unplug load"); }
-    else if (armed) { tone = FooterTone::Ok; st.put(cl.armed() ? "Answering SOP' requests" : "External identity armed"); }
-    else { st.put("Plug in charger only"); }
+    else if (sink) { tone = FooterTone::Caution; st.put(K2_P("Live sink: unplug load")); }
+    else if (armed) { tone = FooterTone::Ok; st.put(cl.armed() ? K2_P("Answering SOP' requests") : K2_P("External identity armed")); }
+    else { st.put(K2_P("Plug in charger only")); }
     if (tone != FooterTone::Info) draw_footer_cached(c, tone, st.view(), foot_);
 }
 
