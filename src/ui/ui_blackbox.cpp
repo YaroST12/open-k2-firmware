@@ -424,6 +424,11 @@ bool BlackBoxPage::on_event(Event e) {
 
 Strip BlackBoxPage::labels() const {
     Strip l = base_labels();
+    if (mode_ == Mode::List) {   // the captures, then the live row; the list stops at its ends
+        int pos = norder_;
+        for (uint8_t k = 0; k < norder_; k++) if (order_[k] == sel_slot_) pos = k;
+        l = list_strip(l, pos, norder_ + 1);
+    }
     l[Button::Ok] = mode_ == Mode::List ? sl::Open : mode_ == Mode::Timeline ? sl::Link : mode_ == Mode::Link ? sl::Dim : sl::None;
     return l;
 }

@@ -219,6 +219,9 @@ constexpr Strip list_strip(Strip base, int at, int count) {
     return base;
 }
 
+// A page with nothing to move (no cursor, an empty or one-row list, a sheet that fits): Up and Dn both dim.
+constexpr Strip still_strip(Strip base) { return list_strip(base, 0, 1); }
+
 // First rule the panel breaks, or nullptr. Used by the table test over every page and submenu.
 const char *label_violation(const PanelLabels &p);
 

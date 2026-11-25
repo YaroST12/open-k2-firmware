@@ -567,11 +567,11 @@ Strip EmarkerPage::labels() const {
     Strip l = base_labels();
     switch (menu_.view) {
     case EmView::List:
-        l = list_strip(l);
+        l = menu_.count > 1 ? list_strip(l) : still_strip(l);   // the list wraps: only a single cable has nowhere to go
         l[Button::Ok] = n_seqs_ > 0 ? sl::View : sl::None;
         break;
     case EmView::Detail:
-        l = list_strip(l);
+        l = menu_.count > 1 ? list_strip(l) : still_strip(l);
         l[Button::Ok] = sl::DeleteShare;
         break;
     case EmView::Confirm:
@@ -722,7 +722,7 @@ bool DiagPage::on_event(Event e) {
 }
 
 Strip DiagPage::labels() const {
-    Strip l = base_labels();
+    Strip l = still_strip(base_labels());
     l[Button::Ok] = sl::ShareLong;
     return l;
 }
@@ -842,7 +842,7 @@ bool MemoryPage::on_event(Event e) {
 }
 
 Strip MemoryPage::labels() const {
-    Strip s = base_labels();
+    Strip s = still_strip(base_labels());
     s[Button::Ok] = sl::Scrub;
     return s;
 }

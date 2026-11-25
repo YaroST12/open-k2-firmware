@@ -291,7 +291,7 @@ Strip ConnectionPage::labels() const {
         return {{back, up, share ? sl::OpenShare : sl::Open, dn}};
     }
     if (view_ == View::Spec) {
-        return {{back, sl::Up, share ? sl::ActionsShare : sl::Actions, sl::Dn}};
+        return list_strip({{back, sl::Up, share ? sl::ActionsShare : sl::Actions, sl::Dn}}, first_, std::max(1, res_n_ - kPlaceRows + 1));
     }
     const int i = act_sel_;
     const bool valid = i >= 0 && i < n_items_;

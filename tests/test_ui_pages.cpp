@@ -257,6 +257,46 @@ static void test_ring_link_keeps_card() {
     ui.goto_page(uint8_t(Page::Home), t += 100);
 }
 
+// Up / Dn dim where they move nothing (UI_SYSTEM strip rule): a page with no cursor, an empty or one-row list, a sheet that
+// fits; a sheet that scrolls dims them at its ends. A dimmed key, pressed, moves nothing.
+static void test_still_pages_dim_arrows() {
+    Ui &ui = fresh_ui();
+    uint32_t t = 40000;
+    const auto dim = [&](Button b) { return ui.labels().b[static_cast<int>(b)].dim; };
+    const auto key = [&](Button b) { ui.on_button(b, ButtonEvent::Short, t += 50); for (int i = 0; i < 4; i++) ui.tick(t += 100); t = settle(ui, t); };
+    const auto both_dim = [&](const char *what) {
+        if (!dim(Button::Minus) || !dim(Button::Plus)) std::printf("  still page with live arrows: %s\n", what);
+        CHECK_EQ(dim(Button::Minus), true);
+        CHECK_EQ(dim(Button::Plus), true);
+    };
+    ui.goto_page(kDiagPage, t);   // System state: fixed cards
+    both_dim("System state");
+    ui.goto_page(static_cast<uint8_t>(Page::Lines), t += 100);
+    CHECK_EQ(ui.push_menu(Menu::Memory, t += 100), 1);
+    both_dim("Memory");
+    ui.goto_page(static_cast<uint8_t>(Page::Lines), t += 100);
+    CHECK_EQ(ui.push_menu(Menu::Cards, t += 100), 1);   // no cards on the host
+    both_dim("Report cards (empty)");
+    ui.goto_page(static_cast<uint8_t>(Page::Lines), t += 100);
+    CHECK_EQ(ui.push_menu(Menu::BlackBox, t += 100), 1);   // no captures: the Live link row alone
+    both_dim("Black Box (Live link only)");
+    key(Button::Plus);
+    key(Button::Minus);
+    CHECK_EQ(ui.menu() == Menu::BlackBox, 1);
+    ui.goto_page(static_cast<uint8_t>(Page::Lines), t += 100);
+    CHECK_EQ(ui.push_menu(Menu::Emarker, t += 100), 1);   // no saved cable: nothing to move to
+    both_dim("Saved cables (empty)");
+    fill_pdos(3);
+    ui.goto_page(kPdPage, t += 100);                       // the Charger sheet fits
+    for (int i = 0; i < 4; i++) ui.tick(t += 100);
+    t = settle(ui, t);
+    both_dim("Spec (fits)");
+    key(Button::Plus);
+    CHECK_EQ(ui.list_state().offset, 0);
+    g_stub.caps = {};
+    ui.goto_page(uint8_t(Page::Home), t += 100);
+}
+
 static void test_short_presses_do_not_page() {
     Ui &ui = fresh_ui();
     fill_pdos(3);
@@ -3039,6 +3079,7 @@ int main() {
     test_ring_navigation();
     test_ring_flag_and_busy_skip();
     test_ring_link_keeps_card();
+    test_still_pages_dim_arrows();
     test_short_presses_do_not_page();
     test_back_goes_home();
     test_press_flash();

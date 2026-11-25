@@ -616,14 +616,15 @@ Strip CardsPage::labels() const {
     Strip l = base_labels();
     switch (mode_) {
     case Mode::List:
+        l = list_strip(l, idx_, n_);
         l[Button::Ok] = n_ > 0 ? sl::Open : sl::None;
         l[Button::Back] = n_ > 0 ? sl::BackDel : sl::Back;
         break;
     case Mode::Detail:
-        l = {{sl::BackDel, sl::Up, sl::OpenShare, sl::Dn}};
+        l = list_strip({{sl::BackDel, sl::Up, sl::OpenShare, sl::Dn}}, row_, rows());
         break;
     case Mode::Group:
-        l = {{sl::Back, sl::Up, sl::Dim, sl::Dn}};
+        l = list_strip({{sl::Back, sl::Up, sl::Dim, sl::Dn}}, row_, rows());
         break;
     case Mode::Confirm:
         l = {{sl::Back, sl::Dim, sl::Delete, sl::Dim}};
