@@ -1405,6 +1405,10 @@ struct PdTriggerSnapshot {
     uint8_t trial_line = 0;            // fusb302::line_trial(): the line (1 / 2) our single Rd is trying while the direct-plug schedule is live, else 0 (appended: clients that read 18 bytes ignore it)
     uint8_t trial_moves = 0;           // how often the direct-plug fallback moved the Rd this attach (appended after trial_line)
     uint8_t auto_hold = 0;             // SinkStatus::auto_hold: the hold is the driver's own PDO 1 answer (appended after trial_moves)
+    // Inline the K2 is not the sink: the contract it sniffed between charger and sink (appended after auto_hold).
+    uint8_t obs_flags = 0;             // bit0: a sniffed Request (pos/mv/ma valid), bit1: its PS_RDY seen
+    uint8_t obs_pos = 0;
+    uint16_t obs_mv = 0, obs_ma = 0;
 };
 // Result of PD_ATTACH: Ok carries the trigger snapshot; any other status is a refusal (err = pd::Err) and the
 // snapshot is not sent. `raised` (not on the wire): the attach actually started or holds a contract above 5 V (a request

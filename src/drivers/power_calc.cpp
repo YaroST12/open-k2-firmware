@@ -4,6 +4,7 @@
 #include "k2/drivers/power_calc.hpp"
 
 #include "k2/core/hot.h"
+#include "k2/core/strpack.hpp"
 
 namespace k2::power {
 
@@ -41,9 +42,9 @@ std::uint64_t udiv64_by_u16(std::uint64_t x, std::uint16_t d) {
 
 const char* name(Chip chip) {
     switch (chip) {
-    case Chip::Ina228: return "INA228";
-    case Chip::Ina226: return "INA226";
-    case Chip::Ina237: return "INA237";
+    case Chip::Ina228: return K2_P("INA228");
+    case Chip::Ina226: return K2_P("INA226");
+    case Chip::Ina237: return K2_P("INA237");
     default:           return "NONE";
     }
 }

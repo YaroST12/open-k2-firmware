@@ -5,10 +5,10 @@
 #include <cstddef>
 
 #ifndef K2_FW_VERSION
-#define K2_FW_VERSION "0.0.0-0-unknown"
+#define K2_FW_VERSION "0.0.0-0-unknown" // k2-plain: build-id fallback
 #endif
 #ifndef K2_GIT_HASH
-#define K2_GIT_HASH "unknown"
+#define K2_GIT_HASH "unknown" // k2-plain: build-id fallback
 #endif
 
 namespace k2 {

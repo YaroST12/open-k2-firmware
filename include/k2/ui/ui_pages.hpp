@@ -129,6 +129,7 @@ struct UiContext {
             std::uint8_t sel K2_BSS_INIT(0);              // the Setup list's cursor
         } pdstress;
         std::array<uint8_t, bench::kPlaces> place_sel K2_BSS_ZERO;  // each place's last action: repeating a job is OK, OK, OK
+        uint8_t link_tab K2_BSS_INIT(0);                  // Link: the card (conn::Tab) last left, which the ring rebuilds on
         struct Ripple {                                              // Meter > Ripple: persisted scope settings across face flips
             uint8_t timebase K2_BSS_INIT(0);                         // 0 = Auto, 1..7 = fixed kTimebases[timebase - 1]
             uint8_t scale K2_BSS_INIT(0);                            // 0 = Auto
@@ -1320,8 +1321,10 @@ public:
 private:
     [[gnu::noinline]] void paint_table(const CrView &v);
     [[gnu::noinline]] void paint_result(const CrView &v);
+    void paint_value(int i, const CrCard &cd);
 
     Field val_[2];                 // the two step values (key/value rows 1 and 2)
+    uint32_t vsig_[2] = {};        // a "V A" value painted in two colours (paint_texts); 0 = the field holds the row
     uint32_t csig_ = 0, rsig_ = 0;
     uint32_t cleared_until_ = 0;   // Reset pressed: the footer says "Cleared" until then
     Elem foot_;                    // footer element cache (draw_footer_cached)

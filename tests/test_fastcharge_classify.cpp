@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Yaraslau Furman
 #include <string_view>
 
+#include "k2/core/strpack.hpp"
 #include "k2/fastcharge/fastcharge_classify.hpp"
 #include "test_util.h"
 
@@ -179,7 +180,7 @@ static void test_wire_values() {
 static void test_short_names() {
     // The Home screen has room for 8 characters.
     for (int i = 0; i <= static_cast<int>(Protocol::UsbData); i++)
-        CHECK_EQ(std::string_view(short_name(static_cast<Protocol>(i))).size() <= 8, true);
+        CHECK_EQ(k2::strpack::cells_rt(short_name(static_cast<Protocol>(i))) <= 8, true);   // packed: the decoded name
     CHECK_STR(short_name(Protocol::Apple24), "APL 2.4A");
     CHECK_STR(short_name(Protocol::Usb11Low), "USB1 LOW");
     CHECK_STR(short_name(Protocol::VoocWarp), "WARP");

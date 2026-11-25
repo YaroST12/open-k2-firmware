@@ -19,6 +19,7 @@
 #include <cstdint>
 
 #include "k2/core/hot.h"
+#include "k2/core/strpack.hpp"
 
 namespace k2::smoothing {
 
@@ -54,7 +55,7 @@ constexpr const char* name(Preset p) {
     switch (p) {
     case Preset::Off:    return "Off";
     case Preset::Low:    return "Low";
-    case Preset::Medium: return "Medium";
+    case Preset::Medium: return K2_P("Medium");
     default:             return "High";
     }
 }

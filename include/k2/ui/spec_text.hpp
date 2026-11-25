@@ -11,6 +11,7 @@
 #include <string_view>
 
 #include "k2/chargertest/spec_rows.hpp"   // empty without K2_SPECROWS
+#include "k2/core/strpack.hpp"
 #include "k2/chargertest/spec_section.hpp"
 #include "k2/pdspec/plan.hpp"
 #include "k2/pdspec/result.hpp"
@@ -24,23 +25,25 @@ namespace k2::spectext {
 namespace sc = pdspec;
 
 // The ResultGrid's label strip (font 12, kResultLabelW - 8 = 46 px): at most 7 characters, by sc::Check.
+// k2-plain-begin: char array table, strlen()ed by callers
 inline constexpr char kCheckShort[][8] = {
     "Accept",  "PS_RDY",  "VBUS go", "Rdy hi",  "Rdy low", "Rise",    "Fall",    "Oversh",  "Level",   "PPS mon", "PPS lvl",
     "PPS set", "PPS t/o", "EPR t/o", "HR 0V",   "HR off",  "HR on",   "HR caps", "Detach",  "Re-att",  "Src rst", "PPS bnd",
     "PPS rdy", "PPS ovs", "PPS tr",  "PPS st",  "Stat t",  "AVS mon", "AVS lvl", "AVS bnd", "AVS rdy", "AVS ovs", "AVS tr",
     "Re-caps", "PPS trk", "AVS trk",
 };
+// k2-plain-end
 static_assert(std::size(kCheckShort) == sc::kChecks, "one grid label per check");
 static_assert(all_fit(kCheckShort, kLabelAdv, kit::kResultLabelW - 8), "a check label is wider than the label strip");
 
 inline constexpr const char* label(sc::Check c) { return kCheckShort[static_cast<std::size_t>(c)]; }
 
 // The detail page's keys (a KvTable at x72, 18 characters of value).
-inline constexpr const char* kDetailKeys[] = {"Verdict", "Worst", "Limit", "Count", "Fails", "At", "Penalty"};
+inline constexpr const char* kDetailKeys[] = {K2_P("Verdict"), K2_P("Worst"), K2_P("Limit"), K2_P("Count"), K2_P("Fails"), "At", K2_P("Penalty")};
 inline constexpr int kDetailRows = static_cast<int>(std::size(kDetailKeys));
-static_assert(all_fit(kDetailKeys, kSmallAdvPx, kit::kKvValueX - 6 - 4), "a Detail key runs into the value column");
+static_assert(all_fit_p(kDetailKeys, kSmallAdvPx, kit::kKvValueX - 6 - 4), "a Detail key runs into the value column");
 // A skip reason as a Detail value (18 characters) and as the lone grid cell (font 16, 150 px).
-static_assert(fits_px(kSmallAdvPx, sc::skip_name(sc::Skip::NoEprProof), 150), "a skip reason is wider than its cell");
+static_assert(fits_px_p(kSmallAdvPx, sc::skip_name(sc::Skip::NoEprProof), 150), "a skip reason is wider than its cell");
 
 inline void put_int(StrBufBase& s, std::int32_t v) {
     if (v < 0) s.put_char('-');
@@ -49,7 +52,7 @@ inline void put_int(StrBufBase& s, std::int32_t v) {
 
 // One measured value in its unit: us as ms with one decimal, ms whole, mV as volts with two decimals, a count bare.
 inline void put_value(StrBufBase& s, sc::Unit u, std::int32_t v) {
-    if (v >= static_cast<std::int32_t>(sc::kNever)) { s.put("not seen"); return; }
+    if (v >= static_cast<std::int32_t>(sc::kNever)) { s.put(K2_P("not seen")); return; }
     switch (u) {
         case sc::Unit::Us: s.put_fixed(v, 1).put("ms"); return;
         case sc::Unit::Ms: put_int(s, v); s.put("ms"); return;
@@ -87,12 +90,12 @@ inline bool put_where(int k, std::uint8_t a, std::uint8_t b, StrBufBase& s) {
                (k >= static_cast<int>(sc::Check::PpsBand) && k <= static_cast<int>(sc::Check::AvsTransient)) ||
                k >= static_cast<int>(sc::Check::PpsTrack)) {
         // A programmable move: APDO, step class, direction and the level asked for ("APDO 5 c2 dn 10.9V").
-        s.put("APDO ").put_u32(a & 0x0Fu).put(" c").put_u32((a >> 4) & 7u).put(a & 0x80u ? " dn " : " up ");
+        s.put(K2_P("APDO ")).put_u32(a & 0x0Fu).put(" c").put_u32((a >> 4) & 7u).put(a & 0x80u ? " dn " : " up ");
         s.put_u32(b / 10u).put(".").put_u32(b % 10u).put("V");
     } else if (a) {
         s.put("PDO ").put_u32(a);
     } else {
-        s.put("the source");
+        s.put(K2_P("the source"));
         return false;
     }
     return true;
@@ -115,7 +118,7 @@ inline kit::Verdict cell_view(int check, const specsec::Cell& c, StrBufBase& tex
         case sc::Verdict::Pass:
         case sc::Verdict::Fail:
             put_value(text, u, specsec::dequantize(u, c.value));
-            if (c.fails) text.put(", ").put_u32(c.fails).put(" fail");
+            if (c.fails) text.put(", ").put_u32(c.fails).put(K2_P(" fail"));
             shown = text.view();
             return c.fails ? kit::Verdict::Fail : kit::Verdict::Pass;
     }
@@ -135,9 +138,9 @@ inline void detail_value(int row, int check, const specsec::Cell& c, StrBufBase&
             switch (v) {
                 case sc::Verdict::Pass: s.put("Pass"); color = kOk; return;
                 case sc::Verdict::Fail: s.put("Fail"); color = kError; return;
-                case sc::Verdict::Unverified: s.put("Unverified"); return;
+                case sc::Verdict::Unverified: s.put(K2_P("Unverified")); return;
                 case sc::Verdict::Skip: s.put("Skip"); color = kDim; return;
-                case sc::Verdict::Pending: s.put("Pending"); color = kDim; return;
+                case sc::Verdict::Pending: s.put(K2_P("Pending")); color = kDim; return;
             }
             return;
         case 1:
@@ -146,7 +149,7 @@ inline void detail_value(int row, int check, const specsec::Cell& c, StrBufBase&
             return;
         case 2:
             if (measured && c.detailed()) put_limit(s, d, c);
-            else { s.put(measured ? "-" : "not judged"); color = kDim; }
+            else { s.put(measured ? "-" : K2_P("not judged")); color = kDim; }
             return;
         case 3:
             if (c.detailed()) s.put_u32(c.n);
@@ -182,7 +185,7 @@ inline void range_footer(StrBufBase& f, const specsec::Apdo& p, const specsec::R
         g.put(label(c)).put(": ");
         if (part != 1) put_value(g, u, specsec::dequantize(u, cell.value));
         if (part == 2) g.put(", ");
-        if (part >= 1) g.put_u32(cell.fails).put(sc::def(c).inferred ? " over" : " fail");
+        if (part >= 1) g.put_u32(cell.fails).put(sc::def(c).inferred ? K2_P(" over") : K2_P(" fail"));
         if (text_cells(g.view()) <= 27) break;
     }
     f.put(g.view());
@@ -195,14 +198,14 @@ inline void slot_tail(int check, const specsec::Cell& c, StrBufBase& s) {
 // ... and the limit and count as its note (31 cells): "max 9.65V, 14 measured", the skip reason, or "not judged".
 inline void slot_note(int check, const specsec::Cell& c, StrBufBase& s) {
     if (c.verdict() == sc::Verdict::Skip) { s.put(sc::skip_name(c.skip())); return; }
-    if (!c.measured()) { s.put("not judged"); return; }
+    if (!c.measured()) { s.put(K2_P("not judged")); return; }
     if (!c.detailed()) { s.put("-"); return; }
     StrBuf<48> g;
     for (int part = 2; part >= 0; --part) {
         g.clear();
         put_limit(g, sc::kDefs[static_cast<std::size_t>(check)], c);
         if (part) g.put(", ").put_u32(c.n);
-        if (part == 2) g.put(" measured");
+        if (part == 2) g.put(K2_P(" measured"));
         if (text_cells(g.view()) <= static_cast<int>(kit::kNoteMaxPx / kLabelAdv)) break;
     }
     s.put(g.view());
@@ -289,7 +292,7 @@ inline void put_row_name(const specsec::Row& r, StrBufBase& s) {
 // The value in the check's unit: 9.21V, 4.5ms, 169ms, 1.5s; signed millivolts for a programmable pass's error; `never` for no event.
 inline void put_row_value(const specsec::Row& r, StrBufBase& s) {
     if (!row_known(r)) return;
-    if (r.value == specsec::kUnseen) { s.put("never"); return; }
+    if (r.value == specsec::kUnseen) { s.put(K2_P("never")); return; }
     const std::int32_t v = r.value;
     switch (sc::kDefs[r.check].unit) {
         case sc::Unit::Us: rowtext::put_time(s, v, false); return;

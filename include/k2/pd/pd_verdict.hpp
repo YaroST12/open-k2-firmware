@@ -71,9 +71,11 @@ constexpr PdVerdictOut pd_verdict(const PdVerdictIn &in) {
 // Short token for the binlog (%s is cut at 12 bytes) and the remote: "pending" / "present" /
 // "none-offered" (sink silent, source offered) / "none-never" (source never offered).
 constexpr const char *pd_verdict_token(PdVerdict v, PdNoneWhy w) {
+    // k2-plain-begin: tests strcmp/strlen the token
     if (v == PdVerdict::Present) return "present";
     if (v == PdVerdict::None) return w == PdNoneWhy::SinkSilentSourceOffered ? "none-offered" : "none-never";
     return "pending";
+    // k2-plain-end
 }
 
 }  // namespace k2::pd

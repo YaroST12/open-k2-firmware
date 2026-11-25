@@ -267,6 +267,25 @@ class SanitizeStep(unittest.TestCase):
         self.assertEqual(len(errs), 1)
         self.assertIn("runtime error", errs[0])
 
+    def test_strings_guard_runs_after_the_64bit_guard(self):
+        names = [fn.__name__ for _, fn in g.STEPS]
+        self.assertEqual(names.index("step_strings"), names.index("step_64bit") + 1)
+        self.assertLess(names.index("step_strings"), names.index("step_tests"))
+
+    def test_strings_guard_fails_on_the_checker_findings(self):
+        import types
+        old = g.run
+        calls = []
+        g.run = lambda cmd, **kw: calls.append(cmd) or types.SimpleNamespace(
+            returncode=1, stdout="", stderr='src/x.cpp:3: error: plain text literal: wrap it in K2_P(...): "hello"')
+        try:
+            with self.assertRaises(g.GateError) as e:
+                g.step_strings()
+        finally:
+            g.run = old
+        self.assertIn("tools/check_strings.py", calls[0])
+        self.assertIn("src/x.cpp:3", str(e.exception))
+
     def test_gate_runs_both_compilers_by_default(self):
         names = [fn.__name__ for _, fn in g.STEPS]
         self.assertIn("step_sanitize", names)

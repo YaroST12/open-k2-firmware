@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Yaraslau Furman
 #include "k2/chargertest/result_layout.hpp"
 #include "k2/core/math_opt.hpp"
+#include "k2/core/strpack.hpp"
 #include "k2/pd/pd.hpp"
 #include "k2/fastcharge/fc_engine.hpp"
 #include "k2/chargertest/step_label.hpp"
@@ -29,11 +30,11 @@ bool caution(const ct::Step& s) {
 }
 const char* verdict_word(const ct::Step& s) {
     switch (s.verdict) {
-    case ct::Verdict::Pass: return caution(s) ? "CAUTION" : "PASS";
-    case ct::Verdict::Fail: return s.reason == ct::Reason::Capped ? "CAPPED" : "FAIL";
-    case ct::Verdict::Skip: return s.reason == ct::Reason::Advertised ? "LISTED" : s.reason == ct::Reason::LightLevel ? "NOT RUN" : "SKIP";
-    case ct::Verdict::Running: return "RUNNING";
-    default: return "PENDING";
+    case ct::Verdict::Pass: return caution(s) ? K2_P("CAUTION") : "PASS";
+    case ct::Verdict::Fail: return s.reason == ct::Reason::Capped ? K2_P("CAPPED") : "FAIL";
+    case ct::Verdict::Skip: return s.reason == ct::Reason::Advertised ? K2_P("LISTED") : s.reason == ct::Reason::LightLevel ? K2_P("NOT RUN") : "SKIP";
+    case ct::Verdict::Running: return K2_P("RUNNING");
+    default: return K2_P("PENDING");
     }
 }
 unsigned sweep_worst_mv(const ctsweep::View& v, uint8_t alg, uint8_t pos) {
@@ -56,7 +57,7 @@ const ct::Step* step_caution(std::span<const ct::Step> steps, ct::Algorithm a, u
     }
     return prog;
 }
-const char* verdict_word(const ct::Step& s, const ctsweep::View& v) { return deviates(s, v) ? "CAUTION" : verdict_word(s); }
+const char* verdict_word(const ct::Step& s, const ctsweep::View& v) { return deviates(s, v) ? K2_P("CAUTION") : verdict_word(s); }
 Progress run_progress(std::span<const ct::Step> steps) {
     Progress p;
     for (const auto& s : steps) {
@@ -71,7 +72,10 @@ namespace {
 struct Out {
     char* p; size_t n; size_t len = 0;
     void put(char c) { if (len + 1 < n) p[len++] = c; p[len] = 0; }
-    void put(const char* s) { while (*s) put(*s++); }
+    void put(const char* s) {
+        if (strpack::is_packed(s)) { strpack::Reader r(s); for (int c; (c = r.next()) >= 0;) put(char(c)); return; }
+        while (*s) put(*s++);
+    }
     void num(unsigned v) { char t[8]; int k = 0; do { t[k++] = char('0' + v % 10); v /= 10; } while (v && k < 8); while (k) put(t[--k]); }
 };
 // The chip words come from k2::step_label (one wording for the rows, the chips and the report card).
@@ -100,6 +104,8 @@ struct TokenBuf {
     uint8_t* cuts = nullptr;
 
     void put_str(char* dst, size_t dcap, std::string_view s) {
+        char dec[48];
+        s = strpack::unpack(s, dec);
         const size_t n = std::min(s.size(), dcap - 1);
         std::memcpy(dst, s.data(), n);
         dst[n] = 0;
@@ -117,6 +123,8 @@ struct TokenBuf {
     // "5-20V 5A"), keeping a range and its current together.
     [[gnu::noinline]] void phrase(std::string_view s, Tone t, bool split_at_number) {
         constexpr size_t kMax = sizeof Token::text - 1;
+        char dec[64];   // words are split on spaces: decode first
+        s = strpack::unpack(s, dec);
         Token* cur = nullptr;
         size_t len = 0;
         bool numbered = false;
@@ -369,17 +377,20 @@ const char* skip_tag(const ct::Step& x) {
     if (x.verdict != ct::Verdict::Skip) return nullptr;
     switch (x.reason) {
     case ct::Reason::OverCap: return x.detail == ct::kDetailMonitor36 ? ">36V" : x.detail == ct::kDetailMonitor48 ? ">48V" : ">cap";
-    case ct::Reason::CableLimit: return "cable";
-    case ct::Reason::EprRefused: return "refused";
-    case ct::Reason::NoContract: return "no PD";
-    case ct::Reason::ClassAOnly: return "Class A";   // neutral: the charger tops out at 12 V, the 20 V level was never expected
-    case ct::Reason::NeedsLoad: return "needs load";   // pattern pps-off-at-no-load: a skip, never a fail (10 chars: fits a token)
+    case ct::Reason::CableLimit: return K2_P("cable");
+    case ct::Reason::EprRefused: return K2_P("refused");
+    case ct::Reason::NoContract: return K2_P("no PD");
+    case ct::Reason::ClassAOnly: return K2_P("Class A");   // neutral: the charger tops out at 12 V, the 20 V level was never expected
+    case ct::Reason::NeedsLoad: return K2_P("needs load");   // pattern pps-off-at-no-load: a skip, never a fail (10 chars: fits a token)
     default: return nullptr;
     }
 }
 void tag(TokenBuf& b, const ct::Step& x) {
     if (const char* t = skip_tag(x))
-        if (Token* k = b.token(false, Tone::Caution, true)) std::strncpy(k->text, t, sizeof k->text - 1);
+        if (Token* k = b.token(false, Tone::Caution, true)) {
+            char d[sizeof k->text];
+            std::strncpy(k->text, strpack::unpack(t, d).data(), sizeof k->text - 1);
+        }
 }
 // The plan runs the fixed levels from the top voltage down, the grid reads them left to right ascending: chips go out in
 // (voltage, plan index) order, one selection pass per chip (at most kMaxSteps steps, no scratch array). `algs` = the algorithms
@@ -485,7 +496,7 @@ unsigned tone_rank(Tone t) {
         silent &= is_no_answer(y) || is_lines_open(y);
     }
     if (first && silent) {
-        if (Token* k = b.token(false, open ? Tone::Caution : Tone::Dim)) { k->mv = first->mv; put_text(*k, open ? "No D+/D-" : "No reply"); }   // a word, not a chip: a chip splits at its space
+        if (Token* k = b.token(false, open ? Tone::Caution : Tone::Dim)) { k->mv = first->mv; put_text(*k, open ? K2_P("No D+/D-") : K2_P("No reply")); }   // a word, not a chip: a chip splits at its space
         return;
     }
     for (size_t i = 0; i < s.size(); ++i) {
@@ -508,8 +519,8 @@ unsigned tone_rank(Tone t) {
         if (!k) return;
         k->mv = x.mv;
         Out o{k->text, sizeof k->text};
-        if (hs_ok && !fail) { for (const char* w = "handshake ok"; *w; ++w) o.put(*w); }
-        else if (detected && !fail) { for (const char* w = "detected"; *w; ++w) o.put(*w); }   // answered SVOOC frames, no voltage proof
+        if (hs_ok && !fail) o.put(K2_P("handshake ok"));
+        else if (detected && !fail) o.put(K2_P("detected"));   // answered SVOOC frames, no voltage proof
         else if (const auto w = oem_watts::chip(x); w.len) put_text(*k, w.c_str());   // SCP / UFCS: "10V 22.5W", the level's claimed watts
         else if (a == A::Ufcs) put_text(*k, step_label::ufcs_level(x).c_str());   // "9V": planned before the mode list was read
         else put_text(*k, step_label::params(x).c_str());   // "9V"
@@ -603,6 +614,12 @@ void put_level(step_label::Text& t, unsigned mv) {
     t.s[t.len] = 0;
 }
 void put_word(step_label::Text& t, const char* w) {
+    if (strpack::is_packed(w)) {
+        strpack::Reader r(w);
+        for (int c; t.len + 1 < step_label::kMax && (c = r.next()) >= 0;) t.s[t.len++] = char(c);
+        t.s[t.len] = 0;
+        return;
+    }
     while (*w && t.len + 1 < step_label::kMax) t.s[t.len++] = *w++;
     t.s[t.len] = 0;
 }
@@ -632,33 +649,33 @@ Reach reach(std::span<const ct::Step> s, A a, int pos) {
 step_label::Text reach_footer(const Reach& r) {
     step_label::Text t;
     if (r.floored) {
-        put_word(t, "floor at "); put_level(t, r.floor_mv); put_word(t, "V");
+        put_word(t, K2_P("floor at ")); put_level(t, r.floor_mv); put_word(t, "V");
     } else if (r.capped) {
-        put_word(t, "caps "); put_level(t, r.hi_mv); put_word(t, "V of "); put_level(t, r.adv_mv); put_word(t, "V");
+        put_word(t, K2_P("caps ")); put_level(t, r.hi_mv); put_word(t, K2_P("V of ")); put_level(t, r.adv_mv); put_word(t, "V");
     } else if (r.folded && r.fold_mv) {
-        put_word(t, "folds to "); put_level(t, r.fold_mv); put_word(t, "V");   // a level the sweep found folded back reads this low
+        put_word(t, K2_P("folds to ")); put_level(t, r.fold_mv); put_word(t, "V");   // a level the sweep found folded back reads this low
     } else if (r.tone == Tone::Pending) {
-        put_word(t, "not finished");
+        put_word(t, K2_P("not finished"));
     } else if (r.listed) {
-        put_word(t, "advertised");   // a Light run's listing: never asked, so never a shortfall
+        put_word(t, K2_P("advertised"));   // a Light run's listing: never asked, so never a shortfall
     } else if (r.needs_load && r.adv_mv && (r.tone == Tone::Skip || r.tone == Tone::Partial)) {
         // pattern pps-off-at-no-load: the levels were skipped, not failed and not never-run; say why
-        put_word(t, "needs load");
+        put_word(t, K2_P("needs load"));
         if (r.lo_mv) { put_word(t, " >"); put_level(t, r.hi_mv); put_word(t, "V"); }   // the highest level that passed
     } else if (r.tone == Tone::Skip || !r.adv_mv) {
-        put_word(t, "not run");
+        put_word(t, K2_P("not run"));
     } else if (!r.lo_mv) {
-        put_word(t, "none reached");
+        put_word(t, K2_P("none reached"));
     } else if (r.tone == Tone::Pass) {
-        put_word(t, "reached "); put_level(t, r.lo_mv); put_word(t, "-"); put_level(t, r.hi_mv); put_word(t, "V");
+        put_word(t, K2_P("reached ")); put_level(t, r.lo_mv); put_word(t, "-"); put_level(t, r.hi_mv); put_word(t, "V");
     } else {
-        put_word(t, "max "); put_level(t, r.hi_mv); put_word(t, "V of "); put_level(t, r.adv_mv); put_word(t, "V");
+        put_word(t, "max "); put_level(t, r.hi_mv); put_word(t, K2_P("V of ")); put_level(t, r.adv_mv); put_word(t, "V");
     }
     return t;
 }
 
 step_label::Text family_footer(const char* label, const FamilyTally& c) {
-    static constexpr const char* kWords[5] = {" pass", " fail", " caution", " listed", " skip"};
+    static constexpr const char* kWords[5] = {" pass", " fail", " caution", " listed", " skip"};  // k2-plain: strlen sizes the footer fit
     const unsigned n[5] = {c.pass, c.fail, c.caution, c.listed, c.skip};
     step_label::Text t;
     put_word(t, label); put_word(t, ": ");
@@ -679,7 +696,7 @@ step_label::Text family_footer(const char* label, const FamilyTally& c) {
         }
         if (!cut) break;
     }
-    if (t.len == head) put_word(t, "no steps");
+    if (t.len == head) put_word(t, K2_P("no steps"));
     return t;
 }
 
@@ -694,13 +711,13 @@ step_label::Text reach_span(const Reach& r) {
 
 const char* section_name(Section s) {
     switch (s) {
-    case Section::Huawei: return "Huawei";
-    case Section::Samsung: return "Samsung";
+    case Section::Huawei: return K2_P("Huawei");
+    case Section::Samsung: return K2_P("Samsung");
     case Section::Oppo: return "OPPO";
-    case Section::Xiaomi: return "Xiaomi";
-    case Section::OemPd: return "OEM / PD";
-    case Section::UsbPd: return "USB PD";
-    case Section::Qc: return "QC/UFCS";
+    case Section::Xiaomi: return K2_P("Xiaomi");
+    case Section::OemPd: return K2_P("OEM / PD");
+    case Section::UsbPd: return K2_P("USB PD");
+    case Section::Qc: return K2_P("QC/UFCS");
     default: return "?";
     }
 }
@@ -719,21 +736,21 @@ Section section_of(A a) {
 // the Xiaomi-ecosystem VID 0x2B01 (Zimi/CUKTECH) included.
 const char* vendor_oem_name(uint16_t vid) {
     switch (vid) {
-    case 0x17EF: return "Lenovo";
+    case 0x17EF: return K2_P("Lenovo");
     case 0x03F0: return "HP";
-    case 0x2717: case 0x2B01: return "Xiaomi";
+    case 0x2717: case 0x2B01: return K2_P("Xiaomi");
     default: return nullptr;
     }
 }
 
 const char* display_name(A a) {
     switch (a) {
-    case A::Pd2Fixed: return "PD2.0";
-    case A::Pd3Fixed: return "PD3.x";
+    case A::Pd2Fixed: return K2_P("PD2.0");
+    case A::Pd3Fixed: return K2_P("PD3.x");
     case A::Epr: return "EPR";
-    case A::SprAvs: return "SPR AVS";
+    case A::SprAvs: return K2_P("SPR AVS");
     case A::Pps: return "PPS";
-    case A::EprAvs: return "EPR AVS";
+    case A::EprAvs: return K2_P("EPR AVS");
     case A::Qc2: return "QC2";
     case A::Qc3: return "QC3";
     case A::Qc3Plus: return "QC3+";
@@ -743,8 +760,8 @@ const char* display_name(A a) {
     case A::Fcp: return "FCP";
     case A::Scp: return "SCP";
     case A::Vooc: return "VOOC";
-    case A::SuperVooc: return "SVOOC";
-    case A::SuperVooc65: return "SVOOC65";
+    case A::SuperVooc: return K2_P("SVOOC");
+    case A::SuperVooc65: return K2_P("SVOOC65");
     case A::Ufcs: return "UFCS";
     case A::Vivo: return "VIVO";
     default: return "?";
@@ -762,8 +779,8 @@ namespace {
     if (!(oem.qc_label || oem.vendor || oem.oppo_svid || oem.scp_cap || oem.vooc_ident || oem.svooc_cap || oem.rebalanced)) return;
     header(b, oem, Section::OemPd);
     if (oem.rebalanced) {
-        b.begin(CompactKind::Fact, "SOURCE", Tone::Caution, A::Count);
-        b.word("rebalanced", Tone::Caution);
+        b.begin(CompactKind::Fact, K2_P("SOURCE"), Tone::Caution, A::Count);
+        b.word(K2_P("rebalanced"), Tone::Caution);
         char nx[5] = {};
         char rev[3] = {};
         unsigned v = oem.rebalanced, n = 0;
@@ -780,10 +797,10 @@ namespace {
         b.phrase_cstr(oem.qc_why, Tone::Dim, true);
     }
     if (oem.vendor) { b.begin(CompactKind::Fact, "OEM", Tone::Dim, A::Count); b.phrase_cstr(oem.vendor, Tone::Dim, false); }
-    if (oem.oppo_svid) { b.begin(CompactKind::Fact, "OPPO", Tone::Dim, A::Count); b.phrase("SVID 0x22D9 (discovery only)", Tone::Dim, false); }
-    if (oem.scp_cap) { b.begin(CompactKind::Fact, "SCP cap", Tone::Dim, A::Count); b.phrase_cstr(oem.scp_cap, Tone::Dim, false); }
-    if (oem.vooc_ident) { b.begin(CompactKind::Fact, "VOOC id", Tone::Dim, A::Count); b.phrase_cstr(oem.vooc_ident, Tone::Dim, false); }
-    if (oem.svooc_cap) { b.begin(CompactKind::Fact, "SV cap", Tone::Dim, A::Count); b.phrase_cstr(oem.svooc_cap, Tone::Dim, false); }
+    if (oem.oppo_svid) { b.begin(CompactKind::Fact, "OPPO", Tone::Dim, A::Count); b.phrase(K2_PSV("SVID 0x22D9 (discovery only)"), Tone::Dim, false); }
+    if (oem.scp_cap) { b.begin(CompactKind::Fact, K2_PSV("SCP cap"), Tone::Dim, A::Count); b.phrase_cstr(oem.scp_cap, Tone::Dim, false); }
+    if (oem.vooc_ident) { b.begin(CompactKind::Fact, K2_PSV("VOOC id"), Tone::Dim, A::Count); b.phrase_cstr(oem.vooc_ident, Tone::Dim, false); }
+    if (oem.svooc_cap) { b.begin(CompactKind::Fact, K2_PSV("SV cap"), Tone::Dim, A::Count); b.phrase_cstr(oem.svooc_cap, Tone::Dim, false); }
 }
 
 // The VOOC family as level rows (OemNotes::vooc_watts): "VOOC" then "SVOOC", one row per run of equal words in the level table.
@@ -842,8 +859,8 @@ void build_impl(Sink& b, std::span<const ct::Step> steps, const OemNotes& oem, c
     auto mi_auth_row = [](Sink& s, const OemNotes& o, bool& shown) {
         if (!o.mi_auth || shown) return;
         shown = true;
-        s.begin(CompactKind::Fact, "Mi Turbo", Tone::Pass, A::Count);
-        s.word("auth ok", Tone::Dim);
+        s.begin(CompactKind::Fact, K2_P("Mi Turbo"), Tone::Pass, A::Count);
+        s.word(K2_P("auth ok"), Tone::Dim);
     };
     bool facts_done = false, vooc_done = false;
     for (size_t at = 0; at < key_n;) {
@@ -859,7 +876,7 @@ void build_impl(Sink& b, std::span<const ct::Step> steps, const OemNotes& oem, c
         for (size_t i = at; i < end; ++i) {
             const Key& key = keys[i];
             if (key.probe) {
-                b.begin(CompactKind::Probe, "Xiaomi", Tone::Dim, A::Count, 0);
+                b.begin(CompactKind::Probe, K2_P("Xiaomi"), Tone::Dim, A::Count, 0);
                 TokenBuf tb = b.buf();
                 probe_row(tb, steps);
                 continue;
@@ -884,7 +901,7 @@ void build_impl(Sink& b, std::span<const ct::Step> steps, const OemNotes& oem, c
             if (oem.fold && is_absent(steps, a)) { absent[unsigned(a)] = true; continue; }
             if (is_no_qc3plus(steps, a)) {
                 b.begin(CompactKind::NoQc3Plus, display_name(a), Tone::Dim, a);
-                b.word("no QC3+", Tone::Dim);
+                b.word(K2_P("no QC3+"), Tone::Dim);
                 continue;
             }
             if (oem.fold && is_skipped_only(steps, a) && !is_class_a_only(steps, a)) {
@@ -919,9 +936,9 @@ void build_impl(Sink& b, std::span<const ct::Step> steps, const OemNotes& oem, c
                 if (const char* w = fold_word(keys[i].a, vooc)) b.word(w, t);
             }
     };
-    collapsed(absent, "No reply", Tone::Dim, 0);
-    collapsed(skipped, "Skipped", Tone::Caution, 1);
-    collapsed(open, "No D+/D-", Tone::Caution, 2);
+    collapsed(absent, K2_P("No reply"), Tone::Dim, 0);
+    collapsed(skipped, K2_P("Skipped"), Tone::Caution, 1);
+    collapsed(open, K2_P("No D+/D-"), Tone::Caution, 2);
     b.flush();
 }
 }  // namespace
@@ -979,9 +996,9 @@ const char* row_label(const CompactGrid& g, size_t row) {
     const CompactRow& cr = g.rows[row];
     switch (cr.kind) {
     case CompactKind::Header: return section_name(static_cast<Section>(cr.algo));
-    case CompactKind::Probe: return "Xiaomi";
+    case CompactKind::Probe: return K2_P("Xiaomi");
     case CompactKind::Fact: return g.pool.data() + cr.mv;
-    case CompactKind::Collapsed: return cr.mv == 2 ? "No D+/D-" : cr.mv ? "Skipped" : "No reply";
+    case CompactKind::Collapsed: return cr.mv == 2 ? K2_P("No D+/D-") : cr.mv ? K2_P("Skipped") : K2_P("No reply");
     case CompactKind::Levels: return oem_watts::kLevels[cr.first].word;
     case CompactKind::Pd: return "PD";
     default: return display_name(static_cast<A>(cr.algo));
@@ -1001,7 +1018,7 @@ void row_tokens(const CompactGrid& g, size_t row, std::span<const ct::Step> step
     case CompactKind::Header: break;
     case CompactKind::Probe: probe_row(tb, steps); break;
     case CompactKind::Pd: pd_row(tb, steps, sweep, cr.mv & 1u); break;
-    case CompactKind::NoQc3Plus: tb.word("no QC3+", Tone::Dim); break;
+    case CompactKind::NoQc3Plus: tb.word(K2_P("no QC3+"), Tone::Dim); break;
     case CompactKind::Legacy: legacy_row(tb, steps, static_cast<A>(cr.algo)); break;
     case CompactKind::Levels: levels_row(tb, steps, static_cast<A>(cr.algo), cr.mv, cr.first, cr.count); break;
     case CompactKind::Fact:
@@ -1051,13 +1068,13 @@ step_label::Text levels_footer(const CompactRow& r, const char* label) {
     char w[24] = {};
     Out o{w, sizeof w};
     if (top) {   // "up to 120W claimed"; a one-level row names its level: "20W claimed"
-        if (r.count > 1) o.put("up to ");
+        if (r.count > 1) o.put(K2_P("up to "));
         o.num(oem_watts::kLevels[top - 1].w);
-        o.put("W claimed");
+        o.put(K2_P("W claimed"));
     } else {   // "50-120W not reached" / "20W not tested"
         o.num(oem_watts::kLevels[r.first].w);
         if (r.count > 1) { o.put('-'); o.num(oem_watts::kLevels[r.first + r.count - 1].w); }
-        o.put(ran ? "W not reached" : "W not tested");
+        o.put(ran ? K2_P("W not reached") : K2_P("W not tested"));
     }
     if (std::strlen(label) + 2 + o.len <= kFooterChars) { put_word(t, label); put_word(t, ": "); }
     put_word(t, w);

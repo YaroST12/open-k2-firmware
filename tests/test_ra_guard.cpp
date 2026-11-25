@@ -44,8 +44,9 @@ int main() {
     // What the dialog does with it: only a receptacle charger (or an unknown) may run the spoof.
     CHECK(spoof_allowed(Topology::DirectReceptacle) && spoof_allowed(Topology::Unknown));
     CHECK(!spoof_allowed(Topology::CableSingleCc) && !spoof_allowed(Topology::NoSource));
-    CHECK(std::string(name(Topology::DirectReceptacle)) == "direct" && std::string(name(Topology::CableSingleCc)) == "cable");
-    CHECK(std::string(name(Topology::NoSource)) == "none" && std::string(name(Topology::Unknown)) == "unknown");
+    auto nm = [](Topology t) { static char b[32]; return std::string(k2::strpack::unpack(name(t), b)); };
+    CHECK(nm(Topology::DirectReceptacle) == "direct" && nm(Topology::CableSingleCc) == "cable");
+    CHECK(nm(Topology::NoSource) == "none" && nm(Topology::Unknown) == "unknown");
 
     // The peak window: a PLUS press sags a line for a few samples; the peak of the last kSamples keeps the verdict.
     PeakWindow w;

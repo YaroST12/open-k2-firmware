@@ -1094,7 +1094,7 @@ bool TwinPage::on_event(Event e) {
 }
 
 Strip TwinPage::labels() const {
-    Strip l = list_strip(base_labels());
+    Strip l = list_strip(base_labels(), detail_ ? act_ : sel_, detail_ ? kActions : list_last() + 1);
     sl::Id ok = sl::None;
     if (running() || learn_wait_ || iq_wait_) {
         l[Button::Back] = sl::Stop;

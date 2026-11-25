@@ -237,7 +237,7 @@ void draw_status_left(const Surface &s, bool has_icon, Icon icon, std::string_vi
 // passive inline role ("PAS"). pin = fusb302::pin_rd(): 0, 1 = CC1, 2 = CC2 (never both).
 inline std::string_view role_badge(std::uint8_t pin, char (&buf)[11]) {
     if (pin == 1 || pin == 2) {
-        constexpr std::string_view kTxt = "Rd pin CC";   // string_view: no NUL in the range
+        constexpr std::string_view kTxt = "Rd pin CC";   // k2-plain: copied byte by byte
         std::size_t i = 0;
         for (char c : kTxt) buf[i++] = c;
         buf[i++] = static_cast<char>('0' + pin);

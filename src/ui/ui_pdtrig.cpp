@@ -81,7 +81,7 @@ int identify_rows(const pd::IdStatus &st, const pd::VdmInfo &vdm, IdRow *rows) {
         const bool beside = vendor.size() <= 13;
         add(rows, n, RowTone::Value, [&](auto &s) { s.put("VID ").put_hex(id.vid, 4); if (beside) s.put_char(' ').put(vendor); });
         if (!beside) add(rows, n, RowTone::Value, [&](auto &s) { s.put(vendor); });
-        add(rows, n, RowTone::Text, [&](auto &s) { s.put("PID ").put_hex(id.pid, 4).put(" bcd ").put_hex(id.bcd, 4); });
+        add(rows, n, RowTone::Text, [&](auto &s) { s.put("PID ").put_hex(id.pid, 4).put(K2_P(" bcd ")).put_hex(id.bcd, 4); });
         if (id.model) add(rows, n, RowTone::Value, [&](auto &s) { s.put(id.model); });
     } else if (st.state == pd::IdState::Done) {
         add(rows, n, RowTone::Dim, [](auto &s) { s.put(K2_P("No identity answer")); });
@@ -90,7 +90,7 @@ int identify_rows(const pd::IdStatus &st, const pd::VdmInfo &vdm, IdRow *rows) {
     for (int i = 0; i < svids; i++) {
         const pd::VendorName nm = pd::svid_name(vdm.svids[i]);
         const bool beside = nm.view().size() <= 12;   // "SVID xxxx " leaves 12 of 22; a longer name takes its own row
-        add(rows, n, RowTone::Text, [&](auto &s) { s.put("SVID ").put_hex(vdm.svids[i], 4); if (beside) s.put_char(' ').put(nm.view()); });
+        add(rows, n, RowTone::Text, [&](auto &s) { s.put(K2_P("SVID ")).put_hex(vdm.svids[i], 4); if (beside) s.put_char(' ').put(nm.view()); });
         if (!beside) add(rows, n, RowTone::Text, [&](auto &s) { s.put(nm.view()); });
     }
     if (st.num_sink_pdos) {
@@ -110,7 +110,7 @@ int identify_rows(const pd::IdStatus &st, const pd::VdmInfo &vdm, IdRow *rows) {
     if (st.revision) {
         add(rows, n, RowTone::Text, [&](auto &s) {
             s.put("PD ").put_u32(st.revision >> 28).put_char('.').put_u32((st.revision >> 24) & 0xF)
-             .put(" ver ").put_u32((st.revision >> 20) & 0xF).put_char('.').put_u32((st.revision >> 16) & 0xF);
+             .put(K2_P(" ver ")).put_u32((st.revision >> 20) & 0xF).put_char('.').put_u32((st.revision >> 16) & 0xF);
         });
     }
     if (st.ok_mask & (1u << unsigned(pd::IdStep::Status))) add(rows, n, RowTone::Text, [](auto &s) { s.put(K2_P("Status: answered")); });
@@ -126,7 +126,8 @@ int identify_rows(const pd::IdStatus &st, const pd::VdmInfo &vdm, IdRow *rows) {
 namespace {
 template <size_t N>
 void put_cut(StrBuf<N> &s, const char *t, size_t max) {
-    for (size_t i = 0; t && t[i] && i < max; i++) s.put_char(t[i]);
+    size_t i = 0;
+    if (t) strpack::for_chars(t, [&](char c) { if (i++ < max) s.put_char(c); });
 }
 constexpr int kIdSvids = 4;
 // Rows for the decoded product type and the USB role, each only when the ID header says something.
@@ -139,7 +140,7 @@ bool identify_card(const pd::IdStatus &st, const pd::VdmInfo &vdm, IdCard &out) 
     out = IdCard{};
     const pd::Identity &id = vdm.identity;
     if (st.state != pd::IdState::Done || !id.valid) return false;
-    put_cut(out.name, id.model ? id.model : !id.vendor.empty() ? id.vendor.c_str() : "Device", pd::kVendorMax);
+    put_cut(out.name, id.model ? id.model : !id.vendor.empty() ? id.vendor.c_str() : K2_P("Device"), pd::kVendorMax);
     put_cut(out.vendor, id.vendor.c_str(), pd::kVendorMax);
     if (st.revision) out.pd.put("PD ").put_u32(st.revision >> 28).put_char('.').put_u32((st.revision >> 24) & 0xF);
     uint32_t best = 0;
@@ -221,7 +222,7 @@ SetupView setup_view(Tool tool, const SetupState &st) {
         v.n = 2;
         v.check[0] = K2_P("Device seen"); v.met[0] = st.attached;
         v.check[1] = K2_P("Other empty"); v.met[1] = !st.inline_mode;
-        v.footer = !st.attached ? K2_P("Plug the device in") : st.inline_mode ? K2_P("Live sink: press twice") : "Ready";
+        v.footer = !st.attached ? K2_P("Plug the device in") : st.inline_mode ? K2_P("Live sink: press twice") : K2_P("Ready");
         break;
     case Tool::Emarker:
         v.bottom_role = "CBL";
@@ -245,7 +246,7 @@ SetupView setup_view(Tool tool, const SetupState &st) {
         v.check[1] = K2_P("PD caps read"); v.met[1] = st.caps_valid;
         v.check[2] = K2_P("Other empty"); v.met[2] = !st.inline_mode;
         v.footer = st.inline_mode ? K2_P("Unplug the other device") : !st.attached ? K2_P("Plug PD charger in")
-                 : !st.caps_valid ? K2_P("Charger gave no PD") : "Ready";
+                 : !st.caps_valid ? K2_P("Charger gave no PD") : K2_P("Ready");
         break;
     }
     return v;

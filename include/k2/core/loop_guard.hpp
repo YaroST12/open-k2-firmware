@@ -44,6 +44,7 @@
 #include <cstdint>
 
 #include "k2/core/rd_intent.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::loopguard {
 
@@ -66,15 +67,15 @@ inline constexpr std::uint32_t kResetMs = 1000;       // Hard Reset -> CC detach
 
 // The one line the lock shows: the Caution footer on every page while locked, PD Stress's refusal, the shell's lab refusal. The
 // charger test's Reason::Loop name is the same words (its pure table cannot include this header).
-inline constexpr const char* kLockText = "HID-cable loop: 5V lock";
+inline constexpr const char* kLockText = K2_P("HID-cable loop: 5V lock");
 
 enum class Reason : std::uint8_t { None, Certain, Suspected };
 constexpr const char* reason_name(Reason r) {
-    return r == Reason::Certain ? "certain" : r == Reason::Suspected ? "suspected" : "none";
+    return r == Reason::Certain ? K2_P("certain") : r == Reason::Suspected ? K2_P("suspected") : "none";
 }
 enum class Clear : std::uint8_t { None, Separate, Gone, Host };
 constexpr const char* clear_name(Clear c) {
-    return c == Clear::Separate ? "separate supply" : c == Clear::Gone ? "rail gone" : c == Clear::Host ? "host" : "none";
+    return c == Clear::Separate ? K2_P("separate supply") : c == Clear::Gone ? K2_P("rail gone") : c == Clear::Host ? "host" : "none";
 }
 
 // One sample. A negative reading = unknown (no ADC snapshot, no monitor): counted as absent, never as a loop.
@@ -157,7 +158,7 @@ private:
 
 enum class Action : std::uint8_t { None, Order5V, HardReset, Detach };
 constexpr const char* action_name(Action a) {
-    return a == Action::Order5V ? "5V order" : a == Action::HardReset ? "hard reset" : a == Action::Detach ? "detach" : "none";
+    return a == Action::Order5V ? K2_P("5V order") : a == Action::HardReset ? K2_P("hard reset") : a == Action::Detach ? K2_P("detach") : "none";
 }
 
 // The escalation once locked. update() every main-loop slot; the caller carries out the returned action.

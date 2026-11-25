@@ -3,6 +3,7 @@
 #include "k2/fastcharge/fastcharge_classify.hpp"
 
 #include <algorithm>
+#include "k2/core/strpack.hpp"
 
 namespace k2::fastcharge {
 
@@ -198,28 +199,28 @@ Protocol classify(const Ring& ring, int dp_mv, int dm_mv, int vbus_mv, bool pd_a
 const char* name(Protocol p) {
     switch (p) {
         case Protocol::Pending:   return "...";
-        case Protocol::NoInput:   return "NO INPUT";
-        case Protocol::NoQuick:   return "NO QUICK";
-        case Protocol::Dcp5V:     return "DCP 5V";
-        case Protocol::Qc3:       return "QC3.0";
-        case Protocol::Qc2_5V:    return "QC2.0 5V";
-        case Protocol::Qc2_9V:    return "QC2.0 9V";
-        case Protocol::Qc2_12V:   return "QC2.0 12V";
-        case Protocol::Qc2_20V:   return "QC2.0 20V";
-        case Protocol::AfcFcp:    return "AFC FCP";
+        case Protocol::NoInput:   return K2_P("NO INPUT");
+        case Protocol::NoQuick:   return K2_P("NO QUICK");
+        case Protocol::Dcp5V:     return K2_P("DCP 5V");
+        case Protocol::Qc3:       return K2_P("QC3.0");
+        case Protocol::Qc2_5V:    return K2_P("QC2.0 5V");
+        case Protocol::Qc2_9V:    return K2_P("QC2.0 9V");
+        case Protocol::Qc2_12V:   return K2_P("QC2.0 12V");
+        case Protocol::Qc2_20V:   return K2_P("QC2.0 20V");
+        case Protocol::AfcFcp:    return K2_P("AFC FCP");
         case Protocol::Scp:       return "SCP";
-        case Protocol::Apple24:   return "APPLE 2.4A";
-        case Protocol::Apple21:   return "APPLE 2.1A";
-        case Protocol::Apple10:   return "APPLE 1.0A";
-        case Protocol::Usb2Hi:    return "USB2.0 HI";
-        case Protocol::Usb11Low:  return "USB1.1 LOW";
-        case Protocol::Sam20:     return "SAM 2.0A";
-        case Protocol::VoocWarp:  return "VOOC WARP";
-        case Protocol::Svooc:     return "SVOOC";
-        case Protocol::PdPe:      return "PD PE";
-        case Protocol::PdMtk:     return "PD MTK";
+        case Protocol::Apple24:   return K2_P("APPLE 2.4A");
+        case Protocol::Apple21:   return K2_P("APPLE 2.1A");
+        case Protocol::Apple10:   return K2_P("APPLE 1.0A");
+        case Protocol::Usb2Hi:    return K2_P("USB2.0 HI");
+        case Protocol::Usb11Low:  return K2_P("USB1.1 LOW");
+        case Protocol::Sam20:     return K2_P("SAM 2.0A");
+        case Protocol::VoocWarp:  return K2_P("VOOC WARP");
+        case Protocol::Svooc:     return K2_P("SVOOC");
+        case Protocol::PdPe:      return K2_P("PD PE");
+        case Protocol::PdMtk:     return K2_P("PD MTK");
         case Protocol::Pd:        return "PD";
-        case Protocol::UsbData:   return "USB DATA";
+        case Protocol::UsbData:   return K2_P("USB DATA");
         case Protocol::PdLikely:  return "PD?";
     }
     return "?";
@@ -228,28 +229,28 @@ const char* name(Protocol p) {
 const char* short_name(Protocol p) {
     switch (p) {
         case Protocol::Pending:   return "...";
-        case Protocol::NoInput:   return "NO INPUT";
-        case Protocol::NoQuick:   return "NO QUICK";
-        case Protocol::Dcp5V:     return "DCP 5V";
-        case Protocol::Qc3:       return "QC3.0";
-        case Protocol::Qc2_5V:    return "QC2 5V";
-        case Protocol::Qc2_9V:    return "QC2 9V";
-        case Protocol::Qc2_12V:   return "QC2 12V";
-        case Protocol::Qc2_20V:   return "QC2 20V";
-        case Protocol::AfcFcp:    return "AFC FCP";
+        case Protocol::NoInput:   return K2_P("NO INPUT");
+        case Protocol::NoQuick:   return K2_P("NO QUICK");
+        case Protocol::Dcp5V:     return K2_P("DCP 5V");
+        case Protocol::Qc3:       return K2_P("QC3.0");
+        case Protocol::Qc2_5V:    return K2_P("QC2 5V");
+        case Protocol::Qc2_9V:    return K2_P("QC2 9V");
+        case Protocol::Qc2_12V:   return K2_P("QC2 12V");
+        case Protocol::Qc2_20V:   return K2_P("QC2 20V");
+        case Protocol::AfcFcp:    return K2_P("AFC FCP");
         case Protocol::Scp:       return "SCP";
-        case Protocol::Apple24:   return "APL 2.4A";
-        case Protocol::Apple21:   return "APL 2.1A";
-        case Protocol::Apple10:   return "APL 1.0A";
-        case Protocol::Usb2Hi:    return "USB2 HI";
-        case Protocol::Usb11Low:  return "USB1 LOW";
-        case Protocol::Sam20:     return "SAM 2.0A";
+        case Protocol::Apple24:   return K2_P("APL 2.4A");
+        case Protocol::Apple21:   return K2_P("APL 2.1A");
+        case Protocol::Apple10:   return K2_P("APL 1.0A");
+        case Protocol::Usb2Hi:    return K2_P("USB2 HI");
+        case Protocol::Usb11Low:  return K2_P("USB1 LOW");
+        case Protocol::Sam20:     return K2_P("SAM 2.0A");
         case Protocol::VoocWarp:  return "WARP";
-        case Protocol::Svooc:     return "SVOOC";
-        case Protocol::PdPe:      return "PD PE";
-        case Protocol::PdMtk:     return "PD MTK";
+        case Protocol::Svooc:     return K2_P("SVOOC");
+        case Protocol::PdPe:      return K2_P("PD PE");
+        case Protocol::PdMtk:     return K2_P("PD MTK");
         case Protocol::Pd:        return "PD";
-        case Protocol::UsbData:   return "USB DATA";
+        case Protocol::UsbData:   return K2_P("USB DATA");
         case Protocol::PdLikely:  return "PD?";
     }
     return "?";

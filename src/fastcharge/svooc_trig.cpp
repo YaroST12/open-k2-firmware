@@ -21,6 +21,7 @@
 #include "k2/fastcharge/fc_seq.hpp"
 #include "k2/fastcharge/fctrig.hpp"
 #include "k2/pd/link.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::svooc_trig {
 
@@ -312,7 +313,7 @@ svooc::Refusal start(bool confirmed, bool ports_busy, std::uint32_t cap_s, bool 
         if (claimed) dpsniff::hook_end();
         K2LOG("[SVOOC] refused: %s vbus=%dmV ibus=%dmA contract=%s inline=%s owners=0x%x%s\n", svooc::name(r), int(f.vbus_mv),
               int(f.ibus_ma), svooc::name(f.contract), pd::inline_cause_name(f.inline_cause), owners,
-              usb_a ? " (USB-A waiver asked)" : "");
+              usb_a ? K2_P(" (USB-A waiver asked)") : "");
         return r;
     }
     g_exit_pending = true;
@@ -336,7 +337,7 @@ svooc::Refusal start(bool confirmed, bool ports_busy, std::uint32_t cap_s, bool 
     const svooc::Params& ep = wire().responder().params();
     K2LOG("[SVOOC] start (no load) cap=%ums vbus=%dmV ibus=%dmA contract=%s inline=%s%s i86=%03X/%03X r82=%03X vtarget=%umV esc=%us profile=%s\n",
           unsigned(run_obj().report().cap_ms), int(f.vbus_mv), int(f.ibus_ma), svooc::name(f.contract),
-          pd::inline_cause_name(f.inline_cause), usb_a ? " far-sink check waived (USB-A)" : "",
+          pd::inline_cause_name(f.inline_cause), usb_a ? K2_P(" far-sink check waived (USB-A)") : "",
           // i86 = the run's first and last 0x86 answer (svooc::ask_word): Probe prints 00F/06D, not the Fixed default 005/005
           unsigned(svooc::ask_word(ep, 0)), unsigned(svooc::ask_word(ep, svooc::ask_count(ep) - 1)), unsigned(ep.r82),
           unsigned(ep.vtarget_mv), unsigned(ep.esc_at_s),

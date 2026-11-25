@@ -10,7 +10,7 @@
 namespace k2::qrshare {
 namespace {
 
-constexpr char kAlphabet[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:";
+constexpr char kAlphabet[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:";   // k2-plain: lookup table
 
 struct TagRow { Type type; const char* tag; };
 constexpr TagRow kTags[] = {

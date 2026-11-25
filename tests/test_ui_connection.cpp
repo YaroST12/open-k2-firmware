@@ -7,6 +7,7 @@
 #include <cstring>
 #include <string>
 #include "test_util.h"
+#include "k2/core/strpack.hpp"
 #include "k2/pd/pd_link.hpp"
 #include "k2/ui/ui_connection.hpp"
 
@@ -59,7 +60,8 @@ static void test_empty_states() {
     CHECK_STR(e(Tab::Source, Topology::Unknown).hint, "Use either port");
     {   // the empty Source tab is one line of 26 cells (the page paints the hint at 8 px advance in 224 - 16 px)
         std::array<std::string_view, 4> ln{};
-        CHECK_EQ(wrap(e(Tab::Source, Topology::NoSource).hint, 26, ln), 1);
+        char d[64];
+        CHECK_EQ(wrap(k2::strpack::unpack(e(Tab::Source, Topology::NoSource).hint, d), 26, ln), 1);
     }
     // The topology word alone no longer says "waiting": the classifier (Facts::wait) decides, see
     // test_source_tab_reads_the_waiting_classifier - with no verdict yet (Unknown) the tab says NO CHARGER.
@@ -86,8 +88,8 @@ static void test_empty_states() {
     for (int t = 0; t < kTabs; t++) {
         for (int o = 0; o < 4; o++) {
             const Empty em = e(static_cast<Tab>(t), static_cast<Topology>(o));
-            CHECK_EQ(std::strlen(em.title) <= 15, 1);
-            CHECK_EQ(std::strlen(em.hint) <= 26, 1);
+            CHECK_EQ(k2::strpack::cells_rt(em.title) <= 15, 1);   // packed copy: the decoded text
+            CHECK_EQ(k2::strpack::cells_rt(em.hint) <= 26, 1);
             CHECK_EQ(std::strstr(em.hint, "OK") == nullptr && std::strstr(em.hint, "START") == nullptr, 1);
         }
     }
@@ -123,8 +125,8 @@ static void test_empty_states_when_possibly_inline() {
             CHECK_EQ(std::strstr(em.title, "NO DEVICE") == nullptr, 1);
             CHECK_EQ(std::strstr(em.title, "NO CHARGER") == nullptr, 1);
             CHECK_EQ(std::strstr(em.hint, "bottom") == nullptr && std::strstr(em.hint, "top port") == nullptr, 1);
-            CHECK_EQ(std::strlen(em.title) <= 15, 1);
-            CHECK_EQ(std::strlen(em.hint) <= 26, 1);
+            CHECK_EQ(k2::strpack::cells_rt(em.title) <= 15, 1);   // packed copy: the decoded text
+            CHECK_EQ(k2::strpack::cells_rt(em.hint) <= 26, 1);
         }
     }
     CHECK_STR(e(Tab::Source, Topology::Unknown).title, "LINE IN USE");
@@ -317,7 +319,8 @@ static void test_source_tab_reads_the_waiting_classifier() {
     CHECK_EQ(std::strlen(ph.title) <= 18, 1);
     {   // the hint wraps into at most 4 lines of 27 cells
         std::array<std::string_view, 4> ln{};
-        const int n = wrap(ph.hint, 27, ln);
+        char d[64];
+        const int n = wrap(k2::strpack::unpack(ph.hint, d), 27, ln);
         CHECK_EQ(n >= 1 && n <= 4, 1);
     }
     CHECK_STR(empty_state(Tab::Source, facts(false, false, false, Topology::CableSingleCc, false, raguard::WaitKind::NoSource)).title,
@@ -331,8 +334,8 @@ static void test_sink_tab_dual_role_port() {
         const Empty em = empty_state(Tab::Sink, facts(false, false, false, o, false, raguard::WaitKind::DualRolePort));
         CHECK_STR(em.title, "DUAL-ROLE PORT");
         CHECK_STR(em.hint, "Ask to identify device");
-        CHECK_EQ(std::strlen(em.title) <= 15, 1);
-        CHECK_EQ(std::strlen(em.hint) <= 26, 1);
+        CHECK_EQ(k2::strpack::cells_rt(em.title) <= 15, 1);   // packed copy: the decoded text
+        CHECK_EQ(k2::strpack::cells_rt(em.hint) <= 26, 1);
         CHECK_EQ(std::strstr(em.hint, "OK") == nullptr && std::strstr(em.hint, "START") == nullptr, 1);
     }
     // inline_sink still wins over DualRolePort.
@@ -619,8 +622,8 @@ static void test_actions() {
         all.attached = all.caps_valid = all.cable_valid = true;
         const int c = actions(static_cast<Tab>(t), all, it);
         for (int i = 0; i < c; i++) {
-            CHECK_EQ(std::strlen(it[std::size_t(i)].label) <= 24, 1);
-            CHECK_EQ(std::strlen(it[std::size_t(i)].why) <= 24, 1);
+            CHECK_EQ(k2::strpack::cells_rt(it[std::size_t(i)].label) <= 24, 1);
+            CHECK_EQ(k2::strpack::cells_rt(it[std::size_t(i)].why) <= 24, 1);
         }
     }
 }

@@ -5,7 +5,9 @@
 
 #include <algorithm>
 
+#include "k2/core/strpack.hpp"
 #include "k2/pd/pd.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::pd {
 
@@ -34,6 +36,11 @@ struct LabelOut {
     }
     void str(const char* s) {
         while (*s) ch(*s++);
+    }
+    void text(const char* p) {   // a K2_P literal
+        char b[24];
+        const std::string_view v = strpack::unpack(p, b);
+        for (char c : v) ch(c);
     }
     void u(std::uint32_t v) {
         char t[10];
@@ -122,11 +129,11 @@ bool lim_unpack(std::span<const std::uint8_t, kLimPackBytes> in, LimConfig& c) {
 const char* lim_state_name(LimState s) {
     switch (s) {
         case LimState::Off: return "off";
-        case LimState::Armed: return "armed";
-        case LimState::Negotiating: return "negotiating";
-        case LimState::Pending: return "pending";
-        case LimState::Injected: return "injected";
-        case LimState::Limited: return "limited";
+        case LimState::Armed: return K2_P("armed");
+        case LimState::Negotiating: return K2_P("negotiating");
+        case LimState::Pending: return K2_P("pending");
+        case LimState::Injected: return K2_P("injected");
+        case LimState::Limited: return K2_P("limited");
     }
     return "?";
 }
@@ -134,15 +141,15 @@ const char* lim_state_name(LimState s) {
 const char* lim_why_name(LimWhy w) {
     switch (w) {
         case LimWhy::None: return "none";
-        case LimWhy::User: return "turned off";
-        case LimWhy::Detached: return "detached";
-        case LimWhy::Epr: return "EPR is not covered";
-        case LimWhy::Rate: return "too many lists";
-        case LimWhy::ChargerResets: return "the charger resets";
-        case LimWhy::SinkResets: return "the sink resets";
-        case LimWhy::SinkIgnores: return "the sink ignores it";
-        case LimWhy::NoFit: return "not on this charger";
-        case LimWhy::ChargerRefuses: return "the charger refuses re-offers";
+        case LimWhy::User: return K2_P("turned off");
+        case LimWhy::Detached: return K2_P("detached");
+        case LimWhy::Epr: return K2_P("EPR is not covered");
+        case LimWhy::Rate: return K2_P("too many lists");
+        case LimWhy::ChargerResets: return K2_P("the charger resets");
+        case LimWhy::SinkResets: return K2_P("the sink resets");
+        case LimWhy::SinkIgnores: return K2_P("the sink ignores it");
+        case LimWhy::NoFit: return K2_P("not on this charger");
+        case LimWhy::ChargerRefuses: return K2_P("the charger refuses re-offers");
     }
     return "?";
 }
@@ -150,8 +157,8 @@ const char* lim_why_name(LimWhy w) {
 const char* lim_refusal_name(LimRefusal r) {
     switch (r) {
         case LimRefusal::None: return "none";
-        case LimRefusal::BadLimit: return "limit outside 5..100 W";
-        case LimRefusal::Busy: return "another feature is running";
+        case LimRefusal::BadLimit: return K2_P("limit outside 5..100 W");
+        case LimRefusal::Busy: return K2_P("another feature is running");
     }
     return "?";
 }
@@ -163,6 +170,28 @@ LimRefusal lim_gate(const LimFacts& f, const LimConfig& cfg) {
 
 LimRefusal lim_gate(const LimFacts& f, std::uint32_t limit_mw) {
     return lim_gate(f, lim_config_watts(limit_mw));
+}
+
+std::size_t lim_fixed_note(const LimTech& t, std::span<char> out) {
+    LabelOut o{out.first(std::min(out.size(), kLimNoteMax))};
+    if (!t.enabled) {
+        o.text(K2_P("fixed offers left out"));
+        return o.n;
+    }
+    o.text(K2_P("fixed 5"));
+    const std::uint16_t top = t.max_mv ? t.max_mv : 20000;
+    if (top > 5000) {
+        o.ch('-');
+        o.tenth(top, 'V');
+    } else {
+        o.ch('V');
+    }
+    o.text(K2_P(" offers"));
+    if (t.max_ma) {
+        o.str(", ");
+        o.amps(t.max_ma);
+    }
+    return o.n;
 }
 
 std::size_t lim_label(const LimConfig& cfg, std::span<char> out) {
@@ -201,9 +230,9 @@ std::size_t lim_label(const LimConfig& cfg, std::span<char> out) {
         o.u(lim_watts(cfg.limit_mw));
         o.ch('W');
     } else if (f.enabled) {
-        o.volt_or_amp(f, "LIMIT");
+        o.volt_or_amp(f, "LIMIT");   // k2-plain: Out::str copies raw
     } else {
-        o.str("LIMIT");
+        o.str("LIMIT");   // k2-plain: Out::str copies raw
     }
     return o.n;
 }

@@ -22,6 +22,7 @@
 #include "k2/drivers/usb.hpp"
 #include "tusb.h"
 #include "k2/core/version.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::msc {
 namespace {
@@ -49,43 +50,43 @@ unsigned cap_mask() {
 
 const char* pdo_name(pd::PdoType t) {
     switch (t) {
-    case pd::PdoType::Fixed: return "fixed";
-    case pd::PdoType::Battery: return "battery";
-    case pd::PdoType::Variable: return "variable";
+    case pd::PdoType::Fixed: return K2_P("fixed");
+    case pd::PdoType::Battery: return K2_P("battery");
+    case pd::PdoType::Variable: return K2_P("variable");
     case pd::PdoType::Pps: return "pps";
     case pd::PdoType::Avs: return "avs";
-    default: return "unknown";
+    default: return K2_P("unknown");
     }
 }
 
 std::size_t render_status(void*, std::span<char> out) {
     TextBuf t(out);
-    t.put("K2 status at read time\r\n");
+    K2_TPUT(t, "K2 status at read time\r\n");
     if (const auto m = power::read()) {
-        t.put("vbus_mv: %d\r\ncurrent_ma: %d\r\npower_mw: %d\r\n", static_cast<int>(m->vbus_mv),
+        K2_TPUT(t, "vbus_mv: %d\r\ncurrent_ma: %d\r\npower_mw: %d\r\n", static_cast<int>(m->vbus_mv),
               static_cast<int>(m->current_ma), static_cast<int>(m->power_mw));
     } else {
-        t.put("power monitor: offline\r\n");
+        K2_TPUT(t, "power monitor: offline\r\n");
     }
     const pd::SourceCaps& c = fusb302::caps();
     if (c.valid) {
-        t.put("source caps: %u PDOs, PD spec rev %u, CC%u\r\n", static_cast<unsigned>(c.num_pdos),
+        K2_TPUT(t, "source caps: %u PDOs, PD spec rev %u, CC%u\r\n", static_cast<unsigned>(c.num_pdos),
               static_cast<unsigned>(c.spec_rev), static_cast<unsigned>(c.active_cc));
         for (unsigned i = 0; i < c.num_pdos && i < c.pdos.size(); i++) {
             const pd::Pdo& p = c.pdos[i];
-            t.put("pdo%u: %s %u-%u mV %u mA\r\n", i + 1, pdo_name(p.type), static_cast<unsigned>(p.min_mv),
+            K2_TPUT(t, "pdo%u: %s %u-%u mV %u mA\r\n", i + 1, pdo_name(p.type), static_cast<unsigned>(p.min_mv),
                   static_cast<unsigned>(p.max_mv), static_cast<unsigned>(p.max_ma));
         }
     } else {
-        t.put("source caps: none\r\n");
+        K2_TPUT(t, "source caps: none\r\n");
     }
     const pd::Emarker& e = fusb302::emarker();
     if (e.valid) {
-        t.put("cable: vid %04X pid %04X, %u A, %u V, %u W, %s\r\n", static_cast<unsigned>(e.vid),
+        K2_TPUT(t, "cable: vid %04X pid %04X, %u A, %u V, %u W, %s\r\n", static_cast<unsigned>(e.vid),
               static_cast<unsigned>(e.pid), static_cast<unsigned>(e.max_current_a),
               static_cast<unsigned>(e.max_voltage_v), static_cast<unsigned>(e.max_power_w), e.speed_str);
     } else {
-        t.put("cable: no e-marker read\r\n");
+        K2_TPUT(t, "cable: no e-marker read\r\n");
     }
     return t.size();
 }

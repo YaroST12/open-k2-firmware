@@ -21,6 +21,7 @@
 #include "k2/drivers/power_calc.hpp"
 #include <optional>
 #include <span>
+#include "k2/core/strpack.hpp"
 
 namespace k2::cable_r {
 
@@ -95,11 +96,11 @@ constexpr Grade grade(const std::optional<Estimate> &e) { return e ? grade(*e) :
 
 constexpr const char *grade_name(Grade g) {
     switch (g) {
-    case Grade::Excellent: return "EXCELLENT";
+    case Grade::Excellent: return K2_P("EXCELLENT");
     case Grade::Good:      return "GOOD";
     case Grade::Fair:      return "FAIR";
     case Grade::Poor:      return "POOR";
-    default:               return "WAITING FOR LOAD";
+    default:               return K2_P("WAITING FOR LOAD");
     }
 }
 
@@ -126,8 +127,8 @@ constexpr Grade grade(const std::optional<Kelvin> &k) { return k ? grade_mohm(k-
 // The two small-print lines under the readings, at most 21 characters each (16 px font, 240 px).
 // Passive: the figure still contains the K2's own path. Kelvin: the sense pairs leave it out.
 constexpr const char *note(Mode m, int line) {
-    if (m == Mode::Kelvin) return line == 0 ? "Sense wires: K2's own" : "path not included.";
-    return line == 0 ? "Passive: includes the" : "K2's own path.";
+    if (m == Mode::Kelvin) return line == 0 ? K2_P("Sense wires: K2's own") : K2_P("path not included.");
+    return line == 0 ? K2_P("Passive: includes the") : K2_P("K2's own path.");
 }
 
 // "200 m<Omega>" below one ohm, "1.25 <Omega>" up to 10, "12.3 <Omega>" above (UTF-8 U+03A9, in the 16 and

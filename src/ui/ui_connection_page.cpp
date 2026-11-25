@@ -254,6 +254,7 @@ void ConnectionPage::exit_actions() {
 }
 
 void ConnectionPage::leave() {
+    ctx_.keep.link_tab = static_cast<uint8_t>(tab_);
     if (view_ == View::Actions) ctx_.rows.detach();
     op_ = StrBuf<24>();
     op_until_ = 0;
@@ -302,7 +303,7 @@ Strip ConnectionPage::labels() const {
         return {{back, up, share ? sl::OpenShare : sl::Open, dn}};
     }
     if (view_ == View::Spec) {
-        return {{back, sl::Up, share ? sl::ActionsShare : sl::Actions, sl::Dn}};
+        return list_strip({{back, sl::Up, share ? sl::ActionsShare : sl::Actions, sl::Dn}}, first_, std::max(1, res_n_ - kPlaceRows + 1));
     }
     const int i = act_sel_;
     const bool valid = i >= 0 && i < n_items_;
@@ -311,11 +312,11 @@ Strip ConnectionPage::labels() const {
     const bool iq_confirm = tab_ == conn::Tab::Sink && valid && items_[static_cast<std::size_t>(i)].act == conn::Act::Identify &&
                             before(ctx_.now, iq_armed_until_);
     const sl::Id ok = (reset_confirm || iq_confirm) ? (share ? sl::ConfirmShare : sl::Confirm)
-                    : valid ? conn::act_slot(items_[static_cast<std::size_t>(i)].act, false, share)
+                    : valid ? sl::dim_if(conn::act_slot(items_[static_cast<std::size_t>(i)].act, false, share),
+                                         !items_[static_cast<std::size_t>(i)].enabled)   // a greyed row: its verb greys too
                     : share ? sl::ShareLong : sl::None;
-    const sl::Id up = i <= 0 ? sl::UpDim : sl::Up;
-    const sl::Id dn = i >= act_count() - 1 ? sl::DnDim : sl::Dn;
-    return {{back, up, ok, dn}};
+    Strip l = list_strip({{back, sl::Up, ok, sl::Dn}}, i, act_count());
+    return l;
 }
 
 bool ConnectionPage::on_event(Event e) {
@@ -462,16 +463,16 @@ void ConnectionPage::share_caps(uint32_t now_ms) {
     const pd::SourceCaps &caps = held::shown_caps();
     if (!caps.valid) { set_op(K2_P("No caps yet"), now_ms); return; }
     const std::size_t len = qrshare::records::pdcaps(caps, ctx_.ui->share_buffer());
-    ctx_.ui->open_share(qrshare::Type::PdCaps, qrshare::kSchemaPdCaps, "Source caps", len, now_ms);
+    ctx_.ui->open_share(qrshare::Type::PdCaps, qrshare::kSchemaPdCaps, "Source caps", len, now_ms);   // k2-plain: share title is memcpy'd
 }
 
 // The held cable as a share record (no quirk table: that belongs to a saved clone).
 void ConnectionPage::share_cable(uint32_t now_ms) {
     const pd::Emarker &em = held::cable_em();
     if (!em.valid || em.num_vdos < 5 || (em.spec_rev != 1 && em.spec_rev != 2)) { set_op(K2_P("No cable read"), now_ms); return; }
-    const emrec::Record rec = emrec::make({em.raw_vdos.data(), 5}, em.spec_rev, "Live cable");
-    const std::size_t len = qrshare::records::emarker(rec, "Live cable", nullptr, ctx_.ui->share_buffer());
-    ctx_.ui->open_share(qrshare::Type::Emarker, qrshare::kSchemaEmarker, "Live cable", len, now_ms);
+    const emrec::Record rec = emrec::make({em.raw_vdos.data(), 5}, em.spec_rev, K2_P("Live cable"));
+    const std::size_t len = qrshare::records::emarker(rec, K2_P("Live cable"), nullptr, ctx_.ui->share_buffer());
+    ctx_.ui->open_share(qrshare::Type::Emarker, qrshare::kSchemaEmarker, "Live cable", len, now_ms);   // k2-plain: share title is memcpy'd
 }
 
 void ConnectionPage::build_items() {
@@ -735,6 +736,7 @@ constexpr int kVisRows = kMaxList;   // row_sig_ capacity in ConnectionPage
 static_assert(conn::kStatusCells <= 27, "the survey texts fit the status buffer");
 // The Cable tab's Replied row: every orientation and table row fits the value column, and the 12 px key fits the
 // 48 px before it (6 px per cell) with a 4 px gap.
+// k2-plain-begin: constexpr fit checks over plain samples
 constexpr bool answered_rows_fit() {
     for (std::uint8_t o = 1; o <= 2; o++)
         for (std::size_t i = 0; i < emk_variant::kAttempts; i++)
@@ -752,6 +754,7 @@ constexpr bool cable_full_rows_fit() {
            std::string_view("Optical retimer").size() <= static_cast<std::size_t>(kValCells);
 }
 static_assert(cable_full_rows_fit(), "the Cable tab's full-read rows fit their columns");
+// k2-plain-end
 
 // A value row. `cut` > 0 splits the value there: the head in `c`, the tail (a current, or watts) in `ct`; so a "20/28V 5A" line
 // reads in unit colours. 0 = one colour.
@@ -841,11 +844,15 @@ void put_id(StrBuf<28> &v, uint16_t vid, uint16_t pid, const char *vendor) {
 
 // Appends `tag` only when it fits the value column whole.
 void put_if_fits(StrBuf<28> &v, std::string_view tag) {
+    char dec[24];
+    tag = strpack::unpack(tag, dec);   // measured below
     if (v.view().size() + tag.size() <= static_cast<std::size_t>(kValCells)) v.put(tag);
 }
 
 // Appends `tag` with a separating space when `v` is non-empty, only if it fits `kValCells`.
 void put_tag(StrBuf<28> &v, std::string_view tag) {
+    char dec[24];
+    tag = strpack::unpack(tag, dec);   // measured below
     if (v.view().empty()) {
         put_if_fits(v, tag);
         return;
@@ -894,7 +901,7 @@ void link_rows(Rows &R, const TabData &d) {
 // `vdm` is that side's own answers: the source's (fusb302::vdm) on the Source tab, the sink's (sink_vdm) on the Sink tab.
 void proto_row(Rows &R, const pd::VdmInfo &vdm) {
     StrBuf<kValCells + 1> t;   // protocol_text keeps whole names within what it is given
-    if (conn::protocol_text(std::span<const uint16_t>(vdm.svids.data(), vdm.num_svids), t)) R.add("Proto", kEnergy).put(t.view());
+    if (conn::protocol_text(std::span<const uint16_t>(vdm.svids.data(), vdm.num_svids), t)) R.add(K2_P("Proto"), kEnergy).put(t.view());
 }
 
 // One Line of the offer model as a row: volts in kVolt, the tail (a current, or the watts of an AVS) in its own colour.
@@ -948,8 +955,8 @@ void put_line(Rows &R, const offers::Line &l) {
     // The readout resets on detach, so the rows disappear with it.
     const pd::AppleInfo &ap = fusb302::apple_info();
     if (ap.valid) {
-        R.add("Apple", kEnergy).put(ap.product[0] ? ap.product.data() : ap.maker.data());
-        StrBuf<28> &fw = R.add("fw/hw", kText);
+        R.add(K2_P("Apple"), kEnergy).put(ap.product[0] ? ap.product.data() : ap.maker.data());
+        StrBuf<28> &fw = R.add(K2_P("fw/hw"), kText);
         fw.put("fw ").put(ap.fw.data());
         if (ap.hw[0]) fw.put(" hw ").put(ap.hw.data());
     }
@@ -960,14 +967,14 @@ void cable_full_rows(Rows &R, const pd::Emarker &em);
 [[gnu::noinline]] void cable_rows(Rows &R, const TabData &d) {
     const pd::Emarker &em = held::cable_em();
     put_id(R.add("ID"), em.vid, em.pid, em.vendor_str.c_str());
-    StrBuf<28> &sp = R.add("Speed", kText);
+    StrBuf<28> &sp = R.add(K2_P("Speed"), kText);
     char sb[24];
     pdtabs::speed_short(sb, em.speed_str ? em.speed_str : "?");
     sp.put(sb);
     // The lane and Thunderbolt / USB4 tags follow while they fit; the speed itself is always whole.
     if (em.is_active && em.vdo2_valid && em.usb_lanes == 2) put_if_fits(sp, " x2");
     if (em.vid == 0x8087 || held::cable_thunderbolt()) { if (sp.view().substr(0, 2) != "TB") put_if_fits(sp, " TB"); }
-    else if (em.usb4_supported && sp.view().substr(0, 4) != "USB4") put_if_fits(sp, " USB4");
+    else if (em.usb4_supported && sp.view().substr(0, 4) != "USB4") put_if_fits(sp, K2_P(" USB4"));
     put_a(R.add(K2_P("Current"), kAmp), uint32_t(em.max_current_a) * 1000);
     StrBuf<28> &volt = R.add(K2_P("Voltage"), kVolt);
     volt.put_u32(em.max_voltage_v).put_char('V').put_char(' ').put_u32(em.max_power_w).put_char('W');
@@ -975,7 +982,7 @@ void cable_full_rows(Rows &R, const pd::Emarker &em);
     StrBuf<28> &ty = R.add("Type", kText);
     ty.put(em.is_active ? K2_P("Active") : K2_P("Passive"));
     ty.put(em.type_c_plug ? K2_P(", Type-C") : K2_P(", captive"));
-    if (em.vconn_required) R.add("VCONN", kText).put(K2_P("required"));
+    if (em.vconn_required) R.add(K2_P("VCONN"), kText).put(K2_P("required"));
     if (d.cable_mohm >= 0) {
         char rb[16];
         cable_r::fmt_mohm(rb, static_cast<uint32_t>(d.cable_mohm));
@@ -1015,7 +1022,7 @@ void cable_active_rows(Rows &R, const pd::Emarker &em) {
     const bool v13 = em.vdo_version >= 3;
     const cable_full::ActiveExtra x = cable_full::decode_active_extra(em.raw_vdos[5], v13);
     if (v13) {
-        StrBuf<28> &b = R.add("Build", kText);
+        StrBuf<28> &b = R.add(K2_P("Build"), kText);
         b.put(x.optical ? K2_P("Optical") : K2_P("Copper")).put(x.retimer ? K2_P(" retimer") : K2_P(" redriver"));
         if (em.optical_isolated) put_if_fits(b, " iso");
     }
@@ -1023,20 +1030,20 @@ void cable_active_rows(Rows &R, const pd::Emarker &em) {
     if (x.usb2) u.put("USB2");
     if (x.usb32) put_tag(u, "USB3");
     if (em.usb4_supported) put_tag(u, "USB4");
-    StrBuf<28> &l = R.add("Lanes", kText);
-    l.put_u32(em.usb_lanes).put(em.usb_lanes == 1 ? " lane" : K2_P(" lanes")).put(em.usb_gen2 ? K2_P(" Gen2+") : " Gen1");
+    StrBuf<28> &l = R.add(K2_P("Lanes"), kText);
+    l.put_u32(em.usb_lanes).put(em.usb_lanes == 1 ? K2_P(" lane") : K2_P(" lanes")).put(em.usb_gen2 ? K2_P(" Gen2+") : K2_P(" Gen1"));
     if (x.hub_hops) {
         const char hub[] = {' ', 'h', 'u', 'b', ' ', static_cast<char>('0' + x.hub_hops), 0};   // hops are 1..3
         put_if_fits(l, hub);
     }
-    if (x.asym) put_if_fits(l, " asym");
+    if (x.asym) put_if_fits(l, K2_P(" asym"));
 }
 
 // What a plug answered after its identity: SVIDs, then the decoded Thunderbolt and DisplayPort modes or raw words.
 // SOP'' (`second`) keeps raw words and the "2" keys.
 void cable_plug_rows(Rows &R, const cable_full::Plug &p, bool second) {
     if (p.svids_ack) {
-        StrBuf<28> &v = R.add(second ? K2_P("SVIDs 2") : "SVIDs", kText);
+        StrBuf<28> &v = R.add(second ? K2_P("SVIDs 2") : K2_P("SVIDs"), kText);
         if (p.nsvid) put_svid_list(v, p.svid.data(), p.nsvid);
         else v.put("none");
     }
@@ -1051,8 +1058,8 @@ void cable_plug_rows(Rows &R, const cable_full::Plug &p, bool second) {
             v.put(cable_full::tbt_speed_text(t.speed)).put(t.active ? K2_P(" active") : K2_P(" passive"));
             if (t.rounded) put_if_fits(v, " rnd");
             StrBuf<28> e;
-            if (t.optical) put_tag(e, "optical");
-            if (t.retimer) put_tag(e, "retimer");
+            if (t.optical) put_tag(e, K2_P("optical"));
+            if (t.retimer) put_tag(e, K2_P("retimer"));
             if (t.uni_training) put_tag(e, "uni");
             if (!e.view().empty()) R.add(K2_P("TBT ext"), kText).put(e.view());
         } else {
@@ -1082,7 +1089,7 @@ void cable_full_rows(Rows &R, const pd::Emarker &em) {
 
 void sink_pdo_rows(Rows &R, std::span<const uint32_t> sink) {
     auto emit = [&R](const offers::Line &l) { put_line(R, l); };
-    offers::FixedRun run("Fixed");
+    offers::FixedRun run(K2_P("Fixed"));
     for (uint32_t raw : sink) {
         const pd::Pdo p = pd::decode_pdo(raw);
         if (p.type == pd::PdoType::Fixed) run.add(p, kValCells, emit);
@@ -1164,7 +1171,7 @@ void sink_pdo_rows(Rows &R, std::span<const uint32_t> sink) {
 void vooc_row(Rows &R, uint32_t note) {
     if (!note) return;
     StrBuf<28> &v = R.add("VOOC", kDim);
-    v.put("0x82 ");
+    v.put(K2_P("0x82 "));
     const uint32_t w = note & 0xFFFFu;
     if (w == vooc::kNoReply) v.put("-");
     else v.put("0x").put_hex(w, 3).put(" raw");
@@ -1242,7 +1249,7 @@ void put_dwh(StrBuf<28> &v, uint16_t dwh) {
             b.put_u32(nb).put("bat");
             put_tag(sv, b.view());
         }
-        if (load_step & 1u) put_tag(sv, "500mA/us");
+        if (load_step & 1u) put_tag(sv, K2_P("500mA/us"));
         if (!sv.view().empty()) R.add("Sink", kText).put(sv.view());
     }
 
@@ -1336,7 +1343,7 @@ void put_dwh(StrBuf<28> &v, uint16_t dwh) {
     else if (fusb302::sink_vdm().num_svids > 0) { svids = fusb302::sink_vdm().svids.data(); n_svids = fusb302::sink_vdm().num_svids; }
     else if (id_cur && fusb302::vdm().num_svids > 0) { svids = fusb302::vdm().svids.data(); n_svids = fusb302::vdm().num_svids; }
     if (n_svids > 0) {
-        StrBuf<28> &v = R.add("SVIDs", kDim);
+        StrBuf<28> &v = R.add(K2_P("SVIDs"), kDim);
         for (unsigned i = 0; i < n_svids; i++) {
             const bool last = i + 1 == n_svids;
             const std::size_t need = (i ? 1 : 0) + 4 + (last ? 0 : 2);
@@ -1352,8 +1359,8 @@ void put_dwh(StrBuf<28> &v, uint16_t dwh) {
     // EPR_Sink_Capabilities count (from inline interrogation).
     if (iq_ok && iq.num_epr_pdos > 0) {
         StrBuf<28> &v = R.add("EPR", kText);
-        v.put_u32(iq.num_epr_pdos).put(iq.num_epr_pdos == 1 ? " PDO" : " PDOs");
-        if (iq.epr_partial) put_if_fits(v, " (part)");
+        v.put_u32(iq.num_epr_pdos).put(iq.num_epr_pdos == 1 ? " PDO" : K2_P(" PDOs"));
+        if (iq.epr_partial) put_if_fits(v, K2_P(" (part)"));
     }
 }
 
@@ -1383,7 +1390,7 @@ void put_dwh(StrBuf<28> &v, uint16_t dwh) {
     }
     if (r.request_seen) {
         put_request(R.add(K2_P("Request"), kAmp), r, *d.caps);
-        StrBuf<28> &st = R.add("State", kDim);
+        StrBuf<28> &st = R.add(K2_P("State"), kDim);
         st.put(request_state_name(fusb302::contract()));
         StrBuf<32> fl;
         const std::size_t room = st.view().size() + 2 < static_cast<std::size_t>(kValCells) ? kValCells - st.view().size() - 2 : 0;
@@ -1414,7 +1421,7 @@ void word_row(Rows &R, const char *key, pd::SvField f) {
     const pd::SourceCaps &caps = held::shown_caps();
     if (caps.valid) {
         StrBuf<28> &v = R.add("Caps", kText);
-        v.put_u32(caps.num_pdos).put(caps.num_pdos == 1 ? " PDO" : " PDOs");
+        v.put_u32(caps.num_pdos).put(caps.num_pdos == 1 ? " PDO" : K2_P(" PDOs"));
         if (caps.epr) put_if_fits(v, " EPR");
     } else word_row(R, "Caps", pd::SvField::Caps);
 
@@ -1433,13 +1440,13 @@ void word_row(Rows &R, const char *key, pd::SvField f) {
     } else word_row(R, "Ext", pd::SvField::CapsExt);
 
     const pd::VdmInfo &vdm = fusb302::vdm();
-    if (vdm.num_svids > 0) put_svid_list(R.add("SVIDs", kText), vdm.svids.data(), vdm.num_svids);
-    else word_row(R, "SVIDs", pd::SvField::Svids);
+    if (vdm.num_svids > 0) put_svid_list(R.add(K2_P("SVIDs"), kText), vdm.svids.data(), vdm.num_svids);
+    else word_row(R, K2_P("SVIDs"), pd::SvField::Svids);
 
     if (vdm.num_modes > 0) {
-        StrBuf<28> &v = R.add("Modes", kText);
-        v.put_hex(vdm.modes_svid, 4).put(": ").put_u32(vdm.num_modes).put(vdm.num_modes == 1 ? " mode" : K2_P(" modes"));
-    } else word_row(R, "Modes", pd::SvField::Modes);
+        StrBuf<28> &v = R.add(K2_P("Modes"), kText);
+        v.put_hex(vdm.modes_svid, 4).put(": ").put_u32(vdm.num_modes).put(vdm.num_modes == 1 ? K2_P(" mode") : K2_P(" modes"));
+    } else word_row(R, K2_P("Modes"), pd::SvField::Modes);
 }
 
 // What the Details page and the status line read from the survey and the extended answers, hashed for the paint signatures.
@@ -1678,7 +1685,7 @@ void add_soc_chip(Ident &id, const pd::BatteryCaps &bat, const pd::BatteryStatus
             if (sb[0] && sb[0] != '?') id.add(sb, Ident::Outline);
         }
         put_line_id(id.line, em.vid, em.pid, em.vendor_str.c_str());
-        const std::string_view kind = em.is_active ? std::string_view(", active") : std::string_view(", passive");
+        const std::string_view kind = em.is_active ? std::string_view(", active") : std::string_view(", passive");   // k2-plain: size() measured
         if (id.line.size() + kind.size() <= kit::kIdLineCells) id.line.put(kind);
         return;
     }
@@ -1741,7 +1748,7 @@ void add_soc_chip(Ident &id, const pd::BatteryCaps &bat, const pd::BatteryStatus
             const pd::BatteryStatus &bst = iq.battery_status.valid ? iq.battery_status : ext.battery_status;
             add_soc_chip(id, bat, bst, false);
         }
-        id.line.put("Asks ").put_u32(r.want_mw / 1000).put("W of ").put_u32(r.src_max_mw / 1000).put(K2_P("W offered"));
+        id.line.put(K2_P("Asks ")).put_u32(r.want_mw / 1000).put(K2_P("W of ")).put_u32(r.src_max_mw / 1000).put(K2_P("W offered"));
         return;
     }
     }
@@ -1920,8 +1927,8 @@ void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
         grp_ma = p.max_ma;
     }
     flush();
-    if (pps) put_slice_if_fits(out, out.view().empty() ? "PPS" : " +PPS");
-    if (avs) put_slice_if_fits(out, out.view().empty() ? "AVS" : " +AVS");
+    if (pps) put_slice_if_fits(out, out.view().empty() ? "PPS" : K2_P(" +PPS"));
+    if (avs) put_slice_if_fits(out, out.view().empty() ? "AVS" : K2_P(" +AVS"));
 }
 
 [[gnu::noinline]] void build_slice_charger(SliceSpec &sl, const TabData &d, const conn::Facts &f,
@@ -1955,7 +1962,7 @@ void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
         if (src == pd::OfferSource::Sniffed && f.inline_sink && max_ma > 0 && max_ma <= 3000u) {
             sl.add_chip("3A?", SliceSpec::Warn);
         } else if (caps.epr) {
-            sl.add_chip("PD3.1", SliceSpec::Solid);
+            sl.add_chip(K2_P("PD3.1"), SliceSpec::Solid);
         } else if (caps.spec_rev == 1 || caps.spec_rev == 2) {
             sl.add_chip(pd::wire_revision_name(caps.spec_rev), SliceSpec::Solid);
         }
@@ -2036,11 +2043,11 @@ void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
     };
     if (verdict == pd::PdVerdict::None && none_why == pd::PdNoneWhy::SourceNeverOffered) {
         if (d.vbus_mv >= 1000 && rp_ma > 0) {
-            put_rp_live("NO PD", " \xC2\xB7 No PD offers", nullptr);
+            put_rp_live(K2_P("NO PD"), " \xC2\xB7 No PD offers", nullptr);
             if (!put_legacy_fc()) sl.l2.put(text::conn::kNoPdNeverL);
             return;
         }
-        sl.head.put("No PD");
+        sl.head.put(K2_P("No PD"));
         sl.l1.put(text::conn::kNoPdNeverL);
         StrBuf<28> tc;
         typec_row_text(d.vbus_mv, rp_ma, tc);
@@ -2066,13 +2073,13 @@ void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
         sl.l1.put(text::conn::kFlipL);
     } else if (conn::source_asleep(f)) {
         sl.dim = false;
-        sl.head.put("Ready");
+        sl.head.put(K2_P("Ready"));
         sl.add_chip(K2_P("ASLEEP"), SliceSpec::Ok);
         sl.l1.put(text::conn::kSliceReadyL1);
         sl.l2.put(K2_P("Open to wake or test"));
     } else if (f.wait == raguard::WaitKind::ChargerWaiting) {
         sl.dim = false;
-        sl.head.put("Ready");
+        sl.head.put(K2_P("Ready"));
         sl.add_chip("WAIT", SliceSpec::Ok);
         sl.l1.put(text::conn::kSliceReadyL1);
         sl.l2.put(K2_P("Open to read or test"));
@@ -2100,7 +2107,7 @@ void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
     if (em.valid) {
         if (cable_w > 0) sl.head.put_u32(cable_w).put_char('W');
         else sl.head.put_u32(em.max_voltage_v).put("V ").put_u32(em.max_current_a).put_char('A');
-        if (cable_limits) sl.add_chip("LIMIT", SliceSpec::Warn);
+        if (cable_limits) sl.add_chip(K2_P("LIMIT"), SliceSpec::Warn);
         if (d.cable_mohm >= 0) {
             StrBuf<10> rc;
             put_mohm_chip(rc, d.cable_mohm);
@@ -2137,7 +2144,7 @@ void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
     }
     if (f.cable_fact == cablefact::Fact::NoChip) {
         sl.head.put("60W");
-        sl.add_chip(cable_limits ? "LIMIT" : "PLAIN", cable_limits ? SliceSpec::Warn : SliceSpec::Neutral);
+        sl.add_chip(cable_limits ? K2_P("LIMIT") : K2_P("PLAIN"), cable_limits ? SliceSpec::Warn : SliceSpec::Neutral);
         if (d.cable_mohm >= 0) {
             StrBuf<10> rc;
             put_mohm_chip(rc, d.cable_mohm);
@@ -2203,9 +2210,9 @@ void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
                 }
             }
         } else if (r.src_max_mw > 0) {
-            sl.l1.put("Asks ").put_u32((mw + 500u) / 1000u).put("W of ").put_u32((r.src_max_mw + 500u) / 1000u).put(K2_P("W offered"));
+            sl.l1.put(K2_P("Asks ")).put_u32((mw + 500u) / 1000u).put(K2_P("W of ")).put_u32((r.src_max_mw + 500u) / 1000u).put(K2_P("W offered"));
         } else {
-            sl.l1.put("Asks ").put_u32((mw + 500u) / 1000u).put_char('W');
+            sl.l1.put(K2_P("Asks ")).put_u32((mw + 500u) / 1000u).put_char('W');
         }
         const pd::Identity &sid = fusb302::sink_vdm().identity;
         const pd::Identity &iqid = d.iq_ok ? fusb302::interrogate_status().id : pd::Identity{};
@@ -2587,7 +2594,7 @@ void ConnectionPage::row_fn(void *ctx, int index, bool focused, kit::RowSpec &ou
         const bool armed = before(p->ctx_.now, p->reset_armed_until_);
         if (armed) {
             out.text_color = kCaution;
-            out.tail = std::string_view("ARMED");
+            out.tail = K2_PSV("ARMED");
             out.tail_color = kCaution;
             out.tail_tint = kCautionT;
             if (focused) out.note = text::conn::kNoteResetArmed;
@@ -2652,7 +2659,8 @@ void ConnectionPage::paint_status(uint32_t now_ms) {
     } else if (row && row->act == conn::Act::Bench && !before(now_ms, op_until_)) {   // the focused tool's note
         const bench::Acts b = bench::actions(conn::place_of(tab_));
         if (row->arg >= 0 && row->arg < b.n) {   // the note in footer voice: a sentence
-            const std::string_view hint = bench::act_hint(b.a[row->arg]);
+            char dec[64];   // decoded first: the first letter is capitalised, a packed string cannot be sliced
+            const std::string_view hint = strpack::unpack(bench::act_hint(b.a[row->arg]), dec);
             if (!hint.empty()) txt.put_char(hint[0] >= 'a' && hint[0] <= 'z' ? static_cast<char>(hint[0] - 'a' + 'A') : hint[0]).put(hint.substr(1));
         }
     } else if (tab_ == conn::Tab::Sink && fusb302::interrogate_running()) {

@@ -16,7 +16,7 @@ namespace k2 {
 namespace {
 // Header: S12 keys at x28, S16 values at x112 (13 chars, to x216).
 constexpr kit::KvLayout kSpKv{kit::kBodyY, kit::kRowH, kit::kTextX, &kLabelFont, nullptr, 112, 13, Align::Left};
-constexpr std::string_view kSpKeys[SpoofPage::kHeaderRows] = {"State", K2_PSV("Asked/Replied")};
+constexpr std::string_view kSpKeys[SpoofPage::kHeaderRows] = {K2_PSV("State"), K2_PSV("Asked/Replied")};
 static_assert(all_fit_p(kSpKeys, kLabelAdv, 112 - kit::kTextX - 4), "a spoof key is wider than its column");
 }  // namespace
 
@@ -96,8 +96,8 @@ bool SpoofPage::on_event(Event e) {
 }
 
 Strip SpoofPage::labels() const {
-    Strip l = list_strip(base_labels());
     const CableIdentityList &cl = ctx_.cables;
+    Strip l = list_strip(base_labels(), sel_, cl.count());
     const ctcable::Choice c = cl.choice_at(sel_);
     sl::Id ok = sl::Arm;
     if (c.kind == ctcable::Kind::Off) ok = emk_spoof::active() ? sl::Disarm : cl.selected().kind != ctcable::Kind::Off ? sl::Off : sl::None;
@@ -122,7 +122,7 @@ void SpoofPage::paint_header(bool armed, uint32_t req, uint32_t rep) {
     const Surface &c = ctx_.content;
     StrBuf<24> cnt;
     spoof_counts_text(req, rep, cnt);
-    kit::kv_row(c, kSpKv, kit::kv_row_y(kSpKv, 0), kSpKeys[0], armed ? "ARMED"sv : "OFF"sv, armed ? kCaution : kDim);
+    kit::kv_row(c, kSpKv, kit::kv_row_y(kSpKv, 0), kSpKeys[0], armed ? K2_PSV("ARMED") : "OFF"sv, armed ? kCaution : kDim);
     kit::kv_row(c, kSpKv, kit::kv_row_y(kSpKv, 1), kSpKeys[1], cnt.view(), req ? kText : kDim);
 }
 

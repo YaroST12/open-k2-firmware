@@ -10,6 +10,7 @@
 #include "ramflash.hpp"
 #include "k2/core/fs.hpp"
 #include "k2/core/fmt.hpp"
+#include "k2/core/strpack.hpp"
 #include "ui_stubs.h"
 #include "k2/core/bbpersist.hpp"
 #include "k2/core/eekeep.hpp"
@@ -799,7 +800,7 @@ StatsSnapshot stats_snapshot() { return {stats.resets, stats.isrs, stats.log_sen
 bool configured() { return g_stub.usb_configured; }
 bool host_active() { return g_stub.usb_configured; }   // configured and awake: the stand-in never suspends
 void poll() { g_stub.polls++; }
-void log(std::string_view) {}
+void log(std::string_view m) { strpack::expect_plain(m); }   // the device sends these bytes as they are
 void log_fmt(const char* fmt, ...) {
     // K2LOG on the host formats the text directly: keep it, so tests can assert on log lines (capped, they look at the tail).
     char buf[256];

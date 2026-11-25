@@ -376,11 +376,11 @@ K2_HOT void paint_texts(const Surface &s, Box ground, const TextRun *runs, int n
 K2_HOT uint32_t RowList::row_sig_cb(void *ctx, int index) {
     auto *self = static_cast<RowList *>(ctx);
     RowSpec r;
-    const bool focused = index == self->sel_;
+    const bool focused = index == self->lit();
     self->fn_(self->ctx_, index, focused, r);
     uint32_t h = mix_u32(static_cast<uint32_t>(r.marker) | (static_cast<uint32_t>(r.state) << 4) |
                        (static_cast<uint32_t>(r.icon) << 8) | (static_cast<uint32_t>(r.chevron) << 16) |
-                       (static_cast<uint32_t>(focused) << 17) | (static_cast<uint32_t>(self->muted_) << 18) |
+                       (static_cast<uint32_t>(focused) << 17) |
                        (static_cast<uint32_t>(r.section_before) << 19));
     h = mix_u32(h, r.marker_color | (static_cast<uint32_t>(r.text_color) << 16));
     h = mix_u32(h, r.tail_color | (static_cast<uint32_t>(r.tail_tint) << 16));
@@ -397,16 +397,15 @@ K2_HOT void RowList::draw_row_cb(void *ctx, int index, const Rect &r, bool hi, F
     RowSpec sp;
     self->fn_(self->ctx_, index, hi, sp);
     const int16_t y = r.y;
-    const bool muted = hi && self->muted_;
-    const uint16_t bg = muted ? kBg2 : hi ? kFocusFill : kBg;
+    const uint16_t bg = hi ? kFocusFill : kBg;
     const bool bar = hi && kFocusBar != 0;
-    const uint16_t bar_col = muted ? kInk3 : kFocusBar;
+    const uint16_t bar_col = kFocusBar;
     if (hi && !bar) {
         sp.text_color = kOnFocus;
         if (!sp.tail_tint) sp.tail_color = kOnFocusDim;
         if (sp.marker != Marker::Verdict) sp.marker_color = kOnFocus;
     } else if (hi && sp.marker == Marker::Icon && sp.marker_color == 0) {
-        sp.marker_color = muted ? kInk2 : kAccent;
+        sp.marker_color = kAccent;
     }
     if (hi) {   // blocked / placeholder ink3 all but vanishes on the focus fill: the focus-dim ink reads there
         if (sp.text_color == kInk3) sp.text_color = kOnFocusDim;
@@ -488,7 +487,8 @@ K2_HOT void RowList::draw_row_cb(void *ctx, int index, const Rect &r, bool hi, F
 K2_HOT void RowList::draw(uint32_t now_ms, PaintBudget *bg) {
     if (!fn_) { if (bg) bg->defer(); return; }
     list_.set_count(count_, false);
-    list_.set_highlight(sel_);
+    const int lit_row = lit();
+    list_.set_highlight(lit_row);
     const ListState &st = list_.state();
     if (sel_ >= 0 && sel_ < count_) {
         int off = st.offset;
@@ -497,16 +497,16 @@ K2_HOT void RowList::draw(uint32_t now_ms, PaintBudget *bg) {
         list_.set_offset(off);
     }
     int16_t want = 0;
-    if (sel_ >= 0 && sel_ < count_) {
+    if (lit_row >= 0 && lit_row < count_) {
         RowSpec probe;
-        fn_(ctx_, sel_, true, probe);
+        fn_(ctx_, lit_row, true, probe);
         if (!probe.note.empty()) want = kFocusExtra;
     }
     if (want != extra_) {
         const bool known = extra_ >= 0;
         if (want < kFocusExtra && bg && !bg->admit(static_cast<int>(surf_.w) * (kFocusExtra - want), true)) return;
         list_.set_focus_extra(want);
-        if (known) list_.invalidate();
+        if (known) list_.invalidate_bar();   // the rows below the focus moved: ListView repaints them by position
         if (want < kFocusExtra)
             gfx_fill(surf_, 0, static_cast<int16_t>(y_ + st.visible * kRowH + want), surf_.w,
                      static_cast<int16_t>(kFocusExtra - want), kBg);

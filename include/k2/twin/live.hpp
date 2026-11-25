@@ -50,6 +50,7 @@
 #include "k2/twin/library.hpp"
 #include "k2/twin/predict.hpp"
 #include "k2/twin/twin.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::twin::live {
 
@@ -73,47 +74,47 @@ enum class Refusal : std::uint8_t { None, NeedConfirm, Busy, Inline, NoMonitor, 
 
 constexpr const char* name(Verdict v) {
     switch (v) {
-        case Verdict::None: return "not run";
-        case Verdict::Granted: return "granted";
-        case Verdict::Refused: return "refused";
-        case Verdict::NoPsRdy: return "no PS_RDY";
-        case Verdict::OutOfBand: return "out of band";
-        case Verdict::NoCaps: return "no list";
-        case Verdict::Reset: return "link reset";
-        case Verdict::Unsafe: return "overvoltage";
-        case Verdict::Skipped: return "skipped";
-        case Verdict::Cancelled: return "cancelled";
+        case Verdict::None: return K2_P("not run");
+        case Verdict::Granted: return K2_P("granted");
+        case Verdict::Refused: return K2_P("refused");
+        case Verdict::NoPsRdy: return K2_P("no PS_RDY");
+        case Verdict::OutOfBand: return K2_P("out of band");
+        case Verdict::NoCaps: return K2_P("no list");
+        case Verdict::Reset: return K2_P("link reset");
+        case Verdict::Unsafe: return K2_P("overvoltage");
+        case Verdict::Skipped: return K2_P("skipped");
+        case Verdict::Cancelled: return K2_P("cancelled");
     }
     return "?";
 }
 constexpr const char* name(Skip s) {
     switch (s) {
         case Skip::None: return "";
-        case Skip::NoPrediction: return "nothing usable";
-        case Skip::AboveCeiling: return "above the monitor ceiling";
-        case Skip::RequestRefused: return "request not buildable";
-        case Skip::NoTwin: return "twin unreadable";
+        case Skip::NoPrediction: return K2_P("nothing usable");
+        case Skip::AboveCeiling: return K2_P("above the monitor ceiling");
+        case Skip::RequestRefused: return K2_P("request not buildable");
+        case Skip::NoTwin: return K2_P("twin unreadable");
     }
     return "?";
 }
 constexpr const char* name(Refusal r) {
     switch (r) {
         case Refusal::None: return "ok";
-        case Refusal::NeedConfirm: return "confirm needed";
+        case Refusal::NeedConfirm: return K2_P("confirm needed");
         case Refusal::Busy: return "busy";
-        case Refusal::Inline: return "link inline";
-        case Refusal::NoMonitor: return "no power monitor";
-        case Refusal::NoSource: return "no charger";
-        case Refusal::NoTwins: return "no twins";
+        case Refusal::Inline: return K2_P("link inline");
+        case Refusal::NoMonitor: return K2_P("no power monitor");
+        case Refusal::NoSource: return K2_P("no charger");
+        case Refusal::NoTwins: return K2_P("no twins");
     }
     return "?";
 }
 constexpr const char* name(Reason r) {
     switch (r) {
         case Reason::Done: return "done";
-        case Reason::Cancelled: return "cancelled";
-        case Reason::Busy: return "ports taken";
-        case Reason::NoOffer: return "no offer";
+        case Reason::Cancelled: return K2_P("cancelled");
+        case Reason::Busy: return K2_P("ports taken");
+        case Reason::NoOffer: return K2_P("no offer");
     }
     return "?";
 }

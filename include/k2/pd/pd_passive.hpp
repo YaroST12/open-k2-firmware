@@ -7,6 +7,7 @@
 
 #include "k2/core/bss_zero.hpp"
 #include "k2/pd/pd_spec_timing.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::pd {
 
@@ -38,9 +39,9 @@ constexpr bool sink_present(std::int32_t cc_mv) {
 enum class DetachReason : std::uint8_t { None, Vbus, Cc, Sink };
 inline const char* detach_reason_name(DetachReason r) {
     switch (r) {
-        case DetachReason::Vbus: return "VBUS low";
-        case DetachReason::Cc: return "no Rp on the active line";
-        case DetachReason::Sink: return "the sink left (inline)";
+        case DetachReason::Vbus: return K2_P("VBUS low");
+        case DetachReason::Cc: return K2_P("no Rp on the active line");
+        case DetachReason::Sink: return K2_P("the sink left (inline)");
         default: return "none";
     }
 }
@@ -157,9 +158,9 @@ constexpr TriggerRefusal can_trigger(const TriggerFacts& f) {
 }
 constexpr const char* trigger_refusal_name(TriggerRefusal r) {
     switch (r) {
-        case TriggerRefusal::Inline: return "link inline";
-        case TriggerRefusal::SinkRd: return "sink Rd on the other port";
-        case TriggerRefusal::ForeignRequest: return "request from another sink";
+        case TriggerRefusal::Inline: return K2_P("link inline");
+        case TriggerRefusal::SinkRd: return K2_P("sink Rd on the other port");
+        case TriggerRefusal::ForeignRequest: return K2_P("request from another sink");
         case TriggerRefusal::None: break;
     }
     return "none";
@@ -267,13 +268,13 @@ constexpr HandbackVerdict handback_verdict(const HandbackFacts& f, bool flag_con
 }
 constexpr const char* handback_verdict_name(HandbackVerdict v) {
     switch (v) {
-    case HandbackVerdict::Allowed: return "allowed";
-    case HandbackVerdict::RefusedBusy: return "charger test running";
-    case HandbackVerdict::NeedConfirm: return "confirm needed";
-    case HandbackVerdict::RefusedNotInline: return "not inline";
-    case HandbackVerdict::RefusedNoContract: return "no contract owned";
-    case HandbackVerdict::RefusedFarRequest: return "far sink Request seen this attach";
-    case HandbackVerdict::RefusedAgain: return "already handed back this attach";
+    case HandbackVerdict::Allowed: return K2_P("allowed");
+    case HandbackVerdict::RefusedBusy: return K2_P("charger test running");
+    case HandbackVerdict::NeedConfirm: return K2_P("confirm needed");
+    case HandbackVerdict::RefusedNotInline: return K2_P("not inline");
+    case HandbackVerdict::RefusedNoContract: return K2_P("no contract owned");
+    case HandbackVerdict::RefusedFarRequest: return K2_P("far sink Request seen this attach");
+    case HandbackVerdict::RefusedAgain: return K2_P("already handed back this attach");
     }
     return "?";
 }

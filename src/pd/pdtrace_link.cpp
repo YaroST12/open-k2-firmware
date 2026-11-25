@@ -3,6 +3,7 @@
 #include "k2/pd/pdtrace_link.hpp"
 
 #include "k2/pd/pdtrace.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::pdtrace::view {
 namespace {
@@ -18,7 +19,7 @@ struct Cursor {
     std::span<char> out;
     std::size_t n = 0;
     void put(char c) { if (n < out.size()) out[n++] = c; }
-    void put(const char* s) { while (*s) put(*s++); }
+    void put(const char* s) { strpack::for_chars(s, [this](char ch) { put(ch); }); }   // packed or plain
     void num(unsigned v) {
         char t[10];
         int k = 0;
@@ -150,15 +151,15 @@ LinkText link_text(const Link& l) {
         switch (l.usb_mode) {
         case 0: c.put("USB2"); break;
         case 1:
-            c.put("USB3.2");
-            if (l.usb_speed == 1) c.put(" Gen1 5G");
-            else if (l.usb_speed == 2) c.put(" Gen2 10G");
+            c.put(K2_P("USB3.2"));
+            if (l.usb_speed == 1) c.put(K2_P(" Gen1 5G"));
+            else if (l.usb_speed == 2) c.put(K2_P(" Gen2 10G"));
             break;
         case 2:
             c.put("USB4");
-            if (l.usb_speed == 2) c.put(" Gen2 20G");
-            else if (l.usb_speed == 3) c.put(" Gen3 40G");
-            else if (l.usb_speed == 4) c.put(" Gen4 80G");
+            if (l.usb_speed == 2) c.put(K2_P(" Gen2 20G"));
+            else if (l.usb_speed == 3) c.put(K2_P(" Gen3 40G"));
+            else if (l.usb_speed == 4) c.put(K2_P(" Gen4 80G"));
             break;
         default: c.put("USB?"); break;
         }
@@ -177,14 +178,14 @@ LinkText link_text(const Link& l) {
         if (const char* s = speed_g(l.cable_speed)) c.put(s); else c.put('?');
         if (l.cable_amps) { c.put(' '); c.num(l.cable_amps); c.put('A'); }
         if (l.cable_emarker) { if (l.cable_active) c.put(" act"); }
-        else if (l.cable_ctype == 1) c.put(" retimer");
-        else if (l.cable_ctype == 2) c.put(" redriver");
-        else if (l.cable_ctype == 3) c.put(" optical");
+        else if (l.cable_ctype == 1) c.put(K2_P(" retimer"));
+        else if (l.cable_ctype == 2) c.put(K2_P(" redriver"));
+        else if (l.cable_ctype == 3) c.put(K2_P(" optical"));
         copy(t.cable, sizeof t.cable, c);
     }
     if (l.peer) {
         Cursor c{b};
-        if (l.peer_host && l.peer_dev) c.put("host+dev");
+        if (l.peer_host && l.peer_dev) c.put(K2_P("host+dev"));
         else if (l.peer_host) c.put("host");
         else if (l.peer_dev) c.put("dev");
         else c.put("none");
@@ -195,18 +196,18 @@ LinkText link_text(const Link& l) {
 
 std::size_t format_link(const Link& l, std::span<char> out) {
     Cursor c{out};
-    if (!l.any()) { c.put("not seen"); return c.n; }
+    if (!l.any()) { c.put(K2_P("not seen")); return c.n; }
     const LinkText t = link_text(l);
     bool first = true;
     auto sep = [&] { if (!first) c.put(" | "); first = false; };
     if (t.usb[0]) { sep(); c.put(t.usb); }
     if (t.tbt[0]) { sep(); c.put(t.tbt); }
-    if (t.dp[0]) { sep(); c.put("DP alt "); c.put(t.dp); }
+    if (t.dp[0]) { sep(); c.put(K2_P("DP alt ")); c.put(t.dp); }
     else if (l.dp) { sep(); c.put("DP"); }
-    if (t.cable[0]) { sep(); c.put("cable "); c.put(t.cable); }
+    if (t.cable[0]) { sep(); c.put(K2_P("cable ")); c.put(t.cable); }
     if (t.peer[0]) {
         sep();
-        c.put(l.peer_host || l.peer_dev ? "partner USB " : "partner no USB");
+        c.put(l.peer_host || l.peer_dev ? K2_P("partner USB ") : K2_P("partner no USB"));
         if (l.peer_host || l.peer_dev) c.put(t.peer);
     }
     return c.n;
@@ -217,7 +218,7 @@ void json_link(const Link& l, std::span<char, kJsonLine> out) {
     char buf[kJsonLine];
     Cursor c{buf};
     const LinkText t = link_text(l);
-    c.put("{\"link\":{");
+    c.put(K2_P("{\"link\":{"));
     bool first = true;
     auto field = [&](const char* name, const char* v) {
         if (!v[0]) return;
@@ -228,7 +229,7 @@ void json_link(const Link& l, std::span<char, kJsonLine> out) {
     field("usb", t.usb);
     field("tbt", t.tbt);
     field("dp", t.dp);
-    field("cable", t.cable);
+    field(K2_P("cable"), t.cable);
     field("peer", t.peer);
     c.put("}}");
     for (std::size_t i = 0; i < c.n && i < kJsonLine - 1; i++) out[i] = buf[i];

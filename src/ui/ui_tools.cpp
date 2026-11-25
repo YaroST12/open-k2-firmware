@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Yaraslau Furman
 #include "k2/ui/ui_tools.hpp"
 #include "k2/ui/rail_title.hpp"
+#include "k2/core/strpack.hpp"
 #include "k2/pd/pd_emarker_plan.hpp"
 #include "k2/ui/text/tools.hpp"
 
@@ -96,43 +97,45 @@ constexpr uint8_t pg(Page p) { return static_cast<uint8_t>(p); }
 // Charger, Cable and Device are the place pages (the Connection page in place mode, conn::place_actions): their own reads
 // (Charger ID, Cable read, Device ID) are the page itself; these are the tools it adds.
 constexpr Act kCharger[] = {
-    {"Test charger", K::Page, pg(Page::ChargerTest), "grades every offer"},
-    {"Report cards", K::Tool, 9, nullptr},
+    {K2_P("Test charger"), K::Page, pg(Page::ChargerTest), K2_P("grades every offer")},
+    {K2_P("Report cards"), K::Tool, 9, nullptr},
 #if K2_PDSTRESS
-    {"Stress test", K::Tool, 13, nullptr},
+    {K2_P("Stress test"), K::Tool, 13, nullptr},
 #endif
 };
 constexpr Act kTools[] = {
-    {"Request voltage", K::Tool, 1, nullptr},
-    {"Fast charge", K::Tool, 0, nullptr},
-    {"Cable R", K::Tool, 3, nullptr},
-    {"Spoof cable", K::Tool, 2, nullptr},
-    {"Report cards", K::Tool, 9, nullptr},
-    {"Black Box", K::Tool, 7, nullptr},
+    {K2_P("Request voltage"), K::Tool, 1, nullptr},
+    {K2_P("Fast charge"), K::Tool, 0, nullptr},
+    {K2_P("Cable R"), K::Tool, 3, nullptr},
+    {K2_P("Spoof cable"), K::Tool, 2, nullptr},
+    {K2_P("Report cards"), K::Tool, 9, nullptr},
+    {K2_P("Black Box"), K::Tool, 7, nullptr},
 #if K2_TWIN
-    {"Device twins", K::Tool, 11, nullptr},
+    {K2_P("Device twins"), K::Tool, 11, nullptr},
 #endif
 #if K2_LOOPPROBE
-    {"Loop probe", K::Tool, 12, nullptr},
+    {K2_P("Loop probe"), K::Tool, 12, nullptr},
 #endif
 #if K2_PDSTRESS
-    {"PD Stress", K::Tool, 13, nullptr},
+    {K2_P("PD Stress"), K::Tool, 13, nullptr},
 #endif
 };
 constexpr Act kCable[] = {
-    {"Resistance", K::Tool, 3, nullptr},
+    {K2_P("Resistance"), K::Tool, 3, nullptr},
 #if K2_LOOPPROBE
-    {"Loop probe", K::Tool, 12, nullptr},
+    {K2_P("Loop probe"), K::Tool, 12, nullptr},
 #endif
 };
 #if K2_TWIN
 constexpr Act kDevice[] = {
-    {"Twins", K::Tool, 11, nullptr},
+    {K2_P("Twins"), K::Tool, 11, nullptr},
 };
 #endif
 // Battery, Log and K2 are pages of their own (the efficiency recorder, the PD diagnosis with its Black Box row, the settings
 // with System state and Boot info): they add no Bench tools.
+// k2-plain-begin: tests strcmp/print place names
 constexpr const char *kPlaceNames[kPlaces] = {"Meter", "Charger", "Cable", "Device", "Battery", "Log", "K2"};
+// k2-plain-end
 
 template <size_t N> constexpr Acts acts(const Act (&a)[N]) { return {a, static_cast<int>(N)}; }
 
@@ -187,57 +190,57 @@ Row row(Place p, const Facts &f) {
     switch (p) {
     case Place::Meter:
         r.known = f.vbus;
-        if (!f.vbus) { s.put("No VBUS"); break; }
+        if (!f.vbus) { s.put(K2_P("No VBUS")); break; }
         s.put_abs_fixed(f.mw, f.mw >= 99995 ? 1 : 2).put("W  ").put_fixed(f.mv, 2).put("V  ").put_abs_fixed(f.ma, 3).put_char('A');
         break;
     case Place::Charger:
         r.known = f.caps || f.fc;
         if (f.caps) {
-            s.put(f.spec_rev >= 2 ? "PD3.x " : f.spec_rev == 1 ? "PD2.0 " : "PD ");
-            s.put_u32((f.max_mw + 500) / 1000).put("W, ").put_u32(f.offers).put(f.offers == 1 ? " offer" : " offers");
+            s.put(f.spec_rev >= 2 ? K2_P("PD3.x ") : f.spec_rev == 1 ? K2_P("PD2.0 ") : "PD ");
+            s.put_u32((f.max_mw + 500) / 1000).put("W, ").put_u32(f.offers).put(f.offers == 1 ? K2_P(" offer") : K2_P(" offers"));
         } else if (f.fc) {
-            s.put(f.fc).put(" on the lines");
+            s.put(f.fc).put(K2_P(" on the lines"));
         } else {
-            s.put("None on either port");
+            s.put(K2_P("None on either port"));
         }
         break;
     case Place::Cable:
         r.known = f.cable;
-        if (!f.cable) { s.put("Not read"); break; }
+        if (!f.cable) { s.put(K2_P("Not read")); break; }
         s.put_u32(f.cable_a).put("A ").put_u32(f.cable_v).put_char('V');
         if (f.cable_w) s.put(", ").put_u32(f.cable_w).put_char('W');
         break;
     case Place::Device:
         r.known = f.contract;
-        if (!f.contract) { s.put("None inline"); break; }
-        s.put("Asks ");
+        if (!f.contract) { s.put(K2_P("None inline")); break; }
+        s.put(K2_P("Asks "));
         put_volts(s, f.ctr_mv);
         s.put_char(' ');
         put_amps(s, f.ctr_ma);
-        if (f.vbus && f.mw >= 1000) s.put(", gets ").put_u32(static_cast<uint32_t>((f.mw + 500) / 1000)).put_char('W');
+        if (f.vbus && f.mw >= 1000) s.put(K2_P(", gets ")).put_u32(static_cast<uint32_t>((f.mw + 500) / 1000)).put_char('W');
         break;
     case Place::Battery:
         r.known = f.batt;
-        s.put(f.batt_status.view().empty() ? std::string_view("No run") : f.batt_status.view());
+        s.put(f.batt_status.view().empty() ? std::string_view(K2_P("No run")) : f.batt_status.view());
         break;
     case Place::Log:
         r.known = true;
-        s.put(f.diag.view().empty() ? std::string_view("No session") : f.diag.view());
-        if (f.captures) s.put(", ").put_u32(f.captures).put(f.captures == 1 ? " capture" : " captures");
+        s.put(f.diag.view().empty() ? std::string_view(K2_P("No session")) : f.diag.view());
+        if (f.captures) s.put(", ").put_u32(f.captures).put(f.captures == 1 ? K2_P(" capture") : K2_P(" captures"));
         break;
     case Place::K2:
         r.known = true;
-        s.put(short_version(f.version)).put(f.hid ? ", HID on" : f.webusb ? ", WebUSB on" : ", HID off");
+        s.put(short_version(f.version)).put(f.hid ? K2_P(", HID on") : f.webusb ? K2_P(", WebUSB on") : K2_P(", HID off"));
         break;
     }
     return r;
 }
 
 void fact(const Facts &f, StrBuf<28> &out) {
-    if (f.caps) out.put("Charger on a port, PD");
-    else if (f.fc) out.put("Charger on a port, ").put(f.fc);
-    else if (f.vbus) out.put("Power on the line");
-    else out.put("Nothing attached");
+    if (f.caps) out.put(K2_P("Charger on a port, PD"));
+    else if (f.fc) out.put(K2_P("Charger on a port, ")).put(f.fc);
+    else if (f.vbus) out.put(K2_P("Power on the line"));
+    else out.put(K2_P("Nothing attached"));
 }
 
 }  // namespace bench

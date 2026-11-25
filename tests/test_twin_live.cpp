@@ -117,7 +117,7 @@ struct Sim : Env {
     }
     void unwake() override { log.push_back("unwake"); }
     void record(std::uint8_t seq_no, const Slot& s) override { recorded[seq_no] = s; log.push_back(std::string("record ") + std::to_string(seq_no) + " " + name(s.verdict)); }
-    void finished(Reason why) override { finished_called = true; fin = why; log.push_back(std::string("finished ") + name(why)); }
+    void finished(Reason why) override { finished_called = true; fin = why; char d[32]; log.push_back(std::string("finished ") + std::string(k2::strpack::unpack(name(why), d))); }
 
     int level_of(const pd::Choice& c) const { return c.mv != 0 ? int(c.mv) : int(caps.pdos[c.pos - 1].max_mv); }
 

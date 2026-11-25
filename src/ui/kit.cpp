@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
+#include "k2/core/strpack.hpp"
 #include "k2/ui/kit.hpp"
 #include "kit_internal.hpp"
 #include "k2/core/math_opt.hpp"
@@ -10,6 +11,7 @@
 namespace k2::kit {
 
 namespace {
+bool g_browse;   // .bss zero: boot paints entered until Ui sets the ring state
 // Text centred in a box (x, w) on the line whose top is `y`.
 void centred_text(const Surface &s, const Font &f, int16_t x, int16_t w, int16_t y, std::string_view text, uint16_t fg, uint16_t bg) {
     char buf[kFitBuf];
@@ -17,6 +19,9 @@ void centred_text(const Surface &s, const Font &f, int16_t x, int16_t w, int16_t
     gfx_text(s, f, static_cast<int16_t>(x + (w - text_width(f, t)) / 2), y, t, fg, bg);
 }
 }  // namespace
+
+void set_browse(bool on) { g_browse = on; }
+bool browsing() { return g_browse; }
 
 namespace detail {
 LabelLayout label_layout(int16_t x, int16_t y, int16_t w, int16_t h, std::string_view label, char (&buf)[kFitBuf]) {
@@ -161,7 +166,7 @@ void draw_top_bar(const Surface &s, std::string_view title, int step, std::strin
         buf[n++] = static_cast<char>('0' + segs);
         buf[n++] = ' ';
     }
-    for (size_t i = 0; i < title.size() && n < sizeof(buf); i++) buf[n++] = title[i];
+    strpack::for_chars(title, [&](char c) { if (n < sizeof(buf)) buf[n++] = c; });
     draw_status_left(s, false, Icon::Bolt, std::string_view(buf, n), 132, badge, readout_follows);
     if (step > 0) draw_progress_rule(s, step, segs);
     else gfx_fill(s, 0, kProgY + 1, s.w, kProgH - 1, kBg);
@@ -246,7 +251,7 @@ void RowList::init(const Surface &s, int16_t y, RowFn fn, void *ctx) {
     list_.set_row_bg(kBg, kFocusFill, kBg);   // Fieldbook: white space between rows, no hairlines
     list_.set_full_lane(true);
     list_.set_self_ground(true);   // draw_row_cb paints the row's ground itself, around its text and marker
-    list_.set_highlight(sel_);
+    list_.set_highlight(lit());
     if (rebind) list_.set_offset(0);
     extra_ = -1;
 }
@@ -477,6 +482,7 @@ bool ActionCell::draw_ticket(uint32_t tag, std::string_view head, std::string_vi
 }
 
 [[gnu::noinline]] bool ActionCell::draw_idle(std::string_view verb, std::string_view hint, PaintBudget *bg, bool focused) {
+    focused = focused && !g_browse;
     return draw_ticket(focused ? 0 : 2, verb, hint,
                        focused ? kTicket : kBg, focused ? kOnTicket : kInk2, focused ? kTicketFrame : kRule, false, bg);
 }

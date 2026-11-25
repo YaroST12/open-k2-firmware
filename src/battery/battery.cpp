@@ -424,6 +424,12 @@ bool decode(std::span<const std::uint8_t> in, Record &r) {
         if ((q[0] & ~flags) > 1 || q[1] > 3) return false;
         r.ph[i] = PhaseRec{Kind(q[0] & 0x7F), End(q[1]), get16(q + 2), get32(q + 4), get32(q + 8), get32(q + 12), get32(q + 16),
                            get32(q + 20), bool(q[0] & flags)};
+        // Version 1 before 05313146 kept the columns by sign: the phase's own column is the one that carried more.
+        PhaseRec &p = r.ph[i];
+        if (ver == 1 && (p.kind == Kind::Charge ? p.uwh_out > p.uwh_in : p.uwh_in > p.uwh_out)) {
+            std::swap(p.uwh_in, p.uwh_out);
+            std::swap(p.uah_in, p.uah_out);
+        }
     }
     for (std::size_t i = 0; i < r.pts.size(); i++) r.pts[i] = b[kHeadBytes + i];
     return true;

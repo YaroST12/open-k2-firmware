@@ -7,6 +7,7 @@
 // External data (saved names, vendor strings, PDO lists read off the device) uses fit_data and is only counted.
 // A truncation is fixed by rewording the copy (docs/UI_DESIGN.md section 6), not by hiding it here.
 #include "test_util.h"
+#include "k2/core/strpack.hpp"
 #include "card_fixtures.h"
 #include "diag_fixture.h"
 #include "fake_lcd.h"
@@ -320,6 +321,57 @@ void walk_pages(Ui &ui, int rot, const Scenario &sc) {
         all_rows("bt-stored");
         step(Button::Back, "bt-runs");
         step(Button::Back, "bt-done");
+        ui.on_button(Button::Back, ButtonEvent::Short, g_t);
+    }
+    // Battery, long values: a 3-digit id, 123.4 Wh, 99999 mAh, 99h59m59s; a discharge measuring, then Saved runs with the
+    // efficiency of separate runs (a charge, then a discharge) atop, and each stored run.
+    stub_battery_reset();
+    if (battery::hw::service().volume()) {
+        namespace bt = battery;
+        const auto rec = [](std::uint16_t id, bt::Mode m, bt::RunState st) {
+            bt::Record r;
+            r.mode = m;
+            r.state = st;
+            r.armed = true;
+            r.id = id;
+            r.phases = m == bt::Mode::RoundTrip ? 2 : 1;
+            const bool dis = m == bt::Mode::Discharge;
+            const bt::End e = st == bt::RunState::Measuring ? bt::End::Running : bt::End::Auto;
+            r.ph[0] = bt::PhaseRec{dis ? bt::Kind::Discharge : bt::Kind::Charge, e, 0, 359'999, dis ? 0u : 123'456'789u,
+                                   dis ? 123'456'789u : 0u, dis ? 0u : 99'999'000u, dis ? 99'999'000u : 0u};
+            if (r.phases == 2) r.ph[1] = bt::PhaseRec{bt::Kind::Discharge, e, 0, 359'999, 0, 99'456'789, 0, 99'999'000};
+            return r;
+        };
+        bt::store::save(*battery::hw::service().volume(), rec(997, bt::Mode::RoundTrip, bt::RunState::Done));
+        bt::store::save(*battery::hw::service().volume(), rec(998, bt::Mode::Charge, bt::RunState::Done));
+        bt::store::save(*battery::hw::service().volume(), rec(999, bt::Mode::Discharge, bt::RunState::Done));
+        battery::hw::service().rec().restore(rec(999, bt::Mode::Discharge, bt::RunState::Measuring));
+    }
+    enter("battery-long", rot, sc.name);
+    if (ui.push_menu(Menu::Battery, g_t)) {
+        auto step = [&](Button b, const char *what) {
+            ui.on_button(b, ButtonEvent::Short, g_t);
+            draw_for_a_while(ui, what, rot, sc.name);
+        };
+        auto all_rows = [&](const char *what) {
+            for (int i = 0; i < 14; ++i) step(Button::Plus, what);
+            for (int i = 0; i < 14; ++i) step(Button::Minus, what);
+        };
+        all_rows("bt-long-measuring");
+        battery::hw::service().rec().finish();
+        all_rows("bt-long-done");
+        const BatteryPage *p = ui.battery_page();
+        for (int i = 0; p && i < 14 && p->act() != battery::view::Act::Runs; ++i) step(Button::Plus, "bt-long-move");
+        step(Button::Ok, "bt-long-runs");
+        all_rows("bt-long-runs");
+        for (int k = 0; k < 3; ++k) {
+            step(Button::Ok, "bt-long-stored");
+            all_rows("bt-long-stored");
+            step(Button::Back, "bt-long-runs");
+            step(Button::Plus, "bt-long-runs");
+        }
+        step(Button::Back, "bt-long-done");
+        ui.on_button(Button::Back, ButtonEvent::Short, g_t);
     }
     stub_battery_reset();
     // PD diagnosis: every row of the fixture reports has been the focused one (note line open), and Home row 1 with each.
@@ -531,6 +583,30 @@ void walk_limit(Ui &ui, int rot, const Scenario &sc) {
     ui.goto_page(static_cast<uint8_t>(Page::Home), g_t);
 }
 
+// The ring in both states: every page browsed (no focus, no open row) and entered (the focused row's note open).
+void walk_ring(Ui &ui, int rot, const Scenario &sc) {
+    auto key = [&](Button b, ButtonEvent e) { g_t += 150; ui.on_button(b, e, g_t); };
+    enter("ring", rot, sc.name);
+    ui.goto_page(static_cast<uint8_t>(Page::Home), g_t);
+    key(Button::Back, ButtonEvent::Short);   // entered Home -> the ring view on Home
+    for (int i = 0; i < ring::kCount; ++i) {
+        char nm[32];
+        std::snprintf(nm, sizeof nm, "ring-%d-browse", i);
+        draw_for_a_while(ui, nm, rot, sc.name);
+        CHECK_EQ(ui.ring_view(), true);
+        CHECK_EQ(int(ui.ring_position()), i);   // a refused page would be skipped unwalked
+        if (ring::can_enter(static_cast<ring::Pos>(i))) {
+            std::snprintf(nm, sizeof nm, "ring-%d-entered", i);
+            enter(nm, rot, sc.name);
+            key(Button::Ok, ButtonEvent::Short);
+            draw_for_a_while(ui, nm, rot, sc.name);
+            key(Button::Back, ButtonEvent::Long);   // out to the ring on the same page
+        }
+        enter("ring-step", rot, sc.name);
+        key(Button::Plus, ButtonEvent::Short);
+    }
+}
+
 void test_walk() {
     for (const Scenario &sc : kScenarios) {
         apply(sc);
@@ -545,6 +621,7 @@ void test_walk() {
             walk_survey(ui, rot, sc);
             walk_wizard(ui, rot, sc);
             walk_limit(ui, rot, sc);
+            walk_ring(ui, rot, sc);
         }
     }
     trunc::context("");
@@ -844,7 +921,7 @@ void test_reach_words() {
                                                      result_layout::Tone::Skip, result_layout::Tone::Pending};
     unsigned too_long = 0, shapes = 0;
     for (const auto a : kRanges) {
-        const size_t label = std::strlen(result_layout::display_name(a));
+        const size_t label = static_cast<size_t>(k2::strpack::cells_rt(result_layout::display_name(a)));   // packed: the decoded name
         for (const uint16_t lo : kLos)
             for (unsigned adv = 6000; adv <= 48000; adv += 1000)
                 for (unsigned hi = lo; hi <= adv; hi += 100)
@@ -867,7 +944,7 @@ void test_reach_words() {
     CHECK_EQ(too_long, 0u);
     CHECK_EQ(shapes > 1000, true);
     // The merged row's toast names its sweep's peak: "<label>: peak 48.0V@48.0V" (the fold's words take the whole line instead).
-    for (const auto a : kRanges) CHECK_EQ(std::strlen(result_layout::display_name(a)) + 2 + std::strlen("peak 48.0V@48.0V") <= static_cast<size_t>(kToastCells), true);
+    for (const auto a : kRanges) CHECK_EQ(static_cast<size_t>(k2::strpack::cells_rt(result_layout::display_name(a))) + 2 + std::strlen("peak 48.0V@48.0V") <= static_cast<size_t>(kToastCells), true);
     trunc::context("");
 }
 

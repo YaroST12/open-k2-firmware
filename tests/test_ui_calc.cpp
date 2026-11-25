@@ -42,13 +42,26 @@ static void test_energy() {
     w.update(0x00000100u, 10000);
     CHECK_EQ(w.microjoules(), 5120000);
 
-    // Reverse power (current flowing back) is ignored: forward energy only.
+    // Power the other way (negative: top port to bottom) is energy too: magnitudes, never subtracted.
     EnergyMeter n;
     n.reset(0);
     n.update(0, -3600);
     n.update(1000, -3600);
-    CHECK_EQ(n.microjoules(), 0);
-    CHECK_EQ(n.mwh(), 0);
+    CHECK_EQ(n.microjoules(), 3'600'000);
+    CHECK_EQ(n.mwh(), 1);
+    n.update(2000, 3600);              // the other direction adds
+    CHECK_EQ(n.microjoules(), 7'200'000);
+    // 57 W the negative way for 40 minutes (a charger on the top port): 38 Wh, not 0
+    EnergyMeter l;
+    l.reset(0);
+    for (uint32_t t = 0; t <= 2400u * 1000u; t += 1000) l.update(t, -57000, -2890);
+    CHECK_EQ(l.mwh(), 38000);
+    CHECK_COND(l.mah() >= 1926 && l.mah() <= 1927);
+    // idle (the monitor's deadband already made it 0) for an hour stays 0
+    EnergyMeter z;
+    z.reset(0);
+    for (uint32_t t = 0; t <= 3600u * 1000u; t += 1000) z.update(t, 0, 0);
+    CHECK_EQ(z.microjoules(), 0);
 
     // Reset clears energy and restarts the clock.
     h.reset(5'000'000);
@@ -70,12 +83,12 @@ static void test_charge() {
     r.update(3600, 0, 2000);
     CHECK_EQ(r.mah(), 1);
     CHECK_EQ(r.microcoulombs(), 3'600'000);
-    // Reverse current is not charge drawn: it counts as 0, like reverse power.
+    // Current the other way is charge too, like power.
     EnergyMeter n;
     n.reset(0);
     n.update(0, -3600, -1000);
     n.update(3600, -3600, -1000);
-    CHECK_EQ(n.mah(), 0);
+    CHECK_EQ(n.mah(), 1);
     // The two-argument update leaves the charge alone; reset clears it.
     EnergyMeter e;
     e.reset(0);
@@ -355,21 +368,20 @@ static void test_strbuf() {
     CHECK_STR(t.c_str(), "xy");
 }
 
-static void test_energy_forward_only() {
+static void test_energy_never_goes_down() {
     EnergyMeter m;
     m.reset(0);
     m.update(0, 0);
     m.update(1000, 3600000);       /* 3600 W for 1 s, trapezoid from 0 W: 1800 W s = 0.5 Wh */
     CHECK_EQ(m.mwh(), 500);
-    const int32_t before = m.mwh();
-    m.update(2000, -3600000);      /* reverse power adds nothing and subtracts nothing */
+    m.update(2000, -3600000);      /* the other direction adds its magnitude, never subtracts */
     m.update(3000, -3600000);
-    CHECK_EQ(m.mwh() >= before, 1);            /* never goes down on reverse power */
+    CHECK_EQ(m.mwh(), 2500);
     EnergyMeter r;
     r.reset(0);
     r.update(0, -5000);
     r.update(10000, -5000);
-    CHECK_EQ(r.microjoules(), 0);
+    CHECK_EQ(r.microjoules(), 50'000'000);
 }
 
 static void test_abs_formatters() {
@@ -421,7 +433,7 @@ static void test_home_decimals() {
 
 int main() {
     test_home_decimals();
-    test_energy_forward_only();
+    test_energy_never_goes_down();
     test_abs_formatters();
     test_energy();
     test_charge();

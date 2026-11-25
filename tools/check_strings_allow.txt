@@ -1,0 +1,23 @@
+# check_strings.py allowlist: <relpath>  <reason>. A file listed here may keep plain text literals.
+# Opt-in lab builds (off in the shipping image) and the K2_P sweep backlog; an entry that no longer needs it fails as stale.
+include/k2/loopprobe/host_report_hw.hpp  header only opt-in builds include (absent from the default build deps)
+include/k2/loopprobe/loop_probe_hw.hpp  header only opt-in builds include (absent from the default build deps)
+include/k2/net/http_api.hpp  header only opt-in builds include (absent from the default build deps)
+include/k2/pdstress/engine.hpp  header only opt-in builds include (absent from the default build deps)
+include/k2/pdstress/journal_hw.hpp  header only opt-in builds include (absent from the default build deps)
+include/k2/pdstress/pdstress_store.hpp  header only opt-in builds include (absent from the default build deps)
+include/k2/twin/present.hpp  header only opt-in builds include (absent from the default build deps)
+include/k2/ui/pd_stress_session.hpp  header only opt-in builds include (absent from the default build deps)
+src/core/math_selftest.cpp  opt-in lab build (Makefile filter-out): not in the shipping image
+src/loopprobe/host_report.cpp  opt-in lab build (Makefile filter-out): not in the shipping image
+src/loopprobe/host_report_hw.cpp  opt-in lab build (Makefile filter-out): not in the shipping image
+src/loopprobe/loop_probe.cpp  opt-in lab build (Makefile filter-out): not in the shipping image
+src/loopprobe/usb_fp.cpp  opt-in lab build (Makefile filter-out): not in the shipping image
+src/net/http_server.cpp  opt-in lab build (Makefile filter-out): not in the shipping image
+src/pd/oppo_probe.cpp  opt-in lab build (Makefile filter-out): not in the shipping image
+src/pdstress/engine.cpp  opt-in lab build (Makefile filter-out): not in the shipping image
+src/twin/twin_hw.cpp  opt-in lab build (Makefile filter-out): not in the shipping image
+src/ui/ui_loop_probe.cpp  opt-in lab build (Makefile filter-out): not in the shipping image
+src/ui/ui_pdstress.cpp  opt-in lab build (Makefile filter-out): not in the shipping image
+src/ui/ui_pdstress_page.cpp  opt-in lab build (Makefile filter-out): not in the shipping image
+src/ui/ui_twin.cpp  opt-in lab build (Makefile filter-out): not in the shipping image

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
 #include "k2/chargertest/report_card_json.hpp"
+#include "k2/core/strpack.hpp"
 
 #include "k2/chargertest/report_card_deep.hpp"
 #include "k2/chargertest/step_label.hpp"
@@ -12,7 +13,7 @@ namespace k2::report_card {
 
 namespace {
 constexpr const char* kVerdict[] = {"none", "pass", "fail", "skip"};
-constexpr const char* kHandover[] = {K2_P("not tried"), K2_P("fell back"), K2_P("stayed PD"), "fault", K2_P("reboot"), K2_P("in PD contract")};
+constexpr const char* kHandover[] = {K2_P("not tried"), K2_P("fell back"), K2_P("stayed PD"), K2_P("fault"), K2_P("reboot"), K2_P("in PD contract")};
 }  // namespace
 
 // The card name is restricted to [A-Za-z0-9 -_.] by valid_name, so it needs no escaping.
@@ -34,7 +35,7 @@ std::size_t render_json(const Card& c, std::span<char> out) {
     if (c.format >= 8 && c.rebalanced)
         K2_TPUT(t, "\"rebalanced\":%u,", unsigned(c.rebalanced));
     // The run's level (v8 spare byte): only a Light or Deep run names it, so every older card reads as Medium.
-    if (c.level != ct::Level::Medium) K2_TPUT(t, "\"level\":\"%s\",", c.level == ct::Level::Light ? "light" : c.level == ct::Level::Deep ? "deep" : "old");
+    if (c.level != ct::Level::Medium) K2_TPUT(t, "\"level\":\"%s\",", c.level == ct::Level::Light ? K2_P("light") : c.level == ct::Level::Deep ? "deep" : "old");
     K2_TPUT(t, "\"fw\":\"%08x\",\"state\":\"%s\",\"reason\":\"%s\",\"pdos\":%u,\"spec_rev\":%u,", unsigned(c.fw), ct::name(c.state),
             ct::name(c.reason), unsigned(c.num_pdos), unsigned(c.spec_rev));
     K2_TPUT(t, "\"handover\":\"%s\",\"handover_ms\":%u,\"groups\":{", kHandover[unsigned(c.handover)], unsigned(c.handover_ds) * 100u);
@@ -133,12 +134,12 @@ std::size_t render_json(const Card& c, std::span<char> out) {
 
 std::size_t render_json(const Card& c, std::span<const std::uint8_t> deep, std::span<char> out) {
     const std::size_t n = render_json(c, out);
-    constexpr char kKey[] = ",\"deep\":\"";
+    constexpr char kKey[] = ",\"deep\":\"";  // k2-plain: copied byte by byte, sizeof
     const std::size_t chars = (deep.size() * 4 + 2) / 3;
     if (!deep::blob_valid(deep) || n == 0 || n + sizeof kKey + chars + 2 > out.size() || out[n - 1] != '}') return n;   // out of room: the card alone
     char* p = out.data() + n - 1;   // over the closing brace
     for (const char ch : kKey) if (ch) *p++ = ch;
-    static constexpr char kAlphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    static constexpr char kAlphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";  // k2-plain: indexed per digit
     for (std::size_t i = 0; i < deep.size(); i += 3) {
         const unsigned left = unsigned(deep.size() - i);
         const std::uint32_t v = std::uint32_t(deep[i]) << 16 | (left > 1 ? std::uint32_t(deep[i + 1]) << 8 : 0u) | (left > 2 ? deep[i + 2] : 0u);
@@ -180,7 +181,7 @@ std::size_t render_summary(const Card& c, std::span<char> out) {
     const bool light = c.level == ct::Level::Light;
     t.put("%u %s, %u fail, %u skip of %u groups \xC2\xB7 %s", unsigned(n.pass), light ? K2_P("detected") : "pass", unsigned(n.fail),
           unsigned(n.skip), unsigned(kGroups), ct::name(c.state));
-    if (c.reason != ct::Reason::None) t.put(" (%s)", ct::name(c.reason));
+    if (c.reason != ct::Reason::None) K2_TPUT(t, " (%s)", ct::name(c.reason));
     t.put("\nIdentity %08X \xC2\xB7 boot %u \xC2\xB7 uptime %u s", unsigned(c.id.fp), unsigned(c.boots), unsigned(c.uptime_s));
     if (c.times > 1)
         t.put(" \xC2\xB7 same result x%u, last boot %u uptime %u s", unsigned(c.times), unsigned(c.last_boots), unsigned(c.last_uptime_s));
@@ -218,7 +219,7 @@ std::size_t render_summary(const Card& c, std::span<char> out) {
             const char* why = r.detail ? group_why(g, r) : r.reason ? ct::name(ct::Reason(r.reason)) : "";
             t.put("\xE2\x9C\x97");
             if (r.fail_mv) { t.put(" "); volts(t, r.fail_mv); t.put(" V"); }
-            if (*why) t.put(r.fail_mv ? " (%s)" : " %s", why);
+            if (*why) t.put_p(r.fail_mv ? K2_P(" (%s)") : " %s", why);
         }
         t.put("\n");
     }

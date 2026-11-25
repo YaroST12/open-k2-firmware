@@ -50,7 +50,6 @@ inline constexpr std::string_view kLimRowMode = "Mode", kLimRowMaxV = K2_PSV("Ma
 inline constexpr std::string_view kLimNoteOff = K2_PSV("limits PD Fixed, PPS or AVS");   // the row with no limit set
 inline constexpr std::string_view kLimNoteNone = K2_PSV("no limit, every offer shown");  // the picker's Off
 inline constexpr const char *kLimNoteAbove = K2_P("limit active: ");              // then e.g. "9V3A" / "27W"
-inline constexpr std::string_view kLimNoteFixed = K2_PSV("fixed 5-20V offers");
 inline constexpr std::string_view kLimNotePps = K2_PSV("PPS voltage range and A");
 inline constexpr std::string_view kLimNoteAvs = K2_PSV("SPR AVS 15/20V and A");
 inline constexpr std::string_view kLimNoteApply = K2_PSV("arms selected PD limit");
@@ -59,7 +58,7 @@ inline constexpr std::string_view kLimNoteMode = K2_PSV("include in forged offer
 inline constexpr std::string_view kLimNoteStepV = K2_PSV("pick max voltage");
 inline constexpr std::string_view kLimNoteStepA = K2_PSV("pick max current");
 inline constexpr const char *kLimNoteAmpsAt = "at ", *kLimNoteAnyV = K2_P("any voltage");
-inline constexpr std::string_view kLimNotes[] = {kLimNoteOff, kLimNoteNone, kLimNoteFixed, kLimNotePps, kLimNoteAvs, kLimNoteApply,
+inline constexpr std::string_view kLimNotes[] = {kLimNoteOff, kLimNoteNone, kLimNotePps, kLimNoteAvs, kLimNoteApply,
                                                  kLimNoteNoOffer, kLimNoteMode, kLimNoteStepV, kLimNoteStepA};
 static_assert(all_fit_p(kLimNotes, kLabelAdv, kit::kNoteMaxPx), "a PD limit note is wider than its line");
 static_assert(fits_px_p(kLabelAdv, kLimNoteAbove, kit::kNoteMaxPx - 5 * static_cast<int>(kLabelAdv)), "the PD limit note plus label is over its line");
@@ -74,7 +73,7 @@ inline constexpr std::string_view kLimToastSinkResets = K2_PSV("Limit off: sink 
 inline constexpr std::string_view kLimToastSinkIgnores = K2_PSV("Limit off: sink ignores it");
 inline constexpr std::string_view kLimToastEpr = K2_PSV("Limit off: EPR contract");
 // A live contract is reset before a new limit (or Off): the same two-press window as Reset & re-read on LINK.
-inline constexpr std::string_view kLimToastConfirm = "OK again: resets link";
+inline constexpr std::string_view kLimToastConfirm = "OK again: resets link";   // k2-plain: compared with the decoded toast
 inline constexpr std::string_view kLimToastResetting = K2_PSV("Resetting link...");
 inline constexpr std::string_view kLimToastRescan = K2_PSV("Rescanning...");
 inline constexpr std::string_view kLimToastNoReset = K2_PSV("No reset: replug to apply");

@@ -85,6 +85,7 @@ struct ReadInfo {
     constexpr bool operator==(const ReadInfo&) const = default;
 };
 
+// k2-plain-begin: string_view, tests compare it
 constexpr std::string_view mode_text(Mode m) {
     switch (m) {
         case Mode::Alone: return "alone";
@@ -92,5 +93,6 @@ constexpr std::string_view mode_text(Mode m) {
         default: return "none";
     }
 }
+// k2-plain-end
 
 }  // namespace k2::emk_attached

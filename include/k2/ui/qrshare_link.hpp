@@ -37,7 +37,7 @@
 namespace k2::qrshare::link {
 
 // The published viewer: GitHub Pages of the repository, folder r/. The one place the address lives.
-inline constexpr std::string_view kBase = "https://yarost12.github.io/open-k2-firmware/r/#";
+inline constexpr std::string_view kBase = "https://yarost12.github.io/open-k2-firmware/r/#";   // k2-plain: QR payload bytes
 inline constexpr char kVersion = '1';
 inline constexpr char kVersionV2 = '2';                                    // a schema v2 record (card, cable), uncompressed
 inline constexpr char kKindCard = 'c', kKindCardPacked = 'z';

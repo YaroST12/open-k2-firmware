@@ -18,7 +18,7 @@ struct Out {
     void hex(std::uint32_t v) {
         char d[8];
         int n = 0;
-        do { d[n++] = "0123456789ABCDEF"[v & 15]; v >>= 4; } while (v);
+        do { d[n++] = "0123456789ABCDEF"[v & 15]; v >>= 4; } while (v); // k2-plain: indexed digit table
         while (n) put(d[--n]);
     }
     K2_HOT void dec(std::uint32_t v) {
@@ -51,12 +51,12 @@ std::size_t vencode(std::span<char> buf, std::uint16_t id, std::uint32_t sig, st
         case kUnsigned: out.hex(va_arg(ap, std::uint32_t)); break;
         default: {
             const char* s = va_arg(ap, const char*);
-            if (!s) s = "(null)";
+            if (!s) s = "(null)"; // k2-plain: the decoder fallback
             auto emit = [&](unsigned char c) {
                 if (c <= ' ' || c == '%' || c >= 0x7F) {
                     out.put('%');
-                    out.put("0123456789ABCDEF"[c >> 4]);
-                    out.put("0123456789ABCDEF"[c & 15]);
+                    out.put("0123456789ABCDEF"[c >> 4]); // k2-plain: indexed digit table
+                    out.put("0123456789ABCDEF"[c & 15]); // k2-plain: indexed digit table
                 } else {
                     out.put(static_cast<char>(c));
                 }

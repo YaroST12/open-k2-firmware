@@ -8,6 +8,7 @@
 #include <span>
 
 #include "k2/core/log.hpp"
+#include "k2/core/strpack.hpp"
 #include "k2/drivers/adc.hpp"
 #include "k2/drivers/pin_mark.hpp"
 #include "k2/drivers/pins.hpp"
@@ -82,7 +83,7 @@ std::size_t scan_orientation(std::uint8_t sw0, std::uint8_t sw1, bool pc13, bool
                     acked = (ia & kIntTxSent) != 0;
                     if (acked && g_read_info.acks < 255) g_read_info.acks++;
                     K2LOG("[EMK] sw0=0x%02X attempt %d (PD %d.0, SVDM %d.0): SOP' %s after %d ms\n", sw0, int(attempt),
-                                var.spec_rev == 1 ? 2 : 3, int(var.svdm), acked ? "GoodCRC" : "RETRYFAIL (no GoodCRC)", (t + 1) * 2);
+                                var.spec_rev == 1 ? 2 : 3, int(var.svdm), acked ? K2_P("GoodCRC") : K2_P("RETRYFAIL (no GoodCRC)"), (t + 1) * 2);
                 }
             }
             std::uint8_t status1;
@@ -113,7 +114,7 @@ void log_found_cable() {
     K2LOG("[EMARK] E-Marker detected: VID=0x%04X (%s), PID=0x%04X\n", e.vid, e.vendor_str.c_str(), e.pid);
     K2LOG("[EMARK] Rating: %d.0A / %dV (%dW), Speed: %s\n", e.max_current_a, e.max_voltage_v,
                 e.max_power_w, e.speed_str);
-    K2LOG("[EMARK] Cable Type: %s, HW: v%d, FW: v%d, XID: 0x%08X\n", e.is_active ? "Active" : "Passive",
+    K2LOG("[EMARK] Cable Type: %s, HW: v%d, FW: v%d, XID: 0x%08X\n", e.is_active ? K2_P("Active") : K2_P("Passive"),
                 e.hw_rev, e.fw_rev, unsigned(e.xid));
     log_cable(e);
 }
@@ -191,8 +192,8 @@ bool cable_exchange_impl(const emk_learn::Request& req, emk_learn::Reply& rep, s
     }
     if (!failed) msg_id = (msg_id + 1) & 7;
     K2LOG("[EMK] cable tx sop%d hdr 0x%04X id %d: %s%s\n", pp ? 2 : 1, header, int((header >> 9) & 7),
-                failed ? "RETRYFAIL (no GoodCRC)" : sent || rep.got ? "GoodCRC" : "no GoodCRC seen",
-                rep.got ? ", answered" : "");
+                failed ? K2_P("RETRYFAIL (no GoodCRC)") : sent || rep.got ? K2_P("GoodCRC") : K2_P("no GoodCRC seen"),
+                rep.got ? K2_P(", answered") : "");
     return !failed && (sent || rep.got);
 }
 
@@ -581,7 +582,7 @@ bool full_exchange(void*, const emk_learn::Request& req, emk_learn::Reply& rep) 
 void full_body(void*) {
     const emk_variant::Variant var{g_answered.spec_rev, g_answered.svdm};
     const bool ok = cable_full::read(&full_exchange, nullptr, var, g_engine.cable.is_active, g_cable_full);
-    K2LOG("[EMK] full read: %s svids=%d modes=0x%02X active=%d id2=%d svids2=%d\n", ok ? "done" : "link lost",
+    K2LOG("[EMK] full read: %s svids=%d modes=0x%02X active=%d id2=%d svids2=%d\n", ok ? "done" : K2_P("link lost"),
           int(g_cable_full.p1.nsvid), unsigned(g_cable_full.p1.mode_ack), int(g_engine.cable.is_active),
           int(g_cable_full.id2_ack), int(g_cable_full.p2.nsvid));
 }
@@ -955,7 +956,7 @@ bool reread_start(std::uint8_t mask) {
     if (!have_contract) {
         if (g_active_cc == 0) {
             if (!g_rd_start && set_rd_for_run(true, false)) g_reread_owns_rd = g_reread_made_contract = true;
-            K2LOG("[REREAD] attach: no CC yet, Rd %s\n", g_rd_start ? "presented" : "refused");
+            K2LOG("[REREAD] attach: no CC yet, Rd %s\n", g_rd_start ? K2_P("presented") : K2_P("refused"));
         } else {
             const pd::Err e = request_inner({1, 0, 0}, false);
             g_reread_made_contract = e == pd::Err::Ok;
@@ -1154,7 +1155,7 @@ void lim_report() {
         K2LOG("[LIM] t=%u forged list %u: %u objects, limit %u mW\n", t, unsigned(s.injections), unsigned(s.forged_n),
               unsigned(s.limit_mw));
         for (unsigned i = 0; i < s.forged_n; i++) K2LOG("[LIM] forged pos %u PDO 0x%08X\n", i + 1, unsigned(s.forged[i]));
-        K2LOG("[LIM] forged list MessageID %u (%s)\n", unsigned(s.forged_id), s.forged_dup ? "the sink's newest" : "fresh");
+        K2LOG("[LIM] forged list MessageID %u (%s)\n", unsigned(s.forged_id), s.forged_dup ? K2_P("the sink's newest") : K2_P("fresh"));
     }
     if (s.refusals != g_lim_logged_ref) {
         g_lim_logged_ref = s.refusals;
@@ -1182,7 +1183,7 @@ bool vconn_request() {
         return false;
     }
     const bool ok = g_vconn.request(systick::millis());
-    K2LOG("[VCONN] request %s\n", ok ? "queued" : "refused: a swap is running");
+    K2LOG("[VCONN] request %s\n", ok ? K2_P("queued") : K2_P("refused: a swap is running"));
     if (ok) vconn_mark();
     return ok;
 }
@@ -1194,7 +1195,7 @@ bool vconn_roundtrip() {
     }
     const bool ok = g_vconn.request(systick::millis(), true);
     g_vconn_give = ok;
-    K2LOG("[VCONN] round trip %s (ra=%d)\n", ok ? "queued" : "refused: a swap is running", int(g_ra));
+    K2LOG("[VCONN] round trip %s (ra=%d)\n", ok ? K2_P("queued") : K2_P("refused: a swap is running"), int(g_ra));
     if (ok) vconn_mark();
     return ok;
 }
@@ -1202,7 +1203,7 @@ bool vconn_roundtrip() {
 bool data_reset() {
     if (g_active_cc == 0 || inline_now() || sink().status().state != pd::SinkState::Ready) return false;
     const bool ok = g_vconn.send_raw(14);
-    K2LOG("[VCONN] Data_Reset %s\n", ok ? "queued" : "refused: TX slot busy");
+    K2LOG("[VCONN] Data_Reset %s\n", ok ? K2_P("queued") : K2_P("refused: TX slot busy"));
     return ok;
 }
 
@@ -1331,7 +1332,7 @@ std::uint8_t g_iq_closed = 0;
 [[gnu::noinline]] void log_cable(const pd::Emarker& e) {
     K2LOG("[EMARK] SOP%s PD%s, VDO v%d, latency %s, %s%s, EPR=%d\n", e.sop == 1 ? "'" : "''",
                 e.spec_rev == 1 ? "2.0" : "3.x", e.vdo_version, e.latency_str, e.termination_str,
-                e.type_c_plug ? ", Type-C plug" : "", e.epr_capable);
+                e.type_c_plug ? K2_P(", Type-C plug") : "", e.epr_capable);
     if (e.vdo2_valid)
         K2LOG("[EMARK] Active VDO2: max %dC, shutdown %dC, U3 power %d, USB4=%d, lanes=%d, gen2=%d, optical=%d\n",
                     e.max_temp_c, e.shutdown_temp_c, e.u3_power, e.usb4_supported, e.usb_lanes, e.usb_gen2,
@@ -1349,7 +1350,7 @@ void log_vdm(std::uint16_t header, std::span<const std::uint8_t> payload) {
     if (cmd_type != 1 || (hdr >> 16) != pd::kSvidPd) return;
     if (cmd == 1 && v.identity.valid) {
         K2LOG("[VDM] Identity: VID=0x%04X (%s) PID=0x%04X bcd=0x%04X%s%s\n", v.identity.vid,
-                    v.identity.vendor.c_str(), v.identity.pid, v.identity.bcd, v.identity.model ? " model=" : "",
+                    v.identity.vendor.c_str(), v.identity.pid, v.identity.bcd, v.identity.model ? K2_P(" model=") : "",
                     v.identity.model ? v.identity.model : "");
         for (std::size_t i = 4; i + 3 < payload.size(); i += 4) {
             const std::uint32_t w = payload[i] | (payload[i + 1] << 8) | (payload[i + 2] << 16) |
@@ -1414,7 +1415,7 @@ void iq_report() {
     K2LOG("[IQ] answers: id %04X:%04X, %u sink PDOs, ext %u bytes, revision 0x%08X, %u SVIDs, %u modes\n", unsigned(s.id.vid),
           unsigned(s.id.pid), unsigned(s.num_sink_pdos), unsigned(s.sink_ext_len), unsigned(s.revision), unsigned(s.num_svids),
           unsigned(s.num_modes));
-    K2LOG("[IQ] late 0x%02X, %u EPR sink PDOs%s\n", unsigned(s.late_mask), unsigned(s.num_epr_pdos), s.epr_partial ? " (first chunk only)" : "");
+    K2LOG("[IQ] late 0x%02X, %u EPR sink PDOs%s\n", unsigned(s.late_mask), unsigned(s.num_epr_pdos), s.epr_partial ? K2_P(" (first chunk only)") : "");
     if (s.spoof)
         K2LOG("[IQ] spoof: SOP' cable queried %u times (charger or device), %u replies, real cable answered %u\n", unsigned(s.sopp_queries),
               unsigned(s.sopp_replies), unsigned(s.sopp_real));
@@ -1435,7 +1436,7 @@ void reread_housekeeping(std::uint32_t now) {
         pdtrace::mark(pdtrace::kMarkReread, std::uint16_t(0x8000 | (rs.skipped_mask << 8) | rs.ok_mask),
                       std::uint16_t((rs.avs_seen ? 0x8000 : 0) | (rs.caps_rx << 8) | rs.pdos_last));
         K2LOG("[REREAD] %s ok=0x%02X skipped=0x%02X notsup=0x%02X caps_rx=%u pdos %u -> %u (last list %u) avs=%d attach_failed=%d\n",
-              rs.state == pd::RereadState::Aborted ? "aborted" : "done", unsigned(rs.ok_mask), unsigned(rs.skipped_mask),
+              rs.state == pd::RereadState::Aborted ? K2_P("aborted") : "done", unsigned(rs.ok_mask), unsigned(rs.skipped_mask),
               unsigned(rs.notsup_mask), unsigned(rs.caps_rx), unsigned(rs.pdos_before), held, unsigned(rs.pdos_last), int(rs.avs_seen), int(rs.attach_failed));
         const bool nothing = rs.attach_failed || rs.state == pd::RereadState::Aborted;
         g_reread_release_at = nothing ? now : now + kRereadLingerMs;
@@ -1576,8 +1577,8 @@ void set_inline(bool on) {
     g_cc_sink_mv = -1;
     g_detach.inline_begin();
     pdtrace::link(g_inline, false);
-    usb::log(on ? "[PD] Inline: real sink attached, active operations need confirm\n"
-                : "[PD] Inline cleared\n");
+    usb::log(on ? K2_P("[PD] Inline: real sink attached, active operations need confirm\n")
+                : K2_P("[PD] Inline cleared\n"));
 }
 
 void set_wait_kind(raguard::WaitKind kind) {
@@ -1606,7 +1607,7 @@ void unit_detach() {
     g_new_source = true;
     g_pd_traffic = false;
     g_last_rx_ms = systick::millis();
-    usb::log("[PD] Unit detach: Rd off, sink forgotten\n");
+    usb::log(K2_P("[PD] Unit detach: Rd off, sink forgotten\n"));
 }
 void unit_attach(bool legacy) {
     listen_lost();
@@ -1625,7 +1626,7 @@ void unit_attach(bool legacy) {
         if (g_crc_on) { g_crc_on = false; write_sw1(); }
     }
     set_rd_for_run(true, false);
-    usb::log(legacy ? "[PD] Unit attach: PD-silent\n" : "[PD] Unit attach: PD\n");
+    usb::log(legacy ? K2_P("[PD] Unit attach: PD-silent\n") : K2_P("[PD] Unit attach: PD\n"));
 }
 void unit_hold(bool legacy) {
     listen_lost();
@@ -1641,7 +1642,7 @@ void unit_hold(bool legacy) {
     g_new_source = true;
     g_pd_traffic = false;
     g_last_rx_ms = systick::millis();
-    usb::log(legacy ? "[PD] Unit hold: PD-silent, Rd kept\n" : "[PD] Unit hold: Soft_Reset, Rd kept\n");
+    usb::log(legacy ? K2_P("[PD] Unit hold: PD-silent, Rd kept\n") : K2_P("[PD] Unit hold: Soft_Reset, Rd kept\n"));
 }
 bool rd_for_run(bool on) {
     listen_lost();
@@ -1961,7 +1962,7 @@ void loop_host_begin(LoopHost* l) {
     g_lh_idle = false;
     if (g_active_cc != 0) write_sw1();
     apply_rd();
-    K2LOG("[LPHR] line %s (inline=%d cc=%u)\n", l ? "owned: sole sink, no Rd, no Hard Reset" : "released", g_inline ? 1 : 0,
+    K2LOG("[LPHR] line %s (inline=%d cc=%u)\n", l ? K2_P("owned: sole sink, no Rd, no Hard Reset") : K2_P("released"), g_inline ? 1 : 0,
           unsigned(g_active_cc));
 }
 bool loop_host_send(const pd::TxMsg& m) {

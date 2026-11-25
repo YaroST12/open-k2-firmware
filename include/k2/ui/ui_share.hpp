@@ -30,6 +30,7 @@
 #include <span>
 #include <string_view>
 
+#include "k2/core/strpack.hpp"
 #include "k2/core/bss_zero.hpp"
 #include "k2/ui/qr.hpp"
 #include "k2/ui/qrshare.hpp"
@@ -89,17 +90,19 @@ public:
     // says so first (the notice below), and keeps USB and the PD engine serviced through it (one poll per mask candidate).
     static constexpr int kBusyVersion = 18;
     static constexpr int kBusyChars = 644;                                   // version 17's byte capacity at level L
-    static constexpr std::string_view kBusyText = "Preparing code...";
-    static constexpr std::string_view kWideHint = "Use the wide camera";   // a code the main camera does not read (version 22 and up)
+    static constexpr std::string_view kBusyText = "Preparing code...";   // k2-plain: tests read its size
+    static constexpr std::string_view kWideHint = "Use the wide camera";   // k2-plain: string_view hint   // a code the main camera does not read (version 22 and up)
     static constexpr std::string_view hint_for(const qrview::Look& l) { return l.wide ? kWideHint : std::string_view{}; }
     // Under the link form's code: what the phone will show. At most 37 characters (a 224 px line of 6 px cells).
     static constexpr std::string_view link_caption(qrshare::Type t) {
         switch (t) {
+            // k2-plain-begin: copied with memcpy (ui_share.cpp)
             case qrshare::Type::Emarker: return "Scan: cable details";
             case qrshare::Type::PdCaps: return "Scan: charger offers";
             case qrshare::Type::Identity:
             case qrshare::Type::BootInfo: return "Scan: firmware info";
             default: return "Scan: full results";   // the report card
+            // k2-plain-end
         }
     }
 
@@ -158,6 +161,11 @@ private:
     qrview::Plan plan_{};
     qrview::Look look_{};
     unsigned encodes_ = 0, paints_ = 0;
+    // The symbol the last paint left in the scratch arena: reused while no other lease came in between (scratch::epoch), so
+    // a screenshot's 240 one-row strips encode once. code_n_ 0: none.
+    std::uint32_t code_epoch_ = 0;
+    std::uint16_t code_key_ = 0;
+    std::uint8_t code_n_ = 0;
 };
 
 }  // namespace k2

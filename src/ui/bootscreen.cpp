@@ -34,7 +34,7 @@ const char* rd_name(std::uint8_t pin) { return pin == 1 ? "CC1" : pin == 2 ? "CC
 void format_lines(const bootinfo::Snapshot& s, std::uint32_t frame, Lines& out) {
     fmt::format(out.id, K2_P("fw %s p%u"), s.fw, unsigned(s.proto));   // the version string carries the hash; the raw git is in the QR line
     fmt::format(out.up, K2_P("up %u.%u s  frame %u"), unsigned(s.t_ms / 1000), unsigned(s.t_ms % 1000 / 100), unsigned(frame));
-    const char* m = s.mode == bootmode::Mode::PlusRdCc2 ? "plus" : s.mode == bootmode::Mode::OkRdCc1 ? "ok" : "plain";
+    const char* m = s.mode == bootmode::Mode::PlusRdCc2 ? "plus" : s.mode == bootmode::Mode::OkRdCc1 ? "ok" : K2_P("plain");
     if (s.move.moved)
         fmt::format(out.mode, K2_P("%s  Rd %s>%s at %u ms"), m, rd_name(s.move.from), rd_name(s.move.to), unsigned(s.move.ms));
     else
@@ -42,7 +42,7 @@ void format_lines(const bootinfo::Snapshot& s, std::uint32_t frame, Lines& out) 
 }
 
 void draw(const bootinfo::Snapshot& s, std::uint32_t frame) {
-    scratch::Lease lease("bootscreen");
+    scratch::Lease lease("bootscreen");   // k2-plain: scratch owner tag
     auto& k = scratch::as<Work>();
     const std::size_t len = bootinfo::format(s, k.record);
     const std::size_t tl = qrshare::encode_part(

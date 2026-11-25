@@ -69,7 +69,7 @@ K2_HOT std::size_t vformat(std::span<char> buf, const char* fmt, std::va_list ap
         case 'X': put_number(out, va_arg(ap, std::uint32_t), false, 16, width, zero); break;
         case 's': {
             const char* s = va_arg(ap, const char*);
-            if (!s) s = "(null)";
+            if (!s) s = "(null)"; // k2-plain: the decoder fallback
             if (strpack::is_packed(s)) {
                 strpack::Reader r(s);
                 for (int ch; (ch = r.next()) >= 0;) out.put(static_cast<char>(ch));

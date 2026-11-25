@@ -62,6 +62,7 @@
 #endif
 #if K2_HOST_REPORT
 #include "k2/loopprobe/host_report_hw.hpp"
+#include "k2/core/strpack.hpp"
 #endif
 
 extern "C" std::uint32_t k2_stack_free_bytes();
@@ -224,7 +225,7 @@ constexpr uint32_t kEraseQuietMs = 1000;
     if (c.accelerometer.poll(now)) {
         c.ui.feed_gravity(c.accelerometer.read(), now);
         if (sensor_was_online != c.accelerometer.online())
-            K2LOG("[ACCEL] %s\n", c.accelerometer.online() ? "online" : "unavailable; retrying");
+            K2LOG("[ACCEL] %s\n", c.accelerometer.online() ? K2_P("online") : K2_P("unavailable; retrying"));
     }
     mark(Stage::Fastcharge);
     k2::fastcharge::poll();

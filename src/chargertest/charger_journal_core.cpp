@@ -5,7 +5,7 @@
 namespace k2::charger_journal {
 
 const char* section_path(Section s) {
-    static constexpr const char* const kPaths[kSections] = {"/jr/pd.sec", "/jr/pps.sec", "/jr/qc.sec", "/jr/oem.sec", "/jr/ext.sec"};
+    static constexpr const char* const kPaths[kSections] = {"/jr/pd.sec", "/jr/pps.sec", "/jr/qc.sec", "/jr/oem.sec", "/jr/ext.sec"}; // k2-plain: fs path
     return kPaths[std::size_t(s)];
 }
 
@@ -273,13 +273,13 @@ void Journal::replay(Replay& r) const {
         at += si.rows[s];
     }
     r.count = at;
-    read_small("/jr/mt.rec", b, r);
+    read_small("/jr/mt.rec", b, r); // k2-plain: fs path
     replay_phase(r, base, si, b);
     if (r.phase != Phase::None && r.phase_index < r.count)
         for (std::size_t k = 0; k < r.count; ++k) if (si.order[k] == r.phase_index) { r.phase_index = k; break; }
     detail::apply_order({r.steps.data(), r.count}, si.order.data());
-    static constexpr const char* const kSmallPaths[] = {"/jr/rs.rec", "/jr/at.rec", "/jr/sp.rec", "/jr/spd.rec", "/jr/sa1.rec", "/jr/sa2.rec",
-                                                        "/jr/sa3.rec", "/jr/sa4.rec", "/jr/fin.rec"};
+    static constexpr const char* const kSmallPaths[] = {"/jr/rs.rec", "/jr/at.rec", "/jr/sp.rec", "/jr/spd.rec", "/jr/sa1.rec", "/jr/sa2.rec", // k2-plain: fs path
+                                                        "/jr/sa3.rec", "/jr/sa4.rec", "/jr/fin.rec"}; // k2-plain: fs path
     static_assert(specsec::Apdos{}.r.size() == 4, "one range file per Apdos entry");
     for (const char* path : kSmallPaths) read_small(path, b, r);
     conclude(r);
@@ -406,37 +406,37 @@ Err Journal::settle(std::uint32_t run_id, const charger_test::Options& o, const 
 
 Err Journal::phase(Phase ph, std::span<const charger_test::Step> steps, std::size_t idx) {
     std::array<std::uint8_t, kMaxRecord> buf;
-    return put("/jr/ph.rec", {buf.data(), encode_phase(buf, ph, steps, idx)});
+    return put("/jr/ph.rec", {buf.data(), encode_phase(buf, ph, steps, idx)}); // k2-plain: fs path
 }
 
 Err Journal::resumed(std::uint8_t count) {
     std::array<std::uint8_t, kMaxRecord> buf;
-    return put("/jr/rs.rec", {buf.data(), encode_resume(buf, count)});
+    return put("/jr/rs.rec", {buf.data(), encode_resume(buf, count)}); // k2-plain: fs path
 }
 
 Err Journal::meta(const RunMeta& m) {
     std::array<std::uint8_t, kMaxRecord> buf;
-    return put("/jr/mt.rec", {buf.data(), encode_meta(buf, m)});
+    return put("/jr/mt.rec", {buf.data(), encode_meta(buf, m)}); // k2-plain: fs path
 }
 
 Err Journal::attempt(std::size_t idx, std::uint8_t count) {
     std::array<std::uint8_t, kMaxRecord> buf;
-    return put("/jr/at.rec", {buf.data(), encode_attempt(buf, idx, count)});
+    return put("/jr/at.rec", {buf.data(), encode_attempt(buf, idx, count)}); // k2-plain: fs path
 }
 
 Err Journal::spec(const specsec::Result& s) {
     std::array<std::uint8_t, kMaxRecord> buf;
-    return put("/jr/sp.rec", {buf.data(), encode_spec(buf, s)});
+    return put("/jr/sp.rec", {buf.data(), encode_spec(buf, s)}); // k2-plain: fs path
 }
 
 Err Journal::spec_detail(const specsec::Result& s) {
     std::array<std::uint8_t, kSpecDetailRecord> buf;
-    return put("/jr/spd.rec", {buf.data(), encode_spec_detail(buf, s)});
+    return put("/jr/spd.rec", {buf.data(), encode_spec_detail(buf, s)}); // k2-plain: fs path
 }
 
 Err Journal::spec_apdo(std::size_t idx, const specsec::Apdo& a) {
     std::array<std::uint8_t, kMaxRecord> buf;
-    char path[] = "/jr/sa1.rec";
+    char path[] = "/jr/sa1.rec"; // k2-plain: fs path
     path[6] = static_cast<char>('1' + idx);
     return put(path, {buf.data(), encode_spec_apdo(buf, a)});
 }
@@ -455,7 +455,7 @@ Err Journal::spec_rows(const SpecRowsSource* src) {
 Err Journal::finish(std::uint8_t state, std::uint8_t reason) {
     broken_ = false;
     std::array<std::uint8_t, kMaxRecord> buf;
-    return put("/jr/fin.rec", {buf.data(), encode_finish(buf, state, reason)});
+    return put("/jr/fin.rec", {buf.data(), encode_finish(buf, state, reason)}); // k2-plain: fs path
 }
 
 void Journal::forget() {
@@ -646,7 +646,7 @@ void Journal::fill_section(void* ctx, std::size_t off, std::span<std::uint8_t> o
 [[gnu::noinline]] void Journal::replay_phase(Replay& r, const std::array<std::size_t, kSections>& base, const SectionInfo& si,
                                              std::array<std::uint8_t, kReadRecord>& b) const {
     std::size_t n = 0;
-    if (fs_.read_file("/jr/ph.rec", b, n) != fs::Err::Ok || n < 4) return;
+    if (fs_.read_file("/jr/ph.rec", b, n) != fs::Err::Ok || n < 4) return; // k2-plain: fs path
     scan({b.data(), n}, [&](Type t, std::span<const std::uint8_t> p) {
         if (t != Type::Phase || p.size() != kPhasePayload || p[0] > 2) return;
         r.phase = Phase(p[0]);

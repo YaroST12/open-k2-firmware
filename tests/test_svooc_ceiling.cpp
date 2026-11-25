@@ -10,6 +10,7 @@
 #include <string>
 
 #include "k2/chargertest/svooc_ceiling.hpp"
+#include "k2/core/strpack.hpp"
 #include "test_util.h"
 
 using namespace k2;
@@ -86,7 +87,7 @@ void test_end_of_reads_a_quiet_adapter_as_stopped() {
     l.quiet_ms = sc::kQuietMs;     CHECK_EQ(int(sc::end_of(l, 4000)), int(End::Stopped));
     l.commands = 0;                CHECK_EQ(int(sc::end_of(l, 4000)), int(End::None));   // never spoke: the wakes go on
     l.commands = 9; l.judged = true; CHECK_EQ(int(sc::end_of(l, 4000)), int(End::Judged));
-    CHECK(std::strcmp(sc::name(End::Stopped), "stopped") == 0);
+    CHECK_STR(sc::name(End::Stopped), "stopped");
 }
 
 void test_result_text() {
@@ -123,7 +124,7 @@ void test_result_text() {
               "aborted: off-script, <=11.1V, 10.9A 121W claimed");
     for (unsigned a = 0; a <= unsigned(svooc::Abort::ContractChanged) + 1; ++a) {
         const char* w = sc::abort_word(std::uint8_t(a));
-        CHECK(w != nullptr && std::strlen(w) <= 10);
+        CHECK(w != nullptr && k2::strpack::cells_rt(w) <= 10);   // packed: the decoded word
         CHECK_EQ(int(cap_text(0x06D, End::Aborted, 11120, 0, svooc::Abort(a)).size()) <= 55, true);
     }
     // The VOOC family's ident as the "VOOC id" row reads it; 0 (none heard) writes nothing.

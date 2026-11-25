@@ -17,6 +17,7 @@
 #pragma once
 
 #include <cstdint>
+#include "k2/core/strpack.hpp"
 
 namespace k2::pd {
 
@@ -55,10 +56,10 @@ enum class ListenDrop : std::uint8_t {
 };
 constexpr const char* listen_drop_name(ListenDrop d) {
     switch (d) {
-    case ListenDrop::None: return "waiting";
-    case ListenDrop::VSafe0: return "vSafe0V reached";
-    case ListenDrop::Timeout: return "timeout";
-    case ListenDrop::Skipped: return "skipped";
+    case ListenDrop::None: return K2_P("waiting");
+    case ListenDrop::VSafe0: return K2_P("vSafe0V reached");
+    case ListenDrop::Timeout: return K2_P("timeout");
+    case ListenDrop::Skipped: return K2_P("skipped");
     }
     return "?";
 }
@@ -76,12 +77,12 @@ constexpr std::uint8_t listen_secs(std::uint8_t requested) { return requested ==
 constexpr const char* listen_refusal_name(ListenRefusal r) {
     switch (r) {
     case ListenRefusal::None: return "ok";
-    case ListenRefusal::BadArg: return "bad seconds or port";
-    case ListenRefusal::Busy: return "the link is busy";
-    case ListenRefusal::Inline: return "a sink sits behind the K2";
-    case ListenRefusal::Pinned: return "the K2 is powered through this port";
-    case ListenRefusal::Spoof: return "the e-marker spoof is armed";
-    case ListenRefusal::Running: return "already listening";
+    case ListenRefusal::BadArg: return K2_P("bad seconds or port");
+    case ListenRefusal::Busy: return K2_P("the link is busy");
+    case ListenRefusal::Inline: return K2_P("a sink sits behind the K2");
+    case ListenRefusal::Pinned: return K2_P("the K2 is powered through this port");
+    case ListenRefusal::Spoof: return K2_P("the e-marker spoof is armed");
+    case ListenRefusal::Running: return K2_P("already listening");
     }
     return "?";
 }
@@ -89,8 +90,8 @@ constexpr const char* listen_end_name(ListenEnd e) {
     switch (e) {
     case ListenEnd::None: return "none";
     case ListenEnd::Done: return "done";
-    case ListenEnd::Stopped: return "stopped";
-    case ListenEnd::Lost: return "lost the port";
+    case ListenEnd::Stopped: return K2_P("stopped");
+    case ListenEnd::Lost: return K2_P("lost the port");
     }
     return "?";
 }

@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include "k2/core/strpack.hpp"
 
 namespace k2::memstat {
 
@@ -15,7 +16,7 @@ struct Out {
     std::span<char> buf;
     std::size_t n = 0;
     Out& put(const char* s) {
-        while (*s && n < buf.size()) buf[n++] = *s++;
+        strpack::for_chars(s, [this](char c) { if (n < buf.size()) buf[n++] = c; });
         return *this;
     }
     Out& u32(std::uint32_t v) {
@@ -32,17 +33,17 @@ struct Out {
     }
 };
 
-constexpr const char* kLabels[kRows] = {"Stack now", "Stack low", "IRQ low", "RAM static", "FS used",
-                                        "FS free",   "Image",     "Image free", "Heap"};
+constexpr const char* kLabels[kRows] = {K2_P("Stack now"), K2_P("Stack low"), K2_P("IRQ low"), K2_P("RAM static"), K2_P("FS used"),
+                                        K2_P("FS free"),   K2_P("Image"),     K2_P("Image free"), "Heap"};
 constexpr bool labels_fit() {
     for (int i = 0; i < kRows; i++)
-        if (__builtin_strlen(kLabels[i]) > kLabelMax) return false;
+        if (strpack::cells_packed(kLabels[i]) > int(kLabelMax)) return false;
     return true;
 }
 static_assert(labels_fit(), "a memory label is wider than its column");
 
 Out& blocks(Out& o, std::uint32_t used_or_free_blocks, std::uint32_t block_bytes) {
-    return o.u32(used_or_free_blocks * block_bytes / 1024).put(" KB (").u32(used_or_free_blocks).put(" blk)");
+    return o.u32(used_or_free_blocks * block_bytes / 1024).put(K2_P(" KB (")).u32(used_or_free_blocks).put(K2_P(" blk)"));
 }
 
 }  // namespace
@@ -81,13 +82,13 @@ Level footer_level(const Snapshot& s) { return storage_level(s); }
 
 std::size_t footer_text(const Snapshot& s, std::span<char> out) {
     Out o{out.first(std::min(out.size(), kFooterMax))};
-    if (!s.ok) return o.put("Reading memory").n;
+    if (!s.ok) return o.put(K2_P("Reading memory")).n;
     switch (storage_level(s)) {
     case Level::Ok:      break;
-    case Level::Caution: return o.put("Storage low: delete cards").n;
-    case Level::Error:   return o.put("Storage full: delete cards").n;
+    case Level::Caution: return o.put(K2_P("Storage low: delete cards")).n;
+    case Level::Error:   return o.put(K2_P("Storage full: delete cards")).n;
     }
-    return o.put("Stack never below ").u32(s.psp_low).put(" B").n;
+    return o.put(K2_P("Stack never below ")).u32(s.psp_low).put(" B").n;
 }
 
 }  // namespace k2::memstat

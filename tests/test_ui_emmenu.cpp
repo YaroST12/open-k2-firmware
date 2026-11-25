@@ -13,9 +13,12 @@ static void test_flow() {
     m.set_count(3);
     CHECK_EQ(m.on_event(S(Button::Back), c) ? 1 : 0, 0);   // BACK in the list leaves the page
     m.on_event(S(Button::Plus), c); CHECK_EQ(m.idx, 1);
-    m.on_event(S(Button::Minus), c); m.on_event(S(Button::Minus), c); CHECK_EQ(m.idx, 2);   // wraps
+    m.on_event(S(Button::Minus), c); m.on_event(S(Button::Minus), c); CHECK_EQ(m.idx, 0);   // stops at the first
+    m.on_event(S(Button::Plus), c); m.on_event(S(Button::Plus), c); m.on_event(S(Button::Plus), c);
+    CHECK_EQ(m.idx, 2);                                                  // stops at the last
     m.on_event(S(Button::Ok), c); CHECK_EQ(int(m.view), int(EmView::Detail));
-    m.on_event(S(Button::Plus), c); CHECK_EQ(m.idx, 0);                  // next cable in the detail
+    m.on_event(S(Button::Plus), c); CHECK_EQ(m.idx, 2);                  // the detail stops at the last too
+    m.on_event(S(Button::Minus), c); CHECK_EQ(m.idx, 1);                 // previous cable in the detail
     m.on_event(S(Button::Ok), c);                     // delete asks first
     CHECK_EQ(int(c), int(EmCmd::None)); CHECK_EQ(int(m.view), int(EmView::Confirm));
     m.on_event(S(Button::Back), c);                   // keep it

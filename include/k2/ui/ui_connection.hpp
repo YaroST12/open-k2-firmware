@@ -18,6 +18,7 @@
 #include <span>
 #include <string_view>
 
+#include "k2/core/strpack.hpp"
 #include "k2/pd/cable_fact.hpp"
 #include "k2/pd/cc_crossed.hpp"
 #include "k2/pd/pd_rdseek.hpp"
@@ -37,7 +38,7 @@ using Topology = raguard::Topology;
 inline constexpr int kTabs = pdtabs::kTabs;
 
 constexpr const char *tab_name(Tab t) {
-    return t == Tab::Source ? "Source" : t == Tab::Cable ? "Cable" : "Sink";
+    return t == Tab::Source ? K2_P("Source") : t == Tab::Cable ? K2_P("Cable") : "Sink";
 }
 
 // What the passive readers say right now.
@@ -210,7 +211,7 @@ constexpr bool tab_empty(Tab t, const Facts &f) {
 
 // "top plug" / "via cable" when the lines say so, "" otherwise (status bar).
 constexpr const char *topology_word(Topology t) {
-    return t == Topology::DirectReceptacle ? "top plug" : t == Topology::CableSingleCc ? "via cable" : "";
+    return t == Topology::DirectReceptacle ? K2_P("top plug") : t == Topology::CableSingleCc ? K2_P("via cable") : "";
 }
 
 // Empty state of a tab: the verdict band's word and the one line under it (text::conn, width-checked there).
@@ -262,6 +263,7 @@ constexpr Empty empty_state(Tab t, const Facts &f) {
 // cut. Returns the number of lines used.
 template <std::size_t N>
 int wrap(std::string_view text, std::size_t width, std::array<std::string_view, N> &lines) {
+    K2_EXPECT_PLAIN(text);
     int n = 0;
     std::size_t pos = 0;
     while (pos < text.size() && n < int(N)) {
@@ -301,21 +303,21 @@ inline bool tab_unasked(Tab t, const pd::Survey &s) {
 // One word for a field that has no value: why the row is empty (<= 19 cells, the value column). Got has no word.
 constexpr const char *sv_word(const pd::SvEntry &e) {
     switch (e.state) {
-    case pd::SvState::NotAsked: return "Not asked";
-    case pd::SvState::Pending: return "Asking...";
+    case pd::SvState::NotAsked: return K2_P("Not asked");
+    case pd::SvState::Pending: return K2_P("Asking...");
     case pd::SvState::Got: return "";
-    case pd::SvState::NotSupported: return "Not supported";
-    case pd::SvState::NoAnswer: return "No answer";
+    case pd::SvState::NotSupported: return K2_P("Not supported");
+    case pd::SvState::NoAnswer: return K2_P("No answer");
     case pd::SvState::Blocked:
         switch (e.why) {
-        case pd::SvWhy::Inline: return "Inline: blocked";
-        case pd::SvWhy::ChargerTest: return "Charger test";
-        case pd::SvWhy::XiaomiChain: return "Xiaomi chain";
-        case pd::SvWhy::Pd20: return "Not in PD 2.0";
-        case pd::SvWhy::NoEpr: return "No EPR bit";
+        case pd::SvWhy::Inline: return K2_P("Inline: blocked");
+        case pd::SvWhy::ChargerTest: return K2_P("Charger test");
+        case pd::SvWhy::XiaomiChain: return K2_P("Xiaomi chain");
+        case pd::SvWhy::Pd20: return K2_P("Not in PD 2.0");
+        case pd::SvWhy::NoEpr: return K2_P("No EPR bit");
         case pd::SvWhy::None: break;
         }
-        return "Blocked";
+        return K2_P("Blocked");
     }
     return "";
 }
@@ -329,11 +331,11 @@ inline constexpr std::size_t kStatusCells = 27;                            // th
 // "Read: 5 got, 2 unsupported": the footer holds 27 cells, "2 not supported" would make the line 28, so the short word. A
 // ", 1 no answer" follows only while it still fits.
 inline void read_summary(const pd::Survey &s, StrBufBase &out) {
-    out.put("Read: ").put_u32(s.got()).put(" got");
-    if (s.refused()) out.put(", ").put_u32(s.refused()).put(" unsupported");
+    out.put(K2_P("Read: ")).put_u32(s.got()).put(" got");
+    if (s.refused()) out.put(", ").put_u32(s.refused()).put(K2_P(" unsupported"));
     if (s.silent()) {
         StrBuf<24> t;
-        t.put(", ").put_u32(s.silent()).put(" no answer");
+        t.put(", ").put_u32(s.silent()).put(K2_P(" no answer"));
         if (out.view().size() + t.view().size() <= kStatusCells) out.put(t.view());
     }
 }
@@ -341,15 +343,15 @@ inline void read_summary(const pd::Survey &s, StrBufBase &out) {
 // The state of each tab in footer words, lower case (the footer capitalises the first): what an empty tab's footer says
 // about the other two.
 constexpr const char *source_word(const Facts &f) {
-    return f.charger ? "charger" : f.wait == raguard::WaitKind::ChargerWaiting ? "charger waiting"
-           : f.wait == raguard::WaitKind::DualRolePort ? "dual-role port" : "no charger";
+    return f.charger ? K2_P("charger") : f.wait == raguard::WaitKind::ChargerWaiting ? K2_P("charger waiting")
+           : f.wait == raguard::WaitKind::DualRolePort ? K2_P("dual-role port") : K2_P("no charger");
 }
 constexpr const char *cable_word(const Facts &f) {
-    return f.cable ? "cable read" : f.cable_fact == cablefact::Fact::ChipSilent ? "chip silent"
-           : f.cable_fact == cablefact::Fact::NoChip ? "no e-marker" : "no cable read";
+    return f.cable ? K2_P("cable read") : f.cable_fact == cablefact::Fact::ChipSilent ? K2_P("chip silent")
+           : f.cable_fact == cablefact::Fact::NoChip ? K2_P("no e-marker") : K2_P("no cable read");
 }
 constexpr const char *sink_word(const Facts &f) {
-    return f.inline_sink ? "device inline" : f.sink_seen ? "sink on CC" : "no device";
+    return f.inline_sink ? K2_P("device inline") : f.sink_seen ? K2_P("sink on CC") : K2_P("no device");
 }
 
 // ---- status bar -------------------------------------------------------------------------------------
@@ -380,13 +382,14 @@ inline void status_text(const StatusIn &s, StrBufBase &out) {
     // An empty tab's band already names its own state: the footer never repeats it (user, 2026-11-12) and states what the
     // other two tabs hold instead, the nearer one first ("Charger, no device"), the second only while it fits.
     if (tab_empty(s.tab, s.f)) {
-        const char *a = s.tab == Tab::Source ? sink_word(s.f) : source_word(s.f);
-        const char *b = s.tab == Tab::Cable ? sink_word(s.f) : cable_word(s.f);
-        out.put_char(static_cast<char>(a[0] - ('a' - 'A'))).put(a + 1);
-        if (std::string_view(a).size() + 2 + std::string_view(b).size() <= kStatusCells) out.put(", ").put(b);
+        char da[20], db[20];
+        const std::string_view a = strpack::unpack(s.tab == Tab::Source ? sink_word(s.f) : source_word(s.f), da);
+        const std::string_view b = strpack::unpack(s.tab == Tab::Cable ? sink_word(s.f) : cable_word(s.f), db);
+        out.put_char(static_cast<char>(a[0] - ('a' - 'A'))).put(a.substr(1));
+        if (a.size() + 2 + b.size() <= kStatusCells) out.put(", ").put(b);
         return;
     }
-    out.put(s.tab == Tab::Source ? "Charger" : s.tab == Tab::Cable ? "Cable read" : s.f.inline_sink ? "Device inline" : "Sink seen on CC");
+    out.put(s.tab == Tab::Source ? K2_P("Charger") : s.tab == Tab::Cable ? K2_P("Cable read") : s.f.inline_sink ? K2_P("Device inline") : K2_P("Sink seen on CC"));
     const char *w = topology_word(s.f.topo);
     if (w[0]) out.put(", ").put(w);
 }
@@ -431,33 +434,33 @@ constexpr sl::Id act_slot(Act a, bool more, bool share) {
     return share ? sl::ShareLong : sl::None;
 }
 
-inline constexpr const char *kWhyLiveSink = "Live sink: unplug load";
+inline constexpr const char *kWhyLiveSink = K2_P("Live sink: unplug load");
 // The no-PD gate's own refusal word (fits the 24-cell pop-up "why"): the same sentence the tab shows.
-inline constexpr const char *kWhyNoPd = "No PD from this device";
+inline constexpr const char *kWhyNoPd = K2_P("No PD from this device");
 
 constexpr int actions(Tab t, const ActFacts &a, std::array<Item, kMaxItems> &out) {
     int n = 0;
     switch (t) {
     case Tab::Source:
-        out[std::size_t(n++)] = {Act::Refresh, "Refresh", true, ""};
-        out[std::size_t(n++)] = {Act::Details, a.more ? "Main page" : "Details", a.attached, "No charger"};
-        out[std::size_t(n++)] = {Act::ShareCaps, "Share (QR)", a.caps_valid, "No caps yet"};
+        out[std::size_t(n++)] = {Act::Refresh, K2_P("Refresh"), true, ""};
+        out[std::size_t(n++)] = {Act::Details, a.more ? K2_P("Main page") : K2_P("Details"), a.attached, K2_P("No charger")};
+        out[std::size_t(n++)] = {Act::ShareCaps, K2_P("Share (QR)"), a.caps_valid, K2_P("No caps yet")};
         break;
     case Tab::Cable:   // Refresh last: the cable's own items keep their place
-        out[std::size_t(n++)] = {Act::ReadCable, "Read cable", true, ""};
-        out[std::size_t(n++)] = {Act::SaveCable, "Save cable", a.cable_valid, "No cable read"};
-        out[std::size_t(n++)] = {Act::SpoofAs, "Spoof as...", !a.inline_sink, kWhyLiveSink};
-        out[std::size_t(n++)] = {Act::SavedCables, "Saved cables", true, ""};
-        out[std::size_t(n++)] = {Act::ShareCable, "Share (QR)", a.cable_valid, "No cable read"};
-        out[std::size_t(n++)] = {Act::Refresh, "Refresh", true, ""};
+        out[std::size_t(n++)] = {Act::ReadCable, K2_P("Read cable"), true, ""};
+        out[std::size_t(n++)] = {Act::SaveCable, K2_P("Save cable"), a.cable_valid, K2_P("No cable read")};
+        out[std::size_t(n++)] = {Act::SpoofAs, K2_P("Spoof as..."), !a.inline_sink, kWhyLiveSink};
+        out[std::size_t(n++)] = {Act::SavedCables, K2_P("Saved cables"), true, ""};
+        out[std::size_t(n++)] = {Act::ShareCable, K2_P("Share (QR)"), a.cable_valid, K2_P("No cable read")};
+        out[std::size_t(n++)] = {Act::Refresh, K2_P("Refresh"), true, ""};
         break;
     case Tab::Sink: {
         // No PD this attach: a device that never talks PD cannot be identified - refuse with the same
         // words the tab shows. The alone path (a dual-role phone alone) is PD-capable and stays offered.
         const bool seen = a.attached || a.alone;
         const bool id_ok = seen && !(a.pd_none && !a.alone);
-        out[std::size_t(n++)] = {Act::Identify, "Identify", id_ok, !id_ok && seen ? kWhyNoPd : "No device seen"};
-        out[std::size_t(n++)] = {Act::Refresh, "Refresh", true, ""};
+        out[std::size_t(n++)] = {Act::Identify, K2_P("Identify"), id_ok, !id_ok && seen ? kWhyNoPd : K2_P("No device seen")};
+        out[std::size_t(n++)] = {Act::Refresh, K2_P("Refresh"), true, ""};
         break;
     }
     }
@@ -484,15 +487,15 @@ inline int place_actions(Tab t, const ActFacts &a, std::array<Item, kMaxItems> &
     case Tab::Cable:
         put({Act::ReadCable, tx::kReadEmarker, true, ""});
         for (int i = 0; i < b.n; i++) put({Act::Bench, b.a[i].name, true, "", static_cast<int8_t>(i)});
-        put({Act::SaveCable, "Save cable", a.cable_valid, "No cable read"});
-        put({Act::SavedCables, "Saved cables", true, ""});
-        put({Act::SpoofAs, "Spoof as...", !a.inline_sink, kWhyLiveSink, -1, false, a.inline_sink ? "load" : ""});
+        put({Act::SaveCable, K2_P("Save cable"), a.cable_valid, K2_P("No cable read")});
+        put({Act::SavedCables, K2_P("Saved cables"), true, ""});
+        put({Act::SpoofAs, K2_P("Spoof as..."), !a.inline_sink, kWhyLiveSink, -1, false, a.inline_sink ? "load" : ""});
         break;
     case Tab::Sink: {
         const bool seen = a.attached || a.alone;
         const bool id_ok = seen && !(a.pd_none && !a.alone);
         put({Act::Details, tx::kActSinkDetails, true, ""});
-        put({Act::Identify, "Ask device", id_ok, !id_ok && seen ? kWhyNoPd : "No device seen"});
+        put({Act::Identify, K2_P("Ask device"), id_ok, !id_ok && seen ? kWhyNoPd : K2_P("No device seen")});
         for (int i = 0; i < b.n; i++) put({Act::Bench, b.a[i].name, true, "", static_cast<int8_t>(i)});
         break;
     }
@@ -514,11 +517,11 @@ constexpr const char *no_pd_line(Tab t, pd::PdNoneWhy w) {
 // nullptr for every other SVID (standard ones, DisplayPort, Thunderbolt and unknown values are not protocols).
 constexpr const char *protocol_name(std::uint16_t svid) {
     switch (svid) {
-    case 0x2717: return "Xiaomi PD";
-    case 0x22D9: return "OPPO PD";
-    case 0x12D1: return "Huawei PD";
-    case 0x2D95: return "Vivo PD";
-    case 0x2E87: return "Injoinic PD";
+    case 0x2717: return K2_P("Xiaomi PD");
+    case 0x22D9: return K2_P("OPPO PD");
+    case 0x12D1: return K2_P("Huawei PD");
+    case 0x2D95: return K2_P("Vivo PD");
+    case 0x2E87: return K2_P("Injoinic PD");
     case 0x5FC9: return "UFCS";
     default:     return nullptr;
     }
@@ -552,7 +555,7 @@ bool protocol_text(std::span<const std::uint16_t> svids, StrBuf<N> &out) {
 template <std::size_t N>
 void id_value(StrBuf<N> &out, int val_cells, bool asked, std::uint16_t vid, std::uint16_t pid, const char *vendor) {
     out.clear();
-    if (!asked && out.view().size() + 6 + 9 <= static_cast<std::size_t>(val_cells)) out.put("sniff ");
+    if (!asked && out.view().size() + 6 + 9 <= static_cast<std::size_t>(val_cells)) out.put(K2_P("sniff "));
     out.put_hex(vid, 4).put_char(':').put_hex(pid, 4);
     if (asked && vendor && vendor[0] &&
         out.view().size() + 1 + std::string_view(vendor).size() <= static_cast<std::size_t>(val_cells)) {

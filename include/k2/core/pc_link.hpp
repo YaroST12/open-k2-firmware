@@ -9,6 +9,7 @@
 
 #include "k2/core/bss_zero.hpp"
 #include "k2/core/loop_guard.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::pclink {
 
@@ -17,9 +18,9 @@ enum class State : uint8_t { None = 0, Power = 1, Host = 2, Shell = 3 };
 
 inline constexpr const char *name(State s) {
     switch (s) {
-    case State::Power: return "power";
+    case State::Power: return K2_P("power");
     case State::Host: return "host";
-    case State::Shell: return "shell";
+    case State::Shell: return K2_P("shell");
     default: return "none";
     }
 }

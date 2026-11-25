@@ -121,6 +121,8 @@ public:
     void draw(uint32_t now_ms = 0, PaintBudget *bg = nullptr);
     // Forget what is on screen (after a capture pass or a repaint of the surrounding page).
     void invalidate();
+    // Forget only the scrollbar (its track height follows the focus expansion).
+    void invalidate_bar() { bar_drawn_ = false; bar_count_ = bar_offset_ = -1; tail_used_ = -1; }
 
     const ListState &state() const { return st_; }
 

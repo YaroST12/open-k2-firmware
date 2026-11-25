@@ -8,6 +8,7 @@
 #include "k2/drivers/eeprom.hpp"
 #include "k2/drivers/fusb302.hpp"
 #include "k2/pd/emk_spoof.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::eekeep {
 namespace {
@@ -68,7 +69,7 @@ void spoof_restore() {
         return;   // poll() clears the slot: the user's arm is no longer the one answering
     }
     const bool ok = rdcomeback::arm_identity(c);
-    K2LOG("[EEKEEP] spoof %u/%u %s\n", static_cast<unsigned>(c.kind), static_cast<unsigned>(c.seq), ok ? "re-armed" : "gone, slot cleared");
+    K2LOG("[EEKEEP] spoof %u/%u %s\n", static_cast<unsigned>(c.kind), static_cast<unsigned>(c.seq), ok ? K2_P("re-armed") : K2_P("gone, slot cleared"));
     if (ok) spoof_user_armed(c);
 }
 

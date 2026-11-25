@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
 // QR share record builders (see k2/ui/qrshare_records.hpp).
+#include "k2/core/strpack.hpp"
 #include "k2/ui/qrshare_records.hpp"
 
 #include <algorithm>
@@ -298,6 +299,8 @@ std::size_t emarker(const emrec::Record& rec, std::string_view name, const emk_q
     const std::size_t qlen = !quirks || quirks->empty() ? 0 : emk_quirk::block_size(quirks->count);
     if (out.size() < kEmarkerHead + qlen) return 0;
     out[0] = qlen ? kEmarkerQuirks : 0;
+    char dec[kEmarkerName + 1];
+    name = strpack::unpack(name, dec);
     const std::size_t n = std::min(name.size(), kEmarkerName);
     std::memset(out.data() + 1, 0, kEmarkerName);
     std::memcpy(out.data() + 1, name.data(), n);

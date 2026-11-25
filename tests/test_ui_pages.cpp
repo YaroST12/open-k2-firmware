@@ -36,6 +36,7 @@ static Ui &fresh_ui() {
     // start from a new Link (the rest of the Ui carries over between cases as before).
     const_cast<pd::Link &>(ui.link()) = pd::Link{};
     ui.context().keep.place_sel = {};
+    ui.context().keep.link_tab = 0;
     held::reset();
     g_stub.ms = 10000;
     ui.init(g_stub.ms);
@@ -73,8 +74,10 @@ static void test_label_sets() {
         const uint8_t p = kPages[i];
         ui.goto_page(p, 20000);
         for (int b = 0; b < 4; b++) CHECK_STR(label(ui, static_cast<Button>(b)), expect[i][b]);
-        CHECK_EQ(ui.labels().b[static_cast<int>(Button::Minus)].dim, false);
-        CHECK_EQ(ui.labels().b[static_cast<int>(Button::Plus)].dim, false);
+        if (std::strcmp(expect[i][1], "Up") != 0) {   // a list dims Up / Dn at its ends (list_strip), the rest never
+            CHECK_EQ(ui.labels().b[static_cast<int>(Button::Minus)].dim, false);
+            CHECK_EQ(ui.labels().b[static_cast<int>(Button::Plus)].dim, false);
+        }
         // Every label fits the slot: characters <= label_max_chars(button).
         for (int b = 0; b < 4; b++) CHECK_EQ(strlen(label(ui, static_cast<Button>(b))) <= label_max_chars(static_cast<Button>(b)), 1);
         CHECK_EQ(label_violation(ui.labels()) == nullptr, true);
@@ -221,6 +224,76 @@ static void test_ring_flag_and_busy_skip() {
     CHECK_EQ(ui.ports_busy(), false);
     key(Button::Plus);
     CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Link));             // free again: the menu shows
+    ui.goto_page(uint8_t(Page::Home), t += 100);
+}
+
+// The Link keeps its card through the ring as the other ring pages keep their row: leave it on Cable (Overview or Cable
+// Actions), walk to Tools and back, and OK opens the Cable card again.
+static void test_ring_link_keeps_card() {
+    Ui &ui = fresh_ui();
+    uint32_t t = 30000;
+    const auto key = [&](Button b, ButtonEvent e = ButtonEvent::Short) { ui.on_button(b, e, t += 50); t = settle(ui, t); };
+    ui.goto_page(static_cast<uint8_t>(Page::Lines), t);
+    for (int i = 0; i < 4; i++) key(Button::Plus);
+    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Link));
+    key(Button::Ok);
+    key(Button::Plus);                                   // Overview: the Cable card
+    CHECK_EQ(int(ui.connection_page().tab()), int(conn::Tab::Cable));
+    for (int pass = 0; pass < 2; pass++) {               // 0: left from the Overview, 1: from Cable Actions
+        if (pass == 1) {
+            key(Button::Ok);
+            CHECK_EQ(ui.connection_page().actions_mode(), true);
+        }
+        key(Button::Back, ButtonEvent::Long);
+        CHECK_EQ(ui.ring_view(), true);
+        key(Button::Plus);
+        CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Tools));
+        key(Button::Minus);
+        CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Link));
+        key(Button::Ok);
+        CHECK_EQ(ui.connection_page().overview_mode(), true);
+        CHECK_EQ(int(ui.connection_page().tab()), int(conn::Tab::Cable));
+    }
+    ui.goto_page(uint8_t(Page::Home), t += 100);
+}
+
+// Up / Dn dim where they move nothing (UI_SYSTEM strip rule): a page with no cursor, an empty or one-row list, a sheet that
+// fits; a sheet that scrolls dims them at its ends. A dimmed key, pressed, moves nothing.
+static void test_still_pages_dim_arrows() {
+    Ui &ui = fresh_ui();
+    uint32_t t = 40000;
+    const auto dim = [&](Button b) { return ui.labels().b[static_cast<int>(b)].dim; };
+    const auto key = [&](Button b) { ui.on_button(b, ButtonEvent::Short, t += 50); for (int i = 0; i < 4; i++) ui.tick(t += 100); t = settle(ui, t); };
+    const auto both_dim = [&](const char *what) {
+        if (!dim(Button::Minus) || !dim(Button::Plus)) std::printf("  still page with live arrows: %s\n", what);
+        CHECK_EQ(dim(Button::Minus), true);
+        CHECK_EQ(dim(Button::Plus), true);
+    };
+    ui.goto_page(kDiagPage, t);   // System state: fixed cards
+    both_dim("System state");
+    ui.goto_page(static_cast<uint8_t>(Page::Lines), t += 100);
+    CHECK_EQ(ui.push_menu(Menu::Memory, t += 100), 1);
+    both_dim("Memory");
+    ui.goto_page(static_cast<uint8_t>(Page::Lines), t += 100);
+    CHECK_EQ(ui.push_menu(Menu::Cards, t += 100), 1);   // no cards on the host
+    both_dim("Report cards (empty)");
+    ui.goto_page(static_cast<uint8_t>(Page::Lines), t += 100);
+    CHECK_EQ(ui.push_menu(Menu::BlackBox, t += 100), 1);   // no captures: the Live link row alone
+    both_dim("Black Box (Live link only)");
+    key(Button::Plus);
+    key(Button::Minus);
+    CHECK_EQ(ui.menu() == Menu::BlackBox, 1);
+    ui.goto_page(static_cast<uint8_t>(Page::Lines), t += 100);
+    CHECK_EQ(ui.push_menu(Menu::Emarker, t += 100), 1);   // no saved cable: nothing to move to
+    both_dim("Saved cables (empty)");
+    fill_pdos(3);
+    ui.goto_page(kPdPage, t += 100);                       // the Charger sheet fits
+    for (int i = 0; i < 4; i++) ui.tick(t += 100);
+    t = settle(ui, t);
+    both_dim("Spec (fits)");
+    key(Button::Plus);
+    CHECK_EQ(ui.list_state().offset, 0);
+    g_stub.caps = {};
     ui.goto_page(uint8_t(Page::Home), t += 100);
 }
 
@@ -492,8 +565,12 @@ static void test_cable_tab_save_and_list() {
     CHECK_EQ(ui.menu() == Menu::Emarker, 1);
     CHECK_EQ(ui.menu_depth(), 2u);                          // Connection > Saved cables (opened from Home, no Tools under it)
     CHECK_STR(label(ui, Button::Ok), "View");
+    CHECK_EQ(ui.labels().b[static_cast<int>(Button::Minus)].dim, true);   // one cable: nothing to move to
+    CHECK_EQ(ui.labels().b[static_cast<int>(Button::Plus)].dim, true);
     ui.on_button(Button::Ok, ButtonEvent::Short, 24300);    // detail card
     CHECK_STR(label(ui, Button::Ok), "Delete");
+    CHECK_EQ(ui.labels().b[static_cast<int>(Button::Minus)].dim, true);
+    CHECK_EQ(ui.labels().b[static_cast<int>(Button::Plus)].dim, true);
     ui.on_button(Button::Ok, ButtonEvent::Short, 24400);    // ask
     CHECK_EQ(g_stub.lib_removes, 0);
     ui.on_button(Button::Back, ButtonEvent::Short, 24500);  // keep
@@ -511,6 +588,40 @@ static void test_cable_tab_save_and_list() {
     g_stub.lib_err = emlib::Err::Full;
     ui.on_button(Button::Ok, ButtonEvent::Short, 25100);
     CHECK_EQ(int(g_stub.lib.size()), 0);
+    g_stub = StubState();
+}
+
+// Two saved cables: the list and the detail stop at their ends, Up dim on the first cable, Dn on the last.
+static void test_saved_cables_stop_at_ends() {
+    Ui &ui = fresh_ui();
+    g_stub = StubState();
+    for (uint16_t s = 1; s <= 2; s++) {
+        emlib::Entry e;
+        e.seq = s;
+        e.name[0] = char('A' + s);
+        g_stub.lib.push_back(e);
+    }
+    uint32_t t = 26000;
+    CHECK_EQ(ui.push_menu(Menu::Emarker, t += 100), 1);
+    ui.tick(t += 50);
+    const auto dim = [&](Button b) { return ui.labels().b[static_cast<int>(b)].dim; };
+    const auto key = [&](Button b) { ui.on_button(b, ButtonEvent::Short, t += 50); ui.tick(t += 10); };
+    CHECK_EQ(dim(Button::Minus), true);  CHECK_EQ(dim(Button::Plus), false);
+    key(Button::Minus);                                     // no wrap to the last
+    CHECK_EQ(dim(Button::Minus), true);  CHECK_EQ(dim(Button::Plus), false);
+    key(Button::Plus);
+    CHECK_EQ(dim(Button::Minus), false); CHECK_EQ(dim(Button::Plus), true);
+    key(Button::Plus);                                      // no wrap to the first
+    CHECK_EQ(dim(Button::Minus), false); CHECK_EQ(dim(Button::Plus), true);
+    key(Button::Ok);                                        // the last cable's detail
+    CHECK_STR(label(ui, Button::Ok), "Delete");
+    CHECK_EQ(dim(Button::Minus), false); CHECK_EQ(dim(Button::Plus), true);
+    key(Button::Plus);
+    CHECK_EQ(dim(Button::Minus), false); CHECK_EQ(dim(Button::Plus), true);
+    key(Button::Minus);
+    CHECK_EQ(dim(Button::Minus), true);  CHECK_EQ(dim(Button::Plus), false);
+    key(Button::Minus);
+    CHECK_EQ(dim(Button::Minus), true);  CHECK_EQ(dim(Button::Plus), false);
     g_stub = StubState();
 }
 
@@ -880,6 +991,32 @@ static void test_cable_kelvin_rows() {
         CHECK_EQ(glyphs(kelvin_text(i, true, 20000, -1000, k)) <= 21, 1);
         CHECK_EQ(glyphs(kelvin_text(i, true, 20000, -1000, big)) <= 21, 1);
     }
+}
+
+// Cable R: the step rows read volts in kVolt and amps in kAmp (LIVE, IDLE and LOAD alike), never amps in yellow.
+static void test_cable_r_amps_cyan() {
+    Ui &ui = fresh_ui();
+    ui.set_rotation(0, 20000);
+    ui.goto_page(static_cast<uint8_t>(Page::Lines), 20000);
+    ui.push_menu(Menu::CableR, 20100);
+    ui.set_cable_mode(cable_r::Mode::Kelvin);
+    g_stub.pm_online = true;
+    g_stub.pm = {};
+    g_stub.pm.vbus_mv = 19740; g_stub.pm.current_ma = 310; g_stub.pm.power_mw = 6120;
+    uint32_t t = 20200;
+    for (int i = 0; i < 6; i++) ui.tick(t += 100);
+    t = settle(ui, t);
+    auto ink = [&](uint16_t col) {   // the content between the strip (x 0..15) and the rail (x 224..239), the LIVE row
+        int n = 0;
+        for (int y = kit::kBodyY; y < kit::kBodyY + kit::kRowH; y++)
+            for (int x = 16; x < 224; x++) n += g_panel[y * 240 + x] == col;
+        return n;
+    };
+    CHECK_EQ(ink(kVolt) > 30, true);
+    CHECK_EQ(ink(kAmp) > 30, true);
+    ui.set_cable_mode(cable_r::Mode::Passive);
+    g_stub.pm = {};
+    ui.pop_menu(t += 100);
 }
 
 static void test_cable_mode_toggle() {
@@ -1729,6 +1866,7 @@ static void test_blackbox_submenu() {
 static void test_log_place() {
     Ui &ui = fresh_ui();
     pdtrace::init();
+    ui.context().keep.place_sel[static_cast<int>(bench::Place::Log)] = 0;   // an earlier test left the place on another row
     ui.open_place(bench::Place::Log, kT0);
     const uint32_t t_open = settle(ui, kT0);
     CHECK_EQ(ui.menu() == Menu::Diagnosis, 1);
@@ -1887,6 +2025,7 @@ static void test_settings_long_back_row() {
     // Settings > Home boxes: OK on Box 1/2/3 opens radio picker; OK commits & returns, BACK cancels & returns, Reset defaults restores {Pd, Energy, Rotating}.
     ui.open_place(bench::Place::K2, kT0 + 180);
     ui.context().keep.settings_sel = SettingsPage::kHomeBoxesRow;
+    CHECK_STR(label(ui, Button::Ok), "Open");   // a chevron row opens a page
     press(ui, Button::Ok, ButtonEvent::Short, kT0 + 190);
     CHECK_EQ(ui.menu() == Menu::HomeBoxes, 1);
     CHECK_EQ(ui.list_state().count, HomeBoxesPage::kRows);
@@ -2141,9 +2280,10 @@ static void test_usb_link_toggles() {
     ui.on_button(Button::Minus, ButtonEvent::Short, 21550);       // back to Drive: turning it on drops Net
     ui.on_button(Button::Ok, ButtonEvent::Short, 21560);
     CHECK_EQ(g_stub.usb_stored.net, 0); CHECK_EQ(g_stub.usb_stored.drive, 1);
-    ui.on_button(Button::Plus, ButtonEvent::Short, 21570);        // Network again, then WebUSB, then wrap to HID
-    ui.on_button(Button::Plus, ButtonEvent::Short, 21575);
-    ui.on_button(Button::Plus, ButtonEvent::Short, 21580);
+    ui.on_button(Button::Minus, ButtonEvent::Short, 21570);       // up to HID: the list stops there (no wrap)
+    ui.on_button(Button::Minus, ButtonEvent::Short, 21575);
+    CHECK_STR(label(ui, Button::Minus), "Up");
+    CHECK_EQ(ui.labels().b[static_cast<int>(Button::Minus)].dim, true);
     ui.on_button(Button::Ok, ButtonEvent::Short, 21590);          // HID off: nothing else stays on but Drive
     CHECK_EQ(g_stub.usb_stored.hid, 0); CHECK_EQ(g_stub.usb_stored.net, 0);
     ui.on_button(Button::Ok, ButtonEvent::Short, 21595);          // HID on again, Drive off for the next checks
@@ -2167,10 +2307,11 @@ static void test_usb_link_webusb_row() {
     CHECK_EQ(k2::usbcfg::rows(), 4);
     ui.goto_page(static_cast<uint8_t>(Page::Lines), 23000);
     ui.push_menu(Menu::UsbLink, 23100);
-    ui.on_button(Button::Minus, ButtonEvent::Short, 23200);       // wraps from HID to the last row: WebUSB
+    for (int i = 0; i < 4; i++) ui.on_button(Button::Plus, ButtonEvent::Short, 23200 + i);   // down to WebUSB, the last row: it stops
+    CHECK_EQ(ui.labels().b[static_cast<int>(Button::Plus)].dim, true);
     ui.on_button(Button::Ok, ButtonEvent::Short, 23300);
     CHECK_EQ(g_stub.usb_stored.webusb, 1); CHECK_EQ(g_stub.usb_stored.hid, 0); CHECK_EQ(g_stub.usb_stored.drive, 0);
-    ui.on_button(Button::Plus, ButtonEvent::Short, 23400);        // wrap to HID: the fallback joins
+    for (int i = 0; i < 3; i++) ui.on_button(Button::Minus, ButtonEvent::Short, 23400 + i);   // up to HID: the fallback joins
     ui.on_button(Button::Ok, ButtonEvent::Short, 23500);
     CHECK_EQ(g_stub.usb_stored.webusb, 1); CHECK_EQ(g_stub.usb_stored.hid, 1);
     ui.on_button(Button::Plus, ButtonEvent::Short, 23600);        // Drive on: HID drops out, WebUSB stays
@@ -2288,6 +2429,37 @@ static uint32_t open_limit_row(Ui &ui, uint32_t t) {
     return settle(ui, t + 10);
 }
 
+// BACK from a voltage's Max A list keeps the voltage picked (its amps as the list showed them): the V list again with that
+// voltage, then the editor, and Apply arms it.
+static void test_pd_limit_back_keeps_voltage() {
+    Ui &ui = fresh_ui();
+    set_caps_65w();
+    uint32_t t = open_limit_row(ui, 20000);
+    const int arms = g_stub.lim_arms;
+    g_stub.lim_arm_cfg = {};
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);      // PickLimit
+    press(ui, Button::Plus, ButtonEvent::Short, t += 10);    // Fixed
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);      // EditFixed
+    press(ui, Button::Plus, ButtonEvent::Short, t += 10);    // Max V
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);      // PickMaxV (Max, 5V, 9V, 15V, 20V)
+    press(ui, Button::Plus, ButtonEvent::Short, t += 10);
+    press(ui, Button::Plus, ButtonEvent::Short, t += 10);    // 9V
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);      // 9V's Max A list
+    CHECK_EQ(ui.list_state().count, 10);
+    press(ui, Button::Back, ButtonEvent::Short, t += 10);    // the voltages again, 9V kept
+    CHECK_EQ(ui.list_state().count, 5);
+    CHECK_EQ(ui.context().rows.selected(), 2);
+    press(ui, Button::Back, ButtonEvent::Short, t += 10);    // EditFixed
+    CHECK_EQ(ui.list_state().count, 3);
+    press(ui, Button::Back, ButtonEvent::Short, t += 10);    // PickLimit
+    for (int i = 0; i < 3; i++) press(ui, Button::Plus, ButtonEvent::Short, t += 10);   // Apply (row 4)
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);
+    CHECK_EQ(g_stub.lim_arms, arms + 1);
+    CHECK_EQ(g_stub.lim_arm_cfg.fixed.max_mv, 9000u);
+    CHECK_EQ(g_stub.lim_arm_cfg.fixed.max_ma, 0u);
+    g_stub.caps = {};
+}
+
 static void test_pd_limit_picker() {
     Ui &ui = fresh_ui();
     set_caps_65w();
@@ -2311,7 +2483,7 @@ static void test_pd_limit_picker() {
     press(ui, Button::Plus, ButtonEvent::Short, t += 10);    // 9V
     press(ui, Button::Ok, ButtonEvent::Short, t += 10);      // on to 9V's Max A list
     CHECK_EQ(ui.list_state().count, 10);                     // Max, 1..3A in 0.25A steps
-    press(ui, Button::Back, ButtonEvent::Short, t += 10);    // back to the voltages, nothing committed
+    press(ui, Button::Back, ButtonEvent::Short, t += 10);    // back to the voltages, 9V kept
     CHECK_EQ(ui.list_state().count, 5);
     press(ui, Button::Ok, ButtonEvent::Short, t += 10);      // 9V again
     press(ui, Button::Ok, ButtonEvent::Short, t += 10);      // Max: commit 9V / Max A, return to EditFixed
@@ -2428,7 +2600,7 @@ static void test_pd_limit_va_lists() {
     commit_row(17);                                           // 20V / 5A
     CHECK_EQ(amps_for(0), 18);                                // V = Max: the highest fixed current
     CHECK_EQ(ui.context().rows.selected(), 17);                   // the stored 5A is radio-selected
-    key(Button::Back);                                        // back to the voltages: nothing committed
+    key(Button::Back);                                        // back to the voltages: Max V / 5A kept
     key(Button::Back);                                        // EditFixed
     key(Button::Back);                                        // PickLimit
     key(Button::Plus);                                        // PPS
@@ -2453,7 +2625,7 @@ static void test_pd_limit_va_lists() {
     key(Button::Plus);                                        // Apply
     key(Button::Ok);
     CHECK_EQ(g_stub.lim_arms, 1);
-    CHECK_EQ(g_stub.lim_arm_cfg.fixed.max_mv, 20000u);
+    CHECK_EQ(g_stub.lim_arm_cfg.fixed.max_mv, 0u);            // the Back from Max V's A list kept Max
     CHECK_EQ(g_stub.lim_arm_cfg.fixed.max_ma, 5000u);
     CHECK_EQ(g_stub.lim_arm_cfg.pps.max_mv, 15000u);
     CHECK_EQ(g_stub.lim_arm_cfg.pps.max_ma, 3000u);
@@ -2895,6 +3067,122 @@ static void dump_panel(const char *name, int rot) {
     }
 }
 
+// K2_DUMP=dir: the strip and colour fixes of k2/uinits2 at every rotation (tools/panel2png.py).
+static void dump_ui(const char *name, int rot) {
+    const char *dir = std::getenv("K2_DUMP");
+    if (!dir) return;
+    char p[256];
+    std::snprintf(p, sizeof p, "%s/k2_ui_%s_r%d.panel", dir, name, rot);
+    if (FILE *f = std::fopen(p, "wb")) {
+        std::fwrite(g_panel, 2, 240 * 240, f);
+        std::fclose(f);
+    }
+}
+
+// K2_DUMP=dir: Saved cables and Ripple settings at their ends (k2/cablewrap), every rotation.
+static void test_list_end_renders() {
+    if (!std::getenv("K2_DUMP")) return;
+    for (int rot = 0; rot < 4; rot++) {
+        Ui &ui = fresh_ui();
+        g_stub = StubState();
+        for (uint16_t s = 1; s <= 3; s++) {
+            emlib::Entry e;
+            e.seq = s;
+            const char nm[] = "Cable-1";
+            for (std::size_t i = 0; i < sizeof nm; i++) e.name[i] = nm[i];
+            e.name[6] = char('0' + s);
+            e.rec = emrec::make({std::array<uint32_t, 5>{0xFF00A041, (3u << 27) | 0x05ACu, 0, 0x12340005u + s, (2u << 21) | (3u << 9) | (2u << 5)}.data(), 5}, 2);
+            g_stub.lib.push_back(e);
+        }
+        uint32_t t = 50000;
+        ui.set_rotation(uint8_t(rot), t);
+        const auto shot = [&](const char *n) { for (int i = 0; i < 4; i++) ui.tick(t += 100); t = settle(ui, t); dump_ui(n, rot); };
+        const auto key = [&](Button b) { ui.on_button(b, ButtonEvent::Short, t += 50); t = settle(ui, t); };
+        ui.goto_page(static_cast<uint8_t>(Page::Lines), t += 100);
+        ui.push_menu(Menu::Emarker, t += 100);
+        shot("saved_cables_first");
+        key(Button::Plus); key(Button::Plus);
+        shot("saved_cables_last");
+        key(Button::Ok);
+        shot("saved_cable_detail_last");
+        key(Button::Minus); key(Button::Minus);
+        shot("saved_cable_detail_first");
+        ui.goto_page(static_cast<uint8_t>(Page::Ripple), t += 100);
+        key(Button::Ok);                                     // the settings rows
+        shot("ripple_settings_first");
+        for (int i = 0; i < 3; i++) key(Button::Plus);
+        shot("ripple_settings_last");
+        key(Button::Back);
+        g_stub = StubState();
+        ui.goto_page(uint8_t(Page::Home), t += 100);
+    }
+}
+
+static void test_strip_fix_renders() {
+    if (!std::getenv("K2_DUMP")) return;
+    for (int rot = 0; rot < 4; rot++) {
+        Ui &ui = fresh_ui();
+        uint32_t t = 40000;
+        ui.set_rotation(uint8_t(rot), t);
+        const auto shot = [&](const char *n) { for (int i = 0; i < 4; i++) ui.tick(t += 100); t = settle(ui, t); dump_ui(n, rot); };
+        const auto key = [&](Button b) { ui.on_button(b, ButtonEvent::Short, t += 50); t = settle(ui, t); };
+        ui.goto_page(kDiagPage, t += 100);
+        shot("sysstate");
+        const Menu menus[] = {Menu::Memory, Menu::Cards, Menu::BlackBox, Menu::Emarker};
+        const char *names[] = {"memory", "cards_empty", "bbox_live_only", "saved_cables_empty"};
+        for (int i = 0; i < 4; i++) {
+            ui.goto_page(static_cast<uint8_t>(Page::Lines), t += 100);
+            ui.push_menu(menus[i], t += 100);
+            shot(names[i]);
+        }
+        fill_pdos(3);
+        ui.goto_page(kPdPage, t += 100);
+        shot("sheet_no_charger");
+        g_stub.caps = {};
+        ui.goto_page(static_cast<uint8_t>(Page::ChargerTest), t += 100);
+        for (int i = 0; i < 8; i++) key(Button::Minus);
+        shot("ct_tests_top");
+        for (int i = 0; i < 5; i++) key(Button::Plus);
+        shot("ct_tests_custom");
+        key(Button::Ok);
+        for (int i = 0; i < 8; i++) key(Button::Plus);
+        shot("ct_custom_done");
+        ui.goto_page(static_cast<uint8_t>(Page::Lines), t += 100);
+        ui.push_menu(Menu::CableR, t += 100);
+        ui.set_cable_mode(cable_r::Mode::Kelvin);
+        g_stub.pm_online = true;
+        g_stub.pm = {};
+        g_stub.pm.vbus_mv = 19740; g_stub.pm.current_ma = 310; g_stub.pm.power_mw = 6120;
+        shot("cabler_live");
+        ui.set_cable_mode(cable_r::Mode::Passive);
+        g_stub.pm = {};
+        ui.goto_page(static_cast<uint8_t>(Page::Lines), t += 100);   // Link left on Cable, the ring walked, OK: Cable again
+        for (int i = 0; i < 4; i++) key(Button::Plus);
+        key(Button::Ok);
+        key(Button::Plus);
+        ui.on_button(Button::Back, ButtonEvent::Long, t += 50);
+        key(Button::Plus);
+        key(Button::Minus);
+        key(Button::Ok);
+        shot("link_kept_cable");
+        set_caps_65w();
+        t = open_limit_row(ui, t + 100);
+        key(Button::Ok);                                     // PickLimit
+        key(Button::Plus);                                   // Fixed
+        key(Button::Ok);                                     // EditFixed
+        key(Button::Plus);                                   // Max V
+        key(Button::Ok);
+        key(Button::Plus); key(Button::Plus);                // 9V
+        key(Button::Ok);                                     // 9V's Max A
+        key(Button::Back);                                   // the voltages, 9V kept
+        shot("limit_v_kept");
+        key(Button::Back);                                   // EditFixed
+        shot("limit_edit_kept");
+        g_stub.caps = {};
+        ui.goto_page(uint8_t(Page::Home), t += 100);
+    }
+}
+
 static void test_pd_limit_renders() {
     if (!std::getenv("K2_DUMP")) return;
     for (int rot = 0; rot < 4; rot++) {
@@ -2943,6 +3231,8 @@ static void test_pd_limit_renders() {
 
 int main() {
     test_pd_limit_renders();
+    test_strip_fix_renders();
+    test_list_end_renders();
     test_pd_limit_live_contract_resets_then_arms();
     test_pd_limit_confirm_window();
     test_pd_limit_no_live_contract_no_reset();
@@ -2964,6 +3254,7 @@ int main() {
     test_fc_pill_text();
     test_home_gauges_and_footer();
     test_cable_tab_save_and_list();
+    test_saved_cables_stop_at_ends();
     test_spoof_tool();
     test_spoof_external_identity();
     test_spoof_text();
@@ -2980,10 +3271,12 @@ int main() {
     test_cable_rows();
     test_cable_kelvin_rows();
     test_cable_mode_toggle();
+    test_cable_r_amps_cyan();
     test_every_label_fits_its_slot();
     test_ai_rows_on_lines();
     test_tools_hub();
     test_pd_limit_picker();
+    test_pd_limit_back_keeps_voltage();
     test_pd_limit_va_lists();
     test_pd_limit_100w_levels();
     test_pd_limit_back_stays_on_tools();
@@ -3001,6 +3294,8 @@ int main() {
     test_label_sets();
     test_ring_navigation();
     test_ring_flag_and_busy_skip();
+    test_ring_link_keeps_card();
+    test_still_pages_dim_arrows();
     test_short_presses_do_not_page();
     test_back_goes_home();
     test_press_flash();

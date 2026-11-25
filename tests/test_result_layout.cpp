@@ -4,6 +4,7 @@
 // computed by hand from the PD 3.1 field layouts (the Baseus CJ21 run, tests/fixtures/charger_run3_baseus.json).
 #include "test_util.h"
 #include "k2/chargertest/result_layout.hpp"
+#include "k2/core/strpack.hpp"
 #include "k2/chargertest/oem_watts.hpp"
 #include "k2/fastcharge/fc_engine.hpp"
 #include <algorithm>
@@ -16,6 +17,9 @@ namespace ct = k2::charger_test;
 namespace rl = k2::result_layout;
 using A = ct::Algorithm;
 using V = ct::Verdict;
+
+// A row label as text (labels may be packed).
+static std::string label_of(const rl::CompactGrid& g, size_t r) { char b[64]; return std::string(strpack::unpack(rl::row_label(g, r), b)); }
 
 static ct::Step step(A a, unsigned mv, V v, uint8_t pos = 0, uint32_t pdo = 0, ct::Reason r = ct::Reason::None) {
     ct::Step s; s.algorithm = a; s.group = ct::group(a); s.mv = uint16_t(mv); s.verdict = v; s.pos = pos; s.pdo = pdo; s.reason = r;
@@ -596,7 +600,7 @@ static void test_a_compact_row_regenerates_the_merged_chip_with_its_mark() {
     rl::build_compact(g, rl::kGridMetrics, lines, s);
     int found = 0;
     for (size_t r = 0; r < g.row_count; ++r) {
-        CHECK_EQ(std::string(rl::row_label(g, r)) == "Sweep", false);
+        CHECK_EQ(label_of(g, r) == "Sweep", false);
         if (g.rows[r].kind != rl::CompactKind::Pd) continue;
         rl::RowTokens rt;
         rl::row_tokens(g, r, s, {}, rt);
@@ -938,7 +942,7 @@ static void test_a_source_without_pd_reads_pd_under_no_reply() {
     rl::build_compact(g, rl::kGridMetrics, lines, s);
     bool found = false;
     for (size_t r = 0; r < g.row_count; ++r) {
-        if (std::string(rl::row_label(g, r)) != "No reply") continue;
+        if (label_of(g, r) != "No reply") continue;
         rl::RowTokens rt; rl::row_tokens(g, r, s, {}, rt);
         found = rt.count == 1 && std::string(rt.toks[0].text) == "PD";
     }
@@ -1803,7 +1807,7 @@ static void test_vooc_family_reads_as_watts_levels() {
         CHECK_EQ(rl::row_section(g, r), int(rl::Section::Oppo));
         rl::RowTokens rt;
         rl::row_tokens(g, r, steps, {}, rt);
-        const std::string want = std::string(rl::row_label(g, r)) == "VOOC" ? "detected 20W" : "50W 65W 100W 120W";
+        const std::string want = label_of(g, r) == "VOOC" ? "detected 20W" : "50W 65W 100W 120W";
         std::string got;
         for (unsigned i = 0; i < rt.count; ++i) { if (i) got += ' '; got += rt.toks[i].text; }
         CHECK_STR(got.c_str(), want.c_str());
@@ -1873,7 +1877,7 @@ static void test_a_silent_vooc_family_folds_as_one_word() {
     rl::CompactGrid g; std::array<rl::CompactLine, rl::kMaxLines> lines;
     rl::build_compact(g, rl::kGridMetrics, lines, s, n);
     for (size_t r = 0; r < g.row_count; ++r) {
-        if (std::string(rl::row_label(g, r)) != "No reply") continue;
+        if (label_of(g, r) != "No reply") continue;
         rl::RowTokens rt;
         rl::row_tokens(g, r, s, {}, rt);
         CHECK_EQ(int(rt.count), 2);

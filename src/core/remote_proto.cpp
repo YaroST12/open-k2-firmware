@@ -5,6 +5,8 @@
 #include "k2/chargertest/step_label.hpp"
 #include <algorithm>
 
+#include "k2/core/strpack.hpp"
+
 namespace k2::remote {
 
 namespace {
@@ -17,8 +19,10 @@ public:
     void u16(uint16_t v) { u8(static_cast<uint8_t>(v)); u8(static_cast<uint8_t>(v >> 8)); }
     void u32(uint32_t v) { u16(static_cast<uint16_t>(v)); u16(static_cast<uint16_t>(v >> 16)); }
     void i32(int32_t v) { u32(static_cast<uint32_t>(v)); }
-    void text(std::string_view s) { for (char c : s) u8(static_cast<uint8_t>(c)); }
+    void text(std::string_view s) { strpack::for_chars(s, [this](char c) { u8(static_cast<uint8_t>(c)); }); }
     void pad_text(std::string_view s, size_t width) {
+        char dec[64];
+        s = strpack::unpack(s, dec);
         for (size_t i = 0; i < width; i++) u8(i < s.size() ? static_cast<uint8_t>(s[i]) : 0);
     }
     size_t size() const { return n_; }
@@ -695,6 +699,7 @@ size_t encode_pd_trigger(std::span<uint8_t> out, const PdTriggerSnapshot &s) {
     w.u8(s.pin);   // appended: older clients read the first 17 bytes
     w.u8(s.trial_line); w.u8(s.trial_moves);   // appended after pin (the direct-plug line fallback): older clients read the first 18 bytes
     w.u8(s.auto_hold);   // appended: older clients read the first 20 bytes
+    w.u8(s.obs_flags); w.u8(s.obs_pos); w.u16(s.obs_mv); w.u16(s.obs_ma);   // appended: older clients read the first 21 bytes
     return w.size();
 }
 

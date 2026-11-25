@@ -8,6 +8,7 @@
 #include "k2/pd/pd_link.hpp"
 
 #include <cstdlib>
+#include "k2/core/strpack.hpp"
 
 namespace k2::fc {
 
@@ -50,27 +51,27 @@ constexpr std::uint32_t kAfcRetryLowMs = 100; // D- low before the one retry of 
 
 const char* name(Proto p) {
     static constexpr const char* const kNames[] = {
-        "QC2", "QC3", "QC3+", "AFC", "FCP", "SCP", "VOOC", "SVOOC", "SVOOC65", "UFCS", "VIVO",
+        "QC2", "QC3", "QC3+", "AFC", "FCP", "SCP", "VOOC", K2_P("SVOOC"), K2_P("SVOOC65"), "UFCS", "VIVO",
     };
     const auto i = static_cast<std::size_t>(p);
     return i < std::size(kNames) ? kNames[i] : "?";
 }
 
 const char* name(State s) {
-    static constexpr const char* const kNames[] = {"idle", "negotiating", "active", "failed"};
+    static constexpr const char* const kNames[] = {"idle", K2_P("negotiating"), K2_P("active"), K2_P("failed")};
     const auto i = static_cast<std::size_t>(s);
     return i < std::size(kNames) ? kNames[i] : "?";
 }
 
 const char* log_name(State s, Fail f) {
-    return s == State::Failed && f == Fail::Detected ? "detected" : name(s);
+    return s == State::Failed && f == Fail::Detected ? K2_P("detected") : name(s);
 }
 
 const char* name(Fail f) {
     static constexpr const char* const kNames[] = {
-        "none", "need confirm", "over limit", "no power monitor", "busy", "unsupported",
-        "no handshake", "no response", "voltage not reached", "overvoltage", "source lost", "aborted",
-        "PD or load active", "no answer", "handshake ok", "detected", "acked, no change",
+        "none", K2_P("need confirm"), K2_P("over limit"), K2_P("no power monitor"), "busy", K2_P("unsupported"),
+        K2_P("no handshake"), K2_P("no response"), K2_P("voltage not reached"), K2_P("overvoltage"), K2_P("source lost"), K2_P("aborted"),
+        K2_P("PD or load active"), K2_P("no answer"), K2_P("handshake ok"), K2_P("detected"), K2_P("acked, no change"),
     };
     const auto i = static_cast<std::size_t>(f);
     return i < std::size(kNames) ? kNames[i] : "?";
@@ -308,7 +309,7 @@ void Engine::ufcs_resend(std::uint32_t now) {
 const char* Engine::ufcs_what() const {
     switch (utx_kind_) {
     case UKind::Keep: return "ping";
-    case UKind::Refuse: return "refuse";
+    case UKind::Refuse: return K2_P("refuse");
     case UKind::Soft: return "soft";
     case UKind::Main: break;
     }

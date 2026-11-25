@@ -5,11 +5,13 @@
 
 #include "k2/core/log.hpp"
 #include "k2/drivers/regs.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::scratch {
 namespace {
 alignas(kAlign) std::uint8_t g_arena[kSize];
 const char* g_owner = nullptr;
+std::uint32_t g_epoch = 0;
 ViolationHandler g_handler = nullptr;
 
 bool in_exception() {
@@ -26,7 +28,7 @@ void violate(const char* want, bool isr) {
         g_handler(v);
         return;
     }
-    K2LOG("[SCRATCH] %s refused: %s\n", want, isr ? "taken from an exception handler" : g_owner != nullptr ? g_owner : "?");
+    K2LOG("[SCRATCH] %s refused: %s\n", want, isr ? K2_P("taken from an exception handler") : g_owner != nullptr ? g_owner : "?");
     __builtin_trap();      // UsageFault -> HardFault -> the [FAULT] report
 }
 }  // namespace
@@ -37,14 +39,16 @@ void acquire(const char* owner_tag) {
     const bool isr = in_exception();
     if (isr || g_owner != nullptr) violate(owner_tag, isr);
     g_owner = owner_tag;
+    g_epoch++;
 }
 
 void release() { g_owner = nullptr; }
 bool held() { return g_owner != nullptr; }
+std::uint32_t epoch() { return g_epoch; }
 const char* owner() { return g_owner; }
 
 std::uint8_t* arena() {
-    if (g_owner == nullptr) violate("(no lease)", false);
+    if (g_owner == nullptr) violate(K2_P("(no lease)"), false);
     return g_arena;
 }
 

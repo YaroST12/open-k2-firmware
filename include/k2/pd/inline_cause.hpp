@@ -4,6 +4,7 @@
 // needs the name or the topology question (the SuperVOOC guards, svooc_run.hpp) does not pull in the whole tracker.
 #pragma once
 #include <cstdint>
+#include "k2/core/strpack.hpp"
 
 namespace k2::pd {
 
@@ -15,10 +16,10 @@ constexpr const char* inline_cause_name(InlineCause c) {
     switch (c) {
         case InlineCause::None: return "none";
         case InlineCause::Load: return "load";
-        case InlineCause::Request: return "sink request";
-        case InlineCause::Rise: return "vbus rise";
-        case InlineCause::Vbus: return "foreign vbus";
-        case InlineCause::FarRd: return "far rd";
+        case InlineCause::Request: return K2_P("sink request");
+        case InlineCause::Rise: return K2_P("vbus rise");
+        case InlineCause::Vbus: return K2_P("foreign vbus");
+        case InlineCause::FarRd: return K2_P("far rd");
     }
     return "?";
 }

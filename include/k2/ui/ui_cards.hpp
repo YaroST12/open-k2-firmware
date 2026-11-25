@@ -78,7 +78,8 @@ struct SheetRow {
 struct CardSheet {
     SheetRow row[kSheetRows];
     char note[32] = {};                      // the text a row views when it is longer than a row's own number box (the fold note)
-    unsigned n = 0;
+    char text[2][kSheetWrap * kSheetLines + 1] = {};   // decoded packed values too long for a row's own box (why, reason)
+    unsigned n = 0, texts = 0;
     int height() const { int h = 0; for (unsigned i = 0; i < n; ++i) h += row[i].height(); return h; }
 };
 // Splits `text` at spaces into at most `max_lines` lines of `cells` cells each; returns the line count, 0 when it cannot.

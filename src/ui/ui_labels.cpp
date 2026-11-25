@@ -84,8 +84,8 @@ constexpr auto kPacked = [] {
 }  // namespace
 
 SlotLabel slot_label(sl::Id id) {
-    const Packed &p = kPacked[id];
-    return {kWords[p.s], kWords[p.l], kWords[p.a_dim & 0x7F], (p.a_dim & 0x80) != 0};
+    const Packed &p = kPacked[id & ~sl::kDimBit];
+    return {kWords[p.s], kWords[p.l], kWords[p.a_dim & 0x7F], ((p.a_dim | id) & 0x80) != 0};
 }
 
 PanelLabels resolve(const Strip &s) {
@@ -95,6 +95,7 @@ PanelLabels resolve(const Strip &s) {
 }
 
 namespace {
+// k2-plain-begin: label words compared byte-wise; messages printed by tests
 constexpr const char *kOkVerbs[] = {
     "Scan", "Listen", "Run", "Force", "Start", "Stop", "Send", "Rescan", "Clear", "Open", "Reset",
     "Next", "Select", "View", "Delete", "Arm", "Disarm", "Toggle", "Cycle", "Apply", "Refresh", "Scrub", "Ask",
@@ -147,7 +148,7 @@ const char *label_violation(const PanelLabels &p) {
         for (const char *v : kOkVerbs) verb = verb || eq(ok.shrt, v);
         if (!verb) return "OK must be a verb";
     }
-    return nullptr;
+    return nullptr;   // k2-plain-end
 }
 
 bool footer_is_clean(const char *s) {

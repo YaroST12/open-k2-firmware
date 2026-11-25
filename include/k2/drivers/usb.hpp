@@ -14,6 +14,8 @@
 #include <span>
 #include <string_view>
 
+#include "k2/core/strpack.hpp"
+
 namespace k2 {
 template <std::size_t N>
 class BinLog;   // k2/core/binlog.hpp
@@ -106,6 +108,11 @@ void dp_pullup_restore();
 
 // Queue one log line (truncated to 63 bytes) / a printf-style line (see k2/core/fmt.hpp).
 void log(std::string_view msg);
+// A C string, packed (K2_P) or plain: decoded here, out of the hot path, then queued as above.
+[[gnu::noinline]] inline void log(const char* msg) {
+    char b[64];
+    log(strpack::unpack(msg, b));
+}
 // One observer of every log line (the debug shell's `log on`); nullptr removes it. The callback
 // must not call log().
 void set_log_tap(void (*fn)(std::string_view));

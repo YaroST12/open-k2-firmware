@@ -22,6 +22,7 @@
 #include "k2/fastcharge/ufcs_diag.hpp"
 #include "k2/drivers/usb.hpp"
 #include "k2/fastcharge/wire.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::fctrig {
 
@@ -71,7 +72,7 @@ bool exchange_once(std::span<const std::uint8_t> tx, std::span<std::uint8_t> rx)
         // them), so it comes from the scratch arena instead of a 585 B static in .bss. Main loop only, and
         // nothing on this path leases the arena (the leases are bootscreen, share pack/paint, bbpersist,
         // emlib, transcap.save, the journal replay - none of them run the wire exchange).
-        const scratch::Lease lease("fctrig.exchange");
+        const scratch::Lease lease(K2_P("fctrig.exchange"));
         auto& s = scratch::as<std::array<std::uint8_t, kMaxRxBytes * kRxSamplesPerByte + 60>>();
         const std::span<std::uint8_t> cap{s.data(), rx.size() * kRxSamplesPerByte + 60};
         dpdm::capture_dm(cap, wire::kRxPeriodUs);
@@ -267,7 +268,7 @@ struct HwEnv final : fc::Env {
         K2LOG("[QC3] coarse step ~%d mV/pulse on QC3+: charger steps like QC3\n", step_mv);
     }
     void log_write(std::uint8_t reg, std::uint8_t value, bool acked) override {
-        K2LOG("[FC] write 0x%02X = 0x%02X %s\n", reg, value, acked ? "ack" : "REFUSED");
+        K2LOG("[FC] write 0x%02X = 0x%02X %s\n", reg, value, acked ? "ack" : K2_P("REFUSED"));
     }
     int vooc_rx(std::uint32_t timeout_us) override {
         const int f = dpdm::rx_command(timeout_us);
@@ -326,12 +327,12 @@ struct HwEnv final : fc::Env {
                       caps[i].min_ma, caps[i].max_ma);
         }
         if (ufcs::Refusal r; f.data && f.cmd == ufcs::kDataRefuse && ufcs::decode_refuse(f.payload, r))
-            K2LOG("[UFCS] refused %s cmd=%d id=%d: %s (%d)\n", r.type == 1 ? "data" : r.type == 0 ? "ctl" : "vendor", r.cmd, r.id,
+            K2LOG("[UFCS] refused %s cmd=%d id=%d: %s (%d)\n", r.type == 1 ? "data" : r.type == 0 ? "ctl" : K2_P("vendor"), r.cmd, r.id,
                   ufcs::refuse_name(r.reason), r.reason);
     }
     void log_ufcs_busy_retry(std::uint32_t ms) override { K2LOG("[UFCS] busy: Request again in %u ms\n", u(ms)); }
     void log_ufcs_exit(bool acked, std::uint32_t ms, int vbus_mv) override {
-        K2LOG("[UFCS] exit %s after %u ms vbus=%d\n", acked ? "acked" : "unanswered", u(ms), vbus_mv);
+        K2LOG("[UFCS] exit %s after %u ms vbus=%d\n", acked ? K2_P("acked") : K2_P("unanswered"), u(ms), vbus_mv);
     }
     void log_ufcs_echo() override { K2LOG("[UFCS] echo: own frames only, D+/D- shorted (no UFCS)\n"); }
     void log_ufcs_retry(const char* what, int try_no, std::span<const std::uint8_t> pending) override {
@@ -504,7 +505,7 @@ void poll() {
         const bool failure = fc::log_is_failure(g_last_state, g_engine.fail());
         K2LOG("[FC] %s %s vbus=%dmV target=%dmV tries=%d%s%s\n", fc::name(g_engine.proto()),
                      fc::log_name(g_last_state, g_engine.fail()), g_engine.reached_mv(), g_engine.target_mv(),
-                     g_engine.vooc_tries(), failure ? " reason=" : "", failure ? fc::name(g_engine.fail()) : "");
+                     g_engine.vooc_tries(), failure ? K2_P(" reason=") : "", failure ? fc::name(g_engine.fail()) : "");
     }
 }
 

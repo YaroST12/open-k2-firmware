@@ -58,6 +58,8 @@ struct PackWork {
 bool ShareRecord::begin(qrshare::Type type, std::uint8_t schema, std::string_view title, std::size_t len, std::span<const std::uint8_t> ext) {
     type_ = type;
     schema_ = schema;
+    char dec[kTitleMax + 1];
+    title = strpack::unpack(title, dec);
     title_len_ = std::min(title.size(), kTitleMax);
     std::memcpy(title_buf_.data(), title.data(), title_len_);
     title_buf_[title_len_] = '\0';
@@ -75,7 +77,7 @@ bool ShareRecord::begin(qrshare::Type type, std::uint8_t schema, std::string_vie
         }
     }
     if (!v2_ && len_ != 0) {   // LZ4 the record in place when that saves a quarter (the block is built in the scratch arena)
-        scratch::Lease lease("share");
+        scratch::Lease lease("share");   // k2-plain: scratch owner tag
         auto &z = scratch::as<PackWork>();
         const std::size_t n = qrshare::pack({rec_.data(), len_}, z.out);
         if (n != 0) {
@@ -97,6 +99,7 @@ void SharePage::show(unsigned index, uint32_t now_ms) {
 
 void SharePage::enter() {
     encodes_ = paints_ = 0;
+    code_n_ = 0;   // a new record: nothing in the arena is ours
     drawn_n_ = 0;
     link_ = has_link_form();
     cycling_ = !link_ && parts() > 1;
@@ -129,29 +132,32 @@ void SharePage::paint(bool clear) {
     if (parts() == 0) {
         wipe();
         drawn_n_ = 0;
-        qrview::draw_line_in(a, mid, "Nothing to share");
+        qrview::draw_line_in(a, mid, K2_P("Nothing to share"));
         return;
     }
 
-    scratch::Lease lease("share");
+    scratch::Lease lease("share");   // k2-plain: scratch owner tag
     auto &k = scratch::as<PaintWork>();
+    const std::uint16_t key = static_cast<std::uint16_t>((index_ & 0x7FFF) | (link_ ? 0x8000u : 0u));
+    const bool kept = code_n_ != 0 && code_key_ == key && scratch::epoch() == code_epoch_ + 1;
     std::uint8_t *code;
     std::uint8_t *temp;
     std::uint16_t *line;
-    std::size_t tn;
+    std::size_t tn = 0;
     if (link_) {
         code = k.link.code;
         temp = k.link.temp;
         line = k.link.line;
         const std::span<char> text(reinterpret_cast<char *>(temp), kLinkBuf);
-        tn = v2() ? lk::encode_v2(type(), record(), text) : lk::encode(type(), record(), packed(), text);
+        if (!kept) tn = v2() ? lk::encode_v2(type(), record(), text) : lk::encode(type(), record(), packed(), text);
     } else {
         code = k.frame.code;
         temp = k.frame.temp;
         line = k.frame.line;
-        tn = qrshare::encode_part(type(), schema(), record(), index_, k.frame.text, packed());
+        if (!kept) tn = qrshare::encode_part(type(), schema(), record(), index_, k.frame.text, packed());
     }
-    encodes_++;
+    if (kept) n_ = code_n_;
+    else encodes_++;
     if (tn != 0) {
         if (link_ && tn > static_cast<std::size_t>(kBusyChars)) {   // the slow ones: say so before the encode
             wipe();
@@ -163,6 +169,9 @@ void SharePage::paint(bool clear) {
                    : qr::encode_text_placed(k.frame.text, code, temp, kFrameMaxVersion);
         qr::set_poll(nullptr);
     }
+    code_epoch_ = scratch::epoch();
+    code_key_ = key;
+    code_n_ = static_cast<std::uint8_t>(n_ > 0 && n_ < 256 ? n_ : 0);
     if (n_ > 0) {
         look_ = qrview::look_for(qrview::version_of(n_));
         plan_ = qrview::plan_in(a, n_, 0, kMinModulePx, look_.quiet, look_.px);
@@ -170,7 +179,7 @@ void SharePage::paint(bool clear) {
     if (clear || busy_shown_ || plan_.px == 0 || n_ != drawn_n_) wipe();
     drawn_n_ = n_;
     if (plan_.px == 0) {
-        qrview::draw_line_in(a, mid, "Code too big for the panel");
+        qrview::draw_line_in(a, mid, K2_P("Code too big for the panel"));
         return;
     }
     const int y = qrview::draw_code_raw_in(a, code, n_, 0, kMinModulePx, line, look_.quiet, look_.px);
@@ -178,7 +187,7 @@ void SharePage::paint(bool clear) {
     if (!caption_shown_) return;
 
     char tail[12];
-    const std::size_t tl = parts() > 1 ? fmt::format(tail, " %u/%u", index_ + 1, parts()) : 0;
+    const std::size_t tl = parts() > 1 ? fmt::format(tail, K2_P(" %u/%u"), index_ + 1, parts()) : 0;
     char text[qrview::kCells + 1];
     const std::size_t cells = std::min<std::size_t>(qrview::kCells, static_cast<std::size_t>(a.w / 6));
     const std::string_view shown = link_ ? link_caption(type()) : title();
@@ -198,7 +207,7 @@ void SharePage::paint_info() {
     drawn_n_ = 0;   // the panel holds no code now: the next code paint wipes the text off first
     wipe();
     char tail[12];
-    const std::size_t tl = parts() > 1 && !link_ ? fmt::format(tail, " %u/%u", index_ + 1, parts()) : 0;
+    const std::size_t tl = parts() > 1 && !link_ ? fmt::format(tail, K2_P(" %u/%u"), index_ + 1, parts()) : 0;
     char text[qrview::kCells + 1];
     const std::size_t cells = std::min<std::size_t>(qrview::kCells, static_cast<std::size_t>(a.w / 6));
     const std::size_t tn = std::min(title().size(), cells > tl ? cells - tl : 0);
@@ -209,7 +218,7 @@ void SharePage::paint_info() {
     int y = 16;
     qrview::draw_line_in(a, y, text);
     y += kPitch;
-    qrview::draw_line_in(a, y, link_ ? link_caption(type()).data() : "K2 data code");   // link_caption() is NUL terminated text
+    qrview::draw_line_in(a, y, link_ ? link_caption(type()).data() : K2_P("K2 data code"));   // link_caption() is NUL terminated text
     y += kPitch;
     if (n_ > 0) {
         fmt::format(text, K2_P("QR version %d, %d px modules"), version(), look_.px);
@@ -219,8 +228,8 @@ void SharePage::paint_info() {
         if (!hint.empty()) qrview::draw_line_in(a, y, hint.data());
     }
     y = a.y + a.h - 2 * kPitch;
-    if (has_link_form()) qrview::draw_line_in(a, y, link_ ? "OK: K2 data code" : "OK: link code");
-    qrview::draw_line_in(a, y + kPitch, "BACK or long OK: the code");
+    if (has_link_form()) qrview::draw_line_in(a, y, link_ ? K2_P("OK: K2 data code") : K2_P("OK: link code"));
+    qrview::draw_line_in(a, y + kPitch, K2_P("BACK or long OK: the code"));
 }
 
 void SharePage::draw_static() {

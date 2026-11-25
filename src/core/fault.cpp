@@ -11,6 +11,7 @@
 #include "k2/drivers/sysreset.hpp"
 #include "k2/drivers/systick.hpp"
 #include "k2/drivers/usb.hpp"
+#include "k2/core/strpack.hpp"
 
 // Linker-script symbols (link.ld): the MPU guard under the application stack.
 extern "C" std::uint32_t _sguard, _eguard;
@@ -64,7 +65,7 @@ void init() {
     const Guard g = stack_guard();
     const bool on = mpu::guard(g.lo, g.hi - g.lo);              // no-access region under the application stack
     K2LOG("[MPU] stack guard %08X..%08X %s\n", static_cast<unsigned>(g.lo), static_cast<unsigned>(g.hi),
-          on ? "on" : "NOT ACTIVE");
+          on ? "on" : K2_P("NOT ACTIVE"));
 }
 
 namespace {

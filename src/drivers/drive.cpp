@@ -8,13 +8,14 @@
 
 #include "k2/pd/emjson.hpp"
 #include "k2/pd/emname.hpp"
+#include "k2/core/strpack.hpp"
 #include "k2/core/textbuf.hpp"
 
 namespace k2::drive {
 
 namespace {
 enum : std::uint32_t { kReadme = 1, kStatus, kLog, kRipple, kSavedLog, kNativeBin, kNativeTxt, kCards, kSummary, kCap0 = 16, kCableBase = 0x10000 };   // kCap0..kCap0+7 are black box slots (below kCableBase)
-constexpr std::string_view kCardsLongName = "CARDS.JSON", kSummaryLongName = "SUMMARY.md";
+constexpr std::string_view kCardsLongName = "CARDS.JSON", kSummaryLongName = "SUMMARY.md";   // k2-plain: FAT long names (sized)
 constexpr std::size_t kSummaryKey = std::size_t{1} << 20;   // card_slot_ value offset: a SUMMARY.md slot is cached apart from a CARDS.JSON one
 }  // namespace
 
@@ -115,25 +116,27 @@ void Drive::rebuild() {
         specs_[n_++] = {vfat::name83(name), static_cast<std::int16_t>(parent), dir, 0, size, content};
         return static_cast<int>(n_ - 1);
     };
+    // k2-plain-begin: FAT 8.3 names (name83 slices them)
     add("README.TXT", -1, false, static_cast<std::uint32_t>(rendered_size(kReadme)), kReadme);
     add("STATUS.TXT", -1, false, kStatusSize, kStatus);
     add("LOG.TXT", -1, false, kLogSize, kLog);
     if (!env_.saved_log.empty()) add("SAVEDLOG.TXT", -1, false, static_cast<std::uint32_t>(env_.saved_log.size()), kSavedLog);
     add("RIPPLE.CSV", -1, false, static_cast<std::uint32_t>(rendered_size(kRipple)), kRipple);
     const int bb = add("BLACKBOX", -1, true, 0, 0);
+    // k2-plain-end
     for (unsigned c = 0; c < env_.capture_slots && c < 8 && env_.capture; c++) {
         if (env_.capture(env_.ctx, c).empty()) continue;
         const char nm[] = {'C', 'A', 'P', static_cast<char>('0' + c), '.', 'J', 'S', 'N'};
         add(std::string_view(nm, sizeof nm), bb, false, static_cast<std::uint32_t>(pdtrace::view::kJsonSize), kCap0 + c);
     }
     if (n_cards_) {   // 8.3 holds three extension letters: CARDS.JSN, with the long name CARDS.JSON
-        const int ci = add("CARDS.JSN", -1, false, 2 + n_cards_ * kCardSlot + 2, kCards);
+        const int ci = add("CARDS.JSN", -1, false, 2 + n_cards_ * kCardSlot + 2, kCards);   // k2-plain: FAT 8.3 name
         specs_[ci].lfn_len = static_cast<std::uint8_t>(kCardsLongName.size());
-        const int si = add("SUMMARY.MD", -1, false, n_cards_ * kSummarySlot, kSummary);
+        const int si = add("SUMMARY.MD", -1, false, n_cards_ * kSummarySlot, kSummary);   // k2-plain: FAT 8.3 name
         specs_[si].lfn_len = static_cast<std::uint8_t>(kSummaryLongName.size());
     }
     if (n_cables_) {
-        const int cd = add("CABLES", -1, true, 0, 0);
+        const int cd = add("CABLES", -1, true, 0, 0);   // k2-plain: FAT 8.3 name
         // The short names already handed out are the specs of this directory: no array of them on the stack.
         struct Taken { const vfat::FileSpec* specs; const std::size_t* n; int dir; } taken{specs_.data(), &n_, cd};
         for (std::size_t i = 0; i < n_cables_ && n_ < vfat::kMaxEntries; i++) {
@@ -151,9 +154,11 @@ void Drive::rebuild() {
         }
     }
     if (!native_page_.empty()) {
+        // k2-plain-begin: FAT 8.3 names
         const int fd = add("NATIVE", -1, true, 0, 0);
         add("LIBRARY.BIN", fd, false, static_cast<std::uint32_t>(native_page_.size()), kNativeBin);
         add("LIBRARY.TXT", fd, false, static_cast<std::uint32_t>(rendered_size(kNativeTxt)), kNativeTxt);
+        // k2-plain-end
     }
     ok_ = img_.build(std::span<const vfat::FileSpec>(specs_.data(), n_));
 }
@@ -176,7 +181,7 @@ std::size_t Drive::lfn(void* self, std::uint32_t content, std::span<char> out) {
         return 0;
     TextBuf t(out);
     t.put_raw(std::string_view(e.name.data()));
-    t.put_raw(".json");
+    t.put_raw(K2_P(".json"));
     return t.size();
 }
 

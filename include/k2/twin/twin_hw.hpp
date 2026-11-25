@@ -17,6 +17,7 @@
 #include "k2/twin/live.hpp"
 #include "k2/twin/predict.hpp"
 #include "k2/twin/twin.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::twin_hw {
 
@@ -66,10 +67,10 @@ enum class Learn : std::uint8_t {
 constexpr const char* name(Learn l) {
     switch (l) {
         case Learn::Ok: return "ok";
-        case Learn::NotReady: return "no identify";
-        case Learn::NotInline: return "not inline";
-        case Learn::NoContract: return "nothing sniffed";
-        case Learn::Store: return "not stored";
+        case Learn::NotReady: return K2_P("no identify");
+        case Learn::NotInline: return K2_P("not inline");
+        case Learn::NoContract: return K2_P("nothing sniffed");
+        case Learn::Store: return K2_P("not stored");
     }
     return "?";
 }

@@ -307,7 +307,7 @@ class SvoocTrigger(unittest.TestCase):
     def test_stage_names_follow_the_firmware(self):
         text = (ROOT / "include/k2/core/stage_meter.hpp").read_text()
         body = re.search(r"constexpr const char\* name\(Id id\) \{(.*?)\n\}", text, re.S).group(1)
-        self.assertEqual(re.findall(r'return "([^"]*)";', body)[:-1], kr.STAGE_NAMES)
+        self.assertEqual(re.findall(r'return (?:K2_P\()?"([^"]*)"\)?;', body)[:-1], kr.STAGE_NAMES)
 
     def test_status_and_stop_commands(self):
         link = Link([summary(stage=6)])
@@ -363,14 +363,14 @@ class SvoocProfiles(unittest.TestCase):
     def test_profile_names_follow_the_firmware(self):
         text = (ROOT / "include/k2/fastcharge/svooc_script.hpp").read_text()
         body = re.search(r"constexpr const char\* name\(Profile p\) \{(.*?)\n\}", text, re.S).group(1)
-        self.assertEqual(re.findall(r'return "([^"]*)";', body)[:-1], kr.SVOOC_PROFILES)
+        self.assertEqual(re.findall(r'return (?:K2_P\()?"([^"]*)"\)?;', body)[:-1], kr.SVOOC_PROFILES)
 
 
 class NamesMatchFirmware(unittest.TestCase):
     def names(self, enum):
         text = (ROOT / "include/k2/fastcharge/svooc_run.hpp").read_text()
         body = re.search(r"constexpr const char\* name\(" + enum + r" \w+\) \{(.*?)\n\}", text, re.S).group(1)
-        return re.findall(r'return "([^"]*)";', body)[:-1]   # the last return is the "?" fallback
+        return re.findall(r'return (?:K2_P\()?"([^"]*)"\)?;', body)[:-1]   # the last return is the "?" fallback
 
     def test_refusals(self):
         self.assertEqual(self.names("Refusal"), kr.SVOOC_REFUSALS)
@@ -388,7 +388,7 @@ class NamesMatchFirmware(unittest.TestCase):
     def test_inline_causes_follow_the_firmware(self):
         text = (ROOT / "include/k2/pd/inline_cause.hpp").read_text()
         body = re.search(r"constexpr const char\* inline_cause_name\(InlineCause c\) \{(.*?)\n\}", text, re.S).group(1)
-        self.assertEqual(re.findall(r'return "([^"]*)";', body)[:-1], kr.INLINE_CAUSES)
+        self.assertEqual(re.findall(r'return (?:K2_P\()?"([^"]*)"\)?;', body)[:-1], kr.INLINE_CAUSES)
 
     def test_stages_and_phases(self):
         run = (ROOT / "include/k2/fastcharge/svooc_run.hpp").read_text()

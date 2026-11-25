@@ -85,11 +85,11 @@ static void test_decode_why() {
     CHECK_EQ(static_cast<int>(w), static_cast<int>(Why::Length));
     // the reason pointer is optional
     CHECK(decode(bad, f, used) == Parse::Bad);
-    CHECK_EQ(std::strcmp(why_name(Why::Crc), "crc"), 0);
-    CHECK_EQ(std::strcmp(why_name(Why::NoSync), "nosync"), 0);
-    CHECK_EQ(std::strcmp(why_name(Why::Type), "type"), 0);
-    CHECK_EQ(std::strcmp(why_name(Why::Length), "length"), 0);
-    CHECK_EQ(std::strcmp(why_name(Why::Overflow), "overflow"), 0);
+    CHECK_STR(why_name(Why::Crc), "crc");
+    CHECK_STR(why_name(Why::NoSync), "nosync");
+    CHECK_STR(why_name(Why::Type), "type");
+    CHECK_STR(why_name(Why::Length), "length");
+    CHECK_STR(why_name(Why::Overflow), "overflow");
 }
 
 static void test_handshake_class() {
@@ -104,9 +104,9 @@ static void test_handshake_class() {
     CHECK(classify({{-1, 4}, {2, 3}, 5}) == HsClass::NoAnswer);
     CHECK(classify({{3, 4}, {2, -1}, 5}) == HsClass::NoAnswer);
     CHECK(classify({{3, 4}, {2, 3}, -1}) == HsClass::NoAnswer);
-    CHECK(std::strcmp(name(HsClass::Mirror), "mirror") == 0);
-    CHECK(std::strcmp(name(HsClass::Delayed), "delayed") == 0);
-    CHECK(std::strcmp(name(HsClass::NoAnswer), "none") == 0);
+    CHECK_STR(name(HsClass::Mirror), "mirror");
+    CHECK_STR(name(HsClass::Delayed), "delayed");
+    CHECK_STR(name(HsClass::NoAnswer), "none");
 }
 
 static void test_remaining_window() {

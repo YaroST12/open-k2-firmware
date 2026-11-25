@@ -57,7 +57,8 @@ namespace pg {
 bool put_field_buf(FieldBase &f, char *cur, PaintBudget *bg, std::string_view s, uint16_t fg, uint16_t bg_col) {
     if (bg && !f.valid() && !bg->admit(f.box_px(), true)) return false;
     f.set_colors(fg, bg_col);
-    f.draw_buf(cur, s);
+    char dec[FieldBase::kMaxChars + 1];
+    f.draw_buf(cur, strpack::unpack(s, dec));   // a Field diffs raw bytes
     return true;
 }
 
@@ -70,6 +71,7 @@ void clear_body(const Surface &c, int16_t y0) {
 }
 
 std::string_view stash_str(char *dst, std::size_t cap, std::string_view s) {
+    K2_EXPECT_PLAIN(s);
     const std::size_t n = std::min(s.size(), cap - 1);
     std::memcpy(dst, s.data(), n);
     dst[n] = 0;
@@ -130,16 +132,16 @@ void lines_row_text(int i, const std::optional<adc::Reading> &r, fastcharge::Pro
         else s.put("--");
     };
     switch (i) {
-    case 0: mv_row("D+   ", r ? r->dp_mv : 0); break;
-    case 1: mv_row("D-   ", r ? r->dm_mv : 0); break;
-    case 2: mv_row("CC1  ", r ? r->cc1_mv : 0); break;
-    case 3: mv_row("CC2  ", r ? r->cc2_mv : 0); break;
+    case 0: mv_row(K2_P("D+   "), r ? r->dp_mv : 0); break;
+    case 1: mv_row(K2_P("D-   "), r ? r->dm_mv : 0); break;
+    case 2: mv_row(K2_P("CC1  "), r ? r->cc1_mv : 0); break;
+    case 3: mv_row(K2_P("CC2  "), r ? r->cc2_mv : 0); break;
     case 4:
-        s.put("AUX  ");
+        s.put(K2_P("AUX  "));
         if (r) s.put_fixed(r->aux_mv, 3).put(" V"); else s.put("--");
         break;
     case 5:
-        s.put("MCU  ");
+        s.put(K2_P("MCU  "));
         if (r && r->mcu.valid) {
             s.put_fixed(r->mcu.deci_c * 100, 1).put(" C");
             if (!r->mcu.calibrated) s.put(K2_P(" uncal"));
@@ -151,11 +153,11 @@ void lines_row_text(int i, const std::optional<adc::Reading> &r, fastcharge::Pro
         s.put(K2_P("BRD  n/a (no sensor)"));
         break;
     case 7:
-        s.put("VREF ");
+        s.put(K2_P("VREF "));
         if (r) s.put_u32(r->vref_raw).put(" ").put_fixed(r->vdd_mv, 2).put(" V"); else s.put("--");
         break;
     default:
-        s.put("FC   ").put(fastcharge::name(p));
+        s.put(K2_P("FC   ")).put(fastcharge::name(p));
     }
 }
 
@@ -167,11 +169,11 @@ void cable_row_text(int i, bool online, int32_t vbus_mv, int32_t ibus_ma, const 
         else s.put(K2_P("-- no power monitor"));
         break;
     case 1:
-        if (m.has_idle()) s.put("IDLE ").put_fixed(m.idle_mv(), 2).put("V ").put_abs_fixed(m.idle_ma(), 2).put("A");
+        if (m.has_idle()) s.put(K2_P("IDLE ")).put_fixed(m.idle_mv(), 2).put("V ").put_abs_fixed(m.idle_ma(), 2).put("A");
         else s.put(K2_P("IDLE waiting <0.2A"));
         break;
     case 2:
-        if (est) s.put("LOAD ").put_fixed(est->load_mv, 2).put("V ").put_abs_fixed(est->load_ma, 2).put("A");
+        if (est) s.put(K2_P("LOAD ")).put_fixed(est->load_mv, 2).put("V ").put_abs_fixed(est->load_ma, 2).put("A");
         else s.put(m.has_idle() ? K2_P("LOAD need +1.0A step") : K2_P("LOAD --"));
         break;
     case 3: {
@@ -200,7 +202,7 @@ void cable_kelvin_row_text(int i, bool online, int32_t vbus_mv, int32_t ibus_ma,
         else s.put(K2_P("-- no power monitor"));
         break;
     case 1:
-        if (k) { s.put("POS "); mohm(k->pos_mohm, s); s.put(" GND "); mohm(k->gnd_mohm, s); }
+        if (k) { s.put("POS "); mohm(k->pos_mohm, s); s.put(K2_P(" GND ")); mohm(k->gnd_mohm, s); }
         else s.put(K2_P("POS -- GND --"));
         break;
     case 2: {
@@ -278,12 +280,13 @@ void fc_pill_text(fastcharge::Protocol p, StrBuf<6> &out) {
     case P::PdLikely: out.put("PD?"); return;
     default: break;
     }
-    const char *n = fastcharge::short_name(p);
-    int len = 0;
-    while (n[len] != '\0' && n[len] != ' ' && len < 4) len++;
+    char dec[12];
+    const std::string_view n = strpack::unpack(fastcharge::short_name(p), dec);
+    std::size_t len = 0;
+    while (len < n.size() && n[len] != ' ' && len < 4) len++;
     if (len == 4 && n[3] == '.') len = 3;                           // "QC3.0" -> "QC3"
     if (len >= 3 && n[len - 1] == '.') len--;
-    out.put(std::string_view(n, static_cast<size_t>(len)));
+    out.put(n.substr(0, len));
 }
 
 void home_contract_text(const pd::Contract &c, fastcharge::Protocol p, int32_t vbus_mv, StrBuf<13> &out) {
@@ -503,7 +506,7 @@ void EmarkerPage::share_cur() {
     if (menu_.idx < 0 || menu_.idx >= n_seqs_) return;
     std::size_t len = 0;
     {
-        const scratch::Lease lease("emk.share");
+        const scratch::Lease lease("emk.share");   // k2-plain: scratch owner tag
         auto &quirks = scratch::make<emk_quirk::Quirks>();
         if (!storage::lib_get(seqs_[menu_.idx], cur_, quirks)) return;
         cur_seq_ = seqs_[menu_.idx];
@@ -579,11 +582,11 @@ Strip EmarkerPage::labels() const {
     Strip l = base_labels();
     switch (menu_.view) {
     case EmView::List:
-        l = list_strip(l);
+        l = list_strip(l, menu_.idx, menu_.count);
         l[Button::Ok] = n_seqs_ > 0 ? sl::View : sl::None;
         break;
     case EmView::Detail:
-        l = list_strip(l);
+        l = list_strip(l, menu_.idx, menu_.count);
         l[Button::Ok] = sl::DeleteShare;
         break;
     case EmView::Confirm:
@@ -619,7 +622,7 @@ namespace {
 constexpr kit::KvLayout kDgLayout{kit::kBodyY, 22, kit::kTextX, &kLabelFont, nullptr, 204 - 17 * 8, 17, Align::Right};
 // Worst case per row ("4294M / 4294M" is 13 chars, RX 17): each cell is only as wide as its text, clear of the S12 keys.
 constexpr uint8_t kDgValueChars[DiagPage::kRows] = {7, 13, 13, 7, 17, 13, 7, 11, 11};
-const char *const kDgLabel[DiagPage::kRows] = {"Link", K2_P("RST/ISR"), K2_P("TX/drop"), K2_P("FUSB302"), "RX", K2_P("Poll gap"), "Meter", K2_P("Uptime"), "Model"};
+const char *const kDgLabel[DiagPage::kRows] = {"Link", K2_P("RST/ISR"), K2_P("TX/drop"), K2_P("FUSB302"), "RX", K2_P("Poll gap"), K2_P("Meter"), K2_P("Uptime"), K2_P("Model")};
 }  // namespace
 
 void DiagPage::draw_static() {
@@ -682,7 +685,7 @@ void DiagPage::update(uint32_t now_ms) {
         t.clear();
         uint16_t col = kText;
         switch (i) {
-        case 0: t.put(live_.configured ? "ready" : K2_P("waiting")); break;
+        case 0: t.put(live_.configured ? K2_P("ready") : K2_P("waiting")); break;
         // Capped counts (10K, 999M, ">999M") are at most 5 chars, so "a / b" is at most 13 and always fits.
         case 1: t.put_count_capped(live_.resets).put(" / ").put_count_capped(live_.isrs); break;
         case 2:
@@ -691,7 +694,7 @@ void DiagPage::update(uint32_t now_ms) {
             if (live_.log_dropped > 0 && !count_overflowed(live_.log_dropped) && !count_overflowed(live_.log_sent))
                 col = kCaution;
             break;
-        case 3: t.put("ID 0x").put_hex(fusb_id, 2); break;
+        case 3: t.put(K2_P("ID 0x")).put_hex(fusb_id, 2); break;
         case 4: t.put_u32(live_.rx_count).put(live_.cc == 1 ? K2_P(" on CC1") : live_.cc == 2 ? K2_P(" on CC2") : K2_P(" on CC-")); break;
         case 5: t.put_u32(live_.poll_gap_max).put(" ms"); break;
         case 6:
@@ -734,7 +737,7 @@ bool DiagPage::on_event(Event e) {
 }
 
 Strip DiagPage::labels() const {
-    Strip l = base_labels();
+    Strip l = still_strip(base_labels());
     l[Button::Ok] = sl::ShareLong;
     return l;
 }
@@ -854,7 +857,7 @@ bool MemoryPage::on_event(Event e) {
 }
 
 Strip MemoryPage::labels() const {
-    Strip s = base_labels();
+    Strip s = still_strip(base_labels());
     s[Button::Ok] = sl::Scrub;
     return s;
 }
@@ -887,7 +890,7 @@ constexpr int32_t kLnFaintMv = 100;                         // a line under 0.1 
 // Three receipt rows (Rp, D+/D-, VREF): key font 16 at x 6, dot leader, 12-char value right-aligned to x 202.
 constexpr kit::KvLayout kLnKv{154, 26, 6, nullptr, nullptr, static_cast<int16_t>(202 - 12 * 8), 12, Align::Right};
 static_assert(kLnBarX + kLinesBarW == 202, "the bars end on the receipt values' right edge");
-constexpr const char *kLnReceiptLabels[3] = {"Rp", "D+/D-", "VREF"};
+constexpr const char *kLnReceiptLabels[3] = {"Rp", K2_P("D+/D-"), "VREF"};
 
 int16_t tick_x(int32_t mv) { return static_cast<int16_t>(kLnBarX + lines_tick_px(mv)); }
 // One threshold column between y0 and y1 (exclusive): dash pixels in ink3, the gaps in the ground, phase anchored to y 0 so the
@@ -957,14 +960,14 @@ void LinesPage::draw_static() {
         if (bg && !bg->admit(cost, true)) return;
         if (!ctx_.blank) {
             const kit::Box tags[3] = {
-                {kKeyAxisX, kLnAxisTextY, static_cast<int16_t>(text_width(kLabelFont, "volts")), kLabelFont.height},
+                {kKeyAxisX, kLnAxisTextY, static_cast<int16_t>(text_width(kLabelFont, K2_P("volts"))), kLabelFont.height},
                 {static_cast<int16_t>(lo - 9), kLnAxisTextY, static_cast<int16_t>(text_width(kLabelFont, "0.4")), kLabelFont.height},
                 {static_cast<int16_t>(hi - 9), kLnAxisTextY, static_cast<int16_t>(text_width(kLabelFont, "2.0")), kLabelFont.height}};
             const int16_t chips = kVerdictY + 2;
             kit::fill_except(c, {0, kLnAxisY, c.w, static_cast<int16_t>(chips - kLnAxisY)}, tags, 3, kBg);
             gfx_fill(c, 0, static_cast<int16_t>(chips + kit::kChipH), c.w, static_cast<int16_t>(kLnKv.y0 - chips - kit::kChipH), kBg);
         }
-        gfx_text(c, kLabelFont, kKeyAxisX, kLnAxisTextY, "volts", kFaint, kBg);
+        gfx_text(c, kLabelFont, kKeyAxisX, kLnAxisTextY, K2_P("volts"), kFaint, kBg);
         gfx_text(c, kLabelFont, static_cast<int16_t>(lo - 9), kLnAxisTextY, "0.4", kDim, kBg);
         gfx_text(c, kLabelFont, static_cast<int16_t>(hi - 9), kLnAxisTextY, "2.0", kDim, kBg);
         static_step_ = 6;
@@ -1159,7 +1162,7 @@ void PdTriggerPage::enter() {
         K2LOG("[UI] pd trigger refused (unplugged or no caps)\n");
         return;
     }
-    if (blocked_) K2LOG("[PD] trigger refused: inline (%s)\n", link.inline_mode() ? "link inline" : pd::trigger_refusal_name(fusb302::trigger_refusal()));
+    if (blocked_) K2LOG("[PD] trigger refused: inline (%s)\n", link.inline_mode() ? K2_P("link inline") : pd::trigger_refusal_name(fusb302::trigger_refusal()));
     const pd::SinkStatus &st = fusb302::sink_status();
     wiz_.enter(caps, st.held ? st.pos : 0);
     active_ = true;
@@ -1272,8 +1275,8 @@ void PdTriggerPage::paint_value() {
     if (sig != bsig_) {
         bsig_ = sig;
         pg::clear_body(c, kit::kBodyY);
-        static const char *const kVoltKeys[] = {"Offer", K2_P("Max amps"), K2_P("Max power")};
-        static const char *const kAmpKeys[] = {"Offer", K2_P("Voltage"), "Power"};
+        static const char *const kVoltKeys[] = {K2_P("Offer"), K2_P("Max amps"), K2_P("Max power")};
+        static const char *const kAmpKeys[] = {K2_P("Offer"), K2_P("Voltage"), K2_P("Power")};
         kit::kv_static(c, kPtKv, volt ? kVoltKeys : kAmpKeys, 3);
         pdo_line(d, line_);
         kit::kv_draw_text(c, kPtKv, 0, line_.text.view());
@@ -1323,7 +1326,7 @@ void PdTriggerPage::paint_confirm(uint32_t now_ms) {
             strpack::assign_sv(err, pd::err_name(s.err));
             gfx_text(c, kSmall, 6, static_cast<int16_t>(kit::kBodyY + kit::kAlertH + 10), err, kText, kBg);
         } else if (ok) {
-            static const char *const kKeys[] = {"Offer", K2_P("Voltage"), K2_P("Current"), "Power"};
+            static const char *const kKeys[] = {K2_P("Offer"), K2_P("Voltage"), K2_P("Current"), K2_P("Power")};
             kit::kv_static(c, kPtKv, kKeys, 4);
             pdo_line(caps_->pdos[wiz_.cursor], line_);
             kit::kv_draw_text(c, kPtKv, 0, line_.text.view());
@@ -1404,7 +1407,7 @@ void PdTriggerPage::paint_footer() {
         tone = FooterTone::Error;
     } else if (wiz_.step == WizStep::Offer && !Wizard::offer_available(*caps_, wiz_.cursor, ctx_.cap_mv)) {
         const bool over = pd::plan_request(*caps_, pd::Choice{static_cast<uint8_t>(wiz_.cursor + 1), 0, 0}, ctx_.cap_mv, wiz_.cursor >= 7).err == pd::Err::OverCap;
-        if (over) msg.put("Over ").put_u32(ctx_.cap_mv / 1000).put(K2_P("V limit: pick other"));
+        if (over) msg.put(K2_P("Over ")).put_u32(ctx_.cap_mv / 1000).put(K2_P("V limit: pick other"));
         else msg.put(K2_P("Not requestable: pick other"));
         tone = FooterTone::Caution;
     } else if (wiz_.step == WizStep::Voltage && std::min<uint32_t>(caps_->pdos[wiz_.cursor].max_mv, std::max<uint32_t>(ctx_.cap_mv, pd::kVsafe5vMv)) < caps_->pdos[wiz_.cursor].max_mv) {
@@ -1553,6 +1556,7 @@ void CableRPage::paint_table(const CrView &v) {
     if (!ctx_.blank) pg::clear_body(c);   // body between the bars (a blank screen is kBg)
     rsig_ = 0;
     pg::invalidate_fields(val_, 2);
+    vsig_[0] = vsig_[1] = 0;
     if (v.meter_missing) {
         kit::draw_alert_band(c, kit::kBodyY, true, K2_PSV("METER MISSING"));
         gfx_text(c, kSmall, kit::kMarkX, kit::kBodyY + kit::kAlertH + 10, K2_PSV("Cable R needs INA2xx"), kText, kBg);
@@ -1601,12 +1605,31 @@ void CableRPage::paint_result(const CrView &v) {
     gfx_text(c, kSmall, kCrNumX, kCrResY + 98, v.detail.view(), kText, kBg);
 }
 
+// A "V A" reading paints its volts kVolt and its amps kAmp over the field's box in one pass; anything else is the field's.
+void CableRPage::paint_value(int i, const CrCard &cd) {
+    const std::string_view s = cd.value.view();
+    if (!cd.amp_at || cd.amp_at >= s.size() || cd.tone != CrTone::Ok) {
+        if (vsig_[i]) val_[i].invalidate();   // the two-colour paint owned the box: the field repaints all of it
+        vsig_[i] = 0;
+        pg::put_field(val_[i], nullptr, s, cr_value_color(cd.tone));
+        return;
+    }
+    const uint32_t sig = pg::mix_str(0x5A, s) | 1u;
+    if (sig == vsig_[i]) return;
+    vsig_[i] = sig;
+    val_[i].invalidate();
+    const int16_t y = static_cast<int16_t>(kit::kv_row_y(kCrKv, i) + kit::row_text_y(kCrKv.pitch, kSmall.height));
+    const kit::TextRun runs[2] = {{kCrKv.value_x, y, &kSmall, s.substr(0, cd.amp_at), kVolt},
+                                  {kCrKv.value_x, y, &kSmall, s.substr(cd.amp_at), kAmp, static_cast<int16_t>(cd.amp_at * kSmall.adv)}};
+    kit::paint_texts(ctx_.content, {kCrKv.value_x, y, static_cast<int16_t>(kCrKv.value_chars * kSmall.adv), static_cast<int16_t>(kSmall.height)}, runs, 2, kBg);
+}
+
 void CableRPage::update(uint32_t) {
     title_badge(false);
     const CrView v = cr_view(ctx_.pm_online, ctx_.pm.vbus_mv, ctx_.pm.current_ma, ctx_.cable_mode, ctx_.cable, ctx_.kelvin);
     paint_table(v);
     if (!v.meter_missing) {
-        for (int i = 0; i < 2; i++) pg::put_field(val_[i], nullptr, v.step[i].value.view(), cr_value_color(v.step[i].tone));
+        for (int i = 0; i < 2; i++) paint_value(i, v.step[i]);
         paint_result(v);
     }
     if (cleared_until_ && static_cast<int32_t>(ctx_.now - cleared_until_) < 0 && !v.has_result) return;
@@ -1655,6 +1678,7 @@ Strip CableRPage::labels() const {
 
 void CableRPage::invalidate() {
     pg::invalidate_fields(val_, 2);
+    vsig_[0] = vsig_[1] = 0;
     csig_ = rsig_ = 0;
     foot_.invalidate();
 }
@@ -1861,7 +1885,7 @@ void TriggerPage::paint_main(uint32_t now_ms) {
     } else {
         // The key/value table: Edit and Review show the protocol, what it offers, the measured VBUS and the held voltage
         // (retarget) or the monitor cap; Live shows the state, the protocol, the request and the measurement.
-        static const char *const kLiveKeys[] = {"State", K2_P("Protocol"), K2_P("Requested"), K2_P("Measured")};
+        static const char *const kLiveKeys[] = {K2_P("State"), K2_P("Protocol"), K2_P("Requested"), K2_P("Measured")};
         static const char *const kHeldKeys[] = {K2_P("Protocol"), K2_P("Offered"), K2_P("Measured"), "Held"};
         static const char *const kCapKeys[] = {K2_P("Protocol"), K2_P("Offered"), K2_P("Measured"), "Cap"};
         if (fresh) {
@@ -1896,7 +1920,7 @@ void TriggerPage::paint_main(uint32_t now_ms) {
         s.clear();
         if (live) {
             const bool waiting = run() == trig::Run::Negotiating;
-            pg::put_field(state_v_, nullptr, waiting ? "Requesting" : "Holding", waiting ? kCaution : kOk);
+            pg::put_field(state_v_, nullptr, waiting ? K2_P("Requesting") : K2_P("Holding"), waiting ? kCaution : kOk);
             s.put_fixed(model_.target_mv(), 2).put_char('V');
             target_v_.draw(s.view());
         } else if (!scan_sel) {
@@ -1937,7 +1961,7 @@ void TriggerPage::paint_main(uint32_t now_ms) {
     } else if (stage == trig::Stage::Edit) {
         if (e.kind == trig::Kind::Range) {
             s.clear();
-            s.put("Step ").put_u32(e.step).put(K2_P("mV, hold ")).put_u32(e.step < 1000 ? 1000 : e.step).put("mV");
+            s.put(K2_P("Step ")).put_u32(e.step).put(K2_P("mV, hold ")).put_u32(e.step < 1000 ? 1000 : e.step).put("mV");
             footer = s.c_str();
         } else {
             footer = K2_P("Choose offered voltage");
@@ -1995,7 +2019,7 @@ void TriggerPage::paint_scan() {
         kit::Verdict sv = kit::Verdict::None;
         if (scanning_) {
             sv = kit::Verdict::Running;
-            label.put("SCAN ").put_u32(static_cast<uint32_t>(scan_step_ + 1)).put(" OF ").put_u32(fc::kScanSteps);
+            label.put(K2_P("SCAN ")).put_u32(static_cast<uint32_t>(scan_step_ + 1)).put(" OF ").put_u32(fc::kScanSteps);
         } else if (acc > 0) {
             sv = kit::Verdict::Pass;
             label.put_u32(static_cast<uint32_t>(acc)).put(" OF ").put_u32(fc::kScanSteps).put(K2_P("  MAX "));
@@ -2130,8 +2154,8 @@ int rotation_choice(const Ui &ui) {
     return ui.rotation_locked() ? 1 + ui.rotation() : 0;
 }
 
-Strip setting_labels(Strip labels, sl::Id action) {
-    labels = list_strip(labels);
+Strip setting_labels(Strip labels, sl::Id action, int at, int count) {
+    labels = list_strip(labels, at, count);
     labels[Button::Ok] = action;
     return labels;
 }
@@ -2236,7 +2260,7 @@ bool SettingsPage::share_boot_info() {
     bootinfo::Snapshot snap;
     bootinfo::collect(snap);
     const std::size_t len = bootinfo::format(snap, {reinterpret_cast<char *>(buf.data()), bootinfo::kQrMax + 1});
-    return ctx_.ui->open_share(qrshare::Type::BootInfo, qrshare::kSchemaBootInfo, "Boot info", len, ctx_.now);
+    return ctx_.ui->open_share(qrshare::Type::BootInfo, qrshare::kSchemaBootInfo, "Boot info", len, ctx_.now);   // k2-plain: share title is memcpy'd
 }
 
 // Row i: the setting name, its current value at the right (green when ON; a chevron on the row that only
@@ -2253,7 +2277,7 @@ void SettingsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
     static constexpr const char *kPresets[smoothing::kPresetCount] = {"Off", "Low", K2_P("Medium"), "High"};
     static constexpr const char *kPresetNotes[smoothing::kPresetCount] = {K2_P("Raw readings"), K2_P("Light calming"), K2_P("Balanced"), K2_P("Steady, slower")};
     // charger_test::Level order (Medium 0, Light 1, Deep 2): the charger test's default level and what it runs.
-    static constexpr const char *kLevels[charger_test::kLevelCount] = {K2_P("Medium"), "Light", "Deep"};
+    static constexpr const char *kLevels[charger_test::kLevelCount] = {K2_P("Medium"), K2_P("Light"), "Deep"};
     static constexpr const char *kLevelNotes[charger_test::kLevelCount] = {
         K2_P("Tests each advertised voltage"), K2_P("Checks what charger offers"),
 #if K2_PDSPEC
@@ -2439,9 +2463,9 @@ bool SettingsPage::on_event(Event e) {
 
 Strip SettingsPage::labels() const {
     const auto row = static_cast<SettingRow>(sel_);
-    const bool opens = row < SettingRow::RotateButtons || row >= SettingRow::Display;
+    const bool opens = row < SettingRow::RotateButtons || row >= SettingRow::HomeBoxes;   // the chevron rows
     const bool cycles = row == SettingRow::Smoothing || row == SettingRow::TestLevel || row == SettingRow::SweepDepth || row == SettingRow::LongBack;
-    return setting_labels(base_labels(), opens ? sl::Open : cycles ? sl::Cycle : sl::Toggle);
+    return setting_labels(base_labels(), opens ? sl::Open : cycles ? sl::Cycle : sl::Toggle, sel_, kSettingsRows);
 }
 
 void AutorotatePage::enter() {
@@ -2487,7 +2511,7 @@ bool AutorotatePage::on_event(Event e) {
     return false;
 }
 
-Strip AutorotatePage::labels() const { return setting_labels(base_labels(), sl::Apply); }
+Strip AutorotatePage::labels() const { return setting_labels(base_labels(), sl::Apply, sel_, 5); }
 
 // ---------------------------------------------------------------------------------------
 // Home boxes submenu (configure the 3 Home info boxes: static metric, Rotating, or Off)
@@ -2521,7 +2545,7 @@ void HomeBoxesPage::draw_static() {
 }
 
 void HomeBoxesPage::row_fn(void *ctx, int i, bool focused, kit::RowSpec &out) {
-    static constexpr const char *kTitles[kRows] = {"Box 1", "Box 2", "Box 3", K2_P("Reset defaults")};
+    static constexpr const char *kTitles[kRows] = {K2_P("Box 1"), K2_P("Box 2"), K2_P("Box 3"), K2_P("Reset defaults")};
     const auto *self = static_cast<const HomeBoxesPage *>(ctx);
     if (self->view_ == View::PickBox) {
         const auto k = static_cast<home::BoxKind>(i);
@@ -2581,10 +2605,7 @@ bool HomeBoxesPage::on_event(Event e) {
 }
 
 Strip HomeBoxesPage::labels() const {
-    Strip l = list_strip(base_labels());
-    const int at = view_ == View::List ? sel_ : pick_;
-    if (at == 0) l[Button::Minus] = sl::UpDim;
-    if (at >= count() - 1) l[Button::Plus] = sl::DnDim;
+    Strip l = list_strip(base_labels(), view_ == View::List ? sel_ : pick_, count());
     l[Button::Ok] = view_ == View::List ? (sel_ < home::kBoxCount ? sl::Pick : sl::Reset) : sl::Select;
     return l;
 }
@@ -2705,10 +2726,7 @@ Strip DisplayPage::labels() const {
         l[Button::Ok] = sl::Done;
         return l;
     }
-    l = list_strip(l);
-    const int at = view_ >= View::PickDim ? pick_ : sel_;
-    if (at == 0) l[Button::Minus] = sl::UpDim;
-    if (at == count() - 1) l[Button::Plus] = sl::DnDim;
+    l = list_strip(l, view_ >= View::PickDim ? pick_ : sel_, count());
     l[Button::Ok] = view_ == View::List ? (sel_ == 0 ? sl::Set : sl::Pick) : sl::Select;
     return l;
 }
@@ -2996,7 +3014,7 @@ void ToolsPage::limit_row(int index, bool focused, kit::RowSpec &out) const {
     if (index >= 1 && index <= 3) {
         struct Meta { std::string_view text, note; };
         static constexpr Meta kMeta[3] = {
-            {tx::kLimFixed, tx::kLimNoteFixed},
+            {tx::kLimFixed, {}},   // pd::lim_fixed_note
             {tx::kLimPps,   tx::kLimNotePps},
             {tx::kLimAvs,   tx::kLimNoteAvs},
         };
@@ -3017,7 +3035,14 @@ void ToolsPage::limit_row(int index, bool focused, kit::RowSpec &out) const {
         out.tail_color = !t.enabled || t.max_mv || t.max_ma ? kCaution : (held::showing_held() ? kStale : kDim);
         if (held::showing_held() && has_caps_) out.text_color = kStale;
         out.chevron = true;
-        if (focused) out.note = kMeta[k].note;
+        if (focused && k == 0) {   // the Fixed range follows the limit picked
+            char b[pd::kLimNoteMax + 1];
+            note_.clear();
+            note_.put(std::string_view(b, pd::lim_fixed_note(t, b)));
+            out.note = note_.view();
+        } else if (focused) {
+            out.note = kMeta[k].note;
+        }
         return;
     }
     if (index == 4) {
@@ -3223,7 +3248,10 @@ bool ToolsPage::on_event(Event e) {
         return true;
     }
     if (e.button == Button::Back && view_ != View::List) {   // step back to tech view, PickLimit, or List, never out of Tools
-        if (view_ == View::PickMaxA && va_) {   // back to the voltages, nothing committed
+        if (view_ == View::PickMaxA && va_) {   // back to the voltages: the voltage stays picked, its amps as the A list showed them
+            cur_tech().max_mv = pend_mv_;
+            cur_tech().max_ma = amp_pick_ma_;
+            draft_.limit_mw = 0;
             show(View::PickMaxV);
             va_ = false;
             return true;
@@ -3235,15 +3263,17 @@ bool ToolsPage::on_event(Event e) {
 }
 
 Strip ToolsPage::labels() const {
-    Strip l = list_strip(base_labels());
     const int at = view_ == View::List ? sel_ : view_ == View::PickLimit ? pick_ : in_tech() ? edit_idx_ : sub_pick_;
-    const int n = count();
-    if (at == 0) l[Button::Minus] = sl::UpDim;
-    if (at >= n - 1) l[Button::Plus] = sl::DnDim;
+    Strip l = list_strip(base_labels(), at, count());
     if (view_ == View::List) {
-        l[Button::Ok] = sel_ >= bench::tools().n ? sl::Pick : sl::Open;
+        const bench::Acts b = bench::tools();
+        bool blocked = false;
+        if (sel_ >= 0 && sel_ < b.n && b.a[sel_].kind == bench::ActKind::Tool)
+            blocked = tool_readiness(b.a[sel_].arg, setup_state(ctx_), ctx_.pm_online).level == ToolLevel::Blocked;
+        l[Button::Ok] = sel_ >= b.n ? sl::Pick : sl::dim_if(sl::Open, blocked);   // a blocked tool's verb greys with its row
     } else if (view_ == View::PickLimit) {
-        l[Button::Ok] = (pick_ >= 1 && pick_ <= 3) ? sl::Open : sl::Select;
+        const bool offered = pick_ == 1 || !has_caps_ || (pick_ == 2 ? has_pps_ : has_avs_);
+        l[Button::Ok] = (pick_ >= 1 && pick_ <= 3) ? sl::dim_if(sl::Open, !offered) : sl::Select;
     } else if (in_tech()) {
         l[Button::Ok] = sl::Pick;
     } else {
@@ -3262,7 +3292,7 @@ constexpr usbcfg::Row ul_row(int i) { return usbcfg::row_at(i); }
 struct UlMeta { const char *name, *hint; };
 constexpr UlMeta kUlMeta[4] = {
     {"HID", K2_P("logs and remote")},
-    {"Drive", K2_P("read-only files")},
+    {K2_P("Drive"), K2_P("read-only files")},
     {K2_P("Network"), K2_P("web 192.168.7.1")},
     {K2_P("WebUSB"), K2_P("web + remote")},
 };
@@ -3313,7 +3343,7 @@ void UsbLinkPage::update(uint32_t) {
 bool UsbLinkPage::on_event(Event e) {
     if (e.press != Press::Short) return false;
     if (e.button == Button::Plus || e.button == Button::Minus) {
-        sel_ = (sel_ + (e.button == Button::Plus ? 1 : kUlRows - 1)) % kUlRows;
+        sel_ = std::clamp(sel_ + (e.button == Button::Plus ? 1 : -1), 0, kUlRows - 1);   // stops at the ends, as every list
         update(ctx_.now);
         return true;
     }
@@ -3327,7 +3357,7 @@ bool UsbLinkPage::on_event(Event e) {
 }
 
 Strip UsbLinkPage::labels() const {
-    Strip l = base_labels();
+    Strip l = list_strip(base_labels(), sel_, kUlRows);
     l[Button::Ok] = sl::Toggle;
     return l;
 }
@@ -3370,7 +3400,7 @@ void QrTestPage::paint() {
         std::uint8_t code[qrtest::kWsBufLen];
     };
     static_assert(sizeof(PaintWork) <= scratch::kSize, "qrtest paint fits the scratch arena");
-    scratch::Lease lease("qrtest");
+    scratch::Lease lease("qrtest");   // k2-plain: scratch owner tag
     auto &pw = scratch::as<PaintWork>();
     link_len_ = qrtest::build_link(version_, px_, std::span<char>(reinterpret_cast<char*>(pw.temp), qrtest::kWsBufLen));
     n_ = link_len_ != 0 && version_ >= qrtest::kVersionMin && version_ <= qrtest::kMaxShownVersion

@@ -916,8 +916,8 @@ Strip PdStressPage::labels() const {
     Strip l = base_labels();
     switch (stage_) {
     case Stage::Setup: {
-        l = list_strip(l);
         const int s = ctx_.keep.pdstress.sel;
+        l = list_strip(l, s, setup_count());
         l[Button::Ok] = s < kSeqRows ? sl::Toggle : s == kCyclesRow || s == kPaceRow ? sl::Cycle : s == kDoneRow ? sl::Next : sl::Open;
         break;
     }
@@ -930,11 +930,11 @@ Strip PdStressPage::labels() const {
         l[Button::Minus] = l[Button::Plus] = l[Button::Ok] = sl::None;
         break;
     case Stage::Results:
-        l = list_strip(l);
+        l = list_strip(l, res_sel_, result_rows());
         l[Button::Ok] = res_sel_ < nrows_ ? sl::Open : sl::Select;
         break;
     case Stage::Detail:
-        l = list_strip(l);
+        l = list_strip(l, detail_page_, kDetailPages);
         l[Button::Ok] = sl::None;
         break;
     }

@@ -41,6 +41,8 @@ int main() {
         const cable_r::Meter m = metered(20040, 50, 0, 0);
         const CrView v = cr_view(true, 20040, 50, cable_r::Mode::Passive, m, std::nullopt);
         CHECK_STR(v.step[0].value.c_str(), "20.04V 0.05A");
+        CHECK_EQ(int(v.step[0].amp_at), 7);                 // "0.05A" paints kAmp
+        CHECK_EQ(int(v.step[1].amp_at), 0);                 // ">= 1.0A" is a hint, one colour
         CHECK_EQ(int(v.step[0].tone == CrTone::Ok), 1);
         CHECK_STR(v.step[1].value.c_str(), ">= 1.0A");
         CHECK_EQ(int(v.step[1].tone == CrTone::Caution), 1);
@@ -62,6 +64,8 @@ int main() {
         const CrView w = cr_view(true, 5000, 100, cable_r::Mode::Kelvin, cable_r::Meter{}, std::nullopt);
         CHECK_STR(w.step[1].label, "SENSE");
         CHECK_STR(w.step[1].value.c_str(), ">= 0.45A");
+        CHECK_STR(w.step[0].value.c_str(), "5.00V 0.10A");  // LIVE
+        CHECK_EQ(int(w.step[0].amp_at), 6);
         const auto k = cable_r::kelvin(100, 400, 250, 2000);
         CHECK_EQ(int(k.has_value()), 1);
         const CrView v = cr_view(true, 5000, 2000, cable_r::Mode::Kelvin, cable_r::Meter{}, k);

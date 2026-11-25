@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
 #include "k2/ui/ui_match.hpp"
+#include "k2/core/strpack.hpp"
 
 #include <algorithm>
 
@@ -58,7 +59,7 @@ void typec_row_text(std::int32_t vbus_mv, std::uint32_t typec_ma, StrBuf<28> &ou
         out.put_char('V');
         if (typec_ma) out.put_char(' ');
     }
-    if (typec_ma == 500) out.put("USB default");   // a default-USB Rp: 500 mA (USB 2.0) or 900 mA (USB 3.x)
+    if (typec_ma == 500) out.put(K2_P("USB default"));   // a default-USB Rp: 500 mA (USB 2.0) or 900 mA (USB 3.x)
     else if (typec_ma) put_a(out, typec_ma);
 }
 
@@ -179,45 +180,45 @@ Severity verdict_severity(Verdict v) {
 bool gone_footer(const MatchResult &r, StrBuf<32> &out) {
     out.clear();
     if (r.gone <= 0) return false;
-    out.put_u32(uint32_t(r.gone)).put(r.gone == 1 ? " offer" : " offers").put(" not sent now");
+    out.put_u32(uint32_t(r.gone)).put(r.gone == 1 ? K2_P(" offer") : K2_P(" offers")).put(K2_P(" not sent now"));
     return true;
 }
 
 void match_footer(const MatchResult &r, StrBuf<32> &out) {
     out.clear();
     if (r.typec_ma && !r.caps_seen) {
-        out.put("No PD: Type-C ");
+        out.put(K2_P("No PD: Type-C "));
         put_amps(out, r.typec_ma);
-        out.put(" source");
+        out.put(K2_P(" source"));
         return;
     }
     switch (r.verdict) {
-        case Verdict::NoCaps: out.put("Waiting for Source_Caps"); break;
-        case Verdict::NoRequest: out.put("Replug device on the charger"); break;
-        case Verdict::OutsideCaps: out.put("Request PDO").put_u32(uint32_t(r.want_pos)).put(" not in caps"); break;
+        case Verdict::NoCaps: out.put(K2_P("Waiting for Source_Caps")); break;
+        case Verdict::NoRequest: out.put(K2_P("Replug device on the charger")); break;
+        case Verdict::OutsideCaps: out.put(K2_P("Request PDO")).put_u32(uint32_t(r.want_pos)).put(K2_P(" not in caps")); break;
         case Verdict::WantsHigherV:
-            out.put("Wants ");
+            out.put(K2_P("Wants "));
             put_volts(out, r.sink_max_mv);
-            out.put("V, charger max ");
+            out.put(K2_P("V, charger max "));
             put_volts(out, r.src_max_mv);
             out.put_char('V');
             break;
         case Verdict::CurrentLimited:
-            out.put("Charger gives ");
+            out.put(K2_P("Charger gives "));
             put_amps(out, r.have_ma);
-            out.put(", wants ");
+            out.put(K2_P(", wants "));
             put_amps(out, r.need_ma);
             if (out.view().size() > 30) {
                 out.clear();
-                out.put("Gives ");
+                out.put(K2_P("Gives "));
                 put_amps(out, r.have_ma);
-                out.put(", wants ");
+                out.put(K2_P(", wants "));
                 put_amps(out, r.need_ma);
             }
             break;
-        case Verdict::MismatchBit: out.put("Capability mismatch bit set"); break;
-        case Verdict::SinkUnknown: out.put("Sink caps not seen"); break;
-        case Verdict::Matches: out.put("Request matches the offer"); break;
+        case Verdict::MismatchBit: out.put(K2_P("Capability mismatch bit set")); break;
+        case Verdict::SinkUnknown: out.put(K2_P("Sink caps not seen")); break;
+        case Verdict::Matches: out.put(K2_P("Request matches the offer")); break;
     }
 }
 
@@ -236,34 +237,43 @@ void sink_summary(std::span<const uint32_t> sink, StrBuf<32> &out) {
             put_volts(list, p.max_mv);
         }
     }
-    if (!any) { out.put("Sink caps not seen"); return; }
-    out.put("Sink caps").put(list.view());
+    if (!any) { out.put(K2_P("Sink caps not seen")); return; }
+    out.put(K2_P("Sink caps")).put(list.view());
     if (!list.view().empty()) out.put_char('V');
-    if (pps) out.put(" +PPS");
-    if (avs) out.put(" +AVS");
+    if (pps) out.put(K2_P(" +PPS"));
+    if (avs) out.put(K2_P(" +AVS"));
 }
 
 const char *request_state_name(const pd::Contract &c) {
+    // k2-plain-begin: callers test st[0] and copy it raw
     if (!c.valid) return "";
     if (c.ready) return "Ready";
     if (c.rejected) return "Rejected";
     if (c.accepted) return "Accepted";
     return "Requested";
+    // k2-plain-end
+}
+
+// Decoded length of a packed or plain name.
+static std::size_t plain_len(const char *s) {
+    std::size_t n = 0;
+    strpack::for_chars(s, [&](char) { n++; });
+    return n;
 }
 
 void rdo_flags_text(uint8_t flags, std::size_t room, StrBuf<32> &out) {
     out.clear();
     struct F { uint8_t bit; const char *name; };
     static constexpr F kFlags[] = {   // the abnormal one first, so a short row still shows it
-        {pd::kRdoFMismatch, "Mismatch"}, {pd::kRdoFGiveBack, "Give-back"}, {pd::kRdoFUsbComm, "USB comm"},
-        {pd::kRdoFNoSuspend, "No suspend"}, {pd::kRdoFEpr, "EPR"},
+        {pd::kRdoFMismatch, K2_P("Mismatch")}, {pd::kRdoFGiveBack, K2_P("Give-back")}, {pd::kRdoFUsbComm, K2_P("USB comm")},
+        {pd::kRdoFNoSuspend, K2_P("No suspend")}, {pd::kRdoFEpr, "EPR"},
     };
     // Whole names only; what does not fit is dropped silently (the list is most-important-first), never a
     // bare "+". Empty output is fine: the caller checks for it.
     std::size_t used = 0, shown = 0;
     for (const F &f : kFlags) {
         if (!(flags & f.bit)) continue;
-        const std::size_t need = (shown ? 2 : 0) + std::string_view(f.name).size();
+        const std::size_t need = (shown ? 2 : 0) + plain_len(f.name);
         if (used + need > room) break;
         if (shown) out.put(", ");
         out.put(f.name);
@@ -283,7 +293,7 @@ WantsList pick_wants(const pd::SinkCapsSeen &sniffed, bool ident_current, const 
 }
 
 const char *wants_src_name(WantsSrc s) {
-    return s == WantsSrc::Sniffed ? "sniffed" : s == WantsSrc::Identify ? "from Identify" : "";
+    return s == WantsSrc::Sniffed ? K2_P("sniffed") : s == WantsSrc::Identify ? K2_P("from Identify") : "";
 }
 
 SinkFlags sink_flags(std::span<const uint32_t> sink) {
@@ -305,15 +315,15 @@ void sink_flags_lines(const SinkFlags &f, StrBuf<34> &l1, StrBuf<34> &l2) {
     l2.clear();
     const char *tok[6];
     int n = 0;
-    if (f.dual_role_power) tok[n++] = "Dual-role";
-    if (f.dual_role_data) tok[n++] = "DR data";
-    if (f.usb_comm) tok[n++] = "USB comm";
-    if (f.unconstrained) tok[n++] = "Unconstrained";
-    if (f.higher_cap) tok[n++] = "Higher cap";
-    if (f.fr_swap) tok[n++] = f.fr_swap == 1 ? "FR USB" : f.fr_swap == 2 ? "FR1.5A" : "FR3A";
+    if (f.dual_role_power) tok[n++] = K2_P("Dual-role");
+    if (f.dual_role_data) tok[n++] = K2_P("DR data");
+    if (f.usb_comm) tok[n++] = K2_P("USB comm");
+    if (f.unconstrained) tok[n++] = K2_P("Unconstrained");
+    if (f.higher_cap) tok[n++] = K2_P("Higher cap");
+    if (f.fr_swap) tok[n++] = f.fr_swap == 1 ? K2_P("FR USB") : f.fr_swap == 2 ? K2_P("FR1.5A") : "FR3A";
     bool second = false;
     for (int i = 0; i < n; i++) {
-        const size_t need = std::string_view(tok[i]).size();
+        const size_t need = plain_len(tok[i]);
         StrBuf<34> &cur = second ? l2 : l1;
         const size_t used = cur.view().size();
         if (used + (used ? 1 : 0) + need > 31) {

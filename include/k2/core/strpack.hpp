@@ -21,7 +21,23 @@ namespace k2::strpack {
 extern "C" [[gnu::weak]] const char __start_k2_strpack[];
 extern "C" [[gnu::weak]] const char __stop_k2_strpack[];
 
-inline bool is_packed(const char *s) {
+#ifndef __arm__
+// Host builds only: a sink must get a packed string whole and a raw seam (usb::log, QR text) never one, so a misuse
+// reports here (the default hook prints and aborts; tests may count instead). The device build has none of this.
+using MisuseHook = void (*)(const char *what);
+void set_misuse_hook(MisuseHook hook);
+void check_whole(const char *s, std::size_t n);   // n = SIZE_MAX: a C string
+void expect_plain(std::string_view s);
+#endif
+
+// A raw seam (QR text, a littlefs path) takes plain bytes only: host builds check it, the device build has no code.
+#ifndef __arm__
+#define K2_EXPECT_PLAIN(s) ::k2::strpack::expect_plain(s)
+#else
+#define K2_EXPECT_PLAIN(s) ((void)0)
+#endif
+
+inline bool in_section(const char *s) {
     if (!s || !__start_k2_strpack) return false;
     const auto a = reinterpret_cast<std::uintptr_t>(s);
     const auto lo = reinterpret_cast<std::uintptr_t>(__start_k2_strpack);
@@ -29,7 +45,21 @@ inline bool is_packed(const char *s) {
     return a - lo < hi - lo;
 }
 
-inline bool is_packed(std::string_view s) { return !s.empty() && is_packed(s.data()); }
+inline bool is_packed(const char *s) {
+    if (!in_section(s)) return false;
+#ifndef __arm__
+    check_whole(s, SIZE_MAX);
+#endif
+    return true;
+}
+
+inline bool is_packed(std::string_view s) {
+    if (s.empty() || !in_section(s.data())) return false;
+#ifndef __arm__
+    check_whole(s.data(), s.size());
+#endif
+    return true;
+}
 
 constexpr bool is_literal_byte(std::uint8_t b) {
     return static_cast<std::uint8_t>(b - 0x20u) < 0x5Fu || b == '\n' || b == '\t' || b == '\r';
@@ -103,6 +133,17 @@ int cells_rt(const char *s);
 template <std::size_t N>
 inline std::string_view unpack(std::string_view s, char (&buf)[N]) {
     return unpack_rt(s, buf, N);
+}
+
+// Feeds each decoded char of `s` (packed or plain) to `f`: the bufferless sink for byte copiers.
+template <class F>
+inline void for_chars(std::string_view s, F &&f) {
+    if (is_packed(s)) {
+        Reader r(s.data());
+        for (int c; (c = r.next()) >= 0;) f(static_cast<char>(c));
+    } else {
+        for (const char c : s) f(c);
+    }
 }
 
 // Decoded cell count (UTF-8 code points) of a BPE-packed or plain ASCII string (constexpr for static_assert width checks).

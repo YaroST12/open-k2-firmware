@@ -6,6 +6,7 @@
 #pragma once
 #include <cstdint>
 #include "k2/core/build_config.h"
+#include "k2/core/strpack.hpp"
 #include "k2/ui/ui_calc.hpp"
 #include "k2/ui/ui_pdtrig.hpp"
 #include "k2/ui/ui_types.hpp"
@@ -16,7 +17,7 @@ enum class ToolLevel : uint8_t { Ready, Caution, Blocked };
 
 struct Readiness {
     ToolLevel level = ToolLevel::Ready;
-    const char *tag = "ready";       // the row's tail when not ready, at most 6 characters (text/tools.hpp)
+    const char *tag = K2_P("ready");      // the row's tail when not ready, at most 6 characters (text/tools.hpp)
     const char *reason = "";         // footer sentence when not ready, at most 27 characters; empty when ready
 };
 

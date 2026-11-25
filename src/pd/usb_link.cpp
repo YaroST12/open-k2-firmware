@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include "k2/core/strpack.hpp"
 
 namespace k2::usblink {
 
@@ -49,7 +50,7 @@ class Out {
 public:
     explicit Out(std::span<char> b) : b_(b) {}
     void put(const char* s) {
-        for (; *s && n_ + 1 < b_.size(); s++) b_[n_++] = *s;
+        strpack::for_chars(s, [this](char c) { if (n_ + 1 < b_.size()) b_[n_++] = c; });   // packed or plain
     }
     std::size_t finish() {
         if (!b_.empty()) b_[n_] = 0;
@@ -64,18 +65,18 @@ private:
 
 const char* family_name(Family f) {
     switch (f) {
-        case Family::LowSpeed: return "USB LS";
-        case Family::FullSpeed: return "USB FS";
-        case Family::Usb2: return "USB 2.0";
-        case Family::Usb32: return "USB 3.2";
+        case Family::LowSpeed: return K2_P("USB LS");
+        case Family::FullSpeed: return K2_P("USB FS");
+        case Family::Usb2: return K2_P("USB 2.0");
+        case Family::Usb32: return K2_P("USB 3.2");
         case Family::Usb4: return "USB4";
-        case Family::Usb4v2: return "USB4v2";
-        default: return "Unknown";
+        case Family::Usb4v2: return K2_P("USB4v2");
+        default: return K2_P("Unknown");
     }
 }
 const char* tbt_name(Tbt t) {
     switch (t) {
-        case Tbt::Tbt3: return "TB3/4";   // legacy TBT mode: a TB4 port in TB3 compat looks the same
+        case Tbt::Tbt3: return K2_P("TB3/4");   // legacy TBT mode: a TB4 port in TB3 compat looks the same
         case Tbt::Tbt4: return "TBT4";
         case Tbt::Tbt5: return "TBT5";
         default: return "";
@@ -83,13 +84,13 @@ const char* tbt_name(Tbt t) {
 }
 const char* source_name(Source s) {
     switch (s) {
-        case Source::DpDm: return "D+/D-";
-        case Source::Identity: return "Identity";
-        case Source::Cable: return "Cable";
-        case Source::EnterUsb: return "Enter_USB";
-        case Source::EnterTbt: return "Enter_Mode TBT";
-        case Source::DpAlt: return "DP alt";
-        case Source::DataReset: return "Data_Reset";
+        case Source::DpDm: return K2_P("D+/D-");
+        case Source::Identity: return K2_P("Identity");
+        case Source::Cable: return K2_P("Cable");
+        case Source::EnterUsb: return K2_P("Enter_USB");
+        case Source::EnterTbt: return K2_P("Enter_Mode TBT");
+        case Source::DpAlt: return K2_P("DP alt");
+        case Source::DataReset: return K2_P("Data_Reset");
         default: return "none";
     }
 }
@@ -105,7 +106,7 @@ const char* confidence_name(Confidence c) {
 std::size_t format(const Link& l, std::span<char> out) {
     Out o(out);
     if (l.family == Family::Unknown && l.tbt == Tbt::None) {
-        o.put(l.dp ? "DP alt" : "--");
+        o.put(l.dp ? K2_P("DP alt") : "--");
         if (l.dp) {
             o.put(" (");
             o.put(confidence_name(l.conf));
@@ -114,12 +115,12 @@ std::size_t format(const Link& l, std::span<char> out) {
         return o.finish();
     }
     switch (l.family) {
-        case Family::LowSpeed: o.put("USB 1.x LS"); break;
-        case Family::FullSpeed: o.put("USB 1.1/2.0 FS"); break;
-        case Family::Usb2: o.put("USB 2.0 480M"); break;
-        case Family::Usb32: o.put(l.mbps >= 10000 ? "USB 3.2 Gen2 10G" : "USB 3.2 Gen1 5G"); break;
-        case Family::Usb4: o.put(l.mbps >= 40000 ? "USB4 40G" : "USB4 20G"); break;
-        case Family::Usb4v2: o.put("USB4v2 80G"); break;
+        case Family::LowSpeed: o.put(K2_P("USB 1.x LS")); break;
+        case Family::FullSpeed: o.put(K2_P("USB 1.1/2.0 FS")); break;
+        case Family::Usb2: o.put(K2_P("USB 2.0 480M")); break;
+        case Family::Usb32: o.put(l.mbps >= 10000 ? K2_P("USB 3.2 Gen2 10G") : K2_P("USB 3.2 Gen1 5G")); break;
+        case Family::Usb4: o.put(l.mbps >= 40000 ? K2_P("USB4 40G") : K2_P("USB4 20G")); break;
+        case Family::Usb4v2: o.put(K2_P("USB4v2 80G")); break;
         default: break;
     }
     if (l.tbt != Tbt::None) {
@@ -137,12 +138,12 @@ std::size_t format(const Link& l, std::span<char> out) {
 namespace {
 void put_speed(Out& o, const Link& l) {
     switch (l.family) {
-        case Family::LowSpeed: o.put("1.x LS"); break;
+        case Family::LowSpeed: o.put(K2_P("1.x LS")); break;
         case Family::FullSpeed: o.put("FS"); break;
-        case Family::Usb2: o.put("2.0 480M"); break;
-        case Family::Usb32: o.put(l.mbps >= 10000 ? "3.2 Gen2 10G" : "3.2 Gen1 5G"); break;
-        case Family::Usb4: o.put(l.mbps >= 40000 ? "USB4 40G" : "USB4 20G"); break;
-        case Family::Usb4v2: o.put("USB4v2 80G"); break;
+        case Family::Usb2: o.put(K2_P("2.0 480M")); break;
+        case Family::Usb32: o.put(l.mbps >= 10000 ? K2_P("3.2 Gen2 10G") : K2_P("3.2 Gen1 5G")); break;
+        case Family::Usb4: o.put(l.mbps >= 40000 ? K2_P("USB4 40G") : K2_P("USB4 20G")); break;
+        case Family::Usb4v2: o.put(K2_P("USB4v2 80G")); break;
         default: break;
     }
 }
@@ -153,7 +154,7 @@ std::size_t format_speed(const Link& l, std::span<char> out) {
     const bool hint_only = l.conf <= Confidence::Hint;
     if (l.family == Family::Unknown || (hint_only && l.tbt == Tbt::None)) {
         // A TBT link entered without a USB speed still has a rate; otherwise no guess.
-        o.put(l.tbt != Tbt::None && l.mbps ? (l.mbps >= 40000 ? "40G" : l.mbps >= 20000 ? "20G" : "10G") : "Unknown");
+        o.put(l.tbt != Tbt::None && l.mbps ? (l.mbps >= 40000 ? "40G" : l.mbps >= 20000 ? "20G" : "10G") : K2_P("Unknown"));
         return o.finish();
     }
     put_speed(o, l);
@@ -165,7 +166,7 @@ AltState format_alt(const Link& l, std::span<char> out, bool tag) {
     bool first = true;
     const auto sep = [&] { if (!first) o.put(", "); first = false; };
     if (l.dp || l.tbt != Tbt::None) {
-        if (l.dp) { sep(); o.put(l.dp_4lane ? "DP 4-lane" : l.dp_2lane ? "DP 2-lane" : "DP"); }
+        if (l.dp) { sep(); o.put(l.dp_4lane ? K2_P("DP 4-lane") : l.dp_2lane ? K2_P("DP 2-lane") : "DP"); }
         if (l.tbt != Tbt::None) { sep(); o.put(tbt_name(l.tbt)); }
         o.finish();
         return AltState::Entered;
@@ -173,7 +174,7 @@ AltState format_alt(const Link& l, std::span<char> out, bool tag) {
     if (l.dp_adv) { sep(); o.put("DP"); }
     if (l.tbt_adv) { sep(); o.put("TB"); }
     if (first) { o.put("-"); o.finish(); return AltState::None; }
-    if (tag) o.put(" (adv)");
+    if (tag) o.put(K2_P(" (adv)"));
     o.finish();
     return AltState::Advertised;
 }
@@ -183,13 +184,13 @@ std::size_t format_ui(const Link& l, std::span<char> out) {
     // Nothing PD-backed (no identity/mode data, only D+/D- hints): no guess.
     const bool hint_only = l.conf <= Confidence::Hint;
     if (l.tbt == Tbt::None && (l.family == Family::Unknown || hint_only)) {
-        o.put(l.dp ? "DP alt" : "Unknown");
+        o.put(l.dp ? K2_P("DP alt") : K2_P("Unknown"));
         return o.finish();
     }
     put_speed(o, l);
     if (l.tbt != Tbt::None) {
         if (l.family != Family::Unknown) o.put(" ");
-        o.put(l.tbt == Tbt::Tbt3 ? "TB3/4" : l.tbt == Tbt::Tbt4 ? "TB4" : "TB5");
+        o.put(l.tbt == Tbt::Tbt3 ? K2_P("TB3/4") : l.tbt == Tbt::Tbt4 ? "TB4" : "TB5");
         if (l.family == Family::Unknown && l.mbps) o.put(l.mbps >= 40000 ? " 40G" : l.mbps >= 20000 ? " 20G" : " 10G");
     }
     if (l.dp) o.put(" +DP");

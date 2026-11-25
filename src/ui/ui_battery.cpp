@@ -59,7 +59,7 @@ const char *mode_name(bt::Mode m) {
     case bt::Mode::Discharge: return K2_P("Dischg");
     case bt::Mode::RoundTrip: break;
     }
-    return "Round";
+    return K2_P("Round");
 }
 
 bool live_any() { return bt::hw::service().rec().state() != bt::State::Idle; }
@@ -77,11 +77,13 @@ BatteryPage::BatteryPage(UiContext &c) : PageBase(c, Page::Count, rail::kBattery
 
 void BatteryPage::enter() {
     view_ = View::Main;
+    armed_until_ = 0;
     build();
-    sel_ = std::clamp(static_cast<int>(ctx_.keep.place_sel[static_cast<int>(bench::Place::Battery)]), 0, count() - 1);
+    focus(ctx_.keep.place_sel[static_cast<int>(bench::Place::Battery)]);   // the remembered index may be Continue by now
 }
 
 void BatteryPage::leave() {
+    armed_until_ = 0;
     if (view_ == View::Main) ctx_.keep.place_sel[static_cast<int>(bench::Place::Battery)] = static_cast<uint8_t>(sel_);
 }
 
@@ -89,11 +91,13 @@ void BatteryPage::build() {
     if (view_ == View::Stored) {
         shown_ = view::shown(rec_, true);
         rows_ = view::rows(shown_, true, runs_sel_ == 0 && !bt::hw::service().rec().active());   // only the newest continues
+        follow();
         return;
     }
     bt::hw::service().rec().to_record(rec_);
     shown_ = view::shown(rec_, live_any());
     rows_ = view::rows(shown_, false);
+    follow();
 }
 
 int BatteryPage::count() const {
@@ -104,6 +108,22 @@ int BatteryPage::count() const {
 Act BatteryPage::act() const {
     if (view_ == View::Runs) return Act::Runs;
     return sel_ >= 0 && sel_ < rows_.n ? rows_.a[sel_] : Act::In;
+}
+
+// Continue only by the user's own Plus / Minus: a pair of OKs meant for End (or a row that turned into Continue when the run
+// ended) never reopens a run.
+void BatteryPage::focus(int sel) {
+    sel_ = std::clamp(sel, 0, count() - 1);
+    if (act() == Act::Continue) sel_ = 0;
+    cur_ = act();
+}
+
+void BatteryPage::follow() {
+    if (view_ == View::Runs || act() == cur_) return;
+    armed_until_ = 0;
+    for (int i = 0; i < rows_.n; i++)
+        if (rows_.a[i] == cur_) { sel_ = i; return; }
+    focus(0);
 }
 
 bool BatteryPage::armed() const {
@@ -121,6 +141,7 @@ void BatteryPage::load_runs() {
         if (!bt::store::load(*f, ids[i], r)) continue;
         runs_[n_runs_++] = view::shown(r, true);
     }
+    pair_ = view::pair(runs_, n_runs_);
 }
 
 void BatteryPage::set_view(View v, int sel) {
@@ -128,7 +149,7 @@ void BatteryPage::set_view(View v, int sel) {
     armed_until_ = 0;
     bar_valid_ = false;
     build();
-    sel_ = std::clamp(sel, 0, count() - 1);
+    focus(sel);
     ctx_.rows.restart();
     ctx_.rows.invalidate();
 }
@@ -180,7 +201,7 @@ void BatteryPage::action_row(Act a, bool focused, kit::RowSpec &out) {
     case Act::Time:
         tail_.put(view::hms(s.secs).view());
         if (s.gaps) note_row_.put_u32(s.gaps).put(s.gaps == 1 ? K2_P(" gap not counted") : K2_P(" gaps not counted"));
-        else if (s.phases == 2) note_row_.put(view::hms(s.secs - s.phase_secs).view()).put(" in, ").put(view::hms(s.phase_secs).view()).put(" out");
+        else if (s.phases == 2) note_row_.put(view::hms(s.secs - s.phase_secs).view()).put(K2_P(" in, ")).put(view::hms(s.phase_secs).view()).put(K2_P(" out"));
         break;
     case Act::Eff:
         if (s.eff != bt::kNoRatio) tail_.put(view::pct(s.eff).view());
@@ -195,7 +216,7 @@ void BatteryPage::action_row(Act a, bool focused, kit::RowSpec &out) {
     case Act::Next: note = kNotes[5]; break;
     case Act::Finish: note = kNotes[6]; break;
     case Act::Wiring:
-        tail_.put(same ? K2_P("Same port") : "Moved");
+        tail_.put(same ? K2_P("Same port") : K2_P("Moved"));
         note = same ? kNotes[7] : kNotes[8];
         break;
     case Act::EndMa:
@@ -242,9 +263,14 @@ void BatteryPage::run_row(int i, bool focused, kit::RowSpec &out) {
     else tail_.put(view::wh(r.mode == bt::Mode::Discharge ? r.sum.uwh_out : r.sum.uwh_in).view());
     out.tail = tail_.view();
     out.tail_color = r.eff_final ? kInk : kInk2;
-    if (focused) {
-        note_row_.put(view::wh(r.sum.uwh_in).view()).put(" in, ").put(view::wh(r.sum.uwh_out).view()).put(" out, ");
-        note_row_.put(view::hm(r.secs).view());
+    if (focused) {   // both energies of a round trip; else the other unit of the tail's (the Wh of a cut one), the time
+        const bool dis = r.mode == bt::Mode::Discharge;
+        if (r.mode == bt::Mode::RoundTrip) {
+            note_row_.put(view::wh(r.sum.uwh_in).view()).put(K2_P(" in, ")).put(view::wh(r.sum.uwh_out).view()).put(K2_P(" out"));
+        } else {
+            note_row_.put(r.lost ? view::wh(dis ? r.sum.uwh_out : r.sum.uwh_in).view() : view::mah(dis ? r.sum.uah_out : r.sum.uah_in).view());
+            note_row_.put(dis ? K2_P(" out, ") : K2_P(" in, ")).put(view::hm(r.secs).view());
+        }
         out.note = note_row_.view();
     }
 }
@@ -258,7 +284,13 @@ void BatteryPage::update(uint32_t now_ms) {
     if (note_until_ && static_cast<int32_t>(note_until_ - now_ms) <= 0) note_until_ = 0;
     // the identity block
     kit::Ident id;
-    if (view_ == View::Runs) {
+    if (view_ == View::Runs && pair_.eff != bt::kNoRatio) {   // a charge and a discharge recorded apart: their efficiency
+        id.head.put(view::pct(pair_.eff).view());
+        StrBuf<12> ids;
+        ids.put_char('#').put_u32(pair_.lo).put_char('-').put_u32(pair_.hi);
+        id.add(ids.view(), pair_.eff <= 1000 ? kit::Ident::Ok : kit::Ident::Outline);   // over 100 %: a part measured
+        id.line.put(view::wh(pair_.uwh_out).view()).put(K2_P(" out / ")).put(view::wh(pair_.uwh_in).view()).put(K2_P(" in"));
+    } else if (view_ == View::Runs) {
         id.head.put(K2_P("Saved runs"));
         id.dim = n_runs_ == 0;
         id.line.put(n_runs_ ? K2_P("Newest first, OK opens one") : K2_P("A run is saved when it ends"));
@@ -331,7 +363,7 @@ void BatteryPage::ok() {
         switch (sv.start(m, sv.wiring(), bt::hw::monitor_online())) {
         case bt::Recorder::Start::Ok:
             build();
-            sel_ = rows_.facts;   // the first thing to do now: End charge
+            focus(rows_.facts);   // the first thing to do now: End charge
             ctx_.rows.invalidate();
             break;
         case bt::Recorder::Start::NoMonitor: refuse(K2_P("No power monitor"), FooterTone::Error); break;
@@ -353,21 +385,21 @@ void BatteryPage::ok() {
         if (a == Act::EndPhase) sv.rec().end_phase();
         else if (a == Act::Finish) sv.rec().finish();
         else {
-            static constexpr const char *kCont[] = {"Run continues", "A run is measuring", "No power monitor",
-                                                    "No run to continue", "Only the newest run"};   // Service::Cont
+            static constexpr const char *kCont[] = {K2_P("Run continues"), K2_P("A run is measuring"), K2_P("No power monitor"),
+                                                    K2_P("No run to continue"), K2_P("Only the newest run")};   // Service::Cont
             const auto c = sv.continue_run(shown_.id, bt::hw::monitor_online());
             refuse(kCont[static_cast<int>(c)], c == bt::Service::Cont::Ok ? FooterTone::Ok : FooterTone::Caution);
             if (c != bt::Service::Cont::Ok) return;
             set_view(View::Main, 0);
         }
         build();
-        sel_ = rows_.facts;
+        focus(rows_.facts);   // End charge after a continue; after an end the In row (focus skips Continue)
         ctx_.rows.invalidate();
         return;
     case Act::Next:
         sv.rec().next();
         build();
-        sel_ = rows_.facts;
+        focus(rows_.facts);
         ctx_.rows.invalidate();
         return;
     case Act::Wiring:
@@ -392,7 +424,7 @@ void BatteryPage::ok() {
     case Act::Share: {
         if (view_ != View::Stored) bt::hw::service().rec().to_record(rec_);
         const std::size_t len = bt::encode(rec_, ctx_.ui->share_buffer());
-        ctx_.ui->open_share(qrshare::Type::Battery, qrshare::kSchemaBattery, "Battery run", len, ctx_.now);
+        ctx_.ui->open_share(qrshare::Type::Battery, qrshare::kSchemaBattery, "Battery run", len, ctx_.now);   // k2-plain: share title is memcpy'd
         return;   // the share view is on top now
     }
     case Act::In:
@@ -406,6 +438,7 @@ bool BatteryPage::on_event(Event e) {
     if (e.press != Press::Short) return false;
     if (e.button == Button::Plus || e.button == Button::Minus) {
         sel_ = std::clamp(sel_ + (e.button == Button::Plus ? 1 : -1), 0, count() - 1);
+        cur_ = act();
         armed_until_ = 0;   // moving off disarms a hand end
         update(ctx_.now);   // the Ui re-reads labels() after the event: the OK verb follows the row
         return true;
@@ -421,6 +454,7 @@ bool BatteryPage::on_event(Event e) {
             set_view(View::Main, 0);
             for (int i = 0; i < rows_.n; i++)
                 if (rows_.a[i] == Act::Runs) sel_ = i;
+            cur_ = act();
             update(ctx_.now);
             return true;
         }
@@ -430,7 +464,7 @@ bool BatteryPage::on_event(Event e) {
 }
 
 Strip BatteryPage::labels() const {
-    Strip l = list_strip(base_labels());
+    Strip l = list_strip(base_labels(), sel_, count());
     if (view_ == View::Runs) l[Button::Ok] = n_runs_ ? sl::View : sl::None;
     else if (armed()) l[Button::Ok] = sl::Confirm;
     else l[Button::Ok] = view::act_verb(act());

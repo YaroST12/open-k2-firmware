@@ -145,6 +145,10 @@ SECTIONS
     *(.text._ZZN2k22pd4Link* .text._ZZNK2k22pd4Link* .text._ZZN2k22pd7Passive* .text._ZZNK2k22pd7Passive*)
     *(.text._ZN2k22pd7Limiter* .text._ZNK2k22pd7Limiter* .text._ZZN2k22pd7Limiter* .text._ZZNK2k22pd7Limiter*)
     *(.text._ZN2k22lz* .text._ZZN2k22lz* .text._ZN2k27ctsweep* .text._ZNK2k27ctsweep* .text._ZZN2k27ctsweep* .text._ZZNK2k27ctsweep*)
+    /* Cold-file callees of the sweep line and the PD decoders (selftest sweep_sum, pd_codec): the packed-string reader with
+     * its pair table, the vendor and SVID names of a parsed e-marker */
+    *(.text._ZN2k27strpack* .text._ZNK2k27strpack* .text._ZZN2k27strpack* .rodata._ZN2k27strpack5table5kPairE*)
+    *(.text._ZN2k22pd11vendor_name* .text._ZN2k22pd9svid_name* .text._ZN2k22pd10VendorNameC*)
     *(.text._ZN2k210StrBufBase* .text._ZN2k27mix_u32* .text._ZN2k23mixE* .text._ZN2k22pg8mix_cstr* .text._ZN2k22pg8mix_u32s* .text._ZN2k22pg8mix_u16s* .text._ZN2k22pg9mix_bytes* .text._ZN2k27fmt_fit* .text._ZN2k27fmt_u32* .text._ZN2k29fmt_fixed* .text._ZN2k213fmt_abs_fixed*)
     *(.text._ZN2k210fastcharge* .text._ZN2k27dpsniff* .text._ZN2k26fctrig4poll* .text._ZN2k27battery* .text._ZN2k26ripple*)
     *(.text._ZZN2k210fastcharge* .text._ZZN2k27dpsniff* .text._ZZN2k26fctrig4poll* .text._ZZN2k27battery* .text._ZZN2k26ripple*)

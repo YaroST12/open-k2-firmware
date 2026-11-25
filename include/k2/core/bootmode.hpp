@@ -5,6 +5,7 @@
 // on before the app runs); BACK selects no mode.
 #pragma once
 #include <cstdint>
+#include "k2/core/strpack.hpp"
 
 namespace k2::bootmode {
 
@@ -75,7 +76,7 @@ constexpr std::uint8_t moved_pin(std::uint8_t pin, std::uint32_t ms_since_start,
 }
 
 constexpr const char* name(Mode m) {
-    return m == Mode::PlusRdCc2 ? "plus-rd-cc2" : m == Mode::OkRdCc1 ? "ok-rd-cc1" : "plain";
+    return m == Mode::PlusRdCc2 ? K2_P("plus-rd-cc2") : m == Mode::OkRdCc1 ? K2_P("ok-rd-cc1") : K2_P("plain");
 }
 
 constexpr bool self_powered(Mode m) { return m != Mode::Plain; }

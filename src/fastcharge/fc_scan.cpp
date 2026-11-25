@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Yaraslau Furman
 // Auto-detect scanner, see k2/fastcharge/fc_scan.hpp.
 #include "k2/fastcharge/fc_scan.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::fc {
 
@@ -15,9 +16,9 @@ constexpr int kBackAt5vMv = 5600;
 const char* name(Outcome o) {
     switch (o) {
     case Outcome::None: return "-";
-    case Outcome::Accepted: return "ACCEPTED";
-    case Outcome::Rejected: return "rejected";
-    case Outcome::Skipped: return "skipped";
+    case Outcome::Accepted: return K2_P("ACCEPTED");
+    case Outcome::Rejected: return K2_P("rejected");
+    case Outcome::Skipped: return K2_P("skipped");
     }
     return "?";
 }

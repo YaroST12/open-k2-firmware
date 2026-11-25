@@ -50,7 +50,7 @@ struct Intent {
     constexpr bool operator==(const Intent&) const = default;
 };
 
-inline constexpr const char* kPath = "/rd.rec";
+inline constexpr const char* kPath = "/rd.rec"; // k2-plain: fs path
 inline constexpr std::array<std::uint8_t, 4> kMagic{'K', '2', 'R', 'I'};
 inline constexpr std::uint8_t kCheckSalt = 0x5A;
 inline constexpr std::size_t kSize = 10;   // "K2RI", kind, pin, cable kind, seq low, seq high, check

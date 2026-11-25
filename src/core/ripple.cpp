@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include "k2/drivers/adc_calc.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::ripple {
 
@@ -213,18 +214,18 @@ void project(std::span<const std::uint16_t> samples, std::uint32_t period_ns, st
 void fmt_vpp(const Stats &s, StrBuf<16> &out) {
     out.clear();
     if (!s.valid) { out.put("--"); return; }
-    if (s.below_floor) { out.put("< floor"); return; }
+    if (s.below_floor) { out.put(K2_P("< floor")); return; }
     if (s.vpp_mv >= 1000) {
         out.put_fixed(s.vpp_mv, 2).put(" Vpp");
     } else {
-        out.put_u32(static_cast<std::uint32_t>(s.vpp_mv)).put(" mVpp");
+        out.put_u32(static_cast<std::uint32_t>(s.vpp_mv)).put(K2_P(" mVpp"));
     }
 }
 
 void fmt_vrms(const Stats &s, StrBuf<16> &out) {
     out.clear();
     if (!s.valid || s.below_floor) { out.put("--"); return; }
-    out.put_u32(static_cast<std::uint32_t>(s.vrms_mv)).put(" mVrms");
+    out.put_u32(static_cast<std::uint32_t>(s.vrms_mv)).put(K2_P(" mVrms"));
 }
 
 void fmt_freq(const Stats &s, StrBuf<16> &out) {

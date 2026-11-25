@@ -5,6 +5,7 @@
 
 #include "k2/drivers/fs_flash.hpp"
 #include "k2/core/log.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::cablepref {
 
@@ -12,13 +13,13 @@ std::optional<ctcable::Choice> stored() { return load(fs::instance()); }
 
 bool set(ctcable::Choice c) {
     const bool ok = save(fs::instance(), c);
-    K2LOG("[CABLE] selection kind=%u seq=%u (%s)\n", unsigned(c.kind), unsigned(c.seq), ok ? "saved" : "FLASH ERROR");
+    K2LOG("[CABLE] selection kind=%u seq=%u (%s)\n", unsigned(c.kind), unsigned(c.seq), ok ? K2_P("saved") : K2_P("FLASH ERROR"));
     return ok;
 }
 
 bool clear() {
     const bool ok = clear(fs::instance());
-    K2LOG("[CABLE] selection cleared (%s)\n", ok ? "default again" : "FLASH ERROR");
+    K2LOG("[CABLE] selection cleared (%s)\n", ok ? K2_P("default again") : K2_P("FLASH ERROR"));
     return ok;
 }
 

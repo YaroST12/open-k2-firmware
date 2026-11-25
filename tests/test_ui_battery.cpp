@@ -26,6 +26,8 @@ namespace bt = k2::battery;
 namespace view = k2::battery::view;
 
 static bool eq(std::string_view a, std::string_view b) {
+    char dec[64];
+    a = strpack::unpack(a, dec);   // names may be packed
     if (a != b) std::printf("  got \"%.*s\", want \"%.*s\"\n", int(a.size()), a.data(), int(b.size()), b.data());
     return a == b;
 }
@@ -127,7 +129,7 @@ static void test_ident_and_footer() {
     id = kit::Ident{};
     view::ident(s, id);
     CHECK(eq(id.head.view(), "Charging"));
-    CHECK(eq(id.line.view(), "Same port, 1h05m11s, 5.431Wh in"));   // 5 W for 3911 s = 5.4319 Wh, cut
+    CHECK(eq(id.line.view(), "Same port, 1h05m11s, 5.431Wh"));   // 5 W for 3911 s = 5.4319 Wh, cut
     f.clear();
     CHECK_EQ(int(view::footer(s, true, false, false, false, f)), int(FooterTone::Info));
     CHECK(eq(f.view(), "Ends under 50mA for 60s"));
@@ -371,13 +373,227 @@ static void test_continue_page() {
     bt::hw::poll(t += 1000, true);
 }
 
+// Continue is only ever where the user moved the cursor: not where it lands after End, not on a row that turned into Continue
+// under a parked cursor when the end rule closed the run, not on the place's remembered row (run 6 of 2026-11-25).
+static void test_continue_never_under_the_cursor() {
+    Ui &ui = fresh_ui();
+    std::uint32_t t = 1000;
+    ui.tick(t);
+    bt::hw::service().start(bt::Mode::Charge, bt::Wiring::SamePort, true);
+    g_stub.pm.vbus_mv = 5000;
+    g_stub.pm.current_ma = 1000;
+    for (int i = 0; i < 5; i++) bt::hw::poll(t += 1000, true);
+    open_settled(ui, bench::Place::Battery, t);
+    const BatteryPage *p = ui.battery_page();
+    CHECK(p != nullptr);
+    if (!p) return;
+    CHECK(find_row(ui, p, view::Act::EndPhase, t));
+    press(ui, Button::Ok, t);
+    press(ui, Button::Ok, t);                                                       // End charge, confirmed
+    CHECK_EQ(int(bt::hw::service().rec().state()), int(bt::State::Done));
+    CHECK(p->act() != view::Act::Continue);
+    press(ui, Button::Ok, t);
+    press(ui, Button::Ok, t);                                                       // the same two presses again
+    CHECK_EQ(int(bt::hw::service().rec().state()), int(bt::State::Done));
+    // a parked cursor on End charge while the end rule closes the run
+    bt::hw::service().rec().finish();
+    bt::hw::poll(t += 1000, true);
+    bt::hw::service().start(bt::Mode::Charge, bt::Wiring::SamePort, true);
+    g_stub.pm.current_ma = 1000;
+    for (int i = 0; i < 5; i++) bt::hw::poll(t += 1000, true);
+    press(ui, Button::Back, t);
+    open_settled(ui, bench::Place::Battery, t);
+    p = ui.battery_page();
+    if (!p) return;
+    CHECK(find_row(ui, p, view::Act::EndPhase, t));
+    g_stub.pm.current_ma = 0;
+    for (int i = 0; i < 65; i++) {
+        bt::hw::poll(t += 1000, true);
+        ui.tick(t);
+    }
+    CHECK_EQ(int(bt::hw::service().rec().state()), int(bt::State::Done));
+    CHECK(p->act() != view::Act::Continue);
+    press(ui, Button::Ok, t);
+    press(ui, Button::Ok, t);
+    CHECK_EQ(int(bt::hw::service().rec().state()), int(bt::State::Done));
+    // left on End charge, the run ends elsewhere, the place opens again
+    bt::hw::service().rec().finish();
+    bt::hw::poll(t += 1000, true);
+    bt::hw::service().start(bt::Mode::Charge, bt::Wiring::SamePort, true);
+    g_stub.pm.current_ma = 1000;
+    for (int i = 0; i < 5; i++) bt::hw::poll(t += 1000, true);
+    while (ui.painting()) ui.tick(t += 20);
+    CHECK(find_row(ui, p, view::Act::EndPhase, t));
+    press(ui, Button::Back, t);
+    g_stub.pm.current_ma = 0;
+    for (int i = 0; i < 65; i++) bt::hw::poll(t += 1000, true);
+    CHECK_EQ(int(bt::hw::service().rec().state()), int(bt::State::Done));
+    open_settled(ui, bench::Place::Battery, t);
+    p = ui.battery_page();
+    if (!p) return;
+    CHECK(p->act() != view::Act::Continue);
+    press(ui, Button::Ok, t);
+    press(ui, Button::Ok, t);
+    CHECK_EQ(int(bt::hw::service().rec().state()), int(bt::State::Done));
+    // the newest stored run open on Share while a run started elsewhere (the remote) measures and then ends empty: the
+    // stored run's Continue row comes back under the cursor
+    CHECK(find_row(ui, p, view::Act::Runs, t));
+    press(ui, Button::Ok, t);
+    press(ui, Button::Ok, t);
+    CHECK(p->viewing_stored());
+    CHECK(find_row(ui, p, view::Act::Share, t));
+    bt::hw::service().start(bt::Mode::Charge, bt::Wiring::SamePort, true);
+    for (int i = 0; i < 3; i++) bt::hw::poll(t += 1000, true);
+    ui.tick(t += 1000);
+    while (ui.painting()) ui.tick(t += 20);
+    bt::hw::service().rec().end_phase();
+    bt::hw::poll(t += 1000, true);
+    ui.tick(t += 1000);
+    while (ui.painting()) ui.tick(t += 20);
+    CHECK(p->act() != view::Act::Continue);
+    press(ui, Button::Ok, t);
+    press(ui, Button::Ok, t);
+    CHECK_EQ(int(bt::hw::service().rec().state()), int(bt::State::Done));
+}
+
+// K2_DUMP=dir: the screen as k2_bt_<name>_r<rot>.panel (tools/panel2png.py), for the renders of a change.
+static void dump(const char *name, int rot) {
+    const char *dir = std::getenv("K2_DUMP");
+    if (!dir) return;
+    char path[256];
+    std::snprintf(path, sizeof path, "%s/k2_bt_%s_r%d.panel", dir, name, rot);
+    if (FILE *f = std::fopen(path, "wb")) {
+        std::fwrite(g_panel, sizeof g_panel[0], LCD_WIDTH * LCD_HEIGHT, f);
+        std::fclose(f);
+    }
+}
+
+// One-phase and round-trip records with the longest values a run can show: a 3-digit id, 123.4 Wh, 99999 mAh, 99h59m59s.
+static bt::Record long_record(std::uint16_t id, bt::Mode m, bool lost, bt::RunState st = bt::RunState::Done) {
+    bt::Record r;
+    r.mode = m;
+    r.wiring = bt::Wiring::SamePort;
+    r.state = st;
+    r.armed = true;
+    r.id = id;
+    r.resumes = 12;
+    r.gap_s = 3599;
+    const bool trip = m == bt::Mode::RoundTrip;
+    const bool run1 = st != bt::RunState::Done && !trip;
+    r.phases = trip && st != bt::RunState::Between ? 2 : 1;
+    r.ph[0] = bt::PhaseRec{m == bt::Mode::Discharge ? bt::Kind::Discharge : bt::Kind::Charge,
+                           run1 ? bt::End::Running : lost && !trip ? bt::End::Lost : bt::End::Auto, std::uint16_t(trip ? 0 : 999), 359'999,
+                           123'456'789, 1'234'567, 99'999'000, 99'999};
+    if (m == bt::Mode::Discharge) { std::swap(r.ph[0].uwh_in, r.ph[0].uwh_out); std::swap(r.ph[0].uah_in, r.ph[0].uah_out); }
+    if (r.phases == 2)
+        r.ph[1] = bt::PhaseRec{bt::Kind::Discharge, st == bt::RunState::Measuring ? bt::End::Running : lost ? bt::End::Lost : bt::End::Manual, 0,
+                               359'999, 1'234'567, 123'456'789, 99'999, 99'999'000};
+    return r;
+}
+
+// The real runs of 2026-11-24/25 as kept after id 5 (two charges and the discharge before them: the pair 84.0 %).
+static bt::Record real_record(std::uint16_t id, bt::Mode m, std::uint32_t secs, std::uint32_t uwh, std::uint32_t uah) {
+    bt::Record r;
+    r.mode = m;
+    r.wiring = m == bt::Mode::Discharge ? bt::Wiring::Moved : bt::Wiring::SamePort;
+    r.state = bt::RunState::Done;
+    r.id = id;
+    r.phases = 1;
+    const bool dis = m == bt::Mode::Discharge;
+    r.ph[0] = bt::PhaseRec{dis ? bt::Kind::Discharge : bt::Kind::Charge, bt::End::Auto, 0, secs, dis ? 0 : uwh, dis ? uwh : 0, dis ? 0 : uah, dis ? uah : 0};
+    return r;
+}
+
+static void walk_page(Ui &ui, const BatteryPage *p, std::uint32_t &t, const char *name, int rot) {
+    char nm[64];
+    for (int i = 0; i < 20 && p->selected() > 0; i++) press(ui, Button::Minus, t);
+    for (int i = 0;; i++) {
+        std::snprintf(nm, sizeof nm, "%s_%02d", name, i);
+        dump(nm, rot);
+        if (p->selected() >= p->list_state().count - 1 || i >= 20) break;
+        press(ui, Button::Plus, t);
+    }
+}
+
+// Every row of the main, Saved runs and stored views focused, in all four rotations, with long values and with the real runs.
+// Nothing may be cut (test_report fails on a cut).
+static void walk_set(const bt::Record *runs, int n, const bt::Record &live, const char *set) {
+    for (int rot = 0; rot < 4; rot++) {
+        Ui &ui = fresh_ui();
+        ui.set_rotation(std::uint8_t(rot), g_stub.ms);
+        std::uint32_t t = 1000;
+        ui.tick(t);
+        fs::Fs *f = bt::hw::service().volume();
+        CHECK(f != nullptr);
+        if (!f) return;
+        for (int i = 0; i < n; i++) CHECK(bt::store::save(*f, runs[i]));
+        bt::hw::service().rec().restore(live);
+        open_settled(ui, bench::Place::Battery, t);
+        const BatteryPage *p = ui.battery_page();
+        CHECK(p != nullptr);
+        if (!p) return;
+        char nm[48];
+        std::snprintf(nm, sizeof nm, "%s_main", set);
+        walk_page(ui, p, t, nm, rot);
+        if (!find_row(ui, p, view::Act::Runs, t)) continue;
+        press(ui, Button::Ok, t);
+        std::snprintf(nm, sizeof nm, "%s_runs", set);
+        walk_page(ui, p, t, nm, rot);
+        for (int k = 0; k < n; k++) {
+            for (int i = 0; i < 5 && p->selected() > 0; i++) press(ui, Button::Minus, t);
+            for (int i = 0; i < k; i++) press(ui, Button::Plus, t);
+            press(ui, Button::Ok, t);
+            CHECK(p->viewing_stored());
+            std::snprintf(nm, sizeof nm, "%s_stored%d", set, k);
+            walk_page(ui, p, t, nm, rot);
+            press(ui, Button::Back, t);
+        }
+        press(ui, Button::Back, t);
+        press(ui, Button::Back, t);
+    }
+    stub_battery_reset();
+}
+
+// The identity line is painted through fit_data (counted, not failed): its longest texts are checked here instead.
+static void test_long_ident_lines() {
+    const bt::RunState st[] = {bt::RunState::Measuring, bt::RunState::Between, bt::RunState::Done};
+    for (bt::Mode m : {bt::Mode::Charge, bt::Mode::Discharge, bt::Mode::RoundTrip})
+        for (bt::RunState s : st)
+            for (bool lost : {false, true}) {
+                kit::Ident id;
+                view::ident(view::shown(long_record(999, m, lost, s), true), id);
+                if (id.line.view().size() > kit::kIdLineCells) std::printf("  identity line \"%s\" too long\n", id.line.c_str());
+                CHECK(id.line.view().size() <= kit::kIdLineCells);
+            }
+    kit::Ident id;
+    view::ident(view::shown(long_record(999, bt::Mode::Discharge, false, bt::RunState::Measuring), true), id);
+    CHECK(eq(id.line.view(), "Same port, 99h59m59s, 123.4Wh"));
+}
+
+static void test_long_values() {
+    const bt::Record longs[] = {long_record(997, bt::Mode::Charge, true), long_record(998, bt::Mode::Discharge, false),
+                                long_record(999, bt::Mode::RoundTrip, false)};
+    walk_set(longs, 3, long_record(999, bt::Mode::RoundTrip, false), "long");
+    walk_set(longs, 3, long_record(999, bt::Mode::Discharge, false, bt::RunState::Measuring), "long_meas");
+    walk_set(longs, 3, long_record(999, bt::Mode::RoundTrip, false, bt::RunState::Measuring), "long_trip");
+    walk_set(longs, 3, long_record(999, bt::Mode::RoundTrip, false, bt::RunState::Between), "long_between");
+    walk_set(longs, 3, long_record(999, bt::Mode::RoundTrip, true), "long_lost");
+    const bt::Record real[] = {real_record(3, bt::Mode::Discharge, 3170, 30'994'272, 1'538'604),
+                               real_record(4, bt::Mode::Charge, 3006, 23'804'464, 1'205'674),
+                               real_record(5, bt::Mode::Charge, 1592, 13'075'722, 673'138)};
+    walk_set(real, 3, real[2], "real");
+}
+
 int main() {
     test_numbers();
     test_rows();
     test_ident_and_footer();
     test_page();
     test_continue_page();
+    test_continue_never_under_the_cursor();
     test_rows_have_no_marker();
     test_classic();
+    test_long_ident_lines();
+    test_long_values();
     return test_report("test_ui_battery");
 }

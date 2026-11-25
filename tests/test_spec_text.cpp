@@ -185,7 +185,7 @@ static void test_detail_rows() {
     const specsec::Cell skip = cell_of(sc::Verdict::Skip, 0, 0, sc::Skip::NoPps);
     s.clear();
     spectext::detail_value(1, 9, skip, s, col);
-    CHECK_COND(s.view() == sc::skip_name(sc::Skip::NoPps));
+    CHECK_STR(s.c_str(), sc::skip_name(sc::Skip::NoPps));   // packed: compare decoded
     s.clear();
     spectext::detail_value(0, 9, skip, s, col);
     CHECK_COND(s.view() == "Skip");

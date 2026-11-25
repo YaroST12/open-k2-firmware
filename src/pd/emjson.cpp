@@ -5,6 +5,7 @@
 #include "k2/pd/emname.hpp"
 #include "k2/pd/pd.hpp"
 #include "k2/core/textbuf.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::emjson {
 
@@ -31,7 +32,7 @@ std::size_t render(const emlib::Entry& e, std::span<char> out) {
     K2_TPUT(t, "  \"name\": \"%s\",\n", name);
     K2_TPUT(t, "  \"auto_name\": \"%s\",\n", emname::make(e.rec).data());
     t.put_raw(K2_PSV("  \"record\": \""));
-    static const char* hex = "0123456789ABCDEF";
+    static const char* hex = "0123456789ABCDEF";   // k2-plain: indexed digits
     for (std::uint8_t b : e.rec) {
         const char two[2] = {hex[b >> 4], hex[b & 15]};
         t.put_raw({two, 2});
@@ -44,7 +45,7 @@ std::size_t render(const emlib::Entry& e, std::span<char> out) {
     K2_TPUT(t, "    \"current_a\": %u,\n    \"max_v\": %u,\n    \"max_w\": %u,\n", static_cast<unsigned>(em.max_current_a),
             static_cast<unsigned>(em.max_voltage_v), static_cast<unsigned>(em.max_power_w));
     K2_TPUT(t, "    \"latency\": \"%s\",\n", em.latency_str);
-    K2_TPUT(t, "    \"vconn_required\": %s,\n    \"epr\": %s,\n", em.vconn_required ? "true" : "false", em.epr_capable ? "true" : "false");
+    K2_TPUT(t, "    \"vconn_required\": %s,\n    \"epr\": %s,\n", em.vconn_required ? "true" : K2_P("false"), em.epr_capable ? "true" : K2_P("false"));
     K2_TPUT(t, "    \"pd_rev\": %u,\n", static_cast<unsigned>(e.rec[0x14]));
     t.put_raw(K2_PSV("    \"vdos\": ["));
     for (unsigned i = 0; i < 5; i++) K2_TPUT(t, "%s\"0x%08X\"", i ? ", " : "", static_cast<unsigned>(v[i]));

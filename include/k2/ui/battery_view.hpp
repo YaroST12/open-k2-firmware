@@ -46,6 +46,17 @@ struct Shown {
 };
 Shown shown(const Record &r, bool any);
 
+// The efficiency of separate runs (a discharge and a charge recorded apart, either split over several runs): over runs newest
+// first, the newest stretch of one kind (Charge or Discharge runs) and the stretch of the other kind just before it, each
+// summed; Wh out of the discharges / Wh in of the charges. A round trip ends the scan; a cut-short run in a stretch or a
+// run not yet done voids it; an empty run is skipped. eff kNoRatio: no such pair.
+struct Pair {
+    uint16_t eff = kNoRatio;
+    uint16_t lo = 0, hi = 0;     // the ids it spans
+    uint32_t uwh_out = 0, uwh_in = 0;   // a record's u32 fields: three kept runs stay far under 4294 Wh
+};
+Pair pair(const Shown *runs, int n);
+
 enum class Act : uint8_t {
     In, Out, Time, Eff,                                   // facts (no verb)
     StartCharge, StartDischarge, StartRoundTrip,          // idle or done

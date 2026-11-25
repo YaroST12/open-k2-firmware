@@ -31,8 +31,9 @@ void EnergyMeter::reset(uint32_t now_ms) {
 void EnergyMeter::update(uint32_t now_ms, int32_t power_mw) { update(now_ms, power_mw, 0); }
 
 void EnergyMeter::update(uint32_t now_ms, int32_t power_mw, int32_t current_ma) {
-    if (power_mw < 0) power_mw = 0;  // forward energy only
-    if (current_ma < 0) current_ma = 0;
+    // Energy through the K2 either way: the sign is a direction (top or bottom port), not less energy.
+    power_mw = power::abs_sat(power_mw);
+    current_ma = power::abs_sat(current_ma);
     if (primed_) {
         uint32_t dt = now_ms - last_ms_;  // wrap-safe
         uj_ += (static_cast<uint64_t>(last_mw_) + static_cast<uint64_t>(power_mw)) * dt >> 1;
@@ -283,7 +284,7 @@ int fmt_u32_compact(std::span<char> out, uint32_t value) {
 }
 
 int fmt_count_capped(std::span<char> out, uint32_t value) {
-    if (count_overflowed(value)) return emit(out, ">999M", 5);
+    if (count_overflowed(value)) return emit(out, ">999M", 5);   // k2-plain: copied by length
     return fmt_u32_compact(out, value);
 }
 

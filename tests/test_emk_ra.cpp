@@ -38,12 +38,14 @@ int main() {
     CHECK(check({.vconn = true}) == Refuse::Vconn);
     CHECK(check({.inline_sink = true, .contract = true}) == Refuse::Inline);   // the first reason wins
     for (const auto r : {Refuse::Inline, Refuse::Contract, Refuse::Busy, Refuse::PinnedRd, Refuse::Vconn}) {
-        const std::string t = refuse_footer(r);
+        char b[64];
+        const std::string t(k2::strpack::unpack(refuse_footer(r), b));
         CHECK(!t.empty() && t.size() <= 27);   // the footer holds 27 characters
         CHECK(t != "Ra mode refused; tool busy");
     }
     CHECK(std::string(refuse_footer(Refuse::None)).empty());
-    CHECK(std::string(refuse_name(Refuse::None)) == "ok"&& std::string(refuse_name(Refuse::Contract)) == "contract");
+    char nb[32];
+    CHECK(std::string(refuse_name(Refuse::None)) == "ok" && std::string(k2::strpack::unpack(refuse_name(Refuse::Contract), nb)) == "contract");
 
     // Rd while the mode is on: CC2 alone (never CC1, where the Ra sits), none with a sink inline
     CHECK(run_rd_lines(true, false, 0) == 2 && run_rd_lines(true, false, 2) == 2 && run_rd_lines(true, false, 1) == 2);

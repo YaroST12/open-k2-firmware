@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 
+#include "k2/core/strpack.hpp"
 #include "k2/ui/ui.hpp"
 #include "k2/ui/ui_pdstress_page.hpp"
 #include "k2/ui/ui_tools.hpp"
@@ -442,7 +443,8 @@ void test_the_tools_row_opens_the_page() {
     run(ui, 120);
     int row = 0;
     const ConnectionPage &cp = ui.connection_page();
-    while (row < cp.item_count() && std::string_view(cp.item(row).label) != "Stress test") ++row;
+    char dec[32];
+    while (row < cp.item_count() && strpack::unpack(cp.item(row).label, dec) != "Stress test") ++row;
     CHECK_EQ(row < cp.item_count(), true);
     presses(ui, Button::Plus, row);
     press(ui, Button::Ok);

@@ -1516,25 +1516,74 @@ static void test_option_c_active_states() {
     CHECK_EQ(px(8, 63), kAccent);
     CHECK_EQ(px(0, 8), kAccent);   // the content-facing divider is on the Right edge's left side
 
-    // 3. RowList::set_muted (charcoal + kInk3 bar when muted vs teal + kFocusBar when active).
-    struct Model { int n = 2; } m;
-    auto fn = [](void *, int i, bool, kit::RowSpec &out) {
-        out.text = i == 0 ? "First" : "Second";
-    };
-    kit::RowList l;
-    lcd::fill(kBg);
-    l.init({16, 0, 208, 240}, kit::kBodyY, fn, &m);
-    l.set_count(2);
-    l.select(0);
-    l.set_muted(false);
-    l.draw(1);
-    CHECK_EQ(px(16, kit::kBodyY + 5), kFocusBar);
-    CHECK_EQ(px(16 + 100, kit::kBodyY + 5), kFocusFill);
+}
 
-    l.set_muted(true);
-    l.draw(2);
-    CHECK_EQ(px(16, kit::kBodyY + 5), kInk3);
-    CHECK_EQ(px(16 + 100, kit::kBodyY + 5), kBg2);
+// A list painted fresh with `sel` (-1 = none) after scrolling to `scroll_to`: the reference screens for browse.
+static std::vector<uint16_t> fresh_list(Model &m, int scroll_to, int sel) {
+    lcd::fill(kBase);
+    kit::RowList ref;
+    ref.init(kSurf, kit::kBodyY, row_fn, &m);
+    ref.set_count(m.n);
+    ref.select(scroll_to); ref.draw(1);
+    ref.select(sel); ref.invalidate();
+    lcd::fill(kBase);
+    ref.draw(2);
+    return snap();
+}
+
+// Browsing a ring page it has not entered: no row is focused. The list paints as if nothing were selected (no tint, no bar,
+// no note, every row 26 px) and keeps the selection and window, which light again on entering. Rows above the focus keep
+// their pixels both ways.
+static void test_row_list_browse() {
+    for (const int n : {5, 12}) {
+        Model m; fill_model(m, n);
+        const int sel = n == 5 ? 2 : 10;
+        const auto none = fresh_list(m, sel, -1), lit = fresh_list(m, sel, sel);
+        lcd::fill(kBase);
+        kit::RowList l;
+        l.init(kSurf, kit::kBodyY, row_fn, &m);
+        l.set_count(m.n); l.select(sel); l.draw(1);
+        CHECK_EQ(snap() == lit, true);
+        kit::set_browse(true);
+        l.draw(2);
+        CHECK_EQ(snap() == none, true);
+        CHECK_EQ(l.selected(), sel);
+        const int top = l.state().offset;
+        const int16_t y_above = static_cast<int16_t>(kit::kBodyY + 1);   // the window's first row, above the focus
+        gfx_fill(kSurf, 100, y_above, 10, 10, kError);
+        kit::set_browse(false);
+        l.draw(3);
+        CHECK_EQ(l.state().offset, top);
+        CHECK_EQ(px(100, y_above), kError);   // not repainted
+        gfx_fill(kSurf, 100, y_above, 10, 10, kBg);
+        CHECK_EQ(snap() == lit, true);
+        kit::set_browse(true);
+        const unsigned before = g_lcd_pixels;
+        l.draw(4);
+        l.draw(5);   // idle
+        CHECK_EQ(snap() == none, true);
+        // At most the window from the focused slot down (the rows below it move up 14 px) and the 14 px strip under it.
+        const unsigned from_focus = static_cast<unsigned>(224 * ((l.visible() - (sel - top)) * 26 + 14));
+        CHECK_EQ(g_lcd_pixels - before <= from_focus + 2u * ListView::kBarW * 240u, true);   // + track and thumb
+        kit::set_browse(false);
+    }
+}
+
+// Browse takes the focus off the ActionCell too: an idle cell reads as one not under the cursor.
+static void test_action_cell_browse() {
+    kit::ActionCell a;
+    a.init(kSurf, 156, 64);
+    lcd::fill(kBase);
+    a.draw_idle("START", "no load on the port", nullptr, false);
+    const auto unfocused = snap();
+    a.invalidate();
+    lcd::fill(kBase);
+    kit::set_browse(true);
+    a.draw_idle("START", "no load on the port");
+    CHECK_EQ(snap() == unfocused, true);
+    kit::set_browse(false);
+    a.draw_idle("START", "no load on the port");
+    CHECK_EQ(px(8, 156), kTicketFrame);
 }
 
 // The rail's last cell with the PC-link icon: the widest last-cell text ("D+ 3.30V") in the narrowest lens still renders whole
@@ -1758,6 +1807,8 @@ int main() {
     test_last_row_opens_over_empty_slot();
     test_row_without_note_stays_26();
     test_row_list_caches();
+    test_row_list_browse();
+    test_action_cell_browse();
     test_markers();
     test_tail_and_chevron();
     test_tails_share_a_right_edge_when_scaled();

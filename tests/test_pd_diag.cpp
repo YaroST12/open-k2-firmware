@@ -768,6 +768,24 @@ void test_over_sustained_blocks() {
     }
 }
 
+// Current the other way (negative: the charger on the top port) is the same draw: the peak and the power are magnitudes.
+void test_reverse_current_is_a_draw() {
+    Trace t;
+    t.cc(true);
+    t.contract(kRgCaps, rdo(3, 3250, 3250));
+    t.vbus(19700, -2900);
+    t.wins_for(10000, 19700, -2900, 19500, 19900, -3100, -2700);
+    Run run;
+    run.go(t);
+    run.dump("reverse current");
+    CHECK_EQ(run.r.peak_ma, 3100);
+    const Finding* d = run.find(Code::Draw);
+    CHECK_COND(d != nullptr);
+    if (d) CHECK_COND(d->c > 55000 && d->c < 58000);   // 19.7 V x 2.9 A
+    EXPECT_NO(run, Code::OverDraw);
+    EXPECT_NO(run, Code::InputCuts);
+}
+
 void test_over_draw_fail_when_vbus_drops() {
     Trace t;
     t.cc(true);
@@ -1422,6 +1440,19 @@ void test_goodcrc_from_the_rx_fifo_is_no_tx_fail() {
     EXPECT_NO(run, Code::TxFail);
 }
 
+// An inline forged frame both partners GoodCRC at once raises neither TXSENT nor RETRYFAIL (TxResult::Inline): delivered,
+// not "K2 send failed" (limiter runs 2026-11-25: the sink's Request follows every one).
+void test_inline_tx_is_no_tx_fail() {
+    Trace t;
+    t.cc(true);
+    t.rx(true, false, Source_Cap, kHubCaps);
+    t.tx(false, false, Request, {rdo(1, 1000, 3000)});
+    t.tx_result(4);
+    Run run;
+    run.go(t);
+    EXPECT_NO(run, Code::TxFail);
+}
+
 // ---- roles and modes ----
 
 // The laptop's left port (source, DFP) rejects the hub's PR_Swap: it stays the 5 V source.
@@ -1835,6 +1866,7 @@ int main() {
     test_fixture_novoo_then_ramp();
     test_over_sustained_blocks();
     test_over_draw_fail_when_vbus_drops();
+    test_reverse_current_is_a_draw();
     test_over_draw_fail_when_source_resets();
     test_five_volt_only();
     test_draw_reduced_quiet_is_the_device();
@@ -1868,6 +1900,7 @@ int main() {
     test_capture_gap_is_no_verdict();
     test_tx_fail_and_rx_bad();
     test_goodcrc_from_the_rx_fifo_is_no_tx_fail();
+    test_inline_tx_is_no_tx_fail();
     test_pr_swap_refused_by_source();
     test_pr_swap_accepted_is_quiet();
     test_swap_unanswered();

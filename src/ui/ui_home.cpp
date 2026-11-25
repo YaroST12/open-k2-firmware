@@ -9,6 +9,7 @@
 #include <span>
 #include <string_view>
 #include "k2/drivers/fusb302.hpp"
+#include "k2/core/strpack.hpp"
 #include "k2/drivers/power_calc.hpp"
 #include "k2/pd/link.hpp"
 #include "k2/pd/diag_live.hpp"
@@ -394,7 +395,7 @@ uint32_t HomePage::qty_head(int si, hm::Qty q, const Frame &f, QtyHead &h, hm::I
     if (hero) {
         pill = near_ ? hm::Pill::None : hm::pill_of(m, hm::Alarm::None, f.pin);
         switch (pill) {
-        case hm::Pill::Last:   ptxt.put("LAST ").put_age(ctx_.live.age_s(f.now)); break;
+        case hm::Pill::Last:   ptxt.put(K2_P("LAST ")).put_age(ctx_.live.age_s(f.now)); break;
         case hm::Pill::NoVbus: ptxt.put(K2_P("NO VBUS")); break;
         case hm::Pill::Pin:    ptxt.put(K2_P("Rd pin CC")).put_char(static_cast<char>('0' + f.pin)); break;
         case hm::Pill::Over: case hm::Pill::None: break;
@@ -419,7 +420,7 @@ uint32_t HomePage::qty_head(int si, hm::Qty q, const Frame &f, QtyHead &h, hm::I
                 mtxt.put_char('/');
                 put_compact_val(mtxt, shown_pk, uc);
             } else if (has_pk) {
-                mtxt.put("Peak ");
+                mtxt.put(K2_P("Peak "));
                 put_compact_val(mtxt, shown_pk, uc);
             } else if (has_max) {
                 mtxt.put("Max ");
@@ -734,7 +735,7 @@ void HomePage::paint_box(int bi, const Frame &f) {
     if (bi < 2) it[n++] = hm::fill(hm::kBoxVRuleX[bi], y0, 1, static_cast<int16_t>(y1 - y0 + 1), kRule);
 
     static constexpr const char *kBoxTitles[static_cast<unsigned>(hm::BoxKind::Count)] = {
-        "", "PD CHG/SNK", "ENERGY", "DROP", "E-MARKER", "CC1/2", "D+/D-", "BATT", "LOAD R", ""
+        "", "PD CHG/SNK", "ENERGY", "DROP", "E-MARKER", "CC1/2", "D+/D-", "BATT", "LOAD R", ""   // k2-plain: push_text measures size()
     };
     zone_start[0] = n;
     const unsigned bi_kind = static_cast<unsigned>(box);
@@ -853,7 +854,7 @@ void HomePage::paint_box(int bi, const Frame &f) {
             if (req_ma) { if (!sb[1].view().empty()) sb[1].put_char(' '); put_compact_val(sb[1], req_ma, 'A'); }
             fit_right(1, sb[1].view(), live ? kAccent : kDim);
         } else if (shown && p.kind != hm::ProtoKind::None) {
-            right(kLabelFont, 46, "no PD", kFaint);
+            right(kLabelFont, 46, "no PD", kFaint);   // k2-plain: right() measures size()
         }
         break;
     }
@@ -999,7 +1000,7 @@ void HomePage::paint_info(const Frame &f) {
     uint16_t diag_fill = kBg;
     if (cross != raguard::CrossKind::None) {
         row1_tag = {};
-        row1_val = cross == raguard::CrossKind::Crossed ? "CROSSED: flip one" : "Flip a cable?";
+        row1_val = cross == raguard::CrossKind::Crossed ? "CROSSED: flip one" : "Flip a cable?";   // k2-plain: string_view measured
         diag_fill = cross == raguard::CrossKind::Crossed ? kError : kCaution;
     } else if (row1_val_col == kError || row1_val_col == kCaution) {
         diag_fill = row1_val_col;

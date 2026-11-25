@@ -119,7 +119,7 @@ K2_HOT void Ui::pump_paint(uint32_t now_ms) {
     }
     const bool toast_was_drawn = ctx_.toast.drawn;
     const int toast_px0 = bg ? bg->spent : -1;
-    ctx_.rows.set_muted(ring_view_);
+    kit::set_browse(ring_view_);
     current().update(now_ms);
     // Covered: the body painted, and a panel window crossed the pill since it was last drawn (paint_meter.hpp overlay watch).
     const bool body_painted = (!bg || bg->spent != toast_px0) && paint::meter.watch_hit();
@@ -350,7 +350,8 @@ K2_HOT UiAction Ui::tick(uint32_t now_ms) {
     link_.update(in);
     if (link_.cc_cross() != cross_seen_) {   // one log line per edge of the crossed-CC verdict (Source tab, bar, Home and the remote state read it)
         cross_seen_ = link_.cc_cross();
-        K2LOG("[LINK] cc cross=%s cc1=%u cc2=%u\n", cross_seen_ == raguard::CrossKind::Crossed ? "crossed" : cross_seen_ == raguard::CrossKind::Hint ? "hint" : "none",
+        K2LOG("[LINK] cc cross=%s cc1=%u cc2=%u\n",
+              cross_seen_ == raguard::CrossKind::Crossed ? "crossed" : cross_seen_ == raguard::CrossKind::Hint ? "hint" : "none",   // k2-plain: K2_HOT tick
               unsigned(in.cc1_mv < 0 ? 0 : in.cc1_mv), unsigned(in.cc2_mv < 0 ? 0 : in.cc2_mv));
     }
     if (link_.pd_verdict() != pd_verdict_seen_) {   // one log line per edge of the "PD present" verdict (Row C; %s is cut at 12 bytes)

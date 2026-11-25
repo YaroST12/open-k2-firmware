@@ -20,6 +20,7 @@ constexpr int16_t kPlotX = 2;
 constexpr int16_t kPlotY = 46;
 
 constexpr int16_t kRow1Y = 4;
+constexpr uint8_t kSettingRows = 4;   // Capture, Time / div, Scale, Trigger
 constexpr int16_t kRow2Y = 26;
 
 int16_t plot_w_for(const Surface &S) {
@@ -62,7 +63,7 @@ void RipplePage::build_row(void *ctx, int index, bool focused, kit::RowSpec &out
         if (focused) out.note = K2_PSV("Auto or fixed span (4 divs)");
         break;
     case 2:
-        out.text = "Scale"sv;
+        out.text = K2_PSV("Scale");
         strpack::assign_sv(out.tail, ripple::kScaleMenu[sc]);
         out.tail_color = kAccent;
         if (focused) out.note = K2_PSV("Vertical scale (+-2 divs)");
@@ -91,7 +92,7 @@ void RipplePage::draw_static() {
         const Surface &S = ctx_.content;
         if (!ctx_.blank) gfx_fill(S, 0, kit::kBelowBar, S.w, static_cast<int16_t>(S.h - kit::kBelowBar), kBg);
         ctx_.rows.init(S, kit::kBodyY, &RipplePage::build_row, this);
-        ctx_.rows.set_count(4);
+        ctx_.rows.set_count(kSettingRows);
         ctx_.rows.select(settings_sel_);
         ctx_.rows.invalidate();
     } else {
@@ -148,7 +149,7 @@ void RipplePage::enter_settings() {
     }
     const Surface &S = ctx_.content;
     ctx_.rows.init(S, kit::kBodyY, &RipplePage::build_row, this);
-    ctx_.rows.set_count(4);
+    ctx_.rows.set_count(kSettingRows);
     ctx_.rows.select(settings_sel_);
     ctx_.rows.invalidate();
     foot_elem_.invalidate();
@@ -190,7 +191,7 @@ void RipplePage::take_sample(uint32_t now_ms) {
     const auto trig = static_cast<ripple::Trigger>(cfg.trigger & 1u);
 
     using Buf = std::array<uint16_t, adc::kRippleSamples>;
-    scratch::acquire("ripple_ui");
+    scratch::acquire("ripple_ui");   // k2-plain: scratch owner tag
     Buf &buf = scratch::as<Buf>();
     const uint32_t period_ns = adc::capture_ripple(buf, ripple::kTimebases[tb].sample_code);
     if (period_ns == 0) {
@@ -333,7 +334,7 @@ void RipplePage::update(uint32_t now_ms) {
     }
     title_badge(ctx_.stale());
     if (settings_open_) {
-        ctx_.rows.set_count(4);
+        ctx_.rows.set_count(kSettingRows);
         ctx_.rows.select(settings_sel_);
         ctx_.rows.draw(now_ms, ctx_.budget);
         paint_footer();
@@ -386,11 +387,11 @@ bool RipplePage::on_event(Event e) {
             return true;
         }
         if (e.button == Button::Minus) {
-            settings_sel_ = settings_sel_ > 0 ? static_cast<uint8_t>(settings_sel_ - 1) : 3;
+            if (settings_sel_ > 0) settings_sel_--;   // the rows stop at their ends
             return true;
         }
         if (e.button == Button::Plus) {
-            settings_sel_ = settings_sel_ < 3 ? static_cast<uint8_t>(settings_sel_ + 1) : 0;
+            if (settings_sel_ + 1 < kSettingRows) settings_sel_++;
             return true;
         }
         if (e.button == Button::Ok) {
@@ -426,7 +427,7 @@ bool RipplePage::on_event(Event e) {
 
 Strip RipplePage::labels() const {
     if (settings_open_) {
-        Strip l = list_strip(nav_strip());
+        Strip l = list_strip(nav_strip(), settings_sel_, kSettingRows);
         l[Button::Ok] = sl::Cycle;
         return l;
     }

@@ -306,6 +306,18 @@ static void band_of(std::uint16_t c_mv, std::uint32_t& lo, std::uint32_t& hi) {
 // CC or PD record, opens the session (its contract unseen). After the first session only CC and PD do.
 bool Analyzer::first_vbus_opens(std::uint16_t mv) const { return mv > kUpMv && !have_last_ && finished_ == 0 && !cc_any_; }
 
+// The draw is a magnitude: the sign only says which port feeds which (negative: top port to bottom).
+static std::int16_t mag16(std::int16_t ma) { return ma >= 0 ? ma : ma == INT16_MIN ? INT16_MAX : std::int16_t(-ma); }
+
+static Window magnitudes(const Window& w) {
+    Window m = w;
+    m.ma = mag16(w.ma);
+    const std::int16_t a = mag16(w.imin), b = mag16(w.imax);
+    m.imax = a > b ? a : b;
+    m.imin = w.imin <= 0 && w.imax >= 0 ? 0 : a < b ? a : b;   // a window through zero touched 0
+    return m;
+}
+
 [[gnu::noinline]] bool Analyzer::prep_vbus(std::uint16_t mv, std::uint16_t vmin, std::int16_t ma, bool is_win) {
     if (is_win || !win_) { pre_mv_ = mv; pre_ma_ = ma; pre_have_ = true; }
     if (is_win) win_ = true;
@@ -325,6 +337,7 @@ bool Analyzer::first_vbus_opens(std::uint16_t mv) const { return mv > kUpMv && !
 // A ring VBUS record. It is emitted on large changes, so it stays the fast witness of VBUS loss and of the unplug; the
 // draw and band evidence come from it only while the session has no power windows.
 void Analyzer::sample(std::uint16_t mv, std::int16_t ma) {
+    ma = mag16(ma);
     if (!prep_vbus(mv, mv, ma, false)) return;
     if (win_) {   // a real sample at its own moment (often between the windows' 20 Hz ones): VBUS evidence only
         band(mv, mv, ma > 0 ? std::uint16_t(ma) : 0);
@@ -342,7 +355,8 @@ void Analyzer::sample(std::uint16_t mv, std::int16_t ma) {
     observe(w);
 }
 
-void Analyzer::power_window(std::uint32_t ts_us, const Window& w) {
+void Analyzer::power_window(std::uint32_t ts_us, const Window& in) {
+    const Window w = magnitudes(in);
     tick(ts_us);
     timers();
     if (!prep_vbus(w.mv, w.vmin, w.ma, true)) return;
@@ -1703,12 +1717,13 @@ namespace detail {
     const std::uint32_t lo = (min_only ? t : t / 60) % 60;
     u(hi);
     if (tight) { c(min_only ? 'm' : 'h'); two(lo); c(min_only ? 's' : 'm'); }
-    else { s(min_only ? " min " : " h "); u(lo); s(min_only ? " s" : " min"); }
+    else { s(min_only ? K2_P(" min ") : " h "); u(lo); s(min_only ? " s" : " min"); }
 }
 
 }  // namespace detail
 
 const char* code_name(Code c) {
+    // k2-plain-begin: wire tokens the tools parse
     static constexpr const char* const kCodeNames[] = {
         "power_short", "mismatch_flag", "no_mismatch_flag", "over_draw", "draw_pinned", "draw", "draw_reduced",
         "five_volt_only", "contract_unseen", "no_contract", "active_sink",
@@ -1719,6 +1734,7 @@ const char* code_name(Code c) {
         "swap_refused", "mode_nak", "enter_usb_refused", "epr_failed", "cable_cap", "vdm_loop", "cable_silent",
         "capture_gap",
     };
+    // k2-plain-end
     static_assert(sizeof(kCodeNames) / sizeof(kCodeNames[0]) == static_cast<unsigned>(Code::CaptureGap) + 1);
     const unsigned i = static_cast<unsigned>(c);
     return i < (sizeof(kCodeNames) / sizeof(kCodeNames[0])) ? kCodeNames[i] : "?";

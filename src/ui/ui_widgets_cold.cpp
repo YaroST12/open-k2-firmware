@@ -37,12 +37,16 @@ void draw_mark(const Surface &s, int16_t x, int16_t y, int size, bool check, uin
 }
 
 int marked_width(const Font &f, std::string_view text) {
+    char dec[64];
+    text = strpack::unpack(text, dec);
     int w = 0;
     for (char ch : text) w += (ch == kMarkCheck || ch == kMarkCross) ? mark_cell(f) : f.adv;
     return w;
 }
 
 int draw_marked_text(const Surface &s, const Font &f, int16_t x, int16_t y, std::string_view text, uint16_t fg, uint16_t bg) {
+    char dec[64];
+    text = strpack::unpack(text, dec);
     size_t i = 0;
     while (i < text.size()) {
         const char ch = text[i];

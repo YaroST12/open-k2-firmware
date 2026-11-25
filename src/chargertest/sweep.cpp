@@ -2,6 +2,8 @@
 // Copyright (C) 2026 Yaraslau Furman
 #include "k2/chargertest/sweep.hpp"
 #include <string_view>
+#include "k2/core/hot.h"
+#include "k2/core/strpack.hpp"
 
 namespace k2::ctsweep {
 
@@ -56,55 +58,72 @@ Summary summarize(std::span<const int16_t> err, unsigned lo_mv) { return summari
 
 // The points in setpoint order: segment a from a_lo_mv, then segment b from b_lo_mv (the parts of a split sweep; b empty for one row).
 // A kHole cell (not measured at this depth) is skipped; the fold rule then judges neighbouring MEASURED points.
-Summary summarize(std::span<const int16_t> a, unsigned a_lo_mv, std::span<const int16_t> b, unsigned b_lo_mv) {
+// K2_HOT keeps this file off the cold -Oz flags and flatten inlines TrackScan::feed; the per-point state lives in locals, stored
+// once at the end (selftest sweep_sum).
+K2_HOT [[gnu::flatten]] Summary summarize(std::span<const int16_t> a, unsigned a_lo_mv, std::span<const int16_t> b, unsigned b_lo_mv) {
     Summary s;
-    const size_t total = a.size() + b.size();
-    auto err_at = [&](size_t i) { return int(i < a.size() ? a[i] : b[i - a.size()]); };
-    auto set_at = [&](size_t i) { return i < a.size() ? a_lo_mv + unsigned(i) * kStepMv : b_lo_mv + unsigned(i - a.size()) * kStepMv; };
-    int worst_abs = -1;
+    const std::span<const int16_t> seg[2] = {a, b};
+    const unsigned seg_lo[2] = {a_lo_mv, b_lo_mv};
+    unsigned points = 0;
+    int min_err = INT32_MAX, max_err = INT32_MIN, worst_abs = -1, worst_err = 0, peak = INT32_MIN;
+    unsigned worst_mv = 0, peak_at = 0;
+    bool oob = false;
     pd::TrackScan track;   // the shared fold / track-break rule (k2/pd/prog_track.hpp), fed in setpoint order
     // The first finding of either kind is the onset. A fold is a Fold, or a Break (what a 200 mV step shows of a fold: the output
     // moves +14 mV for a 200 mV request) that a later point then falls away from; a Break that stays level is no fold.
-    size_t onset_at = 0;
+    unsigned onset_seg = 0, onset_j = 0, onset_set = 0;
     bool onset = false;
     unsigned onset_ok = 0, onset_err = 0;   // the last tracking setpoint and the worst |err| before the onset
     int onset_level = 0;
     unsigned prev_set = 0;   // the last measured setpoint (the fold's "last tracking" one)
-    for (size_t i = 0; i < total; ++i) {
-        if (err_at(i) == kHole) continue;
-        const unsigned set = set_at(i);
-        const int e = err_at(i);
-        const int measured = e + int(set);
-        const bool first = s.points == 0;
-        ++s.points;
-        if (first || e < s.min_err) s.min_err = int16_t(e);
-        if (first || e > s.max_err) s.max_err = int16_t(e);
-        // The fold rule runs before this point's own worst-error update, so the worst |err| held at the onset is the one over the
-        // points BEFORE it (track_err_mv) without a per-point max: that update is the rare branch, the loop stays as it was.
-        track.feed(int(set), measured);
-        if (!onset && track.found()) {
-            onset = true; onset_at = i; onset_ok = prev_set; onset_level = measured;
-            onset_err = unsigned(std::max(worst_abs, 0));   // the points before the onset: how it tracked
+    for (unsigned k = 0; k < 2; ++k) {
+        const int16_t* p = seg[k].data();
+        const unsigned n = unsigned(seg[k].size());
+        unsigned set = seg_lo[k];
+        for (unsigned j = 0; j < n; ++j, set += kStepMv) {
+            const int e = p[j];
+            if (e == kHole) continue;
+            const int measured = e + int(set);
+            ++points;
+            if (e < min_err) min_err = e;
+            if (e > max_err) max_err = e;
+            // The fold rule runs before this point's own worst-error update, so the worst |err| held at the onset is the one over
+            // the points BEFORE it (track_err_mv).
+            track.feed(int(set), measured);
+            if (!onset && track.found()) {
+                onset = true; onset_seg = k; onset_j = j; onset_set = set; onset_ok = prev_set; onset_level = measured;
+                onset_err = unsigned(std::max(worst_abs, 0));   // the points before the onset: how it tracked
+            }
+            const int ae = e < 0 ? -e : e;
+            if (ae > worst_abs) { worst_abs = ae; worst_err = e; worst_mv = set; }
+            if (measured > peak) { peak = int(uint16_t(measured)); peak_at = set; }   // compared as the stored 16-bit value
+            // A point outside the row's band (the PPS band is one-sided: within 5 % / 100 mV below, the ceiling above) was
+            // steady and recorded; the summary says so, the strip colours it.
+            if (out_of_band(set, measured)) oob = true;
+            prev_set = set;
         }
-        if (std::abs(e) > worst_abs) { worst_abs = std::abs(e); s.worst_err = int16_t(e); s.worst_mv = uint16_t(set); }
-        if (first || measured > s.peak_mv) { s.peak_mv = uint16_t(measured); s.peak_at_mv = uint16_t(set); }
-        // A point outside the row's band (the PPS band is one-sided: within 5 % / 100 mV below, the ceiling above) was
-        // steady and recorded; the summary says so, the strip colours it.
-        if (out_of_band(set, measured)) s.out_of_band = true;
-        prev_set = set;
     }
-    if (!s.points) return s;
+    if (!points) return s;
+    s.points = uint16_t(points);
+    s.min_err = int16_t(min_err); s.max_err = int16_t(max_err);
+    s.worst_err = int16_t(worst_err); s.worst_mv = uint16_t(worst_mv);
+    s.peak_mv = uint16_t(peak); s.peak_at_mv = uint16_t(peak_at);
+    s.out_of_band = oob;
     int low = 0;   // the lowest level from the onset on
     bool have = false;
     if (onset)
-        for (size_t i = onset_at; i < total; ++i) {
-            if (err_at(i) == kHole) continue;
-            const int measured = err_at(i) + int(set_at(i));
-            if (!have || measured < low) { low = measured; have = true; }
+        for (unsigned k = onset_seg; k < 2; ++k) {
+            const int16_t* p = seg[k].data();
+            const unsigned n = unsigned(seg[k].size());
+            for (unsigned j = k == onset_seg ? onset_j : 0u; j < n; ++j) {
+                if (p[j] == kHole) continue;
+                const int measured = p[j] + int(seg_lo[k] + j * kStepMv);
+                if (!have || measured < low) { low = measured; have = true; }
+            }
         }
     const bool fold = onset && (track.kind() == pd::Track::Fold || low < onset_level - pd::kTrackFoldMv);
     if (!fold) { s.track_err_mv = uint16_t(worst_abs); return s; }   // every point is tracking
-    s.fold_from_mv = uint16_t(set_at(onset_at));
+    s.fold_from_mv = uint16_t(onset_set);
     s.fold_ok_mv = uint16_t(onset_ok);
     s.track_err_mv = uint16_t(onset_err);
     s.fold_mv = uint16_t(std::max(low, 0));
@@ -144,7 +163,7 @@ size_t format_point(unsigned set_mv, int measured_mv, std::span<char> out) {
     const unsigned got = measured_mv > 0 ? unsigned(measured_mv) : 0u;
     const int err = std::clamp(int(got) - int(set_mv), -9999, 9999);
     size_t n = 0;
-    auto put = [&](std::string_view t) { for (char c : t) if (n + 1 < out.size()) out[n++] = c; };
+    auto put = [&](std::string_view t) { strpack::for_chars(t, [&](char c) { if (n + 1 < out.size()) out[n++] = c; }); };
     auto num = [&](unsigned v, unsigned min_digits) {
         char t[10]; unsigned k = 0;
         do { t[k++] = char('0' + v % 10); v /= 10; } while ((v || k < min_digits) && k < sizeof t);
@@ -155,8 +174,8 @@ size_t format_point(unsigned set_mv, int measured_mv, std::span<char> out) {
         num(r / 100, 1); put("."); num(r % 100, 2); put("V");
     };
     put("req "); volts(set_mv);
-    put("  got "); volts(got);
-    put("  err"); put(err < 0 ? "-" : "+"); num(unsigned(err < 0 ? -err : err), 1); put("mV");
+    put(K2_P("  got ")); volts(got);
+    put(K2_P("  err")); put(err < 0 ? "-" : "+"); num(unsigned(err < 0 ? -err : err), 1); put("mV");
     if (n < out.size()) out[n] = 0;
     return n;
 }
@@ -184,12 +203,12 @@ size_t format_mv(unsigned mv, std::span<char> out) {
 size_t format_summary(const Summary& s, std::span<char> out) {
     if (out.empty()) return 0;
     size_t n = 0;
-    auto put = [&](std::string_view t) { for (char c : t) if (n + 1 < out.size()) out[n++] = c; };
+    auto put = [&](std::string_view t) { strpack::for_chars(t, [&](char c) { if (n + 1 < out.size()) out[n++] = c; }); };
     auto mv = [&](unsigned v) { char b[12]; const size_t k = format_mv(v, {b, sizeof b}); put({b, k}); };
-    if (!s.points) { put("no points"); }
+    if (!s.points) { put(K2_P("no points")); }
     else {
-        put("peak "); mv(s.peak_mv); put(" V at "); mv(s.peak_at_mv); put(" V");
-        if (s.fold_mv) { put(", folds back to "); mv(s.fold_mv); put(" V from "); mv(s.fold_from_mv); put(" V"); }
+        put(K2_P("peak ")); mv(s.peak_mv); put(K2_P(" V at ")); mv(s.peak_at_mv); put(" V");
+        if (s.fold_mv) { put(K2_P(", folds back to ")); mv(s.fold_mv); put(K2_P(" V from ")); mv(s.fold_from_mv); put(" V"); }
     }
     if (n < out.size()) out[n] = 0;
     return n;
@@ -200,7 +219,7 @@ size_t format_fold(const Summary& s, std::span<char> out) {
     if (out.empty()) return 0;
     if (!s.fold_mv) { out[0] = 0; return 0; }
     size_t n = 0;
-    auto put = [&](std::string_view t) { for (char c : t) if (n + 1 < out.size()) out[n++] = c; };
+    auto put = [&](std::string_view t) { strpack::for_chars(t, [&](char c) { if (n + 1 < out.size()) out[n++] = c; }); };
     auto tenths = [&](unsigned mv) {
         const unsigned t = (mv + 50) / 100;
         char d[8]; unsigned k = 0, w = t / 10;
@@ -209,8 +228,8 @@ size_t format_fold(const Summary& s, std::span<char> out) {
         if (t % 10) { const char f[2] = {'.', char('0' + t % 10)}; put({f, 2}); }   // "19.4V", "20V" (the card's put_volts reads the same)
         put("V");
     };
-    put("folds to "); tenths(s.fold_mv);
-    put(" above "); tenths(s.fold_ok_mv ? s.fold_ok_mv : s.fold_from_mv > kStepMv ? s.fold_from_mv - kStepMv : 0u);
+    put(K2_P("folds to ")); tenths(s.fold_mv);
+    put(K2_P(" above ")); tenths(s.fold_ok_mv ? s.fold_ok_mv : s.fold_from_mv > kStepMv ? s.fold_from_mv - kStepMv : 0u);
     if (n < out.size()) out[n] = 0;
     return n;
 }

@@ -7,6 +7,7 @@
 #include <array>
 #include <cstdint>
 
+#include "k2/core/strpack.hpp"
 #include "k2/core/bss_zero.hpp"
 #include "k2/core/math_opt.hpp"
 #include "k2/fastcharge/fc_engine.hpp"
@@ -46,8 +47,8 @@ inline constexpr std::array<Entry, kEntries> kList = {{
     {"FCP",     fc::Proto::Fcp,         Kind::Levels, 3, {5000, 9000, 12000, 0},       0, 0, 0,         9000},
     {"SCP",     fc::Proto::Scp,         Kind::Range,  0, {0, 0, 0, 0},                 3000, 11000, 1000, 5000},
     {"VOOC",    fc::Proto::Vooc,        Kind::Fixed,  0, {0, 0, 0, 0},                 0, 0, 0,         5000},
-    {"SVOOC",   fc::Proto::SuperVooc,   Kind::Fixed,  0, {0, 0, 0, 0},                 0, 0, 0,         5000},
-    {"SVOOC65", fc::Proto::SuperVooc65, Kind::Fixed,  0, {0, 0, 0, 0},                 0, 0, 0,         5000},
+    {K2_P("SVOOC"),   fc::Proto::SuperVooc,   Kind::Fixed,  0, {0, 0, 0, 0},                 0, 0, 0,         5000},
+    {K2_P("SVOOC65"), fc::Proto::SuperVooc65, Kind::Fixed,  0, {0, 0, 0, 0},                 0, 0, 0,         5000},
 }};
 
 inline const Entry &entry(int i) { return kList[static_cast<std::size_t>(i < 0 ? 0 : i >= kEntries ? kEntries - 1 : i)]; }
@@ -274,22 +275,22 @@ inline sl::Id ok_label(const Model &m, Run run) {
 inline const char *fail_short(fc::Fail f) {
     switch (f) {
     case fc::Fail::None: return "";
-    case fc::Fail::NeedConfirm: return "confirm";
-    case fc::Fail::OverLimit: return "limit";
-    case fc::Fail::NoMonitor: return "no mon";
+    case fc::Fail::NeedConfirm: return K2_P("confirm");
+    case fc::Fail::OverLimit: return K2_P("limit");
+    case fc::Fail::NoMonitor: return K2_P("no mon");
     case fc::Fail::Busy: return "busy";
-    case fc::Fail::Unsupported: return "unsupp";
-    case fc::Fail::NoHandshake: return "no hs";
-    case fc::Fail::NoResponse: return "no resp";
-    case fc::Fail::NoBand: return "no volt";
-    case fc::Fail::Overvoltage: return "overV";
+    case fc::Fail::Unsupported: return K2_P("unsupp");
+    case fc::Fail::NoHandshake: return K2_P("no hs");
+    case fc::Fail::NoResponse: return K2_P("no resp");
+    case fc::Fail::NoBand: return K2_P("no volt");
+    case fc::Fail::Overvoltage: return K2_P("overV");
     case fc::Fail::SourceLost: return "lost";
-    case fc::Fail::Aborted: return "abort";
+    case fc::Fail::Aborted: return K2_P("abort");
     case fc::Fail::Inline: return "load";
-    case fc::Fail::NoAnswer: return "no answer";
-    case fc::Fail::NoVoltage: return "handshake ok";
-    case fc::Fail::Detected: return "detected";
-    case fc::Fail::NoChange: return "no move";
+    case fc::Fail::NoAnswer: return K2_P("no answer");
+    case fc::Fail::NoVoltage: return K2_P("handshake ok");
+    case fc::Fail::Detected: return K2_P("detected");
+    case fc::Fail::NoChange: return K2_P("no move");
     }
     return "?";
 }
@@ -300,18 +301,18 @@ inline void put_volts(StrBuf<24> &s, int mv) { s.put_fixed(mv, 1).put("V"); }
 // "Confirm: SCAN" while armed (target 0 = scan).
 inline void state_text(fc::State st, fc::Proto p, fc::Fail f, int target_mv, bool armed, StrBuf<24> &s,
                        bool override_load = false) {
-    if (armed && override_load) { s.put("OVERRIDE LOAD?"); return; }
+    if (armed && override_load) { s.put(K2_P("OVERRIDE LOAD?")); return; }
     if (armed) {
-        s.put("Confirm: ");
+        s.put(K2_P("Confirm: "));
         if (target_mv <= 0) s.put("SCAN"); else put_volts(s, target_mv);
         return;
     }
     if (st == fc::State::Idle) { s.put("IDLE"); return; }
     s.put(fc::name(p));
     switch (st) {
-    case fc::State::Negotiating: s.put(" WAIT "); put_volts(s, target_mv); break;
-    case fc::State::Active:      s.put(" ACTIVE "); put_volts(s, target_mv); break;
-    default:                     s.put((f == fc::Fail::Detected || f == fc::Fail::NoVoltage || f == fc::Fail::NoAnswer) ? " " : " FAIL ").put(fail_short(f)); break;
+    case fc::State::Negotiating: s.put(K2_P(" WAIT ")); put_volts(s, target_mv); break;
+    case fc::State::Active:      s.put(K2_P(" ACTIVE ")); put_volts(s, target_mv); break;
+    default:                     s.put((f == fc::Fail::Detected || f == fc::Fail::NoVoltage || f == fc::Fail::NoAnswer) ? " " : K2_P(" FAIL ")).put(fail_short(f)); break;
     }
 }
 
@@ -324,28 +325,28 @@ inline void scan_row_text(const fc::ScanResult &r, StrBuf<24> &s) {
     switch (r.outcome) {
     case fc::Outcome::Accepted: s.put("OK "); put_volts(s, (r.mv + 50) / 100 * 100); break;
     case fc::Outcome::Rejected: s.put("no"); break;
-    case fc::Outcome::Skipped:  s.put("skipped"); break;
+    case fc::Outcome::Skipped:  s.put(K2_P("skipped")); break;
     default:                    s.put("-"); break;
     }
 }
 
 inline const char *fail_long(fc::Fail f) {
     switch (f) {
-    case fc::Fail::Inline: return "Load/PD active: refused";
-    case fc::Fail::NeedConfirm: return "Press again to confirm";
-    case fc::Fail::OverLimit: return "Above the 20 V limit";
-    case fc::Fail::Unsupported: return "Not supported here";
-    case fc::Fail::NoHandshake: return "Charger did not answer";
-    case fc::Fail::NoResponse: return "No response to request";
-    case fc::Fail::NoBand: return "Voltage not offered";
-    case fc::Fail::Overvoltage: return "VBUS too high: aborted";
-    case fc::Fail::SourceLost: return "Charger lost";
-    case fc::Fail::Aborted: return "Aborted";
-    case fc::Fail::NoAnswer: return "No answer to either wake";
-    case fc::Fail::NoVoltage: return "Handshake ok (no voltage)";
-    case fc::Fail::Detected: return "Adapter detected (no load)";
-    case fc::Fail::NoChange: return "Acked, voltage did not move";
-    default: return "Refused";
+    case fc::Fail::Inline: return K2_P("Load/PD active: refused");
+    case fc::Fail::NeedConfirm: return K2_P("Press again to confirm");
+    case fc::Fail::OverLimit: return K2_P("Above the 20 V limit");
+    case fc::Fail::Unsupported: return K2_P("Not supported here");
+    case fc::Fail::NoHandshake: return K2_P("Charger did not answer");
+    case fc::Fail::NoResponse: return K2_P("No response to request");
+    case fc::Fail::NoBand: return K2_P("Voltage not offered");
+    case fc::Fail::Overvoltage: return K2_P("VBUS too high: aborted");
+    case fc::Fail::SourceLost: return K2_P("Charger lost");
+    case fc::Fail::Aborted: return K2_P("Aborted");
+    case fc::Fail::NoAnswer: return K2_P("No answer to either wake");
+    case fc::Fail::NoVoltage: return K2_P("Handshake ok (no voltage)");
+    case fc::Fail::Detected: return K2_P("Adapter detected (no load)");
+    case fc::Fail::NoChange: return K2_P("Acked, voltage did not move");
+    default: return K2_P("Refused");
     }
 }
 
@@ -386,12 +387,12 @@ struct RefusalView {
 };
 inline RefusalView refusal_view(fc::Fail f, bool vbus_ok) {
     switch (f) {
-    case fc::Fail::Inline:    return {{"Other port empty", "D+/D- free"}, {false, true}, 2, "Disconnect the load", "Load/PD active: refused"};
-    case fc::Fail::NoMonitor: return {{"Power monitor", "D+/D- free"}, {false, true}, 2, "needed to watch VBUS", "No power monitor found"};
-    case fc::Fail::Busy:      return {{"VBUS present", "D+/D- free"}, {vbus_ok, false}, 2, "another trigger runs", "D+/D- busy: stop it first"};
+    case fc::Fail::Inline:    return {{K2_P("Other port empty"), K2_P("D+/D- free")}, {false, true}, 2, K2_P("Disconnect the load"), K2_P("Load/PD active: refused")};
+    case fc::Fail::NoMonitor: return {{K2_P("Power monitor"), K2_P("D+/D- free")}, {false, true}, 2, K2_P("needed to watch VBUS"), K2_P("No power monitor found")};
+    case fc::Fail::Busy:      return {{K2_P("VBUS present"), K2_P("D+/D- free")}, {vbus_ok, false}, 2, K2_P("another trigger runs"), K2_P("D+/D- busy: stop it first")};
     default:
-        if (!vbus_ok) return {{"VBUS present", "D+/D- free"}, {false, true}, 2, "top or bottom port", "No VBUS on either port"};
-        return {{"VBUS present", "D+/D- free"}, {true, true}, 2, "see the footer", fail_long(f)};
+        if (!vbus_ok) return {{K2_P("VBUS present"), K2_P("D+/D- free")}, {false, true}, 2, K2_P("top or bottom port"), K2_P("No VBUS on either port")};
+        return {{K2_P("VBUS present"), K2_P("D+/D- free")}, {true, true}, 2, K2_P("see the footer"), fail_long(f)};
     }
 }
 

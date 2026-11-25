@@ -34,6 +34,7 @@
 #include <span>
 
 #include "k2/pd/pdtrace_link.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::pd::diag {
 
@@ -236,8 +237,8 @@ struct Report {
     std::uint32_t need_mw = 0, offer_mw = 0;
     std::uint16_t need_mv = 0, need_ma = 0, vbus_mv = 0, peak_ma = 0;
     const char* twin = nullptr;
-    const char* snk_noun = "Device";
-    const char* src_noun = "source";
+    const char* snk_noun = K2_P("Device");
+    const char* src_noun = K2_P("source");
     std::uint8_t n = 0;
     std::array<Finding, kMaxFindings> f{};
     bool quiet_contract = true, quiet_quality = true, quiet_link = true, quiet_roles = true;

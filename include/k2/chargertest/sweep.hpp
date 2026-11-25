@@ -21,6 +21,7 @@
 #include <span>
 #include "k2/pd/pd.hpp"
 #include "k2/pd/prog_track.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::ctsweep {
 
@@ -54,10 +55,10 @@ constexpr Depth next_depth(Depth d) {
 // The depth's short name for the lists (fits a 12 px tail and a Review tail: no longer than "200 mV").
 constexpr const char* depth_name(Depth d) {
     switch (d) {
-    case Depth::Step200: return "200 mV";
-    case Depth::Step100: return "100 mV";
-    case Depth::Phone: return "Phone";
-    default: return "20 mV";
+    case Depth::Step200: return K2_P("200 mV");
+    case Depth::Step100: return K2_P("100 mV");
+    case Depth::Phone: return K2_P("Phone");
+    default: return K2_P("20 mV");
     }
 }
 inline constexpr int16_t kHole = INT16_MIN;     // an unmeasured cell of the point record

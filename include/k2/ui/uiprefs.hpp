@@ -38,7 +38,7 @@
 namespace k2::uiprefs {
 
 inline constexpr std::uint32_t kLegacyAddr = 0x080E6800;   // pre-littlefs raw page, read once for the import
-inline constexpr const char* kPath = "/prefs.cfg";
+inline constexpr const char* kPath = "/prefs.cfg";   // k2-plain: littlefs path
 inline constexpr std::array<std::uint8_t, 4> kMagic{'K', '2', 'U', 'P'};
 
 inline constexpr std::array<std::uint8_t, 3> kDefaultHomeBoxes{1, 2, 0};   // Pd, Energy, Rotating

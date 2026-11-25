@@ -2433,6 +2433,13 @@ static void test_place_two_page_info_and_actions() {
     CHECK_EQ(int(cp(ui).item(spoof_row).act), int(conn::Act::SpoofAs));
     CHECK_EQ(cp(ui).item(spoof_row).enabled, false);
     CHECK_STR(cp(ui).item(spoof_row).tag, "load");
+    {   // the greyed row greys its OK verb; the last row dims Dn
+        const PanelLabels pl = ui.labels();
+        CHECK_STR(pl.b[static_cast<int>(Button::Ok)].shrt, "Open");
+        CHECK_EQ(pl.b[static_cast<int>(Button::Ok)].dim, true);
+        CHECK_EQ(pl.b[static_cast<int>(Button::Plus)].dim, true);
+        CHECK_EQ(pl.b[static_cast<int>(Button::Minus)].dim, false);
+    }
     CHECK_STR(std::string(cp(ui).status_line()).c_str(), "Live sink: unplug load");
     // Short Back on Actions switches back to Overview.
     ui.on_button(Button::Back, ButtonEvent::Short, t += 100);
@@ -2838,11 +2845,16 @@ static void test_device_scroll_thumb_reaches_bottom() {
     const int total = cp(ui).result_rows();
     CHECK(total > ConnectionPage::kPlaceRows);
     const int max_offset = total - ConnectionPage::kPlaceRows;
+    const auto dim = [&](Button b) { return ui.labels().b[static_cast<int>(b)].dim; };
+    CHECK_EQ(dim(Button::Minus), true);    // the sheet scrolls: Up dims at its top, Dn at its end
+    CHECK_EQ(dim(Button::Plus), false);
     for (int i = 0; i < max_offset; i++) {
         ui.on_button(Button::Plus, ButtonEvent::Short, t += 100);
         settle(ui, t);
     }
     CHECK_EQ(cp(ui).window_first(), max_offset);
+    CHECK_EQ(dim(Button::Minus), false);
+    CHECK_EQ(dim(Button::Plus), true);
     // Portrait content starts at x = kOppRailThickness (16), width = kTwinContentW (208).
     // Scroll thumb (3 px wide, kInk3) sits at logical x = 205..207 -> panel x = 221..223.
     const int thumb_x = kOppRailThickness + kTwinContentW - 2;

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
 #include "k2/ui/ui_diagnosis.hpp"
+#include "k2/core/strpack.hpp"
 
 #include <algorithm>
 #include <string_view>
@@ -20,12 +21,12 @@ namespace diag = pd::diag;
 namespace screen = pd::diag::screen;
 namespace live = pd::diag::live;
 
-constexpr const char kWaitText[] = "Waiting for PD";
-constexpr const char kWaitNote[] = "starts on first PD message";
+constexpr const char *kWaitText = K2_P("Waiting for PD");
+constexpr const char *kWaitNote = K2_P("starts on first PD message");
 constexpr const char *kWaitTexts[] = {kWaitText};
 constexpr const char *kWaitNotes[] = {kWaitNote};
-static_assert(all_fit(kWaitTexts, kSmallAdvPx, kit::kTailX - kit::kTextX), "the waiting row runs into the tail");
-static_assert(all_fit(kWaitNotes, kLabelAdv, kit::kNoteMaxPx), "the waiting note is wider than the note box");
+static_assert(all_fit_p(kWaitTexts, kSmallAdvPx, kit::kTailX - kit::kTextX), "the waiting row runs into the tail");
+static_assert(all_fit_p(kWaitNotes, kLabelAdv, kit::kNoteMaxPx), "the waiting note is wider than the note box");
 // The screen form's budgets (pd::diag::screen, host-tested with worst-case numbers) fit this list's geometry (208 px canvas).
 // The tail is a hint (tail_yields): a long label keeps the row, the time gives way.
 static_assert(screen::kLabelChars * kSmallAdvPx <= static_cast<unsigned>(kit::kTailX - kit::kTextX), "a diagnosis label runs into the tail");
@@ -35,7 +36,7 @@ static_assert(DiagnosisPage::kStampWordX + static_cast<int>(screen::kLabelChars)
 static_assert(DiagnosisPage::kStampWordX + static_cast<int>(screen::kNoteChars * kLabelAdv) <= kTwinContentW - 2, "the stamp's sub-line runs off the page");
 static_assert(DiagnosisPage::kStampSubY + 12 <= DiagnosisPage::kStampH, "the stamp's sub-line leaves the stamp");
 
-constexpr const char kBlackBox[] = "Black Box";
+constexpr const char *kBlackBox = K2_P("Black Box");
 // The Log place's list: the findings from under the stamp to the list bottom.
 constexpr int16_t kPlaceListY = kit::kBelowBar + DiagnosisPage::kStampH + 2;
 
@@ -59,6 +60,16 @@ kit::Verdict DiagnosisPage::stamp_of(const diag::Report &r) {
 }
 
 // The stamp: the band in the verdict's fill around the glyph cell and the word, each pixel once; repainted on a change.
+// The Log place keeps its row as every place does (ctx_.keep.place_sel), so a rebuilt page lands where it was left.
+void DiagnosisPage::enter() {
+    const int keep = ctx_.keep.place_sel[static_cast<int>(bench::Place::Log)];
+    sel_ = place_ ? std::clamp(keep, 0, std::max(0, list_rows() - 1)) : 0;
+}
+
+void DiagnosisPage::leave() {
+    if (place_) ctx_.keep.place_sel[static_cast<int>(bench::Place::Log)] = static_cast<uint8_t>(sel_);
+}
+
 void DiagnosisPage::paint_stamp() {
     const diag::Report &r = live::report();
     char w[screen::kLabelChars + 8] = {};
@@ -159,8 +170,8 @@ void DiagnosisPage::row_fn(void *self, int index, bool focused, kit::RowSpec &ou
         out.chevron = true;
         if (focused) {
             p->bb_note_.clear();
-            if (caps) p->bb_note_.put_u32(caps).put(caps == 1 ? " capture kept" : " captures kept");
-            else p->bb_note_.put("no captures yet");
+            if (caps) p->bb_note_.put_u32(caps).put(caps == 1 ? K2_P(" capture kept") : K2_P(" captures kept"));
+            else p->bb_note_.put(K2_P("no captures yet"));
             out.note = p->bb_note_.view();
         }
         return;
@@ -247,7 +258,7 @@ bool DiagnosisPage::on_event(Event e) {
 }
 
 Strip DiagnosisPage::labels() const {
-    Strip l = list_strip(base_labels());   // short [+]/[-] move the selection; OK opens only the Black Box row
+    Strip l = list_strip(base_labels(), sel_, list_rows());   // short [+]/[-] move the selection; OK opens only the Black Box row
     l[Button::Ok] = on_blackbox() ? sl::Open : sl::None;
     return l;
 }

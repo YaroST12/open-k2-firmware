@@ -38,6 +38,7 @@ concept Env = requires(E& e, std::string_view msg) {
 // the clear fails or the readback still shows the marker; the app then keeps running.
 template <Env E>
 bool enter_sequence(E& e, ResetMode mode = ResetMode::Sys) {
+    // k2-plain-begin: say() takes a string_view (raw usb::log seam, host fake appends bytes)
     e.say("[DFU] entering bootloader\n");
     e.flush();
     if (!e.clear_marker()) {
@@ -54,6 +55,7 @@ bool enter_sequence(E& e, ResetMode mode = ResetMode::Sys) {
     e.dump_ram();
     e.park();
     e.say("[DFU] chips parked, detaching\n");
+    // k2-plain-end
     e.flush();
     e.detach();
     e.reset(mode);

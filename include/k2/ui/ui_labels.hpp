@@ -60,6 +60,7 @@ unsigned label_text(char (&out)[24], const SlotLabel &l, unsigned max_chars);
 // entries (sl::Open, sl::BackDel, ...) and the panel resolves them when it paints. Entry order is free; ids are not stored
 // anywhere (no persistence), so adding one is only an append here. Columns: name, short, long, long fallback, dim.
 namespace sl {
+// k2-plain-begin: label words compared byte-wise (label_violation)
 #define K2_SLOT_POOL(X)                                                                                                \
     X(None, "", "", "", false)                                                                                         \
     X(Dim, "", "", "", true)                                                                                           \
@@ -161,6 +162,7 @@ namespace sl {
     X(HeroPrev, "Hero-", "", "", false)                                                                                \
     X(HeroNext, "Hero+", "", "", false)                                                                                \
     X(ZoomReset, "Zoom", "Reset", "", false)
+// k2-plain-end
 
 enum Id : uint8_t {
 #define K2_SLOT_ENUM(name, ...) name,
@@ -168,6 +170,15 @@ enum Id : uint8_t {
 #undef K2_SLOT_ENUM
     kCount
 };
+}  // namespace sl
+
+// A pool entry shown but unavailable (the focused row is disabled): bit 7 of the id, which slot_label() resolves. The id
+// changes with it, so the slot's signature repaints it.
+namespace sl {
+inline constexpr std::uint8_t kDimBit = 0x80;
+static_assert(kCount <= kDimBit, "bit 7 of a slot id is the dim flag");
+constexpr Id dim(Id id) { return static_cast<Id>(id | kDimBit); }
+constexpr Id dim_if(Id id, bool off) { return off ? dim(id) : id; }
 }  // namespace sl
 
 // What a page returns for its four buttons (Button order Back, Minus, Ok, Plus): four pool ids, 4 bytes.
@@ -200,6 +211,16 @@ constexpr Strip list_strip(Strip base) {
     base[Button::Plus] = sl::Dn;
     return base;
 }
+
+// The list pair of a list that stops at its ends (no wrap): Up dims on the first row, Dn on the last.
+constexpr Strip list_strip(Strip base, int at, int count) {
+    base[Button::Minus] = at <= 0 ? sl::UpDim : sl::Up;
+    base[Button::Plus] = at >= count - 1 ? sl::DnDim : sl::Dn;
+    return base;
+}
+
+// A page with nothing to move (no cursor, an empty or one-row list, a sheet that fits): Up and Dn both dim.
+constexpr Strip still_strip(Strip base) { return list_strip(base, 0, 1); }
 
 // First rule the panel breaks, or nullptr. Used by the table test over every page and submenu.
 const char *label_violation(const PanelLabels &p);

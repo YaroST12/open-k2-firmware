@@ -520,14 +520,16 @@ static void test_results_grid_budgets() {
 }
 
 // Stepping out of an entered ring page that already is what the ring view shows (its top level, first sub-page, nothing
-// scrolled or in flight) repaints only what differs: the key strip, the rail's title and the muting. The body stays untouched.
+// scrolled or in flight) repaints only what differs: the key strip, the rail's title and the list focus (browse shows none).
 static void test_ring_leave_paint() {
     // Link's 3-slice Overview toggles only its single focused slice (~16,432 px body) when entering/leaving ring view,
-    // never rebuilding the other two slices. Battery and Log repaint their list rows, muted or lit again.
+    // never rebuilding the other two slices. A list repaints its focused row and the rows below it, which move by the
+    // 14 px the open focused row gives back (browse shows no focus); the rows above stay.
     struct { bench::Place place; ring::Pos pos; const char *name; unsigned px, body_px; } cases[] = {
         {bench::Place::Charger, ring::Pos::Link, "Link", 22500, 17000},
-        {bench::Place::Battery, ring::Pos::Battery, "Battery", 46800, 38400},
-        {bench::Place::Log, ring::Pos::Log, "Log", 22400, 17200}};
+        {bench::Place::Battery, ring::Pos::Battery, "Battery", 44600, 38900},
+        {bench::Place::Log, ring::Pos::Log, "Log", 48300, 41000},
+        {bench::Place::K2, ring::Pos::K2, "K2", 50300, 44800}};
     for (const auto &c : cases) {
         fixture();
         Ui ui;
@@ -584,6 +586,26 @@ static void test_ring_leave_paint() {
     const unsigned diff = force_full_redraw(ui, 3500);
     std::printf("ring leave from Actions: incremental vs forced diff=%u\n", diff);
     CHECK_EQ(diff, 0u);
+    // A list left on a lower row stays as it is (no rebuild): the ring view still converges to a full redraw.
+    for (bench::Place p : {bench::Place::Battery, bench::Place::Log}) {
+        fixture();
+        Ui u;
+        u.init(1000);
+        u.set_rotation(0, 1000);
+        u.tick(1100);
+        u.tick(1400);
+        u.open_place(p, 2000);
+        for (int i = 0; i < 6; ++i) u.tick(2100 + 50 * i);
+        for (int i = 0; i < 3; ++i) u.on_button(Button::Plus, ButtonEvent::Short, 2500 + i);
+        for (int i = 0; i < 6; ++i) u.tick(2600 + 50 * i);
+        u.on_button(Button::Back, ButtonEvent::Short, 3000);
+        for (int i = 0; i < 6; ++i) u.tick(3100 + 50 * i);
+        while (u.painting()) u.tick(3500);
+        CHECK_EQ(u.ring_view(), true);
+        const unsigned d = force_full_redraw(u, 3500);
+        std::printf("ring leave from row 3: incremental vs forced diff=%u\n", d);
+        CHECK_EQ(d, 0u);
+    }
 }
 
 // Incremental updates must converge to exactly what a forced full redraw paints. The forced

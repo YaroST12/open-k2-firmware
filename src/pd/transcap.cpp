@@ -11,6 +11,7 @@
 #include "k2/drivers/power_monitor.hpp"
 #include "k2/drivers/systick.hpp"
 #include "k2/drivers/usb.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::transcap {
 
@@ -94,7 +95,7 @@ const char* name(ArmResult r) {
     switch (r) {
     case ArmResult::Ok: return "ok";
     case ArmResult::Busy: return "busy";
-    default: return "no-monitor";
+    default: return K2_P("no-monitor");
     }
 }
 

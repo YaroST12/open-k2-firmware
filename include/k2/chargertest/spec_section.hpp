@@ -18,6 +18,7 @@
 #include "k2/core/build_config.h"
 #include "k2/pdspec/engine.hpp"
 #include "k2/pdspec/result.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::specsec {
 
@@ -227,7 +228,7 @@ constexpr std::size_t apdo_slot(C c) {
 constexpr C apdo_check(bool avs, std::size_t slot) { return slot < kApdoSlots ? (avs ? kApdoAvs : kApdoPps)[slot] : C::Count; }
 enum class Group : std::uint8_t { Level, Timing, Shape };
 constexpr Group slot_group(std::size_t slot) { return slot < 4 ? Group::Level : slot < 9 ? Group::Timing : Group::Shape; }
-constexpr const char* group_word(Group g) { return g == Group::Level ? "level" : g == Group::Timing ? "timing" : "shape"; }
+constexpr const char* group_word(Group g) { return g == Group::Level ? K2_P("level") : g == Group::Timing ? K2_P("timing") : K2_P("shape"); }
 
 // Bit 7 of an APDO cell's code: the kept worst failed (its rank is redone from the quantised value, as Agg does from worst / lo / hi).
 inline constexpr std::uint8_t kWorstFailed = 0x80;

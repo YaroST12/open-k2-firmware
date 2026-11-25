@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
+#include "k2/core/strpack.hpp"
 
 namespace k2::emk_variant {
 
@@ -57,7 +58,7 @@ constexpr std::array<std::uint8_t, 14> discover_identity_frame(Variant v) {
 }
 
 // The variant as the report words: "PD 3.x" / "PD 2.0", and "2.0" / "1.0".
-constexpr std::string_view header_text(Variant v) { return v.spec_rev == 1 ? "PD 2.0" : "PD 3.x"; }
+constexpr std::string_view header_text(Variant v) { return v.spec_rev == 1 ? "PD 2.0" : "PD 3.x"; }   // k2-plain: tests compare the view
 constexpr std::string_view svdm_text(Variant v) { return v.svdm >= 2 ? "2.0" : "1.0"; }
 
 // What a cable answered: the orientation of the scan and the table row. One byte each on the wire (remote
@@ -85,6 +86,10 @@ struct Text {
     constexpr std::string_view view() const { return {s.data(), n}; }
     constexpr const char* c_str() const { return s.data(); }
     constexpr void add(std::string_view t) {
+        if !consteval {
+            strpack::for_chars(t, [this](char c) { if (n + 1u < s.size()) s[n++] = c; });
+            return;
+        }
         for (const char c : t) if (n + 1u < s.size()) s[n++] = c;
     }
     constexpr void add(char c) { add(std::string_view(&c, 1)); }
@@ -97,7 +102,7 @@ constexpr Text orientation_text(const Answered& a) {
     Text t;
     if (!a.valid()) return t;
     t.add(orientation_letter(a));
-    t.add(a.orientation == 2 ? " (CC2 BMC, CC1 VCONN)" : " (CC1 BMC, CC2 VCONN)");
+    t.add(a.orientation == 2 ? K2_P(" (CC2 BMC, CC1 VCONN)") : K2_P(" (CC1 BMC, CC2 VCONN)"));
     return t;
 }
 
@@ -107,9 +112,9 @@ constexpr Text combo_text(const Answered& a) {
     if (!a.valid()) return t;
     const Variant v{a.spec_rev, a.svdm};
     t.add(header_text(v));
-    t.add(" header, SVDM ");
+    t.add(K2_P(" header, SVDM "));
     t.add(svdm_text(v));
-    t.add(", attempt ");
+    t.add(K2_P(", attempt "));
     t.add(char('0' + (a.attempt % 10)));
     return t;
 }
@@ -119,7 +124,7 @@ constexpr Text short_text(const Answered& a) {
     Text t;
     if (!a.valid()) return t;
     t.add(orientation_letter(a));
-    t.add(a.spec_rev == 1 ? ", PD2, SVDM " : ", PD3, SVDM ");
+    t.add(a.spec_rev == 1 ? K2_P(", PD2, SVDM ") : K2_P(", PD3, SVDM "));
     t.add(svdm_text(Variant{a.spec_rev, a.svdm}));
     return t;
 }

@@ -163,6 +163,11 @@ def _function_body(src, marker):
     raise AssertionError(f"could not find end of C++ function {marker}")
 
 
+def _plain(text):
+    """Source text with its K2_P("...") wrappers dropped, so the name tables parse as plain literals."""
+    return re.sub(r'K2_P\(\s*("(?:[^"\\]|\\.)*")\s*\)', r"\1", text)
+
+
 def _cpp_string_names(src, marker):
     body = _function_body(src, marker)
     table = re.search(r"\b(?:kNames|names)\[\]\s*=\s*\{(.*?)\};", body, re.S)
@@ -176,7 +181,7 @@ def _cpp_string_names(src, marker):
 
 
 def _cpp_table(fn_marker):
-    src = (ROOT / "src" / "chargertest" / "charger_test.cpp").read_text()
+    src = _plain((ROOT / "src" / "chargertest" / "charger_test.cpp").read_text())
     return _cpp_string_names(src, fn_marker)
 
 
@@ -197,7 +202,7 @@ def _enum_names(header, name):
 
 
 def _switch_names(path, fn):
-    src = (ROOT / "src" / path).read_text()
+    src = _plain((ROOT / "src" / path).read_text())
     return _cpp_string_names(src, fn)
 
 
@@ -238,7 +243,7 @@ def test_group_why_prefers_the_engine_code_and_falls_back_to_the_reason():
 
 
 def test_epr_detail_names_match_the_firmware_and_the_tools():
-    src = (ROOT / "src" / "chargertest" / "charger_test.cpp").read_text()
+    src = _plain((ROOT / "src" / "chargertest" / "charger_test.cpp").read_text())
     body = src[src.index("const char* epr_detail_name"):]
     body = body[:body.index("default:")]
     base = {"kDetailEprFail": 136, "kDetailMonitor36": 144, "kDetailMonitor48": 145, "kDetailMonitorOther": 146,

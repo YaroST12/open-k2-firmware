@@ -45,7 +45,7 @@ struct Out {
     void str(const char* s) { while (*s) put(*s++); }
     void hex(const char* tag, std::uint32_t v) {
         str(tag);
-        for (int s = 28; s >= 0; s -= 4) put("0123456789ABCDEF"[(v >> s) & 0xF]);
+        for (int s = 28; s >= 0; s -= 4) put("0123456789ABCDEF"[(v >> s) & 0xF]); // k2-plain: indexed digit table
     }
     std::size_t done() { if (n) p[len] = '\0'; return len; }
 };
@@ -66,6 +66,7 @@ inline const char* kind_tag(Kind k) {
 inline std::size_t line_regs(const Info& i, char* buf, std::size_t n) {
     detail::Out o{buf, n};
     if (n == 0) return 0;
+    // k2-plain-begin: the fault handler writes these lines; it never runs the decoder
     o.str("[FAULT] "); o.str(detail::kind_tag(i.kind));
     o.hex(" PC=", i.pc); o.hex(" LR=", i.lr); o.hex(" CFSR=", i.cfsr); o.hex(" BFAR=", i.bfar);
     return o.done();
@@ -77,6 +78,7 @@ inline std::size_t line_status(const Info& i, char* buf, std::size_t n) {
     if (n == 0) return 0;
     o.str("[FAULT]");
     o.hex(" HFSR=", i.hfsr); o.hex(" MMFAR=", i.mmfar); o.hex(" SP=", i.sp); o.hex(" PSR=", i.xpsr);
+    // k2-plain-end
     return o.done();
 }
 

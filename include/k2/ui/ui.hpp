@@ -10,6 +10,7 @@
 #include "k2/core/bss_zero.hpp"
 #include "k2/core/pc_link.hpp"
 #include "k2/core/shell_toast.hpp"
+#include "k2/core/strpack.hpp"
 #include "k2/drivers/buttons.hpp"
 #include "k2/ui/gfx.hpp"
 #include "k2/ui/ui_calc.hpp"
@@ -565,7 +566,7 @@ private:
 
     orientation::Tracker gravity_;
     uint32_t rotation_notice_until_ K2_BSS_INIT(0);
-    static constexpr char kCalibrationNotice[] = "Trim issue; readouts OK";
+    static constexpr const char *kCalibrationNotice = K2_P("Trim issue; readouts OK");   // compared by pointer
     const char *notice_ K2_BSS_INIT(nullptr);   // a literal shown on the notice strip instead of the rotation text (refuse_menu)
     void refuse_menu(Menu m, const char *why, uint32_t now_ms);
     void rotation_gesture(uint32_t now_ms);

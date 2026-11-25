@@ -31,6 +31,7 @@
 #include "k2/pd/emrec.hpp"
 #include "k2/core/fs.hpp"
 #include "k2/core/scratch.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::emlib {
 
@@ -87,11 +88,11 @@ struct Result {
 constexpr const char* err_name(Err e) {
     switch (e) {
     case Err::Ok: return "ok";
-    case Err::Full: return "library full";
-    case Err::Invalid: return "invalid record";
-    case Err::NotFound: return "no such cable";
-    case Err::Flash: return "flash error";
-    case Err::Exists: return "name in use";
+    case Err::Full: return K2_P("library full");
+    case Err::Invalid: return K2_P("invalid record");
+    case Err::NotFound: return K2_P("no such cable");
+    case Err::Flash: return K2_P("flash error");
+    case Err::Exists: return K2_P("name in use");
     }
     return "?";
 }
@@ -141,7 +142,7 @@ public:
     Result save(const emrec::Record& in, const emk_quirk::Quirks& quirks = {}) {
         Result r;
         if (!emrec::valid(in)) { r.err = Err::Invalid; return r; }
-        const scratch::Lease lease("emlib.save");
+        const scratch::Lease lease("emlib.save");   // k2-plain: scratch owner tag
         auto& blk = scratch().block;
         const std::size_t blen = quirks.empty() ? 0 : emk_quirk::encode(quirks, blk);
         if (!quirks.empty() && blen == 0) { r.err = Err::Invalid; return r; }
@@ -177,7 +178,7 @@ public:
     // Gives the cable a new name (name_valid, not used by another cable, compared ignoring case).
     Err rename(std::uint16_t seq, std::string_view name) {
         if (!name_valid(name)) return Err::Invalid;
-        const scratch::Lease lease("emlib.rename");
+        const scratch::Lease lease("emlib.rename");   // k2-plain: scratch owner tag
         Entry cur;
         const std::size_t flen = read_file(seq, cur);
         if (flen == 0) return Err::NotFound;
@@ -256,7 +257,7 @@ private:
     // Reads cable `seq`. `q` / `q_ok` get the parsed quirk table (empty without a block; q_ok false and `*q`
     // untouched when the block does not parse). A null `q` skips the table (q_ok must then be null too).
     bool load(std::uint16_t seq, Entry& out, emk_quirk::Quirks* q, bool* q_ok = nullptr) const {
-        const scratch::Lease lease("emlib.load");
+        const scratch::Lease lease("emlib.load");   // k2-plain: scratch owner tag
         const std::size_t n = read_file(seq, out);
         if (n == 0) return false;
         if (q != nullptr) {

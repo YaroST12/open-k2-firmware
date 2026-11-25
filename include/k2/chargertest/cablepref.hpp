@@ -22,7 +22,7 @@
 
 namespace k2::cablepref {
 
-inline constexpr const char* kPath = "/cable.cfg";
+inline constexpr const char* kPath = "/cable.cfg"; // k2-plain: fs path
 inline constexpr std::array<std::uint8_t, 4> kMagic{'K', '2', 'C', 'B'};
 inline constexpr std::uint8_t kCheckSalt = 0xA5;
 // What the list selects while no record exists: the built-in EPR 50 V / 5 A cable (ctcable::kBuiltinKind, hardware-proven).

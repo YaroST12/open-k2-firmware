@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Yaraslau Furman
 // Pure formatter of the boot-info text (see k2/core/bootinfo.hpp).
 #include "k2/core/bootinfo.hpp"
+#include "k2/core/strpack.hpp"
 
 #include <algorithm>
 
@@ -17,7 +18,7 @@ struct Out {
     std::size_t n = 0;
 
     void put(char c) { if (n < cap) buf[n++] = c; }
-    void str(std::string_view s) { for (const char c : s) put(c); }
+    void str(std::string_view s) { strpack::for_chars(s, [this](char c) { put(c); }); }
     void dec(std::uint32_t v) {
         char t[10];
         int k = 0;
@@ -30,7 +31,7 @@ struct Out {
     void hex(std::uint32_t v) {
         char t[8];
         int k = 0;
-        do { t[k++] = "0123456789ABCDEF"[v & 15]; v >>= 4; } while (v);
+        do { t[k++] = "0123456789ABCDEF"[v & 15]; v >>= 4; } while (v); // k2-plain: indexed digit table
         while (k) put(t[--k]);
     }
 };
@@ -48,7 +49,7 @@ const char* mode_text(bootmode::Mode m) {
     switch (m) {
     case bootmode::Mode::OkRdCc1: return "ok";
     case bootmode::Mode::PlusRdCc2: return "plus";
-    default: return "plain";
+    default: return K2_P("plain");
     }
 }
 
@@ -57,7 +58,7 @@ const char* mode_text(bootmode::Mode m) {
 std::size_t format(const Snapshot& s, std::span<char> out) {
     if (out.empty()) return 0;
     Out o{out, std::min(out.size() - 1, kQrMax)};
-    o.str("K2B1 fw="); o.str(s.fw);
+    o.str(K2_P("K2B1 fw=")); o.str(s.fw);
     o.str(" g="); o.str(s.git);
     o.str(" p="); o.dec(s.proto);
     o.str(" t="); o.dec(s.t_ms);
@@ -70,7 +71,7 @@ std::size_t format(const Snapshot& s, std::span<char> out) {
     o.str(" pa="); o.hex(s.pa);
     o.str(" rf="); o.hex(s.reset_flags);
     o.str(" w="); o.dec(s.warm ? 1 : 0);
-    o.str(" pin="); o.hex(s.pin_initial); o.put(','); o.hex(s.pin_now); o.put(','); o.hex(s.pin_boot); o.put(','); o.dec(s.inherited ? 1 : 0);
+    o.str(K2_P(" pin=")); o.hex(s.pin_initial); o.put(','); o.hex(s.pin_now); o.put(','); o.hex(s.pin_boot); o.put(','); o.dec(s.inherited ? 1 : 0);
     o.str(" mk=");
     if (s.mark_read) o.hex(s.mark); else o.put('-');
     o.str(" ra="); o.dec(s.ra_on ? 1 : 0); o.put(':'); o.str(bootra::name(bootra::Verdict(s.ra_why)));
@@ -126,6 +127,7 @@ std::size_t format(const Snapshot& s, std::span<char> out) {
 }
 
 std::string_view field(std::string_view text, std::string_view key) {
+    K2_EXPECT_PLAIN(text);
     std::size_t pos = 0;
     while (pos < text.size()) {
         const std::size_t end = std::min(text.find(' ', pos), text.size());

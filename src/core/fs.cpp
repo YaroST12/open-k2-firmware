@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Yaraslau Furman
 // k2::fs over littlefs: see include/k2/core/fs.hpp. Pure code over a BlockDevice, host-tested (tests/test_fs.cpp).
 #include "k2/core/fs.hpp"
+#include "k2/core/strpack.hpp"
 
 #include <cstring>
 #include <utility>
@@ -53,14 +54,14 @@ bool is_tmp(const char* name) {
 const char* err_name(Err e) {
     switch (e) {
         case Err::Ok: return "ok";
-        case Err::NotFound: return "not found";
-        case Err::NoSpace: return "no space";
-        case Err::Corrupt: return "corrupt";
+        case Err::NotFound: return K2_P("not found");
+        case Err::NoSpace: return K2_P("no space");
+        case Err::Corrupt: return K2_P("corrupt");
         case Err::Io: return "io";
-        case Err::Invalid: return "invalid";
-        case Err::TooBig: return "too big";
-        case Err::Exists: return "exists";
-        case Err::NotReady: return "not ready";
+        case Err::Invalid: return K2_P("invalid");
+        case Err::TooBig: return K2_P("too big");
+        case Err::Exists: return K2_P("exists");
+        case Err::NotReady: return K2_P("not ready");
     }
     return "?";
 }
@@ -231,7 +232,7 @@ void Fs::unmount() {
 Err Fs::open(lfs_file_t& f, const char* path, int flags) {
     if (!mounted_) return Err::NotReady;
     if (flags & LFS_O_WRONLY) changed();          // every write path opens for writing first
-    return map(lfs_file_opencfg(&lfs_, &f, path, flags, &fcfg_));
+    K2_EXPECT_PLAIN(path);    return map(lfs_file_opencfg(&lfs_, &f, path, flags, &fcfg_));
 }
 
 Err Fs::read_file(const char* path, std::span<std::uint8_t> out, std::size_t& n) {

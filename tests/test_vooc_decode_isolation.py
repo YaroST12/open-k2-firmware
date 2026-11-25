@@ -50,7 +50,8 @@ class DecoderIsolation(unittest.TestCase):
         # glue (src/fastcharge/svooc.cpp) is the only part that moves D-.
         allowed = {"algorithm", "array", "cstddef", "cstdint", "optional", "span", "k2/fastcharge/vooc.hpp",
                    "k2/fastcharge/svooc_script.hpp", "k2/fastcharge/svooc_wire.hpp",
-                   "k2/pd/inline_cause.hpp"}   # the pure InlineCause enum, so the guards read the latch cause
+                   "k2/pd/inline_cause.hpp",   # the pure InlineCause enum, so the guards read the latch cause
+                   "k2/core/strpack.hpp"}      # K2_P text, pure
         for name in ("svooc_script.hpp", "svooc_wire.hpp", "svooc_run.hpp"):
             text = (ROOT / "include/k2/fastcharge" / name).read_text()
             with self.subTest(name=name):
@@ -59,7 +60,8 @@ class DecoderIsolation(unittest.TestCase):
 
     def test_charger_test_ceiling_stage_logic_is_pure(self):
         # The charger test's ceiling stage decides when the trigger is done and how its result reads; it drives nothing.
-        allowed = {"cstddef", "cstdint", "span", "k2/fastcharge/svooc_run.hpp", "k2/fastcharge/svooc_script.hpp"}
+        allowed = {"cstddef", "cstdint", "span", "k2/fastcharge/svooc_run.hpp", "k2/fastcharge/svooc_script.hpp",
+                   "k2/core/strpack.hpp"}
         text = (ROOT / "include/k2/chargertest/svooc_ceiling.hpp").read_text()
         self.assertEqual(sorted(includes(text) - allowed), [])
         self.assertEqual(sorted(set(m.group(1) for m in FORBIDDEN.finditer(code(text)))), [])

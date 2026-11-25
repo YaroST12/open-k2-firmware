@@ -269,6 +269,7 @@ public:
 
 private:
     void checkpoint();
+    bool stale(const Recorder &r) const;   // boot: a running checkpoint of a run flash holds as Done
     bool flush();                 // writes the record (and prunes before a new file); false on a failed write
     fs::Fs *fs_ = nullptr;
     Checkpoint *ckpt_ = nullptr;

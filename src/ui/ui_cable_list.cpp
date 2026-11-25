@@ -8,6 +8,7 @@
 #include <string_view>
 
 #include "k2/chargertest/cablepref.hpp"
+#include "k2/core/strpack.hpp"
 #include "k2/core/eekeep.hpp"
 #include "k2/pd/emk_quirk.hpp"
 #include "k2/pd/emk_spoof.hpp"
@@ -25,11 +26,11 @@ namespace {
 struct Face {
     std::string_view name, rating, note;
 };
-constexpr Face kFaces[] = {
+constexpr Face kFaces[] = {   // k2-plain-begin: string_view fields, measured
     {"EPR", "50V 5A", "Passive EPR cable, 50V 5A"},
     {"Xiaomi", "6A", "Mi VID 20V 5A, unlocks 6A"},
     {"OnePlus", "100W", "OPPO VID, 30V 5A"},
-};
+};   // k2-plain-end
 static_assert(std::size(kFaces) == ctcable::kDialogBuiltins);
 
 // One library read for a name: the Entry (rec included) lives in this frame only, never in a page callback.
@@ -136,8 +137,8 @@ CableIdentityList::Row CableIdentityList::row(int index, View v) const {
     Row r;
     const auto c = choice_at(index);
     if (c.kind == ctcable::Kind::Off) {
-        r.text.put("Off (real cable)");   // the whole row: no rating column, the note says what it means
-        r.note = "Nothing answers for the cable";
+        r.text.put(K2_P("Off (real cable)"));   // the whole row: no rating column, the note says what it means
+        r.note = "Nothing answers for the cable";   // k2-plain: string_view note
     } else if (c.kind == ctcable::Kind::Builtin) {
         const Face& f = kFaces[ctcable::dialog_row(c.seq)];
         r.text.put(f.name);
@@ -146,9 +147,9 @@ CableIdentityList::Row CableIdentityList::row(int index, View v) const {
     } else {
         const auto& slot = names_[index % kNameSlots];
         if (slot.seq == c.seq && slot.name[0]) r.text.put(slot.name);
-        else r.text.put("Clone #").put_u32(c.seq);   // not read (yet): the name never loads inside a paint
-        r.note = "Saved from the e-marker";
-        r.tail = "saved";
+        else r.text.put(K2_P("Clone #")).put_u32(c.seq);   // not read (yet): the name never loads inside a paint
+        r.note = "Saved from the e-marker";   // k2-plain: string_view note
+        r.tail = "saved";   // k2-plain: string_view tail
     }
     r.mark = mark_of(c, v);
     return r;
@@ -201,7 +202,7 @@ int CableIdentityList::window_first(int offset, int selection, int visible, int 
 CableIdentityList::Style CableIdentityList::style(Mark m) {
     switch (m) {
     case Mark::Use: return {kText, {}, kDim, kDimT};   // the picked row is the radio, not a pill
-    case Mark::Armed: return {kCaution, "ARMED", kCaution, kCautionT};
+    case Mark::Armed: return {kCaution, "ARMED", kCaution, kCautionT};   // k2-plain: pill measured
     case Mark::Next: return {kOk, "NEXT", kOk, kOkT};   // the pick of the next run (the Cable step)
     case Mark::Curr: return {kCaution, "CURR", kCaution, kDimT};   // answering now, but not the pick: dim amber
     case Mark::None: break;

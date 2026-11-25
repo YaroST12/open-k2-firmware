@@ -764,7 +764,7 @@ class ChargerHunt(unittest.TestCase):
         body = re.search(r"enum class HuntCause : uint8_t \{(.*?)\n\};", hdr, re.S).group(1)
         enum = [re.match(r"\s*(\w+)", ln).group(1) for ln in body.splitlines() if re.match(r"\s*[A-Z]\w+,", ln)]
         self.assertEqual(len(enum), len(kr.HUNT_CAUSES))
-        src = (Path(__file__).resolve().parent.parent / "src" / "chargertest" / "charger_test.cpp").read_text()
+        src = re.sub(r'K2_P\(\s*("(?:[^"\\]|\\.)*")\s*\)', r"\1", (Path(__file__).resolve().parent.parent / "src" / "chargertest" / "charger_test.cpp").read_text())   # K2_P-packed names
         for c, word in zip(enum, kr.HUNT_CAUSES):
             self.assertIn(f"case HuntCause::{c}: return \"{word}\";", src)
 
@@ -792,7 +792,7 @@ class ChargerHunt(unittest.TestCase):
         # older firmware) is a hunt row when it asks more than the cable ceiling, the most a plan row can ask.
         import re
         root = Path(__file__).resolve().parent.parent
-        src = (root / "src" / "chargertest" / "charger_test.cpp").read_text()
+        src = re.sub(r'K2_P\(\s*("(?:[^"\\]|\\.)*")\s*\)', r"\1", (root / "src" / "chargertest" / "charger_test.cpp").read_text())   # K2_P-packed names
         hdr = (root / "include" / "k2" / "chargertest" / "charger_test.hpp").read_text()
         self.assertIn("(step.hunt ? 0x40 : 0)", (root / "src" / "core" / "remote_proto.cpp").read_text())
         self.assertTrue(step_label.is_hunt({"protocol": "pps", "request_ma": 6000}))                 # older firmware: inferred

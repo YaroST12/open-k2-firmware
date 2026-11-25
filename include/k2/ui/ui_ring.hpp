@@ -8,6 +8,7 @@
 // the ring on the same page. Lines and Numbers have nothing to act on, so they are view-only: OK does nothing there.
 #pragma once
 #include <cstdint>
+#include "k2/core/strpack.hpp"
 #include "k2/ui/rail_title.hpp"
 #include "k2/ui/ui_events.hpp"
 #include "k2/ui/ui_labels.hpp"
@@ -32,7 +33,7 @@ constexpr const rail::Title &mast_name(Pos p) {
 
 // The plain name for the Settings row's tail (at most 7 characters: the row's tail room).
 constexpr const char *name(Pos p) {
-    constexpr const char *kNames[kCount] = {"Home", "Lines", "Numbers", "Graphs", "Ripple", "Link", "Tools", "Battery", "Log", "K2"};
+    constexpr const char *kNames[kCount] = {K2_P("Home"), K2_P("Lines"), K2_P("Numbers"), K2_P("Graphs"), K2_P("Ripple"), K2_P("Link"), K2_P("Tools"), K2_P("Battery"), "Log", "K2"};
     return kNames[static_cast<int>(p) < kCount ? static_cast<int>(p) : 0];
 }
 
