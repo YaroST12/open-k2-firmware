@@ -309,6 +309,12 @@ struct Sink {
 
     [[gnu::noinline]] void word(std::string_view s, Tone t) { TokenBuf tb = buf(); tb.word(s, t); }
     [[gnu::noinline]] void phrase(std::string_view s, Tone t, bool split_at_number) { TokenBuf tb = buf(); tb.phrase(s, t, split_at_number); }
+    [[gnu::noinline]] void begin_cstr(CompactKind kind, const char* label, Tone label_tone, A a, uint16_t mv = 0) {
+        begin(kind, label ? std::string_view(label) : std::string_view{}, label_tone, a, mv);
+    }
+    [[gnu::noinline]] void phrase_cstr(const char* s, Tone t, bool split_at_number) {
+        if (s) phrase(std::string_view(s), t, split_at_number);
+    }
 };
 bool is_revision(A a) { return a >= A::Pd30Revision && a <= A::Pd32Revision; }
 // Nothing to show for this protocol: every step is "not advertised", or a legacy protocol never answered at 5 V.
@@ -771,13 +777,13 @@ namespace {
         const size_t sp = std::min(name.find(' '), name.size());
         b.begin(CompactKind::Fact, name.substr(0, sp), Tone::Pass, A::Count);
         b.phrase(name.substr(sp), Tone::Dim, false);
-        if (oem.qc_why) b.phrase(oem.qc_why, Tone::Dim, true);
+        b.phrase_cstr(oem.qc_why, Tone::Dim, true);
     }
-    if (oem.vendor) { b.begin(CompactKind::Fact, "OEM", Tone::Dim, A::Count); b.phrase(oem.vendor, Tone::Dim, false); }
+    if (oem.vendor) { b.begin(CompactKind::Fact, "OEM", Tone::Dim, A::Count); b.phrase_cstr(oem.vendor, Tone::Dim, false); }
     if (oem.oppo_svid) { b.begin(CompactKind::Fact, "OPPO", Tone::Dim, A::Count); b.phrase("SVID 0x22D9 (discovery only)", Tone::Dim, false); }
-    if (oem.scp_cap) { b.begin(CompactKind::Fact, "SCP cap", Tone::Dim, A::Count); b.phrase(oem.scp_cap, Tone::Dim, false); }
-    if (oem.vooc_ident) { b.begin(CompactKind::Fact, "VOOC id", Tone::Dim, A::Count); b.phrase(oem.vooc_ident, Tone::Dim, false); }
-    if (oem.svooc_cap) { b.begin(CompactKind::Fact, "SV cap", Tone::Dim, A::Count); b.phrase(oem.svooc_cap, Tone::Dim, false); }
+    if (oem.scp_cap) { b.begin(CompactKind::Fact, "SCP cap", Tone::Dim, A::Count); b.phrase_cstr(oem.scp_cap, Tone::Dim, false); }
+    if (oem.vooc_ident) { b.begin(CompactKind::Fact, "VOOC id", Tone::Dim, A::Count); b.phrase_cstr(oem.vooc_ident, Tone::Dim, false); }
+    if (oem.svooc_cap) { b.begin(CompactKind::Fact, "SV cap", Tone::Dim, A::Count); b.phrase_cstr(oem.svooc_cap, Tone::Dim, false); }
 }
 
 // The VOOC family as level rows (OemNotes::vooc_watts): "VOOC" then "SVOOC", one row per run of equal words in the level table.
@@ -801,7 +807,7 @@ namespace {
     for (unsigned i = sp.first; i < unsigned(sp.first) + sp.count;) {
         unsigned j = i + 1;
         while (j < unsigned(sp.first) + sp.count && std::strcmp(oem_watts::kLevels[j].word, oem_watts::kLevels[i].word) == 0) ++j;
-        b.begin(CompactKind::Levels, oem_watts::kLevels[i].word, Tone::Dim, lead, oem.vooc_claims);
+        b.begin_cstr(CompactKind::Levels, oem_watts::kLevels[i].word, Tone::Dim, lead, oem.vooc_claims);
         b.levels(uint8_t(i), uint8_t(j - i));
         TokenBuf tb = b.buf();
         levels_row(tb, steps, lead, oem.vooc_claims, uint8_t(i), uint8_t(j - i));
@@ -829,7 +835,7 @@ void build_impl(Sink& b, std::span<const ct::Step> steps, const OemNotes& oem, c
     auto section_of_key = [](const Key& k) { return k.probe ? Section::Xiaomi : section_of(k.a); };
     auto header = [](Sink& s, const OemNotes& o, Section sec) {
         if (!o.headers) return;
-        s.begin(CompactKind::Header, section_name(sec), Tone::Caution, A::Count, static_cast<uint16_t>(sec));
+        s.begin_cstr(CompactKind::Header, section_name(sec), Tone::Caution, A::Count, static_cast<uint16_t>(sec));
         s.flush();
     };
     bool mi_shown = false;

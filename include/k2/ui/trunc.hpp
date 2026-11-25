@@ -68,6 +68,17 @@ constexpr bool all_fit_p(const char *const (&table)[N], unsigned adv, int max_px
     return true;
 }
 
+constexpr bool fits_px_p(unsigned adv, std::string_view s, int max_px) {
+    return strpack::cells_packed(s.data()) * static_cast<int>(adv) <= max_px;
+}
+
+template <std::size_t N>
+constexpr bool all_fit_p(const std::string_view (&table)[N], unsigned adv, int max_px) {
+    for (std::string_view s : table)
+        if (!fits_px_p(adv, s, max_px)) return false;
+    return true;
+}
+
 namespace trunc {
 
 // What happened to the text.

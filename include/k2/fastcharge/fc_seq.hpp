@@ -45,4 +45,8 @@ void replay(std::span<const Step> steps, Io& io) {
     }
 }
 
+// Fill the 80-step VOOC wake burst (40 x (3.3 V 300 us, 0 V 300 us), D- HiZ) into `out` at runtime
+// instead of duplicating 640-byte constexpr tables in flash.
+void fill_vooc_burst(std::span<Step> out);
+
 }  // namespace k2::fc

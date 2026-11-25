@@ -42,15 +42,13 @@ static_assert(all_fit(kDetailKeys, kSmallAdvPx, kit::kKvValueX - 6 - 4), "a Deta
 // A skip reason as a Detail value (18 characters) and as the lone grid cell (font 16, 150 px).
 static_assert(fits_px(kSmallAdvPx, sc::skip_name(sc::Skip::NoEprProof), 150), "a skip reason is wider than its cell");
 
-template <std::size_t N>
-void put_int(StrBuf<N>& s, std::int32_t v) {
+inline void put_int(StrBufBase& s, std::int32_t v) {
     if (v < 0) s.put_char('-');
     s.put_u32(v < 0 ? 0u - static_cast<std::uint32_t>(v) : static_cast<std::uint32_t>(v));   // INT32_MIN included
 }
 
 // One measured value in its unit: us as ms with one decimal, ms whole, mV as volts with two decimals, a count bare.
-template <std::size_t N>
-void put_value(StrBuf<N>& s, sc::Unit u, std::int32_t v) {
+inline void put_value(StrBufBase& s, sc::Unit u, std::int32_t v) {
     if (v >= static_cast<std::int32_t>(sc::kNever)) { s.put("not seen"); return; }
     switch (u) {
         case sc::Unit::Us: s.put_fixed(v, 1).put("ms"); return;
@@ -61,8 +59,7 @@ void put_value(StrBuf<N>& s, sc::Unit u, std::int32_t v) {
 }
 
 // The limit a check was judged against, from its bounds in the check's unit.
-template <std::size_t N>
-void put_limit(StrBuf<N>& s, const sc::CheckDef& d, std::int32_t lo, std::int32_t hi) {
+inline void put_limit(StrBufBase& s, const sc::CheckDef& d, std::int32_t lo, std::int32_t hi) {
     switch (d.kind) {
         case sc::Kind::Max: s.put("max "); put_value(s, d.unit, hi); return;
         case sc::Kind::Min: s.put("min "); put_value(s, d.unit, lo); return;
@@ -77,14 +74,12 @@ void put_limit(StrBuf<N>& s, const sc::CheckDef& d, std::int32_t lo, std::int32_
     }
 }
 // The limit the cell kept (live and restored alike).
-template <std::size_t N>
-void put_limit(StrBuf<N>& s, const sc::CheckDef& d, const specsec::Cell& c) {
+inline void put_limit(StrBufBase& s, const sc::CheckDef& d, const specsec::Cell& c) {
     put_limit(s, d, specsec::dequantize_limit(d.unit, c.lo, false), specsec::dequantize_limit(d.unit, c.hi, true));
 }
 
 // Where the worst measurement happened (the aggregate's a / b, result.hpp "where"). false = no object ("the source").
-template <std::size_t N>
-bool put_where(int k, std::uint8_t a, std::uint8_t b, StrBuf<N>& s) {
+inline bool put_where(int k, std::uint8_t a, std::uint8_t b, StrBufBase& s) {
     const bool fixed_walk = k < static_cast<int>(sc::Check::PpsMonotonic);
     if (fixed_walk && b < 16) {
         s.put("PDO ").put_u32(a).put(" to ").put_u32(b);
@@ -106,8 +101,7 @@ bool put_where(int k, std::uint8_t a, std::uint8_t b, StrBuf<N>& s) {
 // The grid cell of one check (one wide VerdictCell). `text` holds the number; `shown` is what the cell prints.
 //   skip: the reason, struck out. pending: empty. unverified (an inferred limit): the number, no pass/fail look.
 //   pass / fail: the number, then ", N fail" when it failed.
-template <std::size_t N>
-kit::Verdict cell_view(int check, const specsec::Cell& c, StrBuf<N>& text, std::string_view& shown) {
+inline kit::Verdict cell_view(int check, const specsec::Cell& c, StrBufBase& text, std::string_view& shown) {
     const sc::Unit u = sc::kDefs[static_cast<std::size_t>(check)].unit;
     text.clear();
     shown = {};
@@ -130,7 +124,7 @@ kit::Verdict cell_view(int check, const specsec::Cell& c, StrBuf<N>& text, std::
 
 // One Detail row. The limit, the count and the place come from the cell (live run and journal resume alike); a cell restored from a
 // journal written before the detail record has none (n = 0) and reads a dim "-".
-inline void detail_value(int row, int check, const specsec::Cell& c, StrBuf<20>& s, std::uint16_t& color) {
+inline void detail_value(int row, int check, const specsec::Cell& c, StrBufBase& s, std::uint16_t& color) {
     color = kText;
     const sc::CheckDef& d = sc::kDefs[static_cast<std::size_t>(check)];
     const sc::Verdict v = c.verdict();
@@ -177,8 +171,7 @@ inline void detail_value(int row, int check, const specsec::Cell& c, StrBuf<20>&
 // ---- Layout B: a range's own checks -------------------------------------------------------------------------------------------
 // A range line's footer when its word is not "spec": the check behind the word, its worst value and its fails ("PPS ovs: 9.90V, 2 fail";
 // over an inferred limit "2 over"), shortened to the 27 footer cells by dropping the value, then the count.
-template <std::size_t N>
-void range_footer(StrBuf<N>& f, const specsec::Apdo& p, const specsec::RangeSpec& rs) {
+inline void range_footer(StrBufBase& f, const specsec::Apdo& p, const specsec::RangeSpec& rs) {
     const sc::Check c = specsec::apdo_check(p.avs, rs.slot);
     if (c == sc::Check::Count) return;
     const specsec::Cell& cell = p.cells[rs.slot];
@@ -195,14 +188,12 @@ void range_footer(StrBuf<N>& f, const specsec::Apdo& p, const specsec::RangeSpec
     f.put(g.view());
 }
 // A range's spec row on its Steps page: the worst value as the tail (none when nothing was measured) ...
-template <std::size_t N>
-void slot_tail(int check, const specsec::Cell& c, StrBuf<N>& s) {
+inline void slot_tail(int check, const specsec::Cell& c, StrBufBase& s) {
     const sc::Unit u = sc::kDefs[static_cast<std::size_t>(check)].unit;
     if (c.measured()) put_value(s, u, specsec::dequantize(u, c.value));
 }
 // ... and the limit and count as its note (31 cells): "max 9.65V, 14 measured", the skip reason, or "not judged".
-template <std::size_t N>
-void slot_note(int check, const specsec::Cell& c, StrBuf<N>& s) {
+inline void slot_note(int check, const specsec::Cell& c, StrBufBase& s) {
     if (c.verdict() == sc::Verdict::Skip) { s.put(sc::skip_name(c.skip())); return; }
     if (!c.measured()) { s.put("not judged"); return; }
     if (!c.detailed()) { s.put("-"); return; }
@@ -229,7 +220,7 @@ inline constexpr int kNameFixedCells = 9, kNameProgCells = 16, kNumCells = 6;
 
 // The number part of a fixed-point text (a '+' before a positive one when asked), as precise as the room allows: max_dec decimals,
 // then fewer until it fits `width` characters.
-inline void fit_fixed(StrBuf<16>& out, std::int32_t milli, int max_dec, int width, bool plus) {
+inline void fit_fixed(StrBufBase& out, std::int32_t milli, int max_dec, int width, bool plus) {
     for (int d = max_dec;; --d) {
         out.clear();
         if (plus && milli > 0) out.put_char('+');
@@ -239,8 +230,7 @@ inline void fit_fixed(StrBuf<16>& out, std::int32_t milli, int max_dec, int widt
 }
 
 // A time given in tenths of a millisecond: 4.5ms, 12ms, 169ms, 1.5s. `plus` prefixes '+' to a positive one (a margin). 6 cells at most.
-template <std::size_t N>
-void put_time(StrBuf<N>& s, std::int32_t tenths, bool plus) {
+inline void put_time(StrBufBase& s, std::int32_t tenths, bool plus) {
     const bool neg = tenths < 0;
     const std::uint32_t a = neg ? 0u - static_cast<std::uint32_t>(tenths) : static_cast<std::uint32_t>(tenths);
     if (neg) s.put_char('-');
@@ -251,16 +241,14 @@ void put_time(StrBuf<N>& s, std::int32_t tenths, bool plus) {
 }
 
 // Millivolts as volts, 'V' included, 6 cells at most.
-template <std::size_t N>
-void put_volts(StrBuf<N>& s, std::int32_t mv, bool plus) {
+inline void put_volts(StrBufBase& s, std::int32_t mv, bool plus) {
     StrBuf<16> t;
     fit_fixed(t, mv, 2, kNumCells - 1, plus);
     s.put(t.view()).put_char('V');
 }
 
 // One level of a pair, with the decimals it has (at most `dec`): 9, 9.5, 9.25.
-template <std::size_t N>
-void put_level(StrBuf<N>& s, std::uint16_t mv, int dec) {
+inline void put_level(StrBufBase& s, std::uint16_t mv, int dec) {
     const int nat = mv % 100u ? 2 : mv % 1000u ? 1 : 0;
     s.put_fixed(mv, nat < dec ? nat : dec);
 }
@@ -270,8 +258,7 @@ void put_level(StrBuf<N>& s, std::uint16_t mv, int dec) {
 constexpr bool row_known(const specsec::Row& r) { return r.check < sc::kChecks; }
 
 // 5->9V, 12->15V, 5->9.5V. A programmable pass: its window and step class, 3.3-11V 100mV, 15-28V slam.
-template <std::size_t N>
-void put_row_name(const specsec::Row& r, StrBuf<N>& s) {
+inline void put_row_name(const specsec::Row& r, StrBufBase& s) {
     if (r.flags & specsec::kRowProg) {
         rowtext::put_level(s, r.a, 1);
         s.put_char('-');
@@ -300,8 +287,7 @@ void put_row_name(const specsec::Row& r, StrBuf<N>& s) {
 }
 
 // The value in the check's unit: 9.21V, 4.5ms, 169ms, 1.5s; signed millivolts for a programmable pass's error; `never` for no event.
-template <std::size_t N>
-void put_row_value(const specsec::Row& r, StrBuf<N>& s) {
+inline void put_row_value(const specsec::Row& r, StrBufBase& s) {
     if (!row_known(r)) return;
     if (r.value == specsec::kUnseen) { s.put("never"); return; }
     const std::int32_t v = r.value;
@@ -323,8 +309,7 @@ void put_row_value(const specsec::Row& r, StrBuf<N>& s) {
 }
 
 // The margin past the nearest limit, signed (positive = outside), in the value's unit; a programmable pass: how many of its steps failed.
-template <std::size_t N>
-void put_row_tail(const specsec::Row& r, StrBuf<N>& s) {
+inline void put_row_tail(const specsec::Row& r, StrBufBase& s) {
     if (!row_known(r)) return;
     if (r.flags & specsec::kRowProg) {
         const std::int32_t n = r.margin < 0 ? 0 : r.margin;

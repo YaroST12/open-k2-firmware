@@ -395,24 +395,24 @@ private:
     Err fail(fs::Err why);
 
     fs::Fs& fs_;
-    bool broken_ = false, armed_ = false;
-    fs::Err last_fs_ = fs::Err::Ok;
-    Stage stage_ = Stage::Idle;
-    std::size_t cur_ = 0;
-    std::uint8_t dirty_ = 0;                                // sections whose file is to be rewritten (bit per Section)
-    std::uint8_t apdo_dirty_ = 0;                           // a bit per range of *apdo_ still to write
-    const specsec::Apdos* apdo_ = nullptr;
+    bool broken_ K2_BSS_INIT(false), armed_ K2_BSS_INIT(false);
+    fs::Err last_fs_ K2_BSS_INIT(fs::Err::Ok);
+    Stage stage_ K2_BSS_INIT(Stage::Idle);
+    std::size_t cur_ K2_BSS_INIT(0);
+    std::uint8_t dirty_ K2_BSS_INIT(0);                       // sections whose file is to be rewritten (bit per Section)
+    std::uint8_t apdo_dirty_ K2_BSS_INIT(0);                  // a bit per range of *apdo_ still to write
+    const specsec::Apdos* apdo_ K2_BSS_INIT(nullptr);
 #if K2_SPECROWS
-    bool rows_dirty_ = false;                               // the spec rows (/jr/spt.rec) are to be written, from the source the pump is given
+    bool rows_dirty_ K2_BSS_INIT(false);                      // the spec rows (/jr/spt.rec) are to be written, from the source the pump is given
     bool rows_pending() const { return rows_dirty_; }
 #else
     static constexpr bool rows_pending() { return false; }
 #endif
-    std::uint8_t plan_dirty_ = 0;                           // the subset of dirty_ whose rows or layout changed (not only a verdict)
-    std::array<std::uint16_t, kSections> srows_{}, hrows_{};   // row count of each section file / as the header names it
-    std::array<std::uint32_t, kSections> ssig_{}, hsig_{};     // layout hash of each section file / as the header names it
-    std::uint32_t hord_sig_ = 0;        // fingerprint of the plan order the header names
-    bool hord_known_ = false;           // false until a header was written (or a replay adopted)
+    std::uint8_t plan_dirty_ K2_BSS_INIT(0);                  // the subset of dirty_ whose rows or layout changed (not only a verdict)
+    std::array<std::uint16_t, kSections> srows_ K2_BSS_ZERO, hrows_ K2_BSS_ZERO;   // row count of each section file / as the header names it
+    std::array<std::uint32_t, kSections> ssig_ K2_BSS_ZERO, hsig_ K2_BSS_ZERO;     // layout hash of each section file / as the header names it
+    std::uint32_t hord_sig_ K2_BSS_INIT(0);                   // fingerprint of the plan order the header names
+    bool hord_known_ K2_BSS_INIT(false);                      // false until a header was written (or a replay adopted)
 };
 
 // Write gate. A journal write holds the main loop, and with it every PD reply, for 12 to 250 ms (the flash erases and programs

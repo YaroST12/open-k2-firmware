@@ -97,6 +97,7 @@ std::size_t decode(const char *s, char *out, std::size_t cap);
 // Out-of-line helpers to keep sinks minimal.
 std::string_view unpack_rt(std::string_view s, char *buf, std::size_t cap);
 int cells_rt(const char *s);
+[[gnu::noinline]] void assign_sv(std::string_view &dst, const char *s);
 
 // Convenience: if `s` is packed, decode into `buf` and return a view of `buf`; otherwise return `s` unchanged.
 template <std::size_t N>
@@ -256,8 +257,15 @@ struct Store {
 };
 }  // namespace
 
+template <Lit S>
+constexpr std::string_view packed_sv() noexcept {
+    return {Store<S>::bytes.data(), Store<S>::bytes.size() - 1};
+}
+
 }  // namespace detail
 }  // namespace k2::strpack
 
 // Pack an ASCII string literal into section `k2_strpack`, returning a plain `const char*`.
 #define K2_P(lit) (::k2::strpack::detail::Store<::k2::strpack::detail::Lit(lit)>::bytes.data())
+// Same, returning a compile-time sized `std::string_view` with zero runtime `strlen`.
+#define K2_PSV(lit) (::k2::strpack::detail::packed_sv<::k2::strpack::detail::Lit(lit)>())

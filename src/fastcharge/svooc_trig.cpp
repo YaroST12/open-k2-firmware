@@ -17,6 +17,8 @@
 #include "k2/drivers/systick.hpp"
 #include "k2/drivers/usb.hpp"
 #include "k2/fastcharge/dpsniff.hpp"
+#include "k2/fastcharge/fc_engine.hpp"
+#include "k2/fastcharge/fc_seq.hpp"
 #include "k2/fastcharge/fctrig.hpp"
 #include "k2/pd/link.hpp"
 
@@ -84,13 +86,7 @@ void own_vbus(bool on) {
 
 // The wake: the phone's burst of the 2026-11-11 capture (reverse-engineered), the one fc_engine's vooc_wake plays on odd
 // tries: D+ 40 x (3.3 V 300 us, 0 V 300 us), 24 ms, ending low; D- released. The adapter clocked its first ident
-// ~540 ms after it. In flash, not on the stack.
-constexpr std::size_t kBurstSteps = 80;
-constexpr auto kBurst = [] {
-    std::array<dpdm::Step, kBurstSteps> w{};
-    for (std::size_t i = 0; i < w.size(); ++i) w[i] = {i % 2 == 0 ? dpdm::Drive::V3p3 : dpdm::Drive::V0, dpdm::Drive::HiZ, 300};
-    return w;
-}();
+// ~540 ms after it. Built at runtime via fc::fill_vooc_burst to avoid duplicating the 640 B table in flash.
 
 // The ISR's thin hardware part (also called from the main loop with interrupts masked). Bit: wait from now to `at`
 // (the D+ rise + 50 us; never longer than that, since `at` is the edge's stamp + 50 us), then set D-.
@@ -219,7 +215,9 @@ void wake() {
     }
     dpsniff::hook_mute();
     dpdm::set_dm(dpdm::Drive::HiZ);
-    dpdm::play(kBurst);
+    std::array<dpdm::Step, fc::kVoocBurstSteps> w;
+    fc::fill_vooc_burst(w);
+    dpdm::play(w);
     dpdm::set_dp(dpdm::Drive::Sniff);
     dpdm::set_dm(dpdm::Drive::Sniff);
     {

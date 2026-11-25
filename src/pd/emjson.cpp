@@ -26,17 +26,17 @@ std::size_t render(const emlib::Entry& e, std::span<char> out) {
     }
     name[emlib::kNameMax] = 0;
 
-    t.put_raw(K2_P("{\n  \"format\": \"k2-emarker\",\n  \"version\": 1,\n"));
+    t.put_raw(K2_PSV("{\n  \"format\": \"k2-emarker\",\n  \"version\": 1,\n"));
     K2_TPUT(t, "  \"id\": %u,\n  \"revision\": %u,\n", static_cast<unsigned>(e.seq), static_cast<unsigned>(e.version));
     K2_TPUT(t, "  \"name\": \"%s\",\n", name);
     K2_TPUT(t, "  \"auto_name\": \"%s\",\n", emname::make(e.rec).data());
-    t.put_raw(K2_P("  \"record\": \""));
+    t.put_raw(K2_PSV("  \"record\": \""));
     static const char* hex = "0123456789ABCDEF";
     for (std::uint8_t b : e.rec) {
         const char two[2] = {hex[b >> 4], hex[b & 15]};
         t.put_raw({two, 2});
     }
-    t.put_raw(K2_P("\",\n  \"cable\": {\n"));
+    t.put_raw(K2_PSV("\",\n  \"cable\": {\n"));
     K2_TPUT(t, "    \"vid\": \"0x%04X\",\n    \"vendor\": \"%s\",\n", static_cast<unsigned>(em.vid), em.vendor_str.c_str());
     K2_TPUT(t, "    \"pid\": \"0x%04X\",\n    \"xid\": \"0x%08X\",\n", static_cast<unsigned>(em.pid), static_cast<unsigned>(em.xid));
     K2_TPUT(t, "    \"type\": \"%s\",\n", em.is_active ? K2_P("active") : K2_P("passive"));
@@ -46,9 +46,9 @@ std::size_t render(const emlib::Entry& e, std::span<char> out) {
     K2_TPUT(t, "    \"latency\": \"%s\",\n", em.latency_str);
     K2_TPUT(t, "    \"vconn_required\": %s,\n    \"epr\": %s,\n", em.vconn_required ? "true" : "false", em.epr_capable ? "true" : "false");
     K2_TPUT(t, "    \"pd_rev\": %u,\n", static_cast<unsigned>(e.rec[0x14]));
-    t.put_raw(K2_P("    \"vdos\": ["));
+    t.put_raw(K2_PSV("    \"vdos\": ["));
     for (unsigned i = 0; i < 5; i++) K2_TPUT(t, "%s\"0x%08X\"", i ? ", " : "", static_cast<unsigned>(v[i]));
-    t.put_raw(K2_P("]\n  }\n}\n"));
+    t.put_raw(K2_PSV("]\n  }\n}\n"));
     return t.size();
 }
 

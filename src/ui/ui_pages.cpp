@@ -83,8 +83,23 @@ std::string_view stash_str(char *dst, std::size_t cap, std::string_view s) {
 }
 
 [[gnu::noinline]] uint32_t mix_u32s(uint32_t h, const uint32_t *w, std::size_t n) {
-    for (std::size_t i = 0; i < n; i++) h = mix_u32(h, w[i]);
+    for (std::size_t i = 0; i < n; i++) h = (h ^ w[i]) * 16777619u;
     return h;
+}
+
+[[gnu::noinline]] uint32_t mix_u16s(uint32_t h, const uint16_t *w, std::size_t n) {
+    for (std::size_t i = 0; i < n; i++) h = (h ^ w[i]) * 16777619u;
+    return h;
+}
+
+[[gnu::noinline]] uint32_t mix_bytes(uint32_t h, const void *p, std::size_t n) {
+    const auto *b = static_cast<const uint8_t *>(p);
+    for (std::size_t i = 0; i < n; i++) h = (h ^ b[i]) * 16777619u;
+    return h;
+}
+
+[[gnu::noinline]] uint32_t mix_bytes(const void *p, std::size_t n) {
+    return mix_bytes(mix_init(), p, n);
 }
 
 [[gnu::noinline]] void put_exact_unit(StrBufBase &out, uint32_t milli, char unit) {
@@ -403,7 +418,7 @@ void EmarkerPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
     out.marker = kit::Marker::Icon;
     out.icon = Icon::Emark;
     if (self->n_seqs_ == 0) {   // the list is one dim row, not a selectable cable
-        out.text = K2_P("No saved cables");
+        out.text = K2_PSV("No saved cables");
         out.text_color = kDim;
         return;
     }
@@ -432,15 +447,15 @@ void EmarkerPage::update(uint32_t now_ms) {
         ctx_.rows.draw(now_ms, ctx_.budget);
     } else {
         const bool confirm = menu_.view == EmView::Confirm;
-        uint32_t sg = mix_u32(mix_init(), vsig) + static_cast<uint32_t>(have_cur_) * 3u;
+        uint32_t sg = mix_u32(vsig) + static_cast<uint32_t>(have_cur_) * 3u;
         if (have_cur_) sg = pg::mix_str(mix_u32(sg, cur_.seq), cur_.name.data());
         body_.paint(sg, [&] {
             if (!have_cur_) return;
             if (confirm) {
-                kit::draw_alert_band(c, kit::kBodyY, false, K2_P("DELETE CABLE?"));
+                kit::draw_alert_band(c, kit::kBodyY, false, K2_PSV("DELETE CABLE?"));
                 char buf[kFitBuf];
                 gfx_text(c, kSmall, kit::kTextX, kEmConfirmY, fit_data(kSmall, cur_.name.data(), 192, buf), kText, kBg);
-                gfx_text(c, kSmall, kit::kTextX, static_cast<int16_t>(kEmConfirmY + 22), K2_P("Erased for good"), kDim, kBg);
+                gfx_text(c, kSmall, kit::kTextX, static_cast<int16_t>(kEmConfirmY + 22), K2_PSV("Erased for good"), kDim, kBg);
                 return;
             }
             StrBuf<24> v;
@@ -809,7 +824,7 @@ void MemoryPage::update(uint32_t) {
     const FooterTone tone = lv == memstat::Level::Error ? FooterTone::Error
                           : lv == memstat::Level::Caution ? FooterTone::Caution : FooterTone::Info;
     const std::string_view fv(f, n);
-    const uint32_t fsig = mix(mix_u32(mix_init(), static_cast<uint32_t>(lv)), fv);
+    const uint32_t fsig = mix(mix_u32(static_cast<uint32_t>(lv)), fv);
     const bool had_toast = foot_.valid;
     foot_.paint_budgeted(fsig, bg, static_cast<int>(ctx_.content.w) * 16, [&] {
         if (lv != memstat::Level::Ok) {
@@ -825,9 +840,9 @@ bool MemoryPage::on_event(Event e) {
         std::uint32_t erased = 0;
         const bool ok = memstat::scrub_storage(erased);
         if (!ok) {
-            ctx_.toast.show(FooterTone::Error, K2_P("Scrub failed"), ctx_.now);
+            ctx_.toast.show(FooterTone::Error, K2_PSV("Scrub failed"), ctx_.now);
         } else if (erased == 0) {
-            ctx_.toast.show(FooterTone::Ok, K2_P("Storage clean"), ctx_.now);
+            ctx_.toast.show(FooterTone::Ok, K2_PSV("Storage clean"), ctx_.now);
         } else {
             StrBuf<24> msg;
             msg.put(K2_P("Scrubbed ")).put_u32(erased).put(erased == 1 ? K2_P(" block") : K2_P(" blocks"));
@@ -1009,7 +1024,7 @@ bool LinesPage::paint_verdict(const std::optional<adc::Reading> &r, uint32_t now
     }
     StrBuf<24> rp;
     rp_text(rp, r.has_value(), fusb302::active_cc(), r ? r->cc1_mv : 0, r ? r->cc2_mv : 0);
-    uint32_t sig = pg::mix_str(pg::mix_str(2166136261u, v.main.view()), v.extra.view());
+    uint32_t sig = pg::mix_str(pg::mix_str(v.main.view()), v.extra.view());
     sig = sig * 31 + static_cast<uint32_t>(v.tone) + 1;
     if (!painted_ || sig != vsig_) {   // the chips row; the Rp cell below repaints on its own char diff
         if (bg && !bg->admit(static_cast<int>(c.w) * kit::kChipH, true)) return false;
@@ -1251,7 +1266,7 @@ void PdTriggerPage::paint_value() {
     const uint32_t mw_v = !volt && d.type == pd::PdoType::Fixed ? d.max_mv : wiz_.mv;   // the voltage the current is drawn at
     const uint32_t mw = math::mw_of(mw_v, volt ? cl : wiz_.ma);
     const uint16_t col = volt ? kVolt : kAmp;
-    uint32_t sig = mix_u32(mix_u32(mix_u32(mix_u32(2166136261u, volt ? 1u : 2u), wiz_.cursor), cap), volt ? 0u : mw_v);
+    uint32_t sig = mix_u32(mix_u32(mix_u32(mix_u32(volt ? 1u : 2u), wiz_.cursor), cap), volt ? 0u : mw_v);
     sig = mix_u32(sig, hi) | 1u;
     StrBuf<12> s;
     if (sig != bsig_) {
@@ -1295,7 +1310,7 @@ void PdTriggerPage::paint_confirm(uint32_t now_ms) {
     const Surface &c = ctx_.content;
     WizSummary s;
     const bool ok = wiz_summary(*caps_, wiz_.choice(*caps_), ctx_.cap_mv, s);
-    uint32_t sig = mix_u32(mix_u32(mix_u32(2166136261u, ok ? 1u : 0u), static_cast<uint32_t>(s.err)), s.needs_confirm ? 1u : 0u);
+    uint32_t sig = mix_u32(mix_u32(mix_u32(ok ? 1u : 0u), static_cast<uint32_t>(s.err)), s.needs_confirm ? 1u : 0u);
     sig = pg::mix_str(pg::mix_str(pg::mix_str(pg::mix_str(pg::mix_str(sig, s.volts.view()), s.amps.view()), s.watts.view()), s.offer_w.view()), s.kind.view());
     sig = mix_u32(sig, wiz_.cursor) | 1u;
     if (sig != bsig_) {
@@ -1303,8 +1318,10 @@ void PdTriggerPage::paint_confirm(uint32_t now_ms) {
         pg::clear_body(c, kit::kBodyY);
         send_.invalidate();
         if (ok && s.err != pd::Err::Ok) {   // the plan refused it: say so instead of a summary
-            kit::draw_alert_band(c, kit::kBodyY, true, K2_P("NOT SENDABLE"));
-            gfx_text(c, kSmall, 6, static_cast<int16_t>(kit::kBodyY + kit::kAlertH + 10), pd::err_name(s.err), kText, kBg);
+            kit::draw_alert_band(c, kit::kBodyY, true, K2_PSV("NOT SENDABLE"));
+            std::string_view err;
+            strpack::assign_sv(err, pd::err_name(s.err));
+            gfx_text(c, kSmall, 6, static_cast<int16_t>(kit::kBodyY + kit::kAlertH + 10), err, kText, kBg);
         } else if (ok) {
             static const char *const kKeys[] = {"Offer", K2_P("Voltage"), K2_P("Current"), "Power"};
             kit::kv_static(c, kPtKv, kKeys, 4);
@@ -1315,7 +1332,7 @@ void PdTriggerPage::paint_confirm(uint32_t now_ms) {
             kit::kv_draw_text(c, kPtKv, 3, s.watts.view(), kWatt);   // power_mw
             StrBuf<12> of;
             of.put(" of ").put(s.offer_w.view());
-            gfx_text(c, kSmall, static_cast<int16_t>(kPtKv.value_x + static_cast<int>(s.watts.view().size()) * kSmall.adv),
+            gfx_text(c, kSmall, static_cast<int16_t>(kPtKv.value_x + static_cast<int>(s.watts.size()) * kSmall.adv),
                      pt_text_y(kPtKv, 3), of.view(), kDim, kBg);
             send_.init(c, kPtSendY, kPtSendH);
         }
@@ -1326,9 +1343,10 @@ void PdTriggerPage::paint_confirm(uint32_t now_ms) {
         sub.put(K2_P("Send again: ")).put(s.volts.view()).put_char(' ').put(s.amps.view());
         const uint32_t used = armed_at_ && now_ms > armed_at_ ? now_ms - armed_at_ : 0;
         const int left = used >= Ui::kConfirmWindowMs ? 0 : static_cast<int>(1000u - used * 1000u / Ui::kConfirmWindowMs);
-        send_.draw_armed(K2_P("CONFIRM"), sub.view(), left);
+        send_.draw_armed(K2_PSV("CONFIRM"), sub.view(), left);
     } else {
-        send_.draw_idle("SEND", s.needs_confirm ? K2_P("Above 5V: check your load") : "");
+        using namespace std::string_view_literals;
+        send_.draw_idle("SEND"sv, s.needs_confirm ? K2_PSV("Above 5V: check your load") : ""sv);
     }
 }
 
@@ -1342,7 +1360,7 @@ void PdTriggerPage::paint_live() {
     wiz_summary(*caps_, wiz_.choice(*caps_), ctx_.cap_mv, s);
     const bool on = ctx_.pm_online;
     const bool good = live_good(ls), bad = live_bad(ls);
-    const uint32_t sig = pg::mix_str(pg::mix_str(mix_u32(2166136261u, static_cast<uint32_t>(ls)), s.volts.view()), s.amps.view()) | 1u;
+    const uint32_t sig = pg::mix_str(pg::mix_str(mix_u32(static_cast<uint32_t>(ls)), s.volts.view()), s.amps.view()) | 1u;
     if (sig != bsig_) {
         bsig_ = sig;
         vsig_ = tsig_ = 0;
@@ -1411,12 +1429,12 @@ void PdTriggerPage::paint_footer() {
 void PdTriggerPage::paint_refusal() {
     const Surface &c = ctx_.content;
     const SetupView v = setup_view(Tool::PdTrigger, refusal_state());
-    uint32_t sig = pg::mix_str(2166136261u, v.footer);
+    uint32_t sig = pg::mix_str(v.footer);
     for (int k = 0; k < v.n; k++) sig = sig * 3 + (v.met[k] ? 1u : 0u);
     sig |= 1u;
     if (sig == rsig_) return;
     rsig_ = sig;
-    kit::draw_alert_band(c, kit::kBodyY, true, K2_P("NOT READY"));
+    kit::draw_alert_band(c, kit::kBodyY, true, K2_PSV("NOT READY"));
     const int16_t body_y = static_cast<int16_t>(kit::kBodyY + kit::kAlertH + kit::kAlertStripeH);
     gfx_fill(c, 0, body_y, c.w, static_cast<int16_t>(kFooterY - body_y), kBg);
     for (int k = 0; k < v.n; k++) {
@@ -1536,16 +1554,16 @@ void CableRPage::paint_table(const CrView &v) {
     rsig_ = 0;
     pg::invalidate_fields(val_, 2);
     if (v.meter_missing) {
-        kit::draw_alert_band(c, kit::kBodyY, true, K2_P("METER MISSING"));
-        gfx_text(c, kSmall, kit::kMarkX, kit::kBodyY + kit::kAlertH + 10, K2_P("Cable R needs INA2xx"), kText, kBg);
-        gfx_text(c, kSmall, kit::kMarkX, kit::kBodyY + kit::kAlertH + 30, K2_P("Diag shows the chip"), kDim, kBg);
+        kit::draw_alert_band(c, kit::kBodyY, true, K2_PSV("METER MISSING"));
+        gfx_text(c, kSmall, kit::kMarkX, kit::kBodyY + kit::kAlertH + 10, K2_PSV("Cable R needs INA2xx"), kText, kBg);
+        gfx_text(c, kSmall, kit::kMarkX, kit::kBodyY + kit::kAlertH + 30, K2_PSV("Diag shows the chip"), kDim, kBg);
         return;
     }
     const char *const keys[kCrRows] = {v.step[0].label, v.step[1].label, "Port"};
     kit::kv_static(c, kCrKv, keys, kCrRows);
     // The ports are fixed by the hardware: the load plugs into the top port (the charger into the bottom one), whatever the
     // screen rotation.
-    kit::kv_draw_text(c, kCrKv, 2, K2_P("load on top"), kDim);
+    kit::kv_draw_text(c, kCrKv, 2, K2_PSV("load on top"), kDim);
     kit::kv_cells(c, kCrKv, val_, 2);
 }
 
@@ -1615,7 +1633,7 @@ bool CableRPage::on_event(Event e) {
         ctx_.cable.reset();
         ctx_.kelvin.reset();
         cleared_until_ = ctx_.now + 1500;
-        ctx_.toast.show(FooterTone::Info, K2_P("Cleared, measuring again"), ctx_.now, 1500);
+        ctx_.toast.show(FooterTone::Info, K2_PSV("Cleared, measuring again"), ctx_.now, 1500);
         draw_toast(ctx_.content, FooterTone::Info, ctx_.toast.view());
         ctx_.toast.drawn = true;
         update(ctx_.now);
@@ -1761,9 +1779,9 @@ void TriggerPage::row_fn(void *self, int index, bool, kit::RowSpec &out) {
     out = kit::RowSpec{};
     if (index < 0 || index >= trig::kEntries) return;
     const trig::Entry &e = trig::entry(index);
-    out.text = e.name;
-    out.tail = e.kind == trig::Kind::Scan ? K2_P("HV sweep") :
-        e.kind == trig::Kind::Range ? K2_P("adjustable") : e.kind == trig::Kind::Levels ? K2_P("levels") : K2_P("5V only");
+    strpack::assign_sv(out.text, e.name);
+    out.tail = e.kind == trig::Kind::Scan ? K2_PSV("HV sweep") :
+        e.kind == trig::Kind::Range ? K2_PSV("adjustable") : e.kind == trig::Kind::Levels ? K2_PSV("levels") : K2_PSV("5V only");
 }
 
 // The Offered cell of the table: what the protocol takes.
@@ -1789,7 +1807,7 @@ void TriggerPage::paint_release(bool fresh) {
     const Surface &c = ctx_.content;
     if (fresh) {
         const bool unsafe = ctx_.ui->fc_release().state() == trig::Release::State::Unsafe;
-        kit::draw_alert_band(c, kit::kBodyY, unsafe, unsafe ? K2_P("UNSAFE VBUS") : K2_P("RELEASING"));
+        kit::draw_alert_band(c, kit::kBodyY, unsafe, unsafe ? K2_PSV("UNSAFE VBUS") : K2_PSV("RELEASING"));
         static const char *const labels[] = {K2_P("Target"), K2_P("Measured")};
         kit::kv_static(c, kFcRelKv, labels, 2);
         const int16_t y0 = static_cast<int16_t>(kFcRelKv.y0 + kit::row_text_y(kFcRelKv.pitch, 16));
@@ -1955,7 +1973,7 @@ void TriggerPage::paint_scan() {
         }
         StrBuf<8> volts;
         if (o == fc::Outcome::Accepted) { volts.put_u32(static_cast<uint32_t>((res_[k].mv + 500) / 1000)).put_char('V'); tail = volts.c_str(); }
-        const uint32_t ts = pg::mix_str(2166136261u, tail) * 31u + static_cast<uint32_t>(v) + 1u;
+        const uint32_t ts = pg::mix_str(tail) * 31u + static_cast<uint32_t>(v) + 1u;
         if (ts == tile_sig_[k]) continue;
         tile_sig_[k] = ts;
         gfx_fill(c, 0, y, c.w, kFcScanPitch, kBg);
@@ -2192,7 +2210,7 @@ void SettingsPage::paint_identity() {
     const uint32_t up_min = ctx_.now / 60000u;
     const usbcfg::Setting usb = usbcfg::current;
     const uint32_t usb_mode = usb.hid + 2u * usb.drive + 4u * usb.net + 8u * usb.webusb;
-    id_.paint_budgeted(mix_u32(mix_u32(mix_init(), up_min), usb_mode), ctx_.budget,
+    id_.paint_budgeted(mix_u32(mix_u32(up_min), usb_mode), ctx_.budget,
                         static_cast<int>(ctx_.content.w) * (kListY - kit::kBelowBar), [&] {
         const Surface &c = ctx_.content;
         StrBuf<32> line;
@@ -2225,6 +2243,7 @@ bool SettingsPage::share_boot_info() {
 // opens a page) and, on the focused row, one dim line saying what the value means. Everything is read live from the
 // settings, so the rows keep no value text of their own.
 void SettingsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
+    using namespace std::string_view_literals;
     static constexpr const char *kTitles[kSettingsRows] = {
         K2_P("USB Link"), K2_P("Autorotate"), K2_P("Rotate buttons"),
 #if K2_SCREENSHOT
@@ -2247,9 +2266,9 @@ void SettingsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
     static constexpr const char *kDepthNotes[ctsweep::kDepthCount] = {K2_P("Every 100 mV, PPS and AVS"), K2_P("Every 200 mV, quickest"), K2_P("100 mV, 20 mV in phone zones"), K2_P("Every 20 mV on PPS, slowest")};
     static_assert(all_fit_p(kDepthNotes, kLabelAdv, kit::kNoteMaxPx), "a Sweep depth note is wider than the row note");
     const auto *self = static_cast<const SettingsPage *>(ctx);
-    out.text = kTitles[i];
-    auto set_toggle = [&](bool on, const char *on_note, const char *off_note) {
-        out.tail = on ? "ON" : "OFF";
+    strpack::assign_sv(out.text, kTitles[i]);
+    auto set_toggle = [&](bool on, std::string_view on_note, std::string_view off_note) {
+        out.tail = on ? "ON"sv : "OFF"sv;
         out.tail_color = on ? kOk : kDim;
         out.note = on ? on_note : off_note;
     };
@@ -2261,64 +2280,65 @@ void SettingsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
         out.note = self->usb_note_.view();
         break;
     case SettingRow::Autorotate:
-        out.tail = self->ctx_.ui->rotation_locked() ? K2_P("Locked") : "Auto";
-        out.note = self->ctx_.ui->rotation_locked() ? K2_P("Fixed orientation") : K2_P("Follows gravity");
+        out.tail = self->ctx_.ui->rotation_locked() ? K2_PSV("Locked") : "Auto"sv;
+        out.note = self->ctx_.ui->rotation_locked() ? K2_PSV("Fixed orientation") : K2_PSV("Follows gravity");
         break;
     case SettingRow::RotateButtons:
-        set_toggle(self->ctx_.ui->rotate_buttons(), K2_P("Follow the display"), K2_P("Physical keys"));
+        set_toggle(self->ctx_.ui->rotate_buttons(), K2_PSV("Follow the display"), K2_PSV("Physical keys"));
         break;
 #if K2_SCREENSHOT
     case SettingRow::Screenshot:
-        set_toggle(uiprefs::screenshot_enabled, K2_P("Remote and web capture"), K2_P("No capture"));
+        set_toggle(uiprefs::screenshot_enabled, K2_PSV("Remote and web capture"), K2_PSV("No capture"));
         break;
 #endif
     case SettingRow::Smoothing: {
         const auto p = static_cast<unsigned>(power::smoothing_preset());
-        out.tail = kPresets[p < smoothing::kPresetCount ? p : 0];
-        out.note = kPresetNotes[p < smoothing::kPresetCount ? p : 0];
+        const unsigned idx = p < smoothing::kPresetCount ? p : 0;
+        strpack::assign_sv(out.tail, kPresets[idx]);
+        strpack::assign_sv(out.note, kPresetNotes[idx]);
         break;
     }
     case SettingRow::IdleWake:   // the opt-in exception to "no Rd at idle": a sleeping source's port is asked with our Rd
-        set_toggle(fusb302::idle_wake(), K2_P("Idle Rd on a sleeping port"), K2_P("Idle stays passive"));
+        set_toggle(fusb302::idle_wake(), K2_PSV("Idle Rd on a sleeping port"), K2_PSV("Idle stays passive"));
         break;
     case SettingRow::TestLevel: {
         const unsigned l = self->ct_level_ < charger_test::kLevelCount ? self->ct_level_ : 0;
-        out.tail = kLevels[l];
-        out.note = kLevelNotes[l];
+        strpack::assign_sv(out.tail, kLevels[l]);
+        strpack::assign_sv(out.note, kLevelNotes[l]);
         break;
     }
     case SettingRow::LegacyUnits:   // FCP, SCP and AFC: slow to run and rarely answered, so off until asked for
-        set_toggle(uiprefs::legacy_units_shown, K2_P("FCP, SCP, AFC in the test"), K2_P("FCP, SCP, AFC hidden"));
+        set_toggle(uiprefs::legacy_units_shown, K2_PSV("FCP, SCP, AFC in the test"), K2_PSV("FCP, SCP, AFC hidden"));
         break;
     case SettingRow::SweepDepth: {
         const unsigned d = self->sweep_depth_ < ctsweep::kDepthCount ? self->sweep_depth_ : 1;
-        out.tail = ctsweep::depth_name(ctsweep::Depth(d));
-        out.note = kDepthNotes[d];
+        strpack::assign_sv(out.tail, ctsweep::depth_name(ctsweep::Depth(d)));
+        strpack::assign_sv(out.note, kDepthNotes[d]);
         break;
     }
     case SettingRow::LongBack:   // the ring view's long Back target (ring::view_key)
-        out.tail = ring::name(ring::sanitize_target(self->ctx_.keep.long_back));
-        out.note = K2_P("Where Long Back jumps");
+        strpack::assign_sv(out.tail, ring::name(ring::sanitize_target(self->ctx_.keep.long_back)));
+        out.note = K2_PSV("Where Long Back jumps");
         break;
     case SettingRow::HomeBoxes:
         out.chevron = true;
-        out.note = K2_P("Configure 3 Home info boxes");
+        out.note = K2_PSV("Configure 3 Home info boxes");
         break;
     case SettingRow::Display:
         out.tail = {self->display_tail_, uidisp::format_summary(self->display_tail_, idle_hw::config())};
-        out.note = K2_P("Brightness, dim, screen off");
+        out.note = K2_PSV("Brightness, dim, screen off");
         break;
     case SettingRow::SystemState:
         out.chevron = true;
-        out.note = K2_P("meter, USB, FUSB302, MCU");
+        out.note = K2_PSV("meter, USB, FUSB302, MCU");
         break;
     case SettingRow::Memory:
         out.chevron = true;
-        out.note = K2_P("stacks, RAM, flash, files");
+        out.note = K2_PSV("stacks, RAM, flash, files");
         break;
     default:   // SettingRow::BootInfo
         out.chevron = true;
-        out.note = K2_P("this boot's log as a QR code");
+        out.note = K2_PSV("this boot's log as a QR code");
         break;
     }
 }
@@ -2442,8 +2462,8 @@ void AutorotatePage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
     const auto *self = static_cast<const AutorotatePage *>(ctx);
     out.marker = kit::Marker::Radio;
     out.state = rotation_choice(*self->ctx_.ui) == i ? 1 : 0;
-    out.text = kNames[i];
-    out.note = i == 0 ? K2_P("Follows gravity") : K2_P("Fixed orientation");
+    strpack::assign_sv(out.text, kNames[i]);
+    out.note = i == 0 ? K2_PSV("Follows gravity") : K2_PSV("Fixed orientation");
 }
 
 void AutorotatePage::update(uint32_t) {
@@ -2507,18 +2527,18 @@ void HomeBoxesPage::row_fn(void *ctx, int i, bool focused, kit::RowSpec &out) {
         const auto k = static_cast<home::BoxKind>(i);
         out.marker = kit::Marker::Radio;
         out.state = self->ctx_.keep.home_boxes[static_cast<std::size_t>(self->sel_)] == k ? 1 : 0;
-        out.text = home::box_short_name(k);
-        if (focused) out.note = home::box_note(k);
+        strpack::assign_sv(out.text, home::box_short_name(k));
+        if (focused) strpack::assign_sv(out.note, home::box_note(k));
         return;
     }
-    out.text = kTitles[i];
+    strpack::assign_sv(out.text, kTitles[i]);
     if (i < home::kBoxCount) {
         const home::BoxKind b = self->ctx_.keep.home_boxes[static_cast<std::size_t>(i)];
-        out.tail = home::box_short_name(b);
+        strpack::assign_sv(out.tail, home::box_short_name(b));
         out.tail_color = b == home::BoxKind::Off ? kDim : kAccent;
-        out.note = home::box_note(b);
+        strpack::assign_sv(out.note, home::box_note(b));
     } else {
-        out.note = K2_P("PD Req, Energy, Rotating");
+        out.note = K2_PSV("PD Req, Energy, Rotating");
     }
 }
 
@@ -2614,19 +2634,19 @@ void DisplayPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
         out.marker = kit::Marker::Radio;
         out.state = (dim ? c.dim_after_s == uidisp::kDimAfter[static_cast<std::size_t>(i)]
                          : c.off_after_s == uidisp::kOffAfter[static_cast<std::size_t>(i)]) ? 1 : 0;
-        out.text = dim ? uidisp::kDimNames[static_cast<std::size_t>(i)] : uidisp::kOffNames[static_cast<std::size_t>(i)];
+        strpack::assign_sv(out.text, dim ? uidisp::kDimNames[static_cast<std::size_t>(i)] : uidisp::kOffNames[static_cast<std::size_t>(i)]);
         return;
     }
     char *t = self->tail_[i];
     const std::span<char> buf(t, sizeof self->tail_[i]);
-    out.text = kTitles[i];
+    strpack::assign_sv(out.text, kTitles[i]);
     if (i == 0) {
         out.tail = {t, uidisp::format_percent(buf, c.brightness)};
         out.tail_color = self->view_ == View::Adjust ? kFocus : kDim;
-        out.note = self->view_ == View::Adjust ? K2_P("Changes live") : K2_P("Backlight level");
+        out.note = self->view_ == View::Adjust ? K2_PSV("Changes live") : K2_PSV("Backlight level");
     } else {
         out.tail = {t, uidisp::format_span(buf, i == 1 ? c.dim_after_s : c.off_after_s, false)};
-        out.note = i == 1 ? K2_P("Dims the backlight") : K2_P("Only with nothing plugged in");
+        out.note = i == 1 ? K2_PSV("Dims the backlight") : K2_PSV("Only with nothing plugged in");
     }
 }
 
@@ -2877,8 +2897,9 @@ void ToolsPage::draw_static() {
 }
 
 void ToolsPage::tech_row(int index, bool focused, kit::RowSpec &out) const {
+    using namespace std::string_view_literals;
     namespace tx = text::tools;
-    struct Meta { const char *text, *note; };
+    struct Meta { std::string_view text, note; };
     static constexpr Meta kMeta[3] = {
         {tx::kLimRowMode, tx::kLimNoteMode},
         {tx::kLimRowMaxV, tx::kLimNoteStepV},
@@ -2890,7 +2911,7 @@ void ToolsPage::tech_row(int index, bool focused, kit::RowSpec &out) const {
     out.text = m.text;
     if (focused) out.note = m.note;
     if (index == 0) {
-        out.tail = t.enabled ? tx::kLimOn : tx::kLimOff;
+        out.tail = t.enabled ? "On"sv : "Off"sv;
         out.tail_color = t.enabled ? kOk : kCaution;
         return;
     }
@@ -2902,13 +2923,14 @@ void ToolsPage::tech_row(int index, bool focused, kit::RowSpec &out) const {
 }
 
 void ToolsPage::sub_pick_row(int index, bool focused, kit::RowSpec &out) const {
+    using namespace std::string_view_literals;
     namespace tx = text::tools;
     const pd::LimTech &t = cur_tech();
     out.marker = kit::Marker::Radio;
     if (view_ == View::PickMode) {
         const bool en = index == 0;
         out.state = t.enabled == en ? 1 : 0;
-        out.text = en ? tx::kLimOn : tx::kLimOff;
+        out.text = en ? "On"sv : "Off"sv;
         if (focused) out.note = tx::kLimNoteMode;
         return;
     }
@@ -2967,12 +2989,12 @@ void ToolsPage::limit_row(int index, bool focused, kit::RowSpec &out) const {
     if (index == 0) {
         out.marker = kit::Marker::Radio;
         out.state = armed ? 0 : 1;
-        out.text = tx::kLimOff;
+        out.text = std::string_view("Off");
         if (focused) out.note = tx::kLimNoteNone;
         return;
     }
     if (index >= 1 && index <= 3) {
-        struct Meta { const char *text, *note; };
+        struct Meta { std::string_view text, note; };
         static constexpr Meta kMeta[3] = {
             {tx::kLimFixed, tx::kLimNoteFixed},
             {tx::kLimPps,   tx::kLimNotePps},
@@ -2983,7 +3005,7 @@ void ToolsPage::limit_row(int index, bool focused, kit::RowSpec &out) const {
         const bool avail = k == 0 || !has_caps_ || (k == 1 ? has_pps_ : has_avs_);
         if (!avail) {
             out.text_color = kInk3;
-            out.tail = "none";
+            out.tail = std::string_view("none");
             out.tail_color = kInk3;
             if (focused) out.note = tx::kLimNoteNoOffer;
             return;
@@ -3022,23 +3044,23 @@ void ToolsPage::row_fn(void *ctx, int index, bool focused, kit::RowSpec &out) {
     }
     if (index < 0 || index >= b.n) return;
     const bench::Act &a = b.a[index];
-    out.text = a.name;
+    strpack::assign_sv(out.text, a.name);
     const SetupState ss = setup_state(self->ctx_);
     const Readiness rd = a.kind == bench::ActKind::Tool ? tool_readiness(a.arg, ss, self->ctx_.pm_online) : Readiness{};
     if (rd.level == ToolLevel::Blocked) {
         out.text_color = kInk3;
-        out.tail = rd.tag;
+        strpack::assign_sv(out.tail, rd.tag);
         out.tail_color = kInk3;
         out.chevron = false;
     } else {
         if (rd.level == ToolLevel::Caution) {
-            out.tail = rd.tag;
+            strpack::assign_sv(out.tail, rd.tag);
             out.tail_color = kCaution;
         }
         out.chevron = rd.level != ToolLevel::Caution;
     }
     if (focused) {
-        out.note = (rd.level != ToolLevel::Ready && rd.reason && rd.reason[0]) ? rd.reason : bench::act_hint(a);
+        strpack::assign_sv(out.note, (rd.level != ToolLevel::Ready && rd.reason && rd.reason[0]) ? rd.reason : bench::act_hint(a));
     }
 }
 
@@ -3047,7 +3069,7 @@ void ToolsPage::limit_edge() {
     namespace tx = text::tools;
     const pd::LimStatus &s = fusb302::limit_status();
     if (seen_ != pd::LimState::Off && s.state == pd::LimState::Off) {
-        const char *m = nullptr;
+        std::string_view m;
         switch (s.why) {
         case pd::LimWhy::Rate: m = tx::kLimToastRate; break;
         case pd::LimWhy::ChargerResets: m = tx::kLimToastChargerResets; break;
@@ -3058,7 +3080,7 @@ void ToolsPage::limit_edge() {
         case pd::LimWhy::ChargerRefuses: m = tx::kLimToastChargerRefuses; break;
         default: break;
         }
-        if (m) ctx_.toast.show(FooterTone::Caution, m, ctx_.now);
+        if (!m.empty()) ctx_.toast.show(FooterTone::Caution, m, ctx_.now);
     }
     seen_ = s.state;
 }
@@ -3088,12 +3110,12 @@ void ToolsPage::ask_confirm(uint32_t key) {
 namespace {
 // A limiter result toast, indexed by the result enum; no text = no toast, dwell 0 = the default.
 struct LimToast {
-    const char *msg;
+    std::string_view msg;
     FooterTone tone;
     uint16_t dwell_ms;
 };
 void show_lim_toast(Toast &toast, const LimToast &t, uint32_t now) {
-    if (t.msg) toast.show(t.tone, t.msg, now, t.dwell_ms ? t.dwell_ms : kToastDefaultMs);
+    if (!t.msg.empty()) toast.show(t.tone, t.msg, now, t.dwell_ms ? t.dwell_ms : kToastDefaultMs);
 }
 }  // namespace
 
@@ -3122,9 +3144,9 @@ bool ToolsPage::apply_limit(bool off) {
     const Ui::LimitSet ls = ctx_.ui->pd_limit_set(off ? pd::LimConfig{} : draft_, off, confirmed, ctx_.now);
     if (ls == Ui::LimitSet::NeedConfirm) { ask_confirm(key); return true; }
     static constexpr LimToast kSetToast[] = {
-        {nullptr, FooterTone::Info, 0},                   // Done
+        {{}, FooterTone::Info, 0},                        // Done
         {tx::kLimToastResetting, FooterTone::Info, 2500}, // DoneReset
-        {nullptr, FooterTone::Info, 0},                   // NeedConfirm
+        {{}, FooterTone::Info, 0},                        // NeedConfirm
         {tx::kLimToastNoReset, FooterTone::Caution, 0},   // NoReset
         {tx::kLimToastBusy, FooterTone::Caution, 0},      // Busy
         {tx::kLimToastBadLimit, FooterTone::Error, 0},    // BadLimit
@@ -3168,7 +3190,7 @@ bool ToolsPage::on_event(Event e) {
                     static constexpr LimToast kLrToast[] = {
                         {tx::kLimToastRescan, FooterTone::Info, 2500},        // Cycled
                         {tx::kLimToastResetting, FooterTone::Info, 2500},     // HardReset
-                        {nullptr, FooterTone::Info, 0},                       // NeedConfirm
+                        {{}, FooterTone::Info, 0},                            // NeedConfirm
                         {tx::kLimToastSelfPowered, FooterTone::Caution, 0},   // SelfPowered
                         {tx::kLimToastRetry, FooterTone::Caution, 1500},      // Busy
                         {tx::kLimToastNoLink, FooterTone::Info, 1500},        // NoLink
@@ -3270,14 +3292,16 @@ void UsbLinkPage::draw_static() {
 
 // One row per USB function: the name, ON / OFF at the right and, focused, what it carries.
 void UsbLinkPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
+    using namespace std::string_view_literals;
     const auto *self = static_cast<const UsbLinkPage *>(ctx);
     const usbcfg::Row r = ul_row(i);
     const UlMeta &m = kUlMeta[static_cast<unsigned>(r)];
     const bool on = ul_on(self->pending_, r);
-    out.text = m.name;
-    out.tail = on ? "ON" : "OFF";
+    strpack::assign_sv(out.text, m.name);
+    out.tail = on ? "ON"sv : "OFF"sv;
     out.tail_color = on ? kOk : kDim;
-    out.note = usbcfg::same_mode(self->pending_, usbcfg::current) ? m.hint : K2_P("Replug to apply");
+    if (usbcfg::same_mode(self->pending_, usbcfg::current)) strpack::assign_sv(out.note, m.hint);
+    else out.note = K2_PSV("Replug to apply");
 }
 
 void UsbLinkPage::update(uint32_t) {

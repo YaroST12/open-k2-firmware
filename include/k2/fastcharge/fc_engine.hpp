@@ -146,7 +146,7 @@ protected:
 // are re-read by every SCP session and the UFCS Output_Capabilities by every UFCS session; a list is empty / `valid` false until
 // the session that reads it got its answer, and it stays after the session ends.
 struct Caps {
-    accp::ScpCaps scp;
+    accp::ScpCaps scp K2_BSS_ZERO;
     std::array<ufcs::Cap, ufcs::kMaxCaps> ufcs K2_BSS_ZERO;
     std::uint8_t ufcs_n K2_BSS_INIT(0);
 };

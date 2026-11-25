@@ -328,8 +328,7 @@ inline constexpr std::size_t kStatusCells = 27;                            // th
 
 // "Read: 5 got, 2 unsupported": the footer holds 27 cells, "2 not supported" would make the line 28, so the short word. A
 // ", 1 no answer" follows only while it still fits.
-template <std::size_t N>
-void read_summary(const pd::Survey &s, StrBuf<N> &out) {
+inline void read_summary(const pd::Survey &s, StrBufBase &out) {
     out.put("Read: ").put_u32(s.got()).put(" got");
     if (s.refused()) out.put(", ").put_u32(s.refused()).put(" unsupported");
     if (s.silent()) {
@@ -368,8 +367,7 @@ struct StatusIn {
 // identity is presented at the next attach); then a running survey's progress; then, on the Source tab, the PD diagnosis
 // verdict of an open session; then the rest of the survey (the hint while a field of the open tab was never asked, the
 // summary after a run); else the state of the shown tab and the topology word.
-template <std::size_t N>
-void status_text(const StatusIn &s, StrBuf<N> &out) {
+inline void status_text(const StatusIn &s, StrBufBase &out) {
     out.clear();
     if (!s.op.empty()) { out.put(s.op); return; }
     if (s.spoof_armed && s.f.charger) { out.put(tx::kArmedBar); return; }

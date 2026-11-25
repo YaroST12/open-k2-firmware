@@ -163,7 +163,7 @@ void BatteryPage::row_fn(void *self, int index, bool focused, kit::RowSpec &out)
 
 void BatteryPage::action_row(Act a, bool focused, kit::RowSpec &out) {
     const view::Shown &s = shown_;
-    out.text = view::act_name(a, s);
+    strpack::assign_sv(out.text, view::act_name(a, s));
     out.tail_color = kInk2;
     const bool same = bt::hw::service().wiring() == bt::Wiring::SamePort;
     const bt::Config &cfg = s.any && s.state != bt::RunState::Done ? s.cfg : bt::hw::service().config();
@@ -220,12 +220,15 @@ void BatteryPage::action_row(Act a, bool focused, kit::RowSpec &out) {
     }
     if (armed_until_ && a == armed_act_ && armed()) out.text_color = kCaution;
     out.tail = tail_.view();
-    if (focused) out.note = note ? std::string_view(note) : note_row_.view();
+    if (focused) {
+        if (note) strpack::assign_sv(out.note, note);
+        else out.note = note_row_.view();
+    }
 }
 
 void BatteryPage::run_row(int i, bool focused, kit::RowSpec &out) {
     if (n_runs_ == 0) {
-        out.text = K2_P("No saved runs");
+        out.text = K2_PSV("No saved runs");
         out.text_color = kDim;
         return;
     }

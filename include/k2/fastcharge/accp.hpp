@@ -9,6 +9,8 @@
 #include <optional>
 #include <span>
 
+#include "k2/core/bss_zero.hpp"
+
 namespace k2::accp {
 
 // CRC-8, polynomial 0x39, init 0, MSB first, no final xor.
@@ -92,8 +94,8 @@ constexpr int scp_step_decode(std::uint8_t reg) {
 // current, step-encoded, decoded to mV / mA). `valid` only for a list that reads like one (an idle line, an all-zero
 // block, a max below the min, or values in other units are not capabilities).
 struct ScpCaps {
-    int min_mv = 0, max_mv = 0, min_ma = 0, max_ma = 0;
-    bool valid = false;
+    int min_mv K2_BSS_INIT(0), max_mv K2_BSS_INIT(0), min_ma K2_BSS_INIT(0), max_ma K2_BSS_INIT(0);
+    bool valid K2_BSS_INIT(false);
 };
 
 constexpr ScpCaps scp_caps_decode(const std::array<std::uint8_t, 8>& r) {

@@ -62,6 +62,21 @@ int main() {
     static_assert(all_fit_p(kTbl, 8, 27 * 8), "packed table should fit 27 cells");
     static_assert(!fits_px_p(8, K2_P("No PD source on either port"), 20 * 8), "too narrow must fail");
 
+    // 5. K2_PSV returns a compile-time sized std::string_view matching K2_P, and assign_sv handles C strings + nullptr.
+    static constexpr std::string_view kSv = K2_PSV("Source_Capabilities not answered by the charger");
+    static_assert(!kSv.empty() && kSv.size() < 47);
+    static_assert(fits_px_p(8, K2_PSV("No PD source on either port"), 27 * 8));
+    CHECK(kSv.size() == std::strlen(p1));
+    CHECK(strpack::is_packed(kSv));
+    CHECK(strpack::decode(kSv.data(), buf, sizeof(buf)) == std::strlen("Source_Capabilities not answered by the charger"));
+
+    std::string_view dst = "initial";
+    strpack::assign_sv(dst, p2);
+    CHECK(dst == std::string_view(p2));
+    strpack::assign_sv(dst, nullptr);
+    CHECK(dst.empty());
+    CHECK(!sb.empty() && sb.size() == sb.view().size());
+
     if (g_fail) return 1;
     std::printf("test_strpack: PASS\n");
     return 0;

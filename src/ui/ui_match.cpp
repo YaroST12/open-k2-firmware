@@ -36,6 +36,21 @@ void put_volts(StrBuf<32> &o, uint32_t mv) {
 
 }  // namespace
 
+void put_a(StrBufBase &s, uint32_t ma) {   // "3A", "1.5A", "3.25A"
+    if (ma % 1000 == 0) s.put_u32(ma / 1000);
+    else if (ma % 100 == 0) s.put_fixed(int32_t(ma / 100 * 100), 1);
+    else if (ma % 10 == 0) s.put_fixed(int32_t(ma), 2);
+    else s.put_fixed(int32_t(ma), 3);
+    s.put_char('A');
+}
+
+void put_v(StrBufBase &s, uint32_t mv) {
+    if (mv % 1000 == 0) s.put_u32(mv / 1000);
+    else if (mv % 100 == 0) s.put_fixed(int32_t(mv), 1);
+    else if (mv % 10 == 0) s.put_fixed(int32_t(mv), 2);
+    else s.put_fixed(int32_t(mv), 3);
+}
+
 void typec_row_text(std::int32_t vbus_mv, std::uint32_t typec_ma, StrBuf<28> &out) {
     out.clear();
     if (vbus_mv >= 1000) {

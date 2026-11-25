@@ -70,7 +70,7 @@ void DiagnosisPage::paint_stamp() {
     screen::Row top{};
     if (skip()) screen::row(r, 0, top);
     const std::string_view sub(top.note.data());
-    stamp_.paint_budgeted(mix_u32(mix(mix(mix_init(), word), sub), static_cast<uint32_t>(v)),
+    stamp_.paint_budgeted(mix_u32(mix(mix(word), sub), static_cast<uint32_t>(v)),
                           ctx_.budget, static_cast<int>(ctx_.content.w) * (kStampH + 2), [&] {
         const Surface &c = ctx_.content;
         const kit::VerdictStyle st = kit::verdict_style(v);
@@ -155,7 +155,7 @@ void DiagnosisPage::row_fn(void *self, int index, bool focused, kit::RowSpec &ou
         for (std::size_t i = 0; i < pdtrace::kCapSlots; i++) caps += pdtrace::capture_info(i).trigger != pdtrace::Trigger::None;
         out.marker = kit::Marker::Icon;
         out.icon = Icon::Blackbox;
-        out.text = kBlackBox;
+        strpack::assign_sv(out.text, kBlackBox);
         out.chevron = true;
         if (focused) {
             p->bb_note_.clear();
@@ -168,9 +168,9 @@ void DiagnosisPage::row_fn(void *self, int index, bool focused, kit::RowSpec &ou
     if (!screen::row(r, static_cast<unsigned>(index) + p->skip(), p->row_)) {   // no session yet: the waiting row
         out.marker = kit::Marker::Icon;
         out.icon = Icon::Blackbox;
-        out.text = kWaitText;
+        strpack::assign_sv(out.text, kWaitText);
         out.text_color = kDim;
-        if (focused) out.note = kWaitNote;
+        if (focused) strpack::assign_sv(out.note, kWaitNote);
         return;
     }
     const screen::Row &w = p->row_;
@@ -181,11 +181,11 @@ void DiagnosisPage::row_fn(void *self, int index, bool focused, kit::RowSpec &ou
         out.marker = kit::Marker::Verdict;
         out.state = static_cast<uint8_t>(cell_of(w.sev));
     }
-    out.text = std::string_view(w.label.data());
-    out.tail = std::string_view(w.tail.data());
+    strpack::assign_sv(out.text, w.label.data());
+    strpack::assign_sv(out.tail, w.tail.data());
     out.tail_color = kDim;
     out.tail_yields = true;
-    if (focused) out.note = std::string_view(w.note.data());
+    if (focused) strpack::assign_sv(out.note, w.note.data());
 }
 
 void DiagnosisPage::update(uint32_t now_ms) {

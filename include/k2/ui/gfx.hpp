@@ -67,6 +67,8 @@ public:
     int16_t width_px() const { return static_cast<int16_t>(chars_ * font_->adv); }
     int box_px() const { return font_ ? static_cast<int>(chars_) * font_->adv * font_->height : 0; }
     void draw_buf(char *cur, std::string_view text K2_TRUNC_DECL);
+    void draw(std::string_view text K2_TRUNC_DECL);
+    char *cur_data() { return reinterpret_cast<char *>(this) + sizeof(FieldBase); }
 
 protected:
     void init_base(const Surface &s, const Font &f, int16_t x, int16_t y, uint8_t chars, uint8_t max_chars,
@@ -80,6 +82,8 @@ private:
     uint8_t chars_ = 0;
     Align align_ = Align::Left;
     bool valid_ = false;
+    // Fills FieldBase tail padding so SmallField::cur_ always sits at sizeof(FieldBase) on 32- and 64-bit ABIs.
+    uint8_t pad_[sizeof(void *) - 3];
 };
 
 template <uint8_t MaxChars>
@@ -92,11 +96,10 @@ public:
               uint16_t fg, uint16_t bg) {
         init_base(s, f, x, y, chars, MaxChars, a, fg, bg);
     }
-    void draw(std::string_view text K2_TRUNC_DECL) { draw_buf(cur_, text K2_TRUNC_ARG); }
-    char *cur_data() { return cur_; }
 
 private:
-    char cur_[MaxChars] = {};
+    // valid_ starts false and field_draw_buf overwrites cur_[0..chars-1] before setting valid_ = true.
+    char cur_[MaxChars];
 };
 
 using Field = SmallField<32>;

@@ -361,7 +361,7 @@ int draw_chip_frame(const Surface &s, int16_t x, int16_t y, std::string_view tex
 static_assert(8 + 32 * 6 <= 208 - 4, "the identity line's 32 cells of font 12 fit beside the lane");
 
 bool paint_identity(const Surface &c, const Ident &id, bool full, uint32_t &sig, PaintBudget *bg) {
-    uint32_t h = mix_u32(mix_init(), uint32_t(id.dim) | uint32_t(id.n) << 1);
+    uint32_t h = mix_u32(uint32_t(id.dim) | uint32_t(id.n) << 1);
     h = mix(h, id.head.view());
     for (int i = 0; i < id.n; i++) {
         h = mix_u32(h, 0x100u | id.chip[i].k);
@@ -449,7 +449,7 @@ void ticket_ground(const Surface &s, int16_t y, int16_t h, int16_t w, uint16_t f
 // ---- ActionCell ----------------------------------------------------------------------------------------------------------
 bool ActionCell::draw_ticket(uint32_t tag, std::string_view head, std::string_view sub,
                              uint16_t fill, uint16_t ink, uint16_t frame, bool armed, PaintBudget *bg) {
-    uint32_t sig = mix_u32(mix_init(), tag);
+    uint32_t sig = mix_u32(tag);
     sig = mix(mix(sig, head), sub);
     const int16_t w = static_cast<int16_t>(surf_.w - 2 * kTicketInset);
     return e_.paint_budgeted(sig, bg, static_cast<int>(surf_.w) * h_, [&] {
@@ -626,7 +626,7 @@ void ResultGrid::invalidate() {
 
 namespace {
 uint32_t row_hash(const ResultRowSpec &r, int16_t y, int16_t h, bool with_cur) {
-    uint32_t k = mix_u32(mix_init(), static_cast<uint32_t>(r.n) | (static_cast<uint32_t>(r.section) << 4) |
+    uint32_t k = mix_u32(static_cast<uint32_t>(r.n) | (static_cast<uint32_t>(r.section) << 4) |
                                          (static_cast<uint32_t>(r.focus) << 5) | (static_cast<uint32_t>(y) << 8) |
                                          (with_cur ? static_cast<uint32_t>(h) << 20 : 0u));
     k = mix(k, r.label);

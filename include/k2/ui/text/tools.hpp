@@ -43,52 +43,53 @@ inline constexpr const char *kFooters[] = {kLoadAttached, kLiveSink, kNoPd, kNoP
 static_assert(all_fit_p(kFooters, kSmallAdvPx, 27 * kSmallAdvPx), "a Tools footer is over 27 characters");
 
 // PD limit: the last Tools row, its per-tech picker and their results. A note is at most 29 cells; a toast 30.
-inline constexpr const char *kLimName = K2_P("PD limit"), *kLimOff = "Off", *kLimOn = "On", *kLimMax = "Max";
-inline constexpr const char *kLimFixed = K2_P("Fixed"), *kLimPps = "PPS", *kLimAvs = K2_P("SPR AVS"), *kLimApply = K2_P("Apply");
-inline constexpr const char *kLimRowMode = "Mode", *kLimRowMaxV = K2_P("Max V"), *kLimRowMaxA = K2_P("Max A");
-inline constexpr const char *kLimNoteOff = K2_P("limits PD Fixed, PPS or AVS");   // the row with no limit set
-inline constexpr const char *kLimNoteNone = K2_P("no limit, every offer shown");  // the picker's Off
+inline constexpr std::string_view kLimName = K2_PSV("PD limit");
+inline constexpr const char *kLimOff = "Off", *kLimOn = "On", *kLimMax = "Max";
+inline constexpr std::string_view kLimFixed = K2_PSV("Fixed"), kLimPps = "PPS", kLimAvs = K2_PSV("SPR AVS"), kLimApply = K2_PSV("Apply");
+inline constexpr std::string_view kLimRowMode = "Mode", kLimRowMaxV = K2_PSV("Max V"), kLimRowMaxA = K2_PSV("Max A");
+inline constexpr std::string_view kLimNoteOff = K2_PSV("limits PD Fixed, PPS or AVS");   // the row with no limit set
+inline constexpr std::string_view kLimNoteNone = K2_PSV("no limit, every offer shown");  // the picker's Off
 inline constexpr const char *kLimNoteAbove = K2_P("limit active: ");              // then e.g. "9V3A" / "27W"
-inline constexpr const char *kLimNoteFixed = K2_P("fixed 5-20V offers");
-inline constexpr const char *kLimNotePps = K2_P("PPS voltage range and A");
-inline constexpr const char *kLimNoteAvs = K2_P("SPR AVS 15/20V and A");
-inline constexpr const char *kLimNoteApply = K2_P("arms selected PD limit");
-inline constexpr const char *kLimNoteNoOffer = K2_P("not offered by charger");
-inline constexpr const char *kLimNoteMode = K2_P("include in forged offers");
-inline constexpr const char *kLimNoteStepV = K2_P("pick max voltage");
-inline constexpr const char *kLimNoteStepA = K2_P("pick max current");
+inline constexpr std::string_view kLimNoteFixed = K2_PSV("fixed 5-20V offers");
+inline constexpr std::string_view kLimNotePps = K2_PSV("PPS voltage range and A");
+inline constexpr std::string_view kLimNoteAvs = K2_PSV("SPR AVS 15/20V and A");
+inline constexpr std::string_view kLimNoteApply = K2_PSV("arms selected PD limit");
+inline constexpr std::string_view kLimNoteNoOffer = K2_PSV("not offered by charger");
+inline constexpr std::string_view kLimNoteMode = K2_PSV("include in forged offers");
+inline constexpr std::string_view kLimNoteStepV = K2_PSV("pick max voltage");
+inline constexpr std::string_view kLimNoteStepA = K2_PSV("pick max current");
 inline constexpr const char *kLimNoteAmpsAt = "at ", *kLimNoteAnyV = K2_P("any voltage");
-inline constexpr const char *kLimNotes[] = {kLimNoteOff, kLimNoteNone, kLimNoteFixed, kLimNotePps, kLimNoteAvs, kLimNoteApply,
-                                            kLimNoteNoOffer, kLimNoteMode, kLimNoteStepV, kLimNoteStepA};
+inline constexpr std::string_view kLimNotes[] = {kLimNoteOff, kLimNoteNone, kLimNoteFixed, kLimNotePps, kLimNoteAvs, kLimNoteApply,
+                                                 kLimNoteNoOffer, kLimNoteMode, kLimNoteStepV, kLimNoteStepA};
 static_assert(all_fit_p(kLimNotes, kLabelAdv, kit::kNoteMaxPx), "a PD limit note is wider than its line");
 static_assert(fits_px_p(kLabelAdv, kLimNoteAbove, kit::kNoteMaxPx - 5 * static_cast<int>(kLabelAdv)), "the PD limit note plus label is over its line");
-inline constexpr const char *kLimToastNoOffers = K2_P("No charger offers yet");
-inline constexpr const char *kLimToastNoLimit = K2_P("Set a limit first");
-inline constexpr const char *kLimToastKeepOne = K2_P("Keep one PD mode On");
-inline constexpr const char *kLimToastBadLimit = K2_P("Limit out of range");
-inline constexpr const char *kLimToastBusy = K2_P("Port in use: stop it first");
-inline constexpr const char *kLimToastRate = K2_P("Limit off: too many retries");
-inline constexpr const char *kLimToastChargerResets = K2_P("Limit off: charger resets");
-inline constexpr const char *kLimToastSinkResets = K2_P("Limit off: sink resets");
-inline constexpr const char *kLimToastSinkIgnores = K2_P("Limit off: sink ignores it");
-inline constexpr const char *kLimToastEpr = K2_P("Limit off: EPR contract");
+inline constexpr std::string_view kLimToastNoOffers = K2_PSV("No charger offers yet");
+inline constexpr std::string_view kLimToastNoLimit = K2_PSV("Set a limit first");
+inline constexpr std::string_view kLimToastKeepOne = K2_PSV("Keep one PD mode On");
+inline constexpr std::string_view kLimToastBadLimit = K2_PSV("Limit out of range");
+inline constexpr std::string_view kLimToastBusy = K2_PSV("Port in use: stop it first");
+inline constexpr std::string_view kLimToastRate = K2_PSV("Limit off: too many retries");
+inline constexpr std::string_view kLimToastChargerResets = K2_PSV("Limit off: charger resets");
+inline constexpr std::string_view kLimToastSinkResets = K2_PSV("Limit off: sink resets");
+inline constexpr std::string_view kLimToastSinkIgnores = K2_PSV("Limit off: sink ignores it");
+inline constexpr std::string_view kLimToastEpr = K2_PSV("Limit off: EPR contract");
 // A live contract is reset before a new limit (or Off): the same two-press window as Reset & re-read on LINK.
-inline constexpr const char *kLimToastConfirm = "OK again: resets link";
-inline constexpr const char *kLimToastResetting = K2_P("Resetting link...");
-inline constexpr const char *kLimToastRescan = K2_P("Rescanning...");
-inline constexpr const char *kLimToastNoReset = K2_P("No reset: replug to apply");
-inline constexpr const char *kLimToastSelfPowered = K2_P("Power K2 via USB port");
-inline constexpr const char *kLimToastRetry = K2_P("Busy, retry");
-inline constexpr const char *kLimToastNoLink = K2_P("No active link");
-inline constexpr const char *kLimToastNoFit = K2_P("Fixed Off: not on charger");   // a fixed object before the APDOs
-inline constexpr const char *kLimToastChargerRefuses = K2_P("Limit off: charger refuses");   // it will not take a re-offered Request
-inline constexpr const char *kLimRowReset = K2_P("Reset link");                       // the picker's row when no offers are known
-inline constexpr const char *kLimNoteReset = K2_P("reads the charger's offers");
-inline constexpr const char *kLimToasts[] = {kLimToastNoOffers, kLimToastNoLimit, kLimToastKeepOne, kLimToastBadLimit, kLimToastBusy, kLimToastRate,
-                                             kLimToastChargerResets, kLimToastSinkResets, kLimToastSinkIgnores, kLimToastEpr,
-                                             kLimToastConfirm, kLimToastResetting, kLimToastRescan, kLimToastNoReset,
-                                             kLimToastSelfPowered, kLimToastRetry, kLimToastNoLink, kLimToastNoFit,
-                                             kLimToastChargerRefuses};
+inline constexpr std::string_view kLimToastConfirm = "OK again: resets link";
+inline constexpr std::string_view kLimToastResetting = K2_PSV("Resetting link...");
+inline constexpr std::string_view kLimToastRescan = K2_PSV("Rescanning...");
+inline constexpr std::string_view kLimToastNoReset = K2_PSV("No reset: replug to apply");
+inline constexpr std::string_view kLimToastSelfPowered = K2_PSV("Power K2 via USB port");
+inline constexpr std::string_view kLimToastRetry = K2_PSV("Busy, retry");
+inline constexpr std::string_view kLimToastNoLink = K2_PSV("No active link");
+inline constexpr std::string_view kLimToastNoFit = K2_PSV("Fixed Off: not on charger");   // a fixed object before the APDOs
+inline constexpr std::string_view kLimToastChargerRefuses = K2_PSV("Limit off: charger refuses");   // it will not take a re-offered Request
+inline constexpr std::string_view kLimRowReset = K2_PSV("Reset link");                       // the picker's row when no offers are known
+inline constexpr std::string_view kLimNoteReset = K2_PSV("reads the charger's offers");
+inline constexpr std::string_view kLimToasts[] = {kLimToastNoOffers, kLimToastNoLimit, kLimToastKeepOne, kLimToastBadLimit, kLimToastBusy, kLimToastRate,
+                                                  kLimToastChargerResets, kLimToastSinkResets, kLimToastSinkIgnores, kLimToastEpr,
+                                                  kLimToastConfirm, kLimToastResetting, kLimToastRescan, kLimToastNoReset,
+                                                  kLimToastSelfPowered, kLimToastRetry, kLimToastNoLink, kLimToastNoFit,
+                                                  kLimToastChargerRefuses};
 static_assert(fits_px_p(kLabelAdv, kLimNoteReset, kit::kNoteMaxPx), "the reset row note is wider than its line");
 static_assert(all_fit_p(kLimToasts, kLabelAdv, kToastTextPx), "a PD limit result is wider than the toast");
 

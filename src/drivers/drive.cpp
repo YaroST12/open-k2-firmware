@@ -49,12 +49,12 @@ std::size_t Drive::render(std::uint32_t id, std::span<char> out) {
     TextBuf t(out);
     switch (id) {
     case kReadme:
-        t.put_raw(K2_P("K2 drive\n========\nFirmware "));
+        t.put_raw(K2_PSV("K2 drive\n========\nFirmware "));
         t.put_raw(env_.version);
         t.put_raw(" (");
         t.put_raw(env_.git);
         t.put_raw(")\n\n");
-        t.put_raw(K2_P(
+        t.put_raw(K2_PSV(
             "This drive is read-only. It is computed by the firmware; nothing here is a real\n"
             "file system in flash. Re-mount it to see changes.\n\n"
             "STATUS.TXT    live readings at the time you read the file\n"
@@ -74,7 +74,7 @@ std::size_t Drive::render(std::uint32_t id, std::span<char> out) {
     case kLog:
         return env_.log ? env_.log(env_.ctx, out) : 0;
     case kRipple:
-        t.put_raw(K2_P("# no capture recorded yet\nt_us,mV,mA\n"));
+        t.put_raw(K2_PSV("# no capture recorded yet\nt_us,mV,mA\n"));
         return t.size();
     case kSavedLog: {
         const std::size_t n = std::min(out.size(), env_.saved_log.size());
@@ -97,7 +97,7 @@ std::size_t Drive::render(std::uint32_t id, std::span<char> out) {
 std::size_t Drive::render_native(std::span<char> out) {
     if (const std::size_t n = emrec::describe_native_page(native_page_, out)) return n;
     TextBuf t(out);
-    t.put_raw(K2_P("The library page does not parse as an e-marker table (see LIBRARY.BIN).\n"));
+    t.put_raw(K2_PSV("The library page does not parse as an e-marker table (see LIBRARY.BIN).\n"));
     return t.size();
 }
 

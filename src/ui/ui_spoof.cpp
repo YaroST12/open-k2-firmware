@@ -16,7 +16,7 @@ namespace k2 {
 namespace {
 // Header: S12 keys at x28, S16 values at x112 (13 chars, to x216).
 constexpr kit::KvLayout kSpKv{kit::kBodyY, kit::kRowH, kit::kTextX, &kLabelFont, nullptr, 112, 13, Align::Left};
-constexpr const char *kSpKeys[SpoofPage::kHeaderRows] = {"State", K2_P("Asked/Replied")};
+constexpr std::string_view kSpKeys[SpoofPage::kHeaderRows] = {"State", K2_PSV("Asked/Replied")};
 static_assert(all_fit_p(kSpKeys, kLabelAdv, 112 - kit::kTextX - 4), "a spoof key is wider than its column");
 }  // namespace
 
@@ -118,10 +118,11 @@ void SpoofPage::row_fn(void *self, int index, bool, kit::RowSpec &out) {
 // The two key/value rows: what the spoof is doing and how many requests it saw and answered. Repainted only when the
 // state or a counter changed.
 void SpoofPage::paint_header(bool armed, uint32_t req, uint32_t rep) {
+    using namespace std::string_view_literals;
     const Surface &c = ctx_.content;
     StrBuf<24> cnt;
     spoof_counts_text(req, rep, cnt);
-    kit::kv_row(c, kSpKv, kit::kv_row_y(kSpKv, 0), kSpKeys[0], armed ? "ARMED" : "OFF", armed ? kCaution : kDim);
+    kit::kv_row(c, kSpKv, kit::kv_row_y(kSpKv, 0), kSpKeys[0], armed ? "ARMED"sv : "OFF"sv, armed ? kCaution : kDim);
     kit::kv_row(c, kSpKv, kit::kv_row_y(kSpKv, 1), kSpKeys[1], cnt.view(), req ? kText : kDim);
 }
 
@@ -139,7 +140,7 @@ void SpoofPage::update(uint32_t now_ms) {
     const uint32_t req = emk_spoof::requests(), rep = emk_spoof::replies();
     const bool sink = ctx_.ui->link().inline_mode();
     const Surface &c = ctx_.content;
-    hdr_.paint(mix_u32(mix_u32(mix_init(), armed ? 1u : 0u), req * 65536u + rep) + 1u, [&] { paint_header(armed, req, rep); });
+    hdr_.paint(mix_u32(mix_u32(armed ? 1u : 0u), req * 65536u + rep) + 1u, [&] { paint_header(armed, req, rep); });
     // The list repaints only the rows whose text, mark or highlight changed, an idle tick nothing.
     ctx_.rows.set_count(count);
     ctx_.rows.select(sel_);

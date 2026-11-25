@@ -744,13 +744,10 @@ void Engine::vivo_poll(std::uint32_t now) {
     }
 }
 
-namespace {
-constexpr std::array<Step, kVoocBurstSteps> kVoocBurst = [] {
-    std::array<Step, kVoocBurstSteps> w{};
-    for (std::size_t i = 0; i < w.size(); ++i) w[i] = {i % 2 == 0 ? Drive::V3p3 : Drive::V0, Drive::HiZ, 300};
-    return w;
-}();
-}  // namespace
+void fill_vooc_burst(std::span<Step> out) {
+    for (std::size_t i = 0; i < out.size(); ++i)
+        out[i] = {i % 2 == 0 ? Drive::V3p3 : Drive::V0, Drive::HiZ, 300};
+}
 
 // VOOC wake, D- released (HiZ) so the adapter's D+/D- short carries it, then D+ / D- listen (inputs only). Odd tries play
 // the phone's burst of the 2026-11-11 capture (reverse-engineered): D+ 40 x (3.3 V 300 us, 0 V 300 us), 24 ms, ending low;
@@ -760,17 +757,18 @@ constexpr std::array<Step, kVoocBurstSteps> kVoocBurst = [] {
 void Engine::vooc_wake() {
     ++vooc_tries_;
     env_.set_dm(Drive::HiZ);
+    std::array<Step, kVoocBurstSteps> w;
     if (vooc_tries_ % 2 == 1) {
-        env_.play(kVoocBurst);
+        fill_vooc_burst(w);
+        env_.play(w);
     } else {   // built at run time: as a constexpr table it costs more flash (440 B) than the code that fills it
-        std::array<Step, kVoocTrainSteps> w{};
         std::size_t n = 0;
         for (int i = 0; i < 13; ++i) {
             w[n++] = {Drive::V0, Drive::HiZ, 506}; w[n++] = {Drive::V3p3, Drive::HiZ, 510};
             w[n++] = {Drive::V0, Drive::HiZ, 1010}; w[n++] = {Drive::V3p3, Drive::HiZ, 1510};
         }
         w[n++] = {Drive::V0, Drive::HiZ, 500}; w[n++] = {Drive::V3p3, Drive::HiZ, 500}; w[n++] = {Drive::V0, Drive::HiZ, 500};
-        env_.play(w);
+        env_.play(std::span<const Step>{w.data(), n});
     }
     env_.set_dp(Drive::Listen);
     env_.set_dm(Drive::Sniff);

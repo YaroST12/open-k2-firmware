@@ -41,6 +41,7 @@ uint32_t hash_chips(uint8_t tb, bool is_auto, uint8_t sc, bool hold) {
 }  // namespace
 
 void RipplePage::build_row(void *ctx, int index, bool focused, kit::RowSpec &out) {
+    using namespace std::string_view_literals;
     const auto &self = *static_cast<const RipplePage *>(ctx);
     const auto &cfg = self.ctx_.keep.ripple;
     const uint8_t sc = cfg.scale < ripple::kScaleCount ? cfg.scale : 0;
@@ -49,29 +50,29 @@ void RipplePage::build_row(void *ctx, int index, bool focused, kit::RowSpec &out
     out.marker = kit::Marker::None;
     switch (index) {
     case 0:
-        out.text = K2_P("Capture");
-        out.tail = cfg.hold ? "Hold" : "Live";
+        out.text = K2_PSV("Capture");
+        out.tail = cfg.hold ? "Hold"sv : "Live"sv;
         out.tail_color = cfg.hold ? kCaution : kOk;
-        if (focused) out.note = K2_P("Freeze or resume waveform");
+        if (focused) out.note = K2_PSV("Freeze or resume waveform");
         break;
     case 1:
-        out.text = K2_P("Time / div");
-        out.tail = ripple::timebase_menu_label(cfg.timebase);
+        out.text = K2_PSV("Time / div");
+        strpack::assign_sv(out.tail, ripple::timebase_menu_label(cfg.timebase));
         out.tail_color = kAccent;
-        if (focused) out.note = K2_P("Auto or fixed span (4 divs)");
+        if (focused) out.note = K2_PSV("Auto or fixed span (4 divs)");
         break;
     case 2:
-        out.text = "Scale";
-        out.tail = ripple::kScaleMenu[sc];
+        out.text = "Scale"sv;
+        strpack::assign_sv(out.tail, ripple::kScaleMenu[sc]);
         out.tail_color = kAccent;
-        if (focused) out.note = K2_P("Vertical scale (+-2 divs)");
+        if (focused) out.note = K2_PSV("Vertical scale (+-2 divs)");
         break;
     case 3:
     default:
-        out.text = K2_P("Trigger");
-        out.tail = free_trig ? "Free" : "Auto";
+        out.text = K2_PSV("Trigger");
+        out.tail = free_trig ? "Free"sv : "Auto"sv;
         out.tail_color = kText;
-        if (focused) out.note = K2_P("Rising edge or free run");
+        if (focused) out.note = K2_PSV("Rising edge or free run");
         break;
     }
 }

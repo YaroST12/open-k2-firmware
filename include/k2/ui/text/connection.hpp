@@ -81,13 +81,13 @@ inline constexpr const char *kActSinkDetails = K2_P("Sink details");
 inline constexpr const char *kActionLabels[] = {kActResetLink, kActSpecOffers, kActSinkDetails, kReadEmarker};
 static_assert(all_fit_p(kActionLabels, 8, kActionLabelMaxPx), "an Actions row label is wider than the row box");
 
-inline constexpr const char *kNoteResetInline = K2_P("Force fresh PD negotiation");
-inline constexpr const char *kNoteResetStand = K2_P("Wake / rescan source caps");
-inline constexpr const char *kNoteResetArmed = K2_P("Hard Reset drops VBUS ~0.8s");
-inline constexpr const char *kNoteSpecSource = K2_P("Open full offers & details");
-inline constexpr const char *kNoteSpecSink = K2_P("Open full sink details");
-inline constexpr const char *kActionNotes[] = {kNoteResetInline, kNoteResetStand, kNoteResetArmed,
-                                               kNoteSpecSource, kNoteSpecSink};
+inline constexpr std::string_view kNoteResetInline = K2_PSV("Force fresh PD negotiation");
+inline constexpr std::string_view kNoteResetStand = K2_PSV("Wake / rescan source caps");
+inline constexpr std::string_view kNoteResetArmed = K2_PSV("Hard Reset drops VBUS ~0.8s");
+inline constexpr std::string_view kNoteSpecSource = K2_PSV("Open full offers & details");
+inline constexpr std::string_view kNoteSpecSink = K2_PSV("Open full sink details");
+inline constexpr std::string_view kActionNotes[] = {kNoteResetInline, kNoteResetStand, kNoteResetArmed,
+                                                    kNoteSpecSource, kNoteSpecSink};
 static_assert(all_fit_p(kActionNotes, 6, kActionNoteMaxPx), "an Actions row note is wider than kit::kNoteMaxPx");
 
 inline constexpr const char *kSliceTagCharger = K2_P("CHARGER");

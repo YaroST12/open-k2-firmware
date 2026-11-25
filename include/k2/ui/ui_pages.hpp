@@ -203,16 +203,19 @@ void fc_pill_text(fastcharge::Protocol p, StrBuf<6> &out);
 namespace pg {
 [[gnu::noinline]] bool put_field_buf(FieldBase &f, char *cur, PaintBudget *bg, std::string_view s,
                                      uint16_t fg = kText, uint16_t bg_col = kBg);
-template <uint8_t N>
-inline bool put_field(SmallField<N> &f, PaintBudget *bg, std::string_view s, uint16_t fg = kText, uint16_t bg_col = kBg) {
+inline bool put_field(FieldBase &f, PaintBudget *bg, std::string_view s, uint16_t fg = kText, uint16_t bg_col = kBg) {
     return put_field_buf(f, f.cur_data(), bg, s, fg, bg_col);
 }
 [[gnu::noinline]] void invalidate_fields(Field *f, int n);
 [[gnu::noinline]] void clear_body(const Surface &c, int16_t y0 = 0);
 [[gnu::noinline]] std::string_view stash_str(char *dst, std::size_t cap, std::string_view s);
 inline uint32_t mix_str(uint32_t h, std::string_view s) { return k2::mix(h, s); }
+inline uint32_t mix_str(std::string_view s) { return k2::mix(s); }
 [[gnu::noinline]] uint32_t mix_cstr(uint32_t h, const char *s, std::size_t max_len = ~std::size_t(0));
 [[gnu::noinline]] uint32_t mix_u32s(uint32_t h, const uint32_t *w, std::size_t n);
+[[gnu::noinline]] uint32_t mix_u16s(uint32_t h, const uint16_t *w, std::size_t n);
+[[gnu::noinline]] uint32_t mix_bytes(uint32_t h, const void *p, std::size_t n);
+[[gnu::noinline]] uint32_t mix_bytes(const void *p, std::size_t n);
 [[gnu::noinline]] void put_exact_unit(StrBufBase &out, uint32_t milli, char unit = 0);
 [[gnu::noinline]] void put_unit_or_dash(StrBufBase &out, bool ok, int32_t val, int dec, char unit, bool abs_val = false);
 [[gnu::noinline]] std::string_view trim_left(std::string_view s);

@@ -1029,8 +1029,7 @@ OppCells build_opp_cells(const UiContext &ctx, const kit::OppRailSpec &spec, boo
 }
 
 uint32_t opp_cell_sig(PanelEdge opp_edge, int16_t pos, const kit::OppCell &c) {
-    uint32_t h = mix_init();
-    h = mix_u32(h, static_cast<uint32_t>(opp_edge) | (static_cast<uint32_t>(pos) << 4) |
+    uint32_t h = mix_u32(static_cast<uint32_t>(opp_edge) | (static_cast<uint32_t>(pos) << 4) |
                    (static_cast<uint32_t>(c.masthead) << 24) |
                    (static_cast<uint32_t>(c.dot_count) << 25) | (static_cast<uint32_t>(c.dot_cur) << 28) |
                    (static_cast<uint32_t>(c.active) << 31));
@@ -1158,7 +1157,7 @@ void Ui::draw_hold_card(uint32_t ms) {
         gfx_fill(c, kX, kY + kF, kF, kH - 2 * kF, kInk);
         gfx_fill(c, kX + kW - kF, kY + kF, kF, kH - 2 * kF, kInk);
         gfx_fill(c, kX + kF, kY + kF, kIn, kH - 2 * kF, kCaution);
-        gfx_text(c, kLabelFont, kNoteX, 116, K2_P("release to cancel"), kSpotInk, kCaution);
+        gfx_text(c, kLabelFont, kNoteX, 116, K2_PSV("release to cancel"), kSpotInk, kCaution);
     }
     if (left != hold_left_) {
         hold_left_ = left;
@@ -1175,7 +1174,7 @@ void Ui::draw_hold_card(uint32_t ms) {
 
 void Ui::show_rebooting() {
     ContentViewport viewport(active_dest(), ctx_.content.w, ctx_.content.h);
-    gfx_text(ctx_.content, kMid, 14, 100, K2_P("Rebooting..."), kWarn, kBg);
+    gfx_text(ctx_.content, kMid, 14, 100, K2_PSV("Rebooting..."), kWarn, kBg);
 }
 
 // ---------------------------------------------------------------------------------------
@@ -1874,7 +1873,7 @@ void Ui::draw_release_notice() {
     if (fc_release_.busy() && menu() != Menu::Trigger) {
         const bool unsafe = fc_release_.state() == trig::Release::State::Unsafe;
         draw_toast(ctx_.content, unsafe ? FooterTone::Error : FooterTone::Caution,
-                   unsafe ? K2_P("Unsafe VBUS: unplug source") : K2_P("FC releasing; verify 5V"));
+                   unsafe ? K2_PSV("Unsafe VBUS: unplug source") : K2_PSV("FC releasing; verify 5V"));
     } else if (loopguard::locked() && menu() != Menu::Trigger) {
         draw_toast(ctx_.content, FooterTone::Caution, loopguard::kLockText);   // on whatever page is up, while the lock holds
     }

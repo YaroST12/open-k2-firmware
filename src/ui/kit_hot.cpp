@@ -378,8 +378,7 @@ K2_HOT uint32_t RowList::row_sig_cb(void *ctx, int index) {
     RowSpec r;
     const bool focused = index == self->sel_;
     self->fn_(self->ctx_, index, focused, r);
-    uint32_t h = mix_init();
-    h = mix_u32(h, static_cast<uint32_t>(r.marker) | (static_cast<uint32_t>(r.state) << 4) |
+    uint32_t h = mix_u32(static_cast<uint32_t>(r.marker) | (static_cast<uint32_t>(r.state) << 4) |
                        (static_cast<uint32_t>(r.icon) << 8) | (static_cast<uint32_t>(r.chevron) << 16) |
                        (static_cast<uint32_t>(focused) << 17) | (static_cast<uint32_t>(self->muted_) << 18) |
                        (static_cast<uint32_t>(r.section_before) << 19));

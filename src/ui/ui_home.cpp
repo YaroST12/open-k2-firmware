@@ -283,7 +283,7 @@ void HomePage::update_sweep(const Frame &f, uint32_t now_ms) {
     const hm::Qty q[3] = {hero, led.row[0], led.row[1]};
     uint32_t scale[3];
     int span[3];
-    uint32_t sig = mix_u32(mix_init(), static_cast<uint32_t>(hero));
+    uint32_t sig = mix_u32(static_cast<uint32_t>(hero));
     for (int i = 0; i < 3; i++) {
         const uint32_t mx = f.max[static_cast<int>(q[i])];
         scale[i] = q[i] == hm::Qty::W ? hm::scale_w10(mx) : q[i] == hm::Qty::V ? hm::scale_v10(mx) : hm::scale_a10(mx);
@@ -681,7 +681,7 @@ void HomePage::paint_qty(int si, hm::Qty q, const Frame &f) {
     cell.sw = &sw_[si];
     cell.items = std::span<const hm::Item>(it, static_cast<size_t>(n));
 
-    uint32_t base = mix_u32(mix_init(), static_cast<uint32_t>(m));
+    uint32_t base = mix_u32(static_cast<uint32_t>(m));
     base = mix_u32(base, (over ? 1u : 0u) | (near_ ? 2u : 0u) | (cell.sweep ? 4u : 0u) | (bar ? 8u : 0u));
     base = mix_u32(mix_u32(base, static_cast<uint32_t>(window_)), sweep_epoch_);
     qc.base = mix_u32(mix_u32(base, ctx_.rotation & 3u), static_cast<uint32_t>(q));
@@ -916,7 +916,7 @@ void HomePage::paint_box(int bi, const Frame &f) {
     cell.bg = kBg;
     cell.items = std::span<const hm::Item>(it, static_cast<size_t>(n));
     zone_start[3] = n;
-    uint32_t base = mix_u32(mix_u32(mix_init(), static_cast<uint32_t>(box)), static_cast<uint32_t>(m));
+    uint32_t base = mix_u32(mix_u32(static_cast<uint32_t>(box)), static_cast<uint32_t>(m));
     base = mix_u32(mix_u32(base, glow), ctx_.rotation & 3u);
     commit_zoned_cell(3 + bi, base, mix_init(), cell, zone_start, zy, 3,
                       box_valid_[bi], box_sig_[bi], slice_box_[bi],
@@ -1040,7 +1040,7 @@ void HomePage::paint_info(const Frame &f) {
     cell.bg = kBg;
     cell.items = std::span<const hm::Item>(it, static_cast<size_t>(n));
 
-    commit_zoned_cell(6, static_cast<uint32_t>(m), mix_u32(mix_init(), static_cast<uint32_t>(m)),
+    commit_zoned_cell(6, static_cast<uint32_t>(m), mix_u32(static_cast<uint32_t>(m)),
                       cell, zone_start, kInfoZones, 3,
                       info_ok_, info_sig_, slice_info_, 0, hm::kRule3Y, hm::kW - 1, 239);
 }

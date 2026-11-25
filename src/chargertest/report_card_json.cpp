@@ -23,7 +23,7 @@ std::size_t render_json(const Card& c, std::span<char> out) {
     // Identity extras only when known, so a card without them renders as before (tools/report_card.py does the same).
     if (const pd::VendorName b = pd::vendor_find(c.id.vid); !b.empty()) K2_TPUT(t, "\"brand\":\"%s\",", b.c_str());
     if (c.id.pdp_w) K2_TPUT(t, "\"pdp_w\":%u,", unsigned(c.id.pdp_w));
-    if (c.name_auto) t.put_raw(K2_P("\"name_auto\":true,"));
+    if (c.name_auto) t.put_raw(K2_PSV("\"name_auto\":true,"));
     // The passive OEM label's bare name (tools/report_card.py and the results page write the same); the fact line behind it is UI text.
     if (const QcLabel l = qc_label(c); l != QcLabel::None) K2_TPUT(t, "\"qc\":\"%s\",", qc_label_name(l));
     K2_TPUT(t, "\"runs\":%u,\"boots\":%u,\"uptime_s\":%u,", unsigned(c.runs), unsigned(c.boots), unsigned(c.uptime_s));
@@ -51,7 +51,7 @@ std::size_t render_json(const Card& c, std::span<char> out) {
         if (r.detail) K2_TPUT(t, ",\"detail\":%u,\"why\":\"%s\"", unsigned(r.detail), group_why(g, r));
         t.put("}");
     }
-    t.put_raw(K2_P("},\"ranges\":["));
+    t.put_raw(K2_PSV("},\"ranges\":["));
     for (unsigned i = 0; i < c.n_ranges && i < kMaxRanges; ++i) {
         const Range& r = c.range[i];
         K2_TPUT(t, "%s{\"alg\":\"%s\",\"lo_mv\":%u,\"hi_mv\":%u,\"max_mv\":%u,\"fail_mv\":%u", i ? "," : "",
@@ -62,7 +62,7 @@ std::size_t render_json(const Card& c, std::span<char> out) {
             bool any = false;
             for (unsigned k = 0; k < kSpreadLevels; ++k) any |= c.spread[i][k] != kSpreadNone;
             if (any) {
-                t.put_raw(K2_P(",\"err_mv\":["));
+                t.put_raw(K2_PSV(",\"err_mv\":["));
                 bool first_err = true;
                 for (unsigned k = 0; k < kSpreadLevels; ++k) {
                     if (c.spread[i][k] == kSpreadNone) continue;
@@ -84,7 +84,7 @@ std::size_t render_json(const Card& c, std::span<char> out) {
     }
     t.put("]");
     if (c.format >= 4) {   // v4 cards carry per-EPR-level verdicts; older formats render as before
-        t.put_raw(K2_P(",\"epr_levels\":{"));
+        t.put_raw(K2_PSV(",\"epr_levels\":{"));
         bool first_epr = true;
         for (unsigned i = 0; i < kEprLevels; ++i) {
             const EprLevel& e = c.epr[i];
@@ -102,23 +102,23 @@ std::size_t render_json(const Card& c, std::span<char> out) {
     }
     if (c.format >= 5) {   // v5 cards carry the cable of the run; older formats render as before
         const Cable& cb = c.cable;
-        t.put_raw(K2_P(",\"cable\":{"));
+        t.put_raw(K2_PSV(",\"cable\":{"));
         if (cb.seq) K2_TPUT(t, "\"seq\":%u,", unsigned(cb.seq));
         K2_TPUT(t, "\"vid\":%u,\"pid\":%u,\"max_mv\":%u,\"max_ma\":%u,\"kind\":%u,\"observed\":%u,\"spoofed\":%u",
                 unsigned(cb.vid), unsigned(cb.pid), unsigned(cb.max_mv), unsigned(cb.max_ma), unsigned(cb.kind),
                 unsigned((cb.flags & kCableObserved) != 0), unsigned((cb.flags & kCableSpoofed) != 0));
-        if (cb.flags & kCableSelfPowered) t.put_raw(K2_P(",\"self_powered\":1"));   // only then: every other card renders as before
+        if (cb.flags & kCableSelfPowered) t.put_raw(K2_PSV(",\"self_powered\":1"));   // only then: every other card renders as before
         // The Ra guard's reading when the identity was started (cards before this field: absent), and "started anyway".
         if (const unsigned g = (cb.flags & kCableGuardMask) >> kCableGuardShift; g && g <= 4)
             K2_TPUT(t, ",\"guard\":\"%s\"", raguard::name(raguard::Topology(g - 1)));
-        if (cb.flags & kCableGuardBypassed) t.put_raw(K2_P(",\"guard_bypassed\":1"));
-        if (cb.flags & kCableReattach) t.put_raw(K2_P(",\"reattach\":1"));   // only then: every other card renders as before
+        if (cb.flags & kCableGuardBypassed) t.put_raw(K2_PSV(",\"guard_bypassed\":1"));
+        if (cb.flags & kCableReattach) t.put_raw(K2_PSV(",\"reattach\":1"));   // only then: every other card renders as before
         t.put("}");
-        if (c.src_flags & kSrcOppoSvid) t.put_raw(K2_P(",\"oppo_svid\":1"));   // only then: every other card renders as before
+        if (c.src_flags & kSrcOppoSvid) t.put_raw(K2_PSV(",\"oppo_svid\":1"));   // only then: every other card renders as before
         if (const unsigned ma = scp_cap_ma(c)) K2_TPUT(t, ",\"scp_ma\":%u", ma);   // the adapter's SCP current limit, when it was read
     }
     if (const unsigned n = ufcs_modes(c)) {   // v6 cards carry the UFCS modes (voltage range and the mode's current); none on older cards
-        t.put_raw(K2_P(",\"ufcs\":["));
+        t.put_raw(K2_PSV(",\"ufcs\":["));
         for (unsigned i = 0; i < n; ++i) {
             const UfcsRange& u = c.ufcs[i];
             K2_TPUT(t, "%s{\"lo_mv\":%u,\"hi_mv\":%u", i ? "," : "", unsigned(u.lo_dv) * 100u, unsigned(u.hi_dv) * 100u);
@@ -203,7 +203,7 @@ std::size_t render_summary(const Card& c, std::span<char> out) {
         K2_TPUT(t, "- %s: ", group_word(g));
         const bool handshake = r.max_mv && r.max_mv <= kHandshakeMv;
         if (light && r.verdict == GV::Pass) {
-            t.put_raw(g == 0 ? "\xE2\x9C\x93 advertised" : K2_P("detected"));
+            t.put_raw(g == 0 ? std::string_view("\xE2\x9C\x93 advertised") : K2_PSV("detected"));
         } else if (group_handshake_ok(r)) {
             t.put("\xE2\x9C\x93 handshake ok");
         } else if (group_detected(r)) {
@@ -213,7 +213,7 @@ std::size_t render_summary(const Card& c, std::span<char> out) {
             else if (r.max_mv) { t.put("\xE2\x9C\x93 up to "); volts(t, r.max_mv); t.put(" V"); if (g == 0 && c.pd_ma) { t.put(", "); volts(t, c.pd_ma); t.put(" A"); } }
             else t.put("\xE2\x9C\x93");
         } else {
-            if (handshake) t.put_raw(K2_P("5 V only, "));
+            if (handshake) t.put_raw(K2_PSV("5 V only, "));
             else if (r.max_mv) { t.put("\xE2\x9C\x93 up to "); volts(t, r.max_mv); t.put(" V, "); }
             const char* why = r.detail ? group_why(g, r) : r.reason ? ct::name(ct::Reason(r.reason)) : "";
             t.put("\xE2\x9C\x97");
@@ -232,7 +232,7 @@ std::size_t render_summary(const Card& c, std::span<char> out) {
             t.put("%s%s", first ? "" : ", ", group_word(g));
             first = false;
         }
-        t.put_raw(silent ? K2_P(": skipped, no reply\n") : K2_P(": skipped\n"));
+        t.put_raw(silent ? K2_PSV(": skipped, no reply\n") : K2_PSV(": skipped\n"));
     }
     for (unsigned i = 0; i < c.n_ranges && i < kMaxRanges; ++i) {
         const Range& r = c.range[i];
@@ -243,13 +243,13 @@ std::size_t render_summary(const Card& c, std::span<char> out) {
                 step_label::range(unsigned(r.lo_dv) * 100u, unsigned(r.hi_dv) * 100u, r.ma).c_str());
         if (r.fail_dv) {
             t.put("\xE2\x9C\x97 at "); volts(t, unsigned(r.fail_dv) * 100u); t.put(" V");
-            if (r.max_dv) { t.put_raw(K2_P(", reached ")); volts(t, unsigned(r.max_dv) * 100u); t.put(" V"); }
+            if (r.max_dv) { t.put_raw(K2_PSV(", reached ")); volts(t, unsigned(r.max_dv) * 100u); t.put(" V"); }
         } else if (r.max_dv >= r.hi_dv) {
             t.put("\xE2\x9C\x93 whole range");
         } else if (r.max_dv) {
-            t.put_raw(K2_P("reached ")); volts(t, unsigned(r.max_dv) * 100u); t.put(" V");
+            t.put_raw(K2_PSV("reached ")); volts(t, unsigned(r.max_dv) * 100u); t.put(" V");
         } else {
-            t.put_raw(light ? "\xE2\x9C\x93 advertised" : K2_P("no step measured"));
+            t.put_raw(light ? std::string_view("\xE2\x9C\x93 advertised") : K2_PSV("no step measured"));
         }
         t.put("\n");
     }

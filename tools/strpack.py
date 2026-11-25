@@ -30,7 +30,7 @@ MAX_DEPTH = 14
 # Ordered code IDs: 0x7F..0xFF first (indices 0..128), then 0x01..0x1F skipping \t \n \r (indices 129..159).
 CODE_IDS = list(range(0x7F, 0x100)) + [b for b in range(0x01, 0x20) if b not in (0x09, 0x0A, 0x0D)]
 
-LIT_RE = re.compile(r'\bK2_P\(\s*((?:"(?:[^"\\\n]|\\.)*"\s*)+)\)')
+LIT_RE = re.compile(r'\bK2_P(?:SV)?\(\s*((?:"(?:[^"\\\n]|\\.)*"\s*)+)\)')
 PIECE_RE = re.compile(r'"((?:[^"\\\n]|\\.)*)"')
 ESC_RE = re.compile(rb'\\(x[0-9A-Fa-f]+|[0-7]{1,3}|.)')
 SIMPLE = {b'n': 10, b't': 9, b'r': 13, b'0': 0, b'\\': 92, b'"': 34, b"'": 39, b'?': 63, b'a': 7}
