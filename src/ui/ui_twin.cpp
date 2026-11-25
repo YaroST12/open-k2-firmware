@@ -943,8 +943,8 @@ void TwinPage::paint_detail(uint32_t now_ms) {
     layout_detail();
     const Entry *e = det_entry();
     const bool run = running();
-    uint32_t sig = mix_u32(mix_init(), static_cast<uint32_t>(first_) | (static_cast<uint32_t>(box_y_) << 8) |
-                                           (static_cast<uint32_t>(arm_) << 16) | (static_cast<uint32_t>(run) << 20));
+    uint32_t sig = mix_u32(static_cast<uint32_t>(first_) | (static_cast<uint32_t>(box_y_) << 8) |
+                           (static_cast<uint32_t>(arm_) << 16) | (static_cast<uint32_t>(run) << 20));
     // While a proof runs the lines hold still: the charger's list comes and goes with every re-attach, and the verdict, the list
     // and the notes repaint once, when it ends. Only the box's Step / Asked and VBUS rows move meanwhile.
     if (!run) {
@@ -1005,12 +1005,12 @@ void TwinPage::paint_detail(uint32_t now_ms) {
                 put_level(asked, e->out.ma, 'A');
             }
             static constexpr kit::KvLayout kInfoKv{0, kit::kInfoPitch, kit::kInfoTagX, nullptr, nullptr, kit::kInfoValueX, 21, Align::Left, true};
-            const uint32_t ss = pg::mix_str(2166136261u, asked.view()) | 1u;
+            const uint32_t ss = pg::mix_str(asked.view()) | 1u;
             if (ss != step_sig_) {
                 kit::kv_row(s, kInfoKv, static_cast<int16_t>(kCellY + 4), waking ? "Step" : "Asked", asked.view().substr(1), kText);
                 step_sig_ = ss;
             }
-            const uint32_t vs = pg::mix_str(2166136261u, v.view()) | 1u;
+            const uint32_t vs = pg::mix_str(v.view()) | 1u;
             if (vs != vbus_sig_) kit::kv_row(s, kInfoKv, static_cast<int16_t>(kCellY + 24), "VBUS", v.view(), kVolt);
             vbus_sig_ = vs;
             vbus_next_ = now_ms + 250;   // at most 4 updates a second
@@ -1142,7 +1142,7 @@ void TwinPage::update(uint32_t now_ms) {
     // The floating pill is drawn without erasing: when its text or tone changes the old one is cleared and the body repaints.
     compose_footer();
     {
-        uint32_t sg = mix_u32(mix_init(), static_cast<uint32_t>(foot_tone_) * 31u + 1u);
+        uint32_t sg = mix_u32(static_cast<uint32_t>(foot_tone_) * 31u + 1u);
         sg = mix(sg, foot_text_.view());
         if (foot_.valid && foot_.needs(sg)) {
             draw_footer(ctx_.content, FooterTone::Info, {});   // clears the band the old pill sat in

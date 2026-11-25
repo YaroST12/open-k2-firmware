@@ -149,7 +149,7 @@ SECTIONS
      * its pair table, the vendor and SVID names of a parsed e-marker */
     *(.text._ZN2k27strpack* .text._ZNK2k27strpack* .text._ZZN2k27strpack* .rodata._ZN2k27strpack5table5kPairE*)
     *(.text._ZN2k22pd11vendor_name* .text._ZN2k22pd9svid_name* .text._ZN2k22pd10VendorNameC*)
-    *(.text._ZN2k210StrBufBase* .text._ZN2k23mixEmSt17basic_string_view* .text._ZN2k22pg8mix_cstr* .text._ZN2k22pg8mix_u32s* .text._ZN2k27fmt_fit* .text._ZN2k27fmt_u32* .text._ZN2k29fmt_fixed* .text._ZN2k213fmt_abs_fixed*)
+    *(.text._ZN2k210StrBufBase* .text._ZN2k27mix_u32* .text._ZN2k23mixE* .text._ZN2k22pg8mix_cstr* .text._ZN2k22pg8mix_u32s* .text._ZN2k22pg8mix_u16s* .text._ZN2k22pg9mix_bytes* .text._ZN2k27fmt_fit* .text._ZN2k27fmt_u32* .text._ZN2k29fmt_fixed* .text._ZN2k213fmt_abs_fixed*)
     *(.text._ZN2k210fastcharge* .text._ZN2k27dpsniff* .text._ZN2k26fctrig4poll* .text._ZN2k27battery* .text._ZN2k26ripple*)
     *(.text._ZZN2k210fastcharge* .text._ZZN2k27dpsniff* .text._ZZN2k26fctrig4poll* .text._ZZN2k27battery* .text._ZZN2k26ripple*)
     *(.text._ZN2k23lcd* .text._ZN2k23kit* .text._ZNK2k23kit* .text._ZZN2k23lcd* .text._ZZN2k23kit* .text._ZZNK2k23kit*)

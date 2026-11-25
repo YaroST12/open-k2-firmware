@@ -21,7 +21,7 @@ struct ScanResult {
     Proto proto;
     Outcome outcome;
     int mv;           // VBUS reached while the protocol was active (0 when not accepted)
-    Fail reason = Fail::None; // refusal/failure, not evidence that a protocol is unsupported
+    Fail reason K2_BSS_INIT(Fail::None); // refusal/failure, not evidence that a protocol is unsupported
 };
 
 inline constexpr std::size_t kScanSteps = 7;

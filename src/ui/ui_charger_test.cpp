@@ -200,6 +200,10 @@ const char* detail_name(const ct::Step& s) {
 bool measured_shown(const ct::Step& s) {
     return s.measured_mv && s.verdict != ct::Verdict::Skip && s.verdict != ct::Verdict::Pending;
 }
+[[gnu::noinline]] void put_measured_v(StrBufBase& b, uint16_t& col, const ct::Step& s, int decimals) {
+    if (measured_shown(s)) { b.put_fixed(s.measured_mv, decimals).put_char('V'); col = kVolt; }
+    else { b.put("--"); col = kFaint; }
+}
 // A caution by tracking (a passing sweep whose worst error passes the pass window, result_layout::deviates): the reason words, "off 450mV".
 void put_off(StrBufBase& b, const ctsweep::View& v, const ct::Step& s) {
     b.put("off ").put_u32(result_layout::sweep_worst_mv(v, static_cast<uint8_t>(s.algorithm), s.pos)).put("mV");
@@ -915,24 +919,25 @@ void ChargerTestSession::capture_identity() {
     // V5: the cable the run went through — the physically read e-marker, else the physical limits, and the
     // spoofed library identity when one was armed (its limits are what the run actually used).
     report_card::Cable cable;
-    const auto& em = fusb302::emarker();
-    const auto pc = physical_cable();
-    if (em.valid) {
-        cable.flags |= report_card::kCableObserved;
-        cable.vid = em.vid; cable.pid = em.pid;
-        cable.max_mv = uint16_t(em.max_voltage_v * 1000u); cable.max_ma = uint16_t(em.max_current_a * 1000u);
-        cable.kind = report_card::kCableKindReal;
-    } else {
-        cable.max_mv = pc.max_mv; cable.max_ma = pc.max_ma;
-        if (pc.observed) cable.flags |= report_card::kCableObserved;
-    }
     if (run_cable_.kind != ctcable::Kind::Off) {   // the dialog's identity answered the charger: its limits are what the run used
-        cable = {};
         cable.seq = run_cable_.seq; cable.vid = run_facts_.vid; cable.pid = run_facts_.pid;
         cable.max_mv = run_facts_.max_mv; cable.max_ma = run_facts_.max_ma;
         cable.kind = run_cable_.kind == ctcable::Kind::Builtin ? uint8_t(run_cable_.seq) : uint8_t(0);   // the built-in's id
         cable.flags = report_card::kCableSpoofed;
-    } else if (emk_spoof::active()) cable.flags |= report_card::kCableSpoofed;
+    } else {
+        const auto& em = fusb302::emarker();
+        if (em.valid) {
+            cable.flags |= report_card::kCableObserved;
+            cable.vid = em.vid; cable.pid = em.pid;
+            cable.max_mv = uint16_t(em.max_voltage_v * 1000u); cable.max_ma = uint16_t(em.max_current_a * 1000u);
+            cable.kind = report_card::kCableKindReal;
+        } else {
+            const auto pc = physical_cable();
+            cable.max_mv = pc.max_mv; cable.max_ma = pc.max_ma;
+            if (pc.observed) cable.flags |= report_card::kCableObserved;
+        }
+        if (emk_spoof::active()) cable.flags |= report_card::kCableSpoofed;
+    }
     if (self_run_) cable.flags |= report_card::kCableSelfPowered;
     if (run_guard_ & 0x7F) {   // the Ra guard read the plug when the identity was started; bit 7 = started anyway
         cable.flags |= uint8_t(((run_guard_ & 0x7F) << report_card::kCableGuardShift) & report_card::kCableGuardMask);
@@ -1722,16 +1727,16 @@ void ChargerTestPage::build_grid(bool running_grid, bool note_cuts) {
     char svooc_note[svooc_ceiling::kCapChars] = {};
     char ident_note[6] = {};
     const auto& ev = s_.runner_.evidence();
+    const svooc_ceiling::Outcome sr{ev.svooc_word, static_cast<svooc_ceiling::End>(ev.svooc_end),
+                                    ev.svooc_vmax_mv, ev.svooc_stop_ms, ev.svooc_why};
     if (svooc_ceiling::format_ident(ev.vooc_ident, ident_note)) oem.vooc_ident = ident_note;
     if (ev.svooc_end != 0) {
-        svooc_ceiling::format_cap({ev.svooc_word, static_cast<svooc_ceiling::End>(ev.svooc_end), ev.svooc_vmax_mv, ev.svooc_stop_ms, ev.svooc_why},
-                                  svooc_note);
+        svooc_ceiling::format_cap(sr, svooc_note);
         oem.svooc_cap = svooc_note;
     }
     // The VOOC family by its levels' watts: what the ceiling stage claimed of each (every level not tested without one)
     oem.vooc_watts = true;
-    oem.vooc_claims = oem_watts::claims(oem_watts::Family::Vooc, {ev.svooc_word, static_cast<svooc_ceiling::End>(ev.svooc_end),
-                                                                  ev.svooc_vmax_mv, ev.svooc_stop_ms, ev.svooc_why});
+    oem.vooc_claims = oem_watts::claims(oem_watts::Family::Vooc, sr);
     char justification[48] = {};
     if (const auto label = report_card::qc_label(card); label != report_card::QcLabel::None) {
         report_card::qc_label_justification(card, justification, sizeof justification);
@@ -1768,7 +1773,7 @@ __attribute__((noinline)) void ChargerTestPage::compose_best() {
     std::array<std::string_view, 3> items{};
     for (size_t i = 0; i < n; ++i) items[i] = best[i].text;
     char none[16];   // headline() copies bytes: decode first
-    if (best_none_) { items[0] = strpack::unpack(K2_P("No passing mode"), none); }
+    if (best_none_) { items[0] = strpack::unpack(K2_PSV("No passing mode"), none); }
     static_assert(pd_version::kMaxLabel + 2 + 15 <= kBestChars, "the version and \"No passing mode\" fit one line");
     char line[40];
     pd_version::headline(line, sizeof line, pd_version::label(run_version(s_.runner_.evidence())).view(), items.data(),
@@ -1845,13 +1850,15 @@ void ChargerTestSession::update_summary(const ct::Input& in) {
 void ChargerTestSession::update_preset_counts(const ct::Input& in) {
     static_assert(std::tuple_size_v<decltype(preset_n_)> == kPresets);
     const auto& caps = fusb302::caps();
-    uint32_t key = 2166136261u;
-    const auto mix = [&key](uint32_t v) { key = (key ^ v) * 16777619u; };
-    mix(uint32_t(options_.level)); mix(options_.pps_sweep); mix(options_.avs_sweep); mix(options_.spec);
-    mix(in.cap_mv); mix(in.cable_mv); mix(in.cable_ma); mix(in.cable_observed); mix(in.pd.xiaomi_svid);
-    mix(in.spoof_on); mix(in.spoof_mv); mix(in.spoof_ma); mix(legacy_hidden());
-    mix(caps.valid); mix(caps.num_pdos);
-    for (size_t n = 0; caps.valid && n < std::min<size_t>(caps.num_pdos, caps.pdos.size()); ++n) mix(caps.pdos[n].raw);
+    uint32_t key = mix_init();
+    const uint32_t w[] = {
+        uint32_t(options_.level), options_.pps_sweep, options_.avs_sweep, options_.spec,
+        in.cap_mv, in.cable_mv, in.cable_ma, in.cable_observed, in.pd.xiaomi_svid,
+        in.spoof_on, in.spoof_mv, in.spoof_ma, legacy_hidden(),
+        caps.valid, caps.num_pdos,
+    };
+    key = pg::mix_u32s(key, w, std::size(w));
+    for (size_t n = 0; caps.valid && n < std::min<size_t>(caps.num_pdos, caps.pdos.size()); ++n) key = mix_u32(key, caps.pdos[n].raw);
     key |= 1;   // 0 is "not computed"
     if (key == preset_key_) return;
     preset_key_ = key;
@@ -2038,13 +2045,14 @@ kit::Verdict vmap(const ct::Step& s, const ctsweep::View& view) {
            result_layout::noted(s) ? kit::Verdict::Noted : vmap(s.verdict);
 }
 // A CC line's reading as the Waiting page words it (the Rp ladder of a source's pull-up; "open" = no pull-up or above it).
-const char *cc_word(int mv) {
-    if (mv < 0) return "--";
-    if (mv < 200) return "open";
-    if (mv < 660) return K2_P("Rp USB");
-    if (mv < 1230) return K2_P("Rp 1.5A");
-    if (mv < 2200) return K2_P("Rp 3A");
-    return "open";
+std::string_view cc_word(int mv) {
+    using namespace std::string_view_literals;
+    if (mv < 0) return "--"sv;
+    if (mv < 200) return "open"sv;
+    if (mv < 660) return K2_PSV("Rp USB");
+    if (mv < 1230) return K2_PSV("Rp 1.5A");
+    if (mv < 2200) return K2_PSV("Rp 3A");
+    return "open"sv;
 }
 using waitplus::cc_open;   // the same ladder cut as cc_word's "open" (and the footer's choice)
 // One line of the Running grid's step counters: the unit of step `at`, and which of its steps this is.
@@ -2089,7 +2097,7 @@ void ChargerTestPage::bar() {
 
 // The footer's signature (tone + text; never 0): the same value whoever painted it, so a repaint finds its words already there.
 static uint32_t footer_sig(FooterTone tone, std::string_view text) {
-    return mix_u32(pg::mix_str(mix_init(), text), static_cast<uint32_t>(tone)) | 1u;
+    return mix_u32(pg::mix_str(text), static_cast<uint32_t>(tone)) | 1u;
 }
 bool ChargerTestPage::foot(FooterTone tone, std::string_view text) {
     const bool show = !text.empty() && s_.stage_ != Stage::Running && s_.stage_ != Stage::Algorithms;
@@ -2139,22 +2147,16 @@ static kit::Verdict range_verdict(specsec::RangeTone t) {
 [[gnu::noinline]] static FooterTone spec_footer(StrBuf<32>& f, int check, const specsec::Cell& c, bool detail) {
     const char* name = spectext::label(static_cast<pdspec::Check>(check));
     const pdspec::Verdict v = c.verdict();
-    switch (v) {
-        case pdspec::Verdict::Skip: f.put(pdspec::skip_name(c.skip())); return FooterTone::Info;
-        case pdspec::Verdict::Pending: if (!detail) f.put(name).put(": "); f.put(K2_P("not judged")); return FooterTone::Info;
-        case pdspec::Verdict::Unverified: if (!detail) f.put(name).put(": "); f.put(K2_P("limit unverified")); return FooterTone::Info;
-        case pdspec::Verdict::Pass:
-        case pdspec::Verdict::Fail: break;
-    }
+    if (v == pdspec::Verdict::Skip) { f.put(pdspec::skip_name(c.skip())); return FooterTone::Info; }
     if (!detail) f.put(name).put(": ");
-    if (c.fails) {
-        f.put(K2_P("fail ")).put_u32(c.fails);
-        if (detail && c.detailed()) f.put(" of ").put_u32(c.n).put(K2_P(" measured"));
-        return FooterTone::Caution;
+    if (v == pdspec::Verdict::Pending || v == pdspec::Verdict::Unverified) {
+        f.put(v == pdspec::Verdict::Pending ? K2_P("not judged") : K2_P("limit unverified"));
+        return FooterTone::Info;
     }
-    f.put("pass");
-    if (detail && c.detailed()) f.put(", ").put_u32(c.n).put(K2_P(" measured"));
-    return FooterTone::Ok;
+    if (c.fails) f.put(K2_P("fail ")).put_u32(c.fails);
+    else f.put("pass");
+    if (detail && c.detailed()) f.put(c.fails ? " of " : ", ").put_u32(c.n).put(K2_P(" measured"));
+    return c.fails ? FooterTone::Caution : FooterTone::Ok;
 }
 
 static void put_of(StrBufBase &f, unsigned a, unsigned b, const char *tail) {
@@ -2234,17 +2236,19 @@ static FooterTone range_footer(StrBuf<32> &f, const ct::Runner &runner, A algo, 
         f.put(s_.message_.view().substr(0, kToastCells));
         return FooterTone::Caution;
     }
+    const char *msg = nullptr;
+    FooterTone tone = FooterTone::Info;
     switch (s_.stage_) {
     case Stage::Algorithms: {
         const int pr = preset_row_of(s_.options_.selected);
         f.put(K2_P("Picked: ")).put(pr ? kPresetNames[pr - 1] : K2_P("custom set"));
-        return FooterTone::Info;
+        return tone;
     }
     case Stage::Custom: {
         unsigned on = 0;
         for (int n = fam_skip(); n < kFamilyCount; ++n) on += family_state(s_.options_.selected, n) != 0;
         put_of(f, on, family_rows(), K2_P(" families on"));
-        return FooterTone::Info;
+        return tone;
     }
     case Stage::Group: {
         unsigned on = 0;
@@ -2258,17 +2262,17 @@ static FooterTone range_footer(StrBuf<32> &f, const ct::Runner &runner, A algo, 
             on += (s_.options_.selected & m) == m;
         }
         put_of(f, on, static_cast<unsigned>(n), K2_P(" entries on"));
-        return FooterTone::Info;
+        return tone;
     }
     case Stage::Cable: {
         const auto sel = ctx_.cables.selected();
         f.put(K2_P("Picked: "));
-        if (sel.kind == ctcable::Kind::Off) { f.put(K2_P("no identity")); return FooterTone::Info; }
+        if (sel.kind == ctcable::Kind::Off) { msg = K2_P("no identity"); break; }
         row_ = ctx_.cables.row(ctx_.cables.index_of(sel), CableIdentityList::View::CableStep);
         const size_t room = kFooterCells - 8 - (row_.rating.empty() ? 0 : row_.rating.size() + 1);
         f.put(row_.text.view().substr(0, room));
         if (!row_.rating.empty()) f.put_char(' ').put(row_.rating);
-        return FooterTone::Info;
+        return tone;
     }
     case Stage::Review: {
         const auto in = input(ctx_.now);
@@ -2277,19 +2281,16 @@ static FooterTone range_footer(StrBuf<32> &f, const ct::Runner &runner, A algo, 
                            s_.summary_.refusal_mv ? int(s_.summary_.refusal_mv) : in.vbus_mv, f);
             return FooterTone::Caution;
         }
-        const char *msg = "";   // the other port is START's hint; no fixed warning toast rides on a bare Review
-        FooterTone tone = FooterTone::Info;
         if (!s_.summary_.runnable) { msg = K2_P("Nothing to run: all skip"); tone = FooterTone::Caution; }
         else if (s_.confirming_) { msg = s_.confirm_reattach_ ? kReattachConfirm : K2_P("Press again to start"); tone = FooterTone::Caution; }
-        else if (in.cable_mv == 20000 && s_.summary_.max_mv == 21000) { msg = K2_P("PPS: 21V on 20V wire"); tone = FooterTone::Info; }
-        else if (self_supplied()) { msg = K2_P("Self-powered: VBUS stays up"); tone = FooterTone::Info; }
-        f.put(msg);
-        return tone;
+        else if (in.cable_mv == 20000 && s_.summary_.max_mv == 21000) msg = K2_P("PPS: 21V on 20V wire");
+        else if (self_supplied()) msg = K2_P("Self-powered: VBUS stays up");
+        break;
     }
-    case Stage::Refuse: f.put(K2_P("Direct plug is the sure way")); return FooterTone::Caution;
+    case Stage::Refuse: msg = K2_P("Direct plug is the sure way"); tone = FooterTone::Caution; break;
     case Stage::Waiting: {
         const int cc1 = ctx_.analog ? ctx_.analog->cc1_mv : -1, cc2 = ctx_.analog ? ctx_.analog->cc2_mv : -1;
-        const fusb302::LineTrial lt = fusb302::line_trial();   // the direct-plug fallback's own fact: the line our Rd is on while it is live
+        const fusb302::LineTrial lt = fusb302::line_trial();
         const auto line = waitplus::footer(s_.wait_.state() == pd::VbusWait::State::Ready, cc1, cc2, ctx_.vbus_fast_mv,
                                            static_cast<uint32_t>(std::max<int32_t>(0, static_cast<int32_t>(ctx_.now - s_.wait_t0_))),
                                            lt.live ? lt.line : uint8_t(0), lt.moves);
@@ -2298,45 +2299,43 @@ static FooterTone range_footer(StrBuf<32> &f, const ct::Runner &runner, A algo, 
     }
     case Stage::Running: {
         const auto &steps = s_.runner_.steps();
-        const char *msg = nullptr;
-        FooterTone tone = FooterTone::Info;
         if (s_.runner_.state() == ct::State::Unsafe) { msg = K2_P("Unplug; verify measured 5V"); tone = FooterTone::Error; }
         else if (s_.runner_.reason() != ct::Reason::None) { msg = ct::refusal_words(s_.runner_.reason()); tone = FooterTone::Caution; }
         else if (steps.empty()) msg = K2_P("Starting");
         else if (s_.runner_.state() == ct::State::Spec) msg = K2_P("PD spec checks");
-        else if (s_.fc_words_ && fctrig::paint_critical()) msg = s_.fc_words_;   // the window the screen sits out
-        if (msg) { f.put(msg); return tone; }
+        else if (s_.fc_words_ && fctrig::paint_critical()) msg = s_.fc_words_;
+        if (msg) break;
         unsigned i, n;
         const char *unit;
         unit_progress(s_.runner_, std::min(s_.runner_.index(), steps.size() - 1), i, n, unit);
         f.put(unit).put(K2_P(": step "));
         put_of(f, i, n, "");
-        return FooterTone::Info;
+        return tone;
     }
     case Stage::Results: {
-        if (s_.selection_ >= delta_row()) { f.put(K2_P("Compare with the last card")); return FooterTone::Info; }
-        if (s_.selection_ >= static_cast<int>(line_n_)) {   // a PD spec row
+        if (s_.selection_ >= delta_row()) { msg = K2_P("Compare with the last card"); break; }
+        if (s_.selection_ >= static_cast<int>(line_n_)) {
             const size_t ci = spec_cell(s_.selection_ - static_cast<int>(line_n_));
-            if (ci >= specsec::kCells) return FooterTone::Info;
+            if (ci >= specsec::kCells) return tone;
             return spec_footer(f, static_cast<int>(specsec::kOrder[ci]), s_.runner_.evidence().spec.cells[ci], false);
         }
         const size_t r_idx = lines_[static_cast<size_t>(s_.selection_)].row();
         const auto &row = layout_.rows[r_idx];
         const char *lbl = result_layout::row_label(layout_, r_idx);
-        if (row.kind == result_layout::CompactKind::Collapsed && row.mv == 2) { f.put(kLinesOpenFooter); return FooterTone::Caution; }   // the "No D+/D-" row
+        if (row.kind == result_layout::CompactKind::Collapsed && row.mv == 2) { f.put(kLinesOpenFooter); return FooterTone::Caution; }
         if (row.kind == result_layout::CompactKind::Header || row.kind == result_layout::CompactKind::Fact ||
             row.kind == result_layout::CompactKind::Collapsed) {
             f.put(lbl).put(K2_P(": see steps"));
-            return FooterTone::Info;
+            return tone;
         }
-        if (row.kind == result_layout::CompactKind::Levels) {   // "SVOOC: up to 120W claimed": claimed, never a pass
-            f.put(result_layout::levels_footer(row, lbl).c_str());
-            return FooterTone::Info;
+        if (row.kind == result_layout::CompactKind::Levels) {
+            f.put(result_layout::levels_footer(row, lbl).view());
+            return tone;
         }
         A algo = static_cast<A>(row.algo);
         uint8_t pos = 0;
         bool range = false;
-        if (row.kind == result_layout::CompactKind::Pd) {   // the PD block: a range line is its chip's APDO, a fixed line the block's counts
+        if (row.kind == result_layout::CompactKind::Pd) {
             result_layout::RowTokens rt;
             result_layout::row_tokens(layout_, r_idx, s_.runner_.steps(), s_.runner_.sweep_view(), rt);
             const auto ln = lines_[static_cast<size_t>(s_.selection_)];
@@ -2344,7 +2343,7 @@ static FooterTone range_footer(StrBuf<32> &f, const ct::Runner &runner, A algo, 
                 const auto &tk = rt.toks[static_cast<size_t>(k)];
                 if (!tk.kind) continue;
                 range = true;
-                f.put(result_layout::kind_word(tk.kind)).put(": ");   // the footer names the line's kind: "PPS: caps 19.4V of 21V"
+                f.put(result_layout::kind_word(tk.kind)).put(": ");
                 algo = static_cast<A>(result_layout::kind_algorithm(tk.kind));
                 pos = static_cast<uint8_t>(tk.mv);
             }
@@ -2355,11 +2354,11 @@ static FooterTone range_footer(StrBuf<32> &f, const ct::Runner &runner, A algo, 
     case Stage::SpecDetail: {
         pdspec::Check chk;
         specsec::Cell cell;
-        if (!spec_open(chk, cell)) { f.put(K2_P("No result")); return FooterTone::Info; }
+        if (!spec_open(chk, cell)) { msg = K2_P("No result"); break; }
 #if K2_SPECROWS
-        if (spec_list_on()) {   // the worst transition, by name, in the verdict's tone
+        if (spec_list_on()) {
             specsec::Row r;
-            if (!spec_list_row(spec_list_.worst, r)) { f.put(K2_P("worst: no row")); return FooterTone::Info; }
+            if (!spec_list_row(spec_list_.worst, r)) { msg = K2_P("worst: no row"); break; }
             return spec_detail_footer(f, r);
         }
 #endif
@@ -2367,15 +2366,14 @@ static FooterTone range_footer(StrBuf<32> &f, const ct::Runner &runner, A algo, 
     }
     case Stage::Steps: {
         const auto c = counts(s_.runner_, s_.picked(), s_.result_family_);
-        if (const specsec::Apdo *p = spec_range(); p && s_.selection_ >= static_cast<int>(c.total)) {   // a range's own spec check
+        if (const specsec::Apdo *p = spec_range(); p && s_.selection_ >= static_cast<int>(c.total)) {
             const size_t slot = specsec::slot_at(p->avs, static_cast<size_t>(s_.selection_) - c.total);
             const pdspec::Check chk = specsec::apdo_check(p->avs, slot);
             if (chk != pdspec::Check::Count) return spec_footer(f, static_cast<int>(chk), specsec::slot_cell(s_.runner_.evidence().spec, *p, slot), false);
         }
-        if (s_.picked()) return put_counts(f, s_.result_label_, c);   // "PPS: 3 pass, 1 caution": the name the bar's title uses
-        f.put_u32(c.total).put(K2_P(" steps, "));   // a non-PD unit (QC, UFCS, ...): its whole step list
-        if (!c.fail && c.caution) f.put_u32(c.caution).put(K2_P(" caution"));
-        else f.put_u32(c.fail).put(K2_P(" failed"));
+        if (s_.picked()) return put_counts(f, s_.result_label_, c);
+        const bool show_caution = !c.fail && c.caution;
+        f.put_u32(c.total).put(K2_P(" steps, ")).put_u32(show_caution ? c.caution : c.fail).put(show_caution ? K2_P(" caution") : K2_P(" failed"));
         return c.fail || c.caution ? FooterTone::Caution : FooterTone::Info;
     }
     case Stage::Detail: {
@@ -2383,19 +2381,18 @@ static FooterTone range_footer(StrBuf<32> &f, const ct::Runner &runner, A algo, 
         if (s_.detail_index_ >= 0 && static_cast<size_t>(s_.detail_index_) < steps.size()) {
             const auto &st = steps[static_cast<size_t>(s_.detail_index_)];
             if (st.reason == ct::Reason::StepResolution || st.reason == ct::Reason::ProgCheck) {
-                char wk[28] = {};   // the walk's own words ("steps 100mV, not 20mV") or the transition flags ("overshoot +1")
+                char wk[28] = {};
                 if (const size_t len = ct::caution_text(st, wk)) { f.put(std::string_view(wk, len)); return st.verdict == ct::Verdict::Pass ? FooterTone::Caution : FooterTone::Error; }
             } else if (st.reason == ct::Reason::Folded) {
-                // a caution says what folded, from the APDO's sweep: "folds to 19.4V above 19.9V"
                 if (put_fold_footer(f, s_.runner_.sweep_view().apdo(uint8_t(st.algorithm), st.pos))) return FooterTone::Caution;
             }
             if (result_layout::is_lines_open(st)) { f.put(kLinesOpenFooter); return FooterTone::Caution; }
-            if (result_layout::is_no_answer(st)) { f.put(trig::fail_long(fc::Fail(st.detail))); return FooterTone::Info; }   // 27 cells: the card carries ", unloaded"
+            if (result_layout::is_no_answer(st)) { msg = trig::fail_long(fc::Fail(st.detail)); break; }
         }
-        f.put(K2_P("Kept until the next start"));
-        return FooterTone::Info;
+        msg = K2_P("Kept until the next start");
+        break;
     }
-    case Stage::Changes: f.put_u32(s_.delta_n_).put(K2_P(" changed, was run ")).put_u32(s_.delta_runs_); return FooterTone::Info;
+    case Stage::Changes: f.put_u32(s_.delta_n_).put(K2_P(" changed, was run ")).put_u32(s_.delta_runs_); return tone;
     case Stage::Resume: {
         const auto w = resume_words(ctx_.now);
         f.put(resumetext::footer(w));
@@ -2403,7 +2400,8 @@ static FooterTone range_footer(StrBuf<32> &f, const ct::Runner &runner, A algo, 
     }
     default: break;
     }
-    return FooterTone::Info;
+    if (msg) f.put(msg);
+    return tone;
 }
 
 void ChargerTestPage::row_fn(void *p, int index, bool focused, kit::RowSpec &out) {
@@ -2412,55 +2410,57 @@ void ChargerTestPage::row_fn(void *p, int index, bool focused, kit::RowSpec &out
 
 // Row `index` of the stage's list. The text lives in the page's shared buffers (consumed at once by the kit's paint).
 void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
+    using namespace std::string_view_literals;
     out = {};
     row_text_.clear();
     row_tail_.clear();
     row_note_.clear();
+    const char *note = nullptr;
     switch (s_.stage_) {
     case Stage::Algorithms:
         if (index == kDepthRow) {
-            out.text = K2_P("Depth");
-            out.tail = kLevelItems[level_segment(s_.options_.level)];
+            out.text = K2_PSV("Depth");
+            strpack::assign_sv(out.tail, kLevelItems[level_segment(s_.options_.level)]);
             out.tail_color = kFocus;
-            if (focused) out.note = level_note(s_.options_.level);
+            note = level_note(s_.options_.level);
         } else if (index < kCustomRow) {
             const int p = index - kPresetFirst;
             out.marker = kit::Marker::Radio;
             out.state = p + 1 == preset_row_of(s_.options_.selected);
-            out.text = kPresetNames[p];
+            strpack::assign_sv(out.text, kPresetNames[p]);
             row_tail_.put_u32(s_.preset_n_[p]);
-            if (focused) out.note = kPresetNotes[p];
+            note = kPresetNotes[p];
         } else if (index == kCustomRow) {
             const bool custom = preset_row_of(s_.options_.selected) == 0;
             out.marker = kit::Marker::Radio;
             out.state = custom;
-            out.text = K2_P("Custom...");
+            out.text = K2_PSV("Custom...");
             out.text_color = custom ? kFocus : kText;
             out.chevron = true;
-            if (focused) out.note = kNoteCustom;
+            note = kNoteCustom;
         } else {
-            out.text = K2_P("Last results");
+            out.text = K2_PSV("Last results");
             out.chevron = true;
-            if (focused) out.note = kNoteLast;
+            note = kNoteLast;
         }
         break;
     case Stage::Custom: {
         if (index >= family_rows()) {
-            out.text = "Done";
+            out.text = "Done"sv;
             out.text_color = kFocus;
             break;
         }
         const int fam = index + fam_skip();
         out.marker = kit::Marker::Box3;
         out.state = family_state(s_.options_.selected, fam);
-        out.text = kFamilyNames[fam];
+        strpack::assign_sv(out.text, kFamilyNames[fam]);
         if (fam == kFamXiaomi) {
             out.text_color = kDim;
-            out.tail = "PD";
-            if (focused) out.note = kNoteXiaomi;
+            out.tail = "PD"sv;
+            note = kNoteXiaomi;
         } else {
             row_tail_.put_u32(entries(s_.options_.selected & kFamilies[fam])).put_char('/').put_u32(entries(kFamilies[fam]));
-            if (focused) out.note = kNoteFamily;
+            note = kNoteFamily;
         }
         break;
     }
@@ -2471,14 +2471,15 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
         if (sweep_row_shown(s_.family_, index, s_.sweep_points(), s_.avs_sweep_points())) {   // a deep sweep's own line, with its point count
             const bool avs = sweep_kind_at(index, s_.sweep_points(), s_.avs_sweep_points()) == 1;
             out.state = avs ? s_.options_.avs_sweep : s_.options_.pps_sweep;
-            out.text = avs ? K2_P("AVS sweep") : K2_P("PPS sweep");
+            out.text = avs ? K2_PSV("AVS sweep") : K2_PSV("PPS sweep");
             row_tail_.put_u32(avs ? s_.avs_sweep_points() : s_.sweep_points()).put(" pts");
-            if (focused) out.note = sweep_note(s_.options_.sweep_depth, avs);
+            note = sweep_note(s_.options_.sweep_depth, avs);
             break;
         }
         out.state = (s_.options_.selected & m) == m;
-        out.text = s_.family_ == kFamPd ? (index == 0 ? K2_P("PD fixed") : "PPS") : ct::name(a);
-        if (focused) out.note = group_note(s_.family_, index, a);
+        if (s_.family_ == kFamPd) out.text = index == 0 ? K2_PSV("PD fixed") : "PPS"sv;
+        else strpack::assign_sv(out.text, ct::name(a));
+        note = group_note(s_.family_, index, a);
         break;
     }
     case Stage::Cable:
@@ -2487,7 +2488,7 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
         if (focused) out.note = row_.note;
         break;
     case Stage::Refuse:
-        out.text = index == 0 ? K2_P("Start anyway") : K2_P("Start, skip spoof");
+        out.text = index == 0 ? K2_PSV("Start anyway") : K2_PSV("Start, skip spoof");
         if (index == 0) out.text_color = kCaution;
         break;
     case Stage::Resume:
@@ -2495,7 +2496,7 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
             const auto c = counts(s_.runner_);
             row_text_.put("Run ").put_u32(s_.runner_.run_id()).put(": ").put_u32(c.pass + c.fail + c.skip + c.caution).put_char('/').put_u32(c.total).put(K2_P(" done"));
         } else if (index == 1) {
-            out.text = ct::refusal_words(s_.runner_.reason());
+            strpack::assign_sv(out.text, ct::refusal_words(s_.runner_.reason()));
             out.text_color = kCaution;
             out.data = true;
         } else {
@@ -2509,7 +2510,7 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
         const auto &d = s_.delta_[static_cast<size_t>(index)];
         using DL = report_card::DeltaLine;
         if (d.kind == DL::Group) {
-            out.text = report_card::detail::group_label(d.index);
+            strpack::assign_sv(out.text, report_card::detail::group_label(d.index));
             row_tail_.put(report_card::detail::gv_label(d.was)).put(" > ").put(report_card::detail::gv_label(d.now));
             out.tail_color = d.now == report_card::GV::Pass ? kOk : kError;
         } else {
@@ -2531,7 +2532,7 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
 #if K2_SPECROWS
     case Stage::SpecDetail: {   // one transition of the open check: marker, the pair, the value, the margin (red when it fails)
         specsec::Row r;
-        if (!spec_list_row(index, r)) { out.text = "-"; out.text_color = kDim; break; }
+        if (!spec_list_row(index, r)) { out.text = "-"sv; out.text_color = kDim; break; }
         const bool fail = (r.flags & specsec::kRowFail) != 0, prog = (r.flags & specsec::kRowProg) != 0;
         out.marker = kit::Marker::Verdict;
         out.state = static_cast<uint8_t>(fail ? kit::Verdict::Fail : kit::Verdict::Pass);
@@ -2564,7 +2565,7 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
                 break;
             }
         }
-        if (si < 0) { out.text = K2_P("No selected steps"); out.text_color = kDim; break; }
+        if (si < 0) { out.text = K2_PSV("No selected steps"); out.text_color = kDim; break; }
         const auto &steps = s_.runner_.steps();
         const auto &s = steps[static_cast<size_t>(si)];
         out.marker = kit::Marker::Verdict;
@@ -2573,13 +2574,7 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
         // The step's label; a mode the Xiaomi chain unlocked reads by its watts ("Mi 55W"), its before -> after is the Detail page's.
         row_text_.put(step_label::label(s, si > 0 ? &steps[static_cast<size_t>(si) - 1] : nullptr).view());
         out.data = true;
-        if (measured_shown(s)) {
-            row_tail_.put_fixed(s.measured_mv, 1).put_char('V');
-            out.tail_color = kVolt;
-        } else {
-            row_tail_.put("--");
-            out.tail_color = kFaint;
-        }
+        put_measured_v(row_tail_, out.tail_color, s, 1);
         if (focused) {
             const bool listing = result_layout::noted(s);   // a Light run's listing: LISTED / NOT RUN, no skip cause
             const bool caution = result_layout::caution(s, view);   // a voltage fold (CAUTION: folds back) or a tracking deviation (off 450mV)
@@ -2596,8 +2591,9 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
     }
     default: break;
     }
-    if (!row_text_.view().empty()) out.text = row_text_.view();
-    if (!row_tail_.view().empty()) out.tail = row_tail_.view();
+    if (focused && note) strpack::assign_sv(out.note, note);
+    if (!row_text_.empty()) out.text = row_text_.view();
+    if (!row_tail_.empty()) out.tail = row_tail_.view();
 }
 
 // RowList stages: bind the list on first paint after an invalidate, then apply count and selection (the window follows).
@@ -2643,9 +2639,9 @@ void ChargerTestPage::paint_warning() {
     if (!laid_) {
         const Surface &c = ctx_.content;
         if (ctx_.budget && !ctx_.budget->admit(static_cast<int>(c.w) * 44 + 1200, true)) return;
-        kit::draw_alert_band(c, kit::kBodyY, false, K2_P("Cable connected"));
-        gfx_text(c, kSmall, 6, runlay::kRefuseRowsY - 46, K2_P("the spoof won't reach"), kText, kBg);
-        gfx_text(c, kSmall, 6, runlay::kRefuseRowsY - 26, K2_P("the charger."), kText, kBg);
+        kit::draw_alert_band(c, kit::kBodyY, false, K2_PSV("Cable connected"));
+        gfx_text(c, kSmall, 6, runlay::kRefuseRowsY - 46, K2_PSV("the spoof won't reach"), kText, kBg);
+        gfx_text(c, kSmall, 6, runlay::kRefuseRowsY - 26, K2_PSV("the charger."), kText, kBg);
         ctx_.rows.init(c, runlay::kRefuseRowsY, &ChargerTestPage::row_fn, this);
         ctx_.rows.restart();
         ctx_.rows.invalidate();
@@ -2661,9 +2657,9 @@ void ChargerTestPage::paint_warning() {
 // ====================================================================================================================
 namespace {
 using result_layout::Tone;
-constexpr const char *kChecks[3] = {K2_P("Rd presented"), K2_P("VBUS up"), K2_P("Source caps")};
+constexpr std::string_view kChecks[3] = {K2_PSV("Rd presented"), K2_PSV("VBUS up"), K2_PSV("Source caps")};
 static_assert(all_fit_p(kChecks, kSmallAdvPx, 190), "a Waiting checklist item is wider than its row");
-constexpr const char *kRdOn[2] = {K2_P("Rd on CC1"), K2_P("Rd on CC2")};   // the checklist's first row once the Rd sits on a line
+constexpr std::string_view kRdOn[2] = {K2_PSV("Rd on CC1"), K2_PSV("Rd on CC2")};   // the checklist's first row once the Rd sits on a line
 static_assert(all_fit_p(kRdOn, kSmallAdvPx, 190), "a Waiting checklist item is wider than its row");
 // The Review table: five rows of 26 px from the body top, the key at x6 and the value from x68 (17 cells).
 constexpr kit::KvLayout kKv{kit::kBodyY, kit::kRowH, 6, nullptr, nullptr, 68, 17, Align::Left};
@@ -2686,11 +2682,13 @@ kit::Verdict tone_verdict(Tone t) {
     default: return kit::Verdict::None;
     }
 }
-void put_clip(char (&dst)[14], std::string_view s) {
-    const size_t n = std::min<size_t>(s.size(), sizeof dst - 1);
+[[gnu::noinline]] void put_clip_n(char *dst, size_t cap, std::string_view s) {
+    const size_t n = std::min<size_t>(s.size(), cap - 1);
     std::memcpy(dst, s.data(), n);
     dst[n] = 0;
 }
+template <size_t N>
+inline void put_clip(char (&dst)[N], std::string_view s) { put_clip_n(dst, N, s); }
 // The head line of a row whose section differs from the line above opens with a 2 px rule.
 bool section_break(const result_layout::CompactGrid &l, std::span<const result_layout::CompactLine> lines, size_t i) {
     if (i == 0 || !lines[i].head()) return false;
@@ -2798,7 +2796,7 @@ struct Budget {
 // budget a changed cell that does not fit waits (its signature stays old, so it is still dirty on the next call).
 [[gnu::noinline]] void put_line(const Surface &c, const Font &f, int16_t x, int16_t y, std::string_view text, uint16_t color, unsigned chars,
                                 uint32_t &sig, bool right = false, bool data = false, Budget *bg = nullptr) {
-    uint32_t h = pg::mix_str(mix_init(), text);
+    uint32_t h = pg::mix_str(text);
     h = mix_u32(mix_u32(h, color), chars * 2u + (right ? 1u : 0u)) | 1u;
     if (h == sig) return;
     if (bg && !bg->admit(static_cast<int>(chars) * f.adv * f.height)) return;
@@ -2835,6 +2833,18 @@ static_assert(ctsweep::kErrOkMv == result_layout::kSweepPassMv, "the error hero 
 static_assert(runlay::kHeroDigitsRight - 3 * runlay::kAdv48 - runlay::kAdv24 >= 0, "the sign and the three digit cells fit the content width");
 }  // namespace
 
+[[gnu::noinline]] bool ChargerTestPage::review_kv(int i, const char *key, std::string_view v, uint16_t color) {
+    const uint32_t h = mix_u32(pg::mix_str(pg::mix_cstr(mix_init(), key), v), color) | 1u;
+    if (h == cell_sig_[i]) return true;
+    const Surface &c = ctx_.content;
+    if (ctx_.budget && !ctx_.budget->admit(static_cast<int>(c.w) * kit::kRowH, true)) return false;
+    cell_sig_[i] = h;
+    const int16_t y = kit::kv_row_y(kKv, i);
+    gfx_fill(c, 0, static_cast<int16_t>(y + 1), c.w, kit::kRowH - 1, kBg);
+    kit::kv_row(c, kKv, y, key, v, color);
+    return true;
+}
+
 void ChargerTestPage::paint_review() {
     const Surface &c = ctx_.content;
     PaintBudget *const pbg = ctx_.budget;
@@ -2844,24 +2854,14 @@ void ChargerTestPage::paint_review() {
         action_.init(c, kReviewCellY, kReviewCellH);
         laid_ = true;
     }
-    auto kv = [&](int i, const char *key, std::string_view v, uint16_t color) -> bool {
-        const uint32_t h = mix_u32(pg::mix_str(pg::mix_cstr(mix_init(), key), v), color) | 1u;
-        if (h == cell_sig_[i]) return true;
-        if (pbg && !pbg->admit(static_cast<int>(c.w) * kit::kRowH, true)) return false;
-        cell_sig_[i] = h;
-        const int16_t y = kit::kv_row_y(kKv, i);
-        gfx_fill(c, 0, static_cast<int16_t>(y + 1), c.w, kit::kRowH - 1, kBg);
-        kit::kv_row(c, kKv, y, key, v, color);
-        return true;
-    };
     StrBuf<48> buf;
     // the PD spec stage's checks (Deep, K2_PDSPEC) are tests too
     buf.put_u32(s_.summary_.runnable + s_.summary_.spec_checks).put(K2_P(" run, ")).put_u32(s_.summary_.skipped).put(K2_P(" skip"));
-    if (!kv(0, K2_P("Tests"), buf.view(), s_.summary_.runnable ? kText : kCaution)) return;
+    if (!review_kv(0, K2_P("Tests"), buf.view(), s_.summary_.runnable ? kText : kCaution)) return;
     buf.clear();
     buf.put(kLevelItems[level_segment(s_.options_.level)]);
     if (s_.options_.pps_sweep || s_.options_.avs_sweep) buf.put_char(' ').put(ctsweep::depth_name(s_.options_.sweep_depth));   // the sweep's step, when a sweep runs
-    if (!kv(1, K2_P("Depth"), buf.view(), kText)) return;
+    if (!review_kv(1, K2_P("Depth"), buf.view(), kText)) return;
 
     buf.clear();
     const auto sel = ctx_.cables.selected();
@@ -2871,7 +2871,7 @@ void ChargerTestPage::paint_review() {
         buf.put(row_.text.view());
         if (!row_.rating.empty()) buf.put_char(' ').put(row_.rating);
     }
-    if (!kv(2, K2_P("Spoof"), buf.view(), kText)) return;
+    if (!review_kv(2, K2_P("Spoof"), buf.view(), kText)) return;
 
     // The best advertised level (what the charger offers), then who powers the K2.
     buf.clear();
@@ -2892,18 +2892,18 @@ void ChargerTestPage::paint_review() {
     } else {
         buf.put("--");
     }
-    if (!kv(3, "Peak", buf.view(), buf.view() == "--" ? kDim : kText)) return;
-    if (!kv(4, K2_P("Power"), self_supplied() ? K2_P("From the charger") : K2_P("K2 on USB"), kText)) return;
+    if (!review_kv(3, "Peak", buf.view(), buf.view() == "--" ? kDim : kText)) return;
+    if (!review_kv(4, K2_P("Power"), self_supplied() ? K2_PSV("From the charger") : K2_PSV("K2 on USB"), kText)) return;
 
     if (s_.confirming_) {
         const int32_t left = std::max<int32_t>(0, static_cast<int32_t>(s_.confirm_until_ - ctx_.now));
         const int permille = std::clamp<int>(left * 1000 / static_cast<int32_t>(Ui::kConfirmWindowMs), 0, 1000);
         buf.clear();
         buf.put(K2_P("closes in ")).put_u32(static_cast<uint32_t>((left + 999) / 1000)).put_char('s');
-        action_.draw_armed(K2_P("CONFIRM"), buf.view(), permille, pbg);
+        action_.draw_armed(K2_PSV("CONFIRM"), buf.view(), permille, pbg);
     } else {
         action_.draw_idle("START",   // k2-plain: verb measured by the ticket
-                       K2_P("other port must be empty"), pbg, true);
+                          K2_PSV("other port must be empty"), pbg, true);
     }
 }
 
@@ -3007,7 +3007,7 @@ void ChargerTestPage::paint_waiting(uint32_t now) {
     const uint16_t color = vbus >= pd::kStartVbusMv ? kVolt : vbus > 500 ? kCaution : kFaint;
     StrBuf<12> s;
     hero_text(s, vbus, false);
-    const uint32_t hsig = mix_u32(pg::mix_str(mix_init(), s.view()), color) | 1u;
+    const uint32_t hsig = mix_u32(pg::mix_str(s.view()), color) | 1u;
     if (hsig != hero_sig_) {
         if (!bg.admit(color != hero_color_ ? kHeroPx : 2000)) return;
         paint_hero(color != hero_color_, 170, 34, 5, vbus, color);
@@ -3044,7 +3044,7 @@ void ChargerTestPage::paint_waiting(uint32_t now) {
     const uint32_t spent = now - s_.wait_t0_;
     const uint32_t left = (s_.wait_paused_ || spent >= total) ? 0 : total - spent;
     const int px = static_cast<int>(math::mul_div_u32(left, static_cast<uint32_t>(c.w), total));
-    const uint32_t bsig = mix_u32(mix_init(), static_cast<uint32_t>(px)) | 1u;
+    const uint32_t bsig = mix_u32(static_cast<uint32_t>(px)) | 1u;
     if (bsig != cell_sig_[4] && bg.admit(c.w * 2)) {
         cell_sig_[4] = bsig;
         if (px > 0) gfx_fill(c, 0, 138, static_cast<int16_t>(px), 2, kDim);
@@ -3079,6 +3079,12 @@ static int32_t gauge_full_mv(std::span<const ct::Step> steps, int32_t sweep_hi_m
     for (const auto &s : steps) top = std::max<int32_t>(top, s.mv);
     const int32_t full = (top * 110 / 100 + 999) / 1000 * 1000;
     return std::max<int32_t>(full, 6000);
+}
+
+[[gnu::noinline]] void ChargerTestPage::draw_sweep_gauge(int16_t y, int32_t vbus_g, const ctsweep::Live& live, int32_t full, bool fresh) {
+    const kit::RangePos prev = fresh ? kit::RangePos{-1, -1} : kit::RangePos{static_cast<int16_t>(mark_px_), static_cast<int16_t>(needle_px_)};
+    const kit::RangePos p = kit::draw_range_gauge(ctx_.content, 6, y, 196, vbus_g, live.set_mv, live.lo_mv, live.hi_mv, full, prev);
+    needle_px_ = p.needle; mark_px_ = p.mark;
 }
 
 void ChargerTestPage::paint_running(uint32_t now) {
@@ -3119,8 +3125,7 @@ void ChargerTestPage::paint_running(uint32_t now) {
         cell_sig_[5] = strip_sig;
         needle_px_ = mark_px_ = -1;
         if (sweeping) {
-            const kit::RangePos p = kit::draw_range_gauge(c, 6, L.gauge_y, 196, vbus_g, live.set_mv, live.lo_mv, live.hi_mv, full);
-            needle_px_ = p.needle; mark_px_ = p.mark;
+            draw_sweep_gauge(L.gauge_y, vbus_g, live, full, true);
         } else if (target > 0) {
             needle_px_ = kit::draw_pass_band(c, 6, L.gauge_y, 196, vbus_g, target, full, -1);
         } else {
@@ -3130,8 +3135,7 @@ void ChargerTestPage::paint_running(uint32_t now) {
     // 1a. a sweep row's marker follows the setpoint: the next point's Request is out, so the marker moves on without waiting for the hero
     if (sweeping && needle_px_ >= 0 && mark_px_ >= 0 &&
         kit::range_geom(6, 196, vbus_g, live.set_mv, live.lo_mv, live.hi_mv, full).mark != mark_px_ && bg.admit(kRangePx)) {
-        const kit::RangePos p = kit::draw_range_gauge(c, 6, L.gauge_y, 196, vbus_g, live.set_mv, live.lo_mv, live.hi_mv, full, {static_cast<int16_t>(mark_px_), static_cast<int16_t>(needle_px_)});
-        needle_px_ = p.needle; mark_px_ = p.mark;
+        draw_sweep_gauge(L.gauge_y, vbus_g, live, full, false);
     }
     // 1b. the step outline, in the same tick as the gauge band: the layout follows the runner now, and the grid moves the
     // outline from the cell that was under test to the one that is (two cell rims, never gated). The rows repaint at item 6.
@@ -3140,7 +3144,7 @@ void ChargerTestPage::paint_running(uint32_t now) {
     const uint32_t at_key = spec ? mix_u32(static_cast<uint32_t>(sp.what) + 1u, sp.what == ct::SpecWhat::Fixed ? sp.mv : sp.pos) | 0x80000000u
                           : il != ct::Interlude::None ? 0x40000000u | static_cast<uint32_t>(il)
                                                       : static_cast<uint32_t>(s_.runner_.index());
-    const uint32_t key = mix_u32(mix_u32(mix_init(), s_.runner_.revision()), at_key) | 1u;
+    const uint32_t key = mix_u32(mix_u32(s_.runner_.revision()), at_key) | 1u;
     if (key != grid_key_) {   // rebuilt only when the runner's revision or step moved, never on a plain tick
         grid_key_ = key;
         build_grid(true);
@@ -3202,8 +3206,7 @@ void ChargerTestPage::paint_running(uint32_t now) {
             hero_color_ = kVolt;
         }
         if (sweeping && needle_px_ >= 0 && mark_px_ >= 0) {
-            const kit::RangePos p = kit::draw_range_gauge(c, 6, L.gauge_y, 196, vbus_g, live.set_mv, live.lo_mv, live.hi_mv, full, {static_cast<int16_t>(mark_px_), static_cast<int16_t>(needle_px_)});
-            needle_px_ = p.needle; mark_px_ = p.mark;
+            draw_sweep_gauge(L.gauge_y, vbus_g, live, full, false);
         } else if (target > 0 && needle_px_ >= 0) {
             needle_px_ = kit::draw_pass_band(c, 6, L.gauge_y, 196, vbus_g, target, full, needle_px_);
         }
@@ -3221,21 +3224,23 @@ void ChargerTestPage::paint_running(uint32_t now) {
         StrBuf<24> fam_buf;   // a sweep row's label also names the sweep step: "USB PD 200 mV"
         fam_buf.put(fam >= 0 ? kFamilyNames[fam] : "");
         if (sweeping) fam_buf.put_char(' ').put(ctsweep::depth_name(s_.options_.sweep_depth));
-        const char *const fam_name = fam_buf.c_str();
-        if (sweeping) put_line(c, kLabelFont, runlay::kSweepFamX, L.name_y + kSmall.ascent - kLabelFont.ascent, fam_name, kDim, 16, cell_sig_[2], true, false, &bg);
-        else put_line(c, kLabelFont, runlay::kLeftX, 32, fam_name, kDim, runlay::kFamCells, cell_sig_[2], false, false, &bg);
+        put_line(c, kLabelFont, sweeping ? runlay::kSweepFamX : runlay::kLeftX,
+                 sweeping ? static_cast<int16_t>(L.name_y + kSmall.ascent - kLabelFont.ascent) : int16_t(32),
+                 fam_buf.view(), kDim, sweeping ? 16 : runlay::kFamCells, cell_sig_[2], sweeping, false, &bg);
         buf.clear();
         if (il != ct::Interlude::None) buf.put(step_label::interlude_label(il, s_.runner_.spec_point()).view());
         else if (st) buf.put(step_label::label(*st, at > 0 ? &steps[at - 1] : nullptr).view());
         // The plain name stays in the left column, kLeftGap short of the hero: a longer one drops to the 12 px font.
         const bool small = !sweeping && runlay::name_small(text_cells(buf.view()));
         if (small != name_small_) {   // the other font leaves rows of the old glyphs behind: blank the cell, repaint the name
-            name_small_ = small;            gfx_fill(c, runlay::kLeftX, L.name_y, runlay::kLeftW, runlay::kH16, kBg);
+            name_small_ = small;
+            gfx_fill(c, runlay::kLeftX, L.name_y, runlay::kLeftW, runlay::kH16, kBg);
             cell_sig_[3] = 0;
         }
-        if (sweeping) put_line(c, kSmall, 6, L.name_y, buf.view(), kText, runlay::kSweepNameCells, cell_sig_[3], false, true, &bg);
-        else if (small) put_line(c, kLabelFont, runlay::kLeftX, L.name_y + kSmall.ascent - kLabelFont.ascent, buf.view(), kText, runlay::kNameCellsSmall, cell_sig_[3], false, true, &bg);
-        else put_line(c, kSmall, runlay::kLeftX, L.name_y, buf.view(), kText, runlay::kNameCells, cell_sig_[3], false, true, &bg);
+        put_line(c, small ? kLabelFont : kSmall, sweeping ? int16_t(6) : runlay::kLeftX,
+                 small ? static_cast<int16_t>(L.name_y + kSmall.ascent - kLabelFont.ascent) : L.name_y,
+                 buf.view(), kText, sweeping ? runlay::kSweepNameCells : small ? runlay::kNameCellsSmall : runlay::kNameCells,
+                 cell_sig_[3], false, true, &bg);
         if (!sweeping) {
             buf.clear();
             if (st && st->mv) { buf.put(K2_P("target ")); pg::put_volts_trim(buf, st->mv); buf.put_char('V'); }
@@ -3251,14 +3256,11 @@ void ChargerTestPage::paint_running(uint32_t now) {
     if (s_.follow_) grid_.anchor_bottom(want);   // finished rows stay above, the row under test ends the window
     else grid_.set_first(want);
     // an idle tick lets the grid have a whole row; otherwise it gets what the other items left, never more
-    const int room = pbg ? (pbg->spent == 0 ? kFlightRowPx : pbg->left())
-                         : (flight ? (bg.spent == 0 ? kFlightRowPx : bg.cap - bg.spent) : (1 << 30));
-    const int drawn = grid_.draw_some(room, -1, pbg ? pbg->spent != 0 : (flight && bg.spent != 0));
     if (pbg) {
-        pbg->spent += drawn;
-        if (grid_.pending()) pbg->defer();
+        draw_grid_slice(grid_, pbg);
     } else {
-        bg.spent += drawn;
+        const int room = flight ? (bg.spent == 0 ? kFlightRowPx : bg.cap - bg.spent) : (1 << 30);
+        bg.spent += grid_.draw_some(room, -1, flight && bg.spent != 0);
     }
 }
 
@@ -3281,14 +3283,14 @@ void ChargerTestPage::grid_row(int index, kit::ResultRowSpec &out) {
             const size_t ck = static_cast<size_t>(specsec::kOrder[ci]);
             std::string_view shown;
             const kit::Verdict v = spectext::cell_view(static_cast<int>(ck), s_.runner_.evidence().spec.cells[ci], spec_txt_, shown);
-            out.label = spectext::label(static_cast<pdspec::Check>(ck));
+            strpack::assign_sv(out.label, spectext::label(static_cast<pdspec::Check>(ck)));
             out.cells[0] = {v, shown, {}};
             out.section = specsec::section_start(ci) || k == 0;
         } else {
             StrBuf<12> t;
             t.put_u32(static_cast<uint32_t>(s_.delta_n_)).put(K2_P(" changed"));
             put_clip(cell_txt_[0][0], t.view());
-            out.label = K2_P("Changes");
+            out.label = K2_PSV("Changes");
             out.cells[0] = {kit::Verdict::None, cell_txt_[0][0], {}};
             out.section = spec_n() > 0;
         }
@@ -3301,9 +3303,7 @@ void ChargerTestPage::grid_row(int index, kit::ResultRowSpec &out) {
     const auto &row = layout_.rows[r_idx];
     if (ln.head() || header) {   // the Steps header repeats the label on a block's continuation line
         char dec[sizeof cell_lbl_];
-        const std::string_view lbl = strpack::unpack(result_layout::row_label(layout_, r_idx), dec);
-        std::memset(cell_lbl_, 0, sizeof cell_lbl_);
-        std::memcpy(cell_lbl_, lbl.data(), std::min(lbl.size(), sizeof cell_lbl_ - 1));
+        put_clip(cell_lbl_, strpack::unpack(result_layout::row_label(layout_, r_idx), dec));
         out.label = cell_lbl_;
     }
     result_layout::RowTokens rt;
@@ -3350,7 +3350,7 @@ void ChargerTestPage::grid_row(int index, kit::ResultRowSpec &out) {
         for (int k = pl.first(); k < pl.first() + pl.count(); ++k) range_rule &= rt.toks[static_cast<size_t>(k)].kind == 0;
     }
     if (range_kind && n < kit::kResultMaxCells) {
-        out.label = result_layout::kind_word(range_kind);
+        strpack::assign_sv(out.label, result_layout::kind_word(range_kind));
         const specsec::Apdo *p = s_.runner_.spec_apdo().find(range_pos);
         const specsec::RangeSpec rs = p ? specsec::range_spec(*p) : specsec::RangeSpec{};
         out.cells[n++] = {range_verdict(rs.tone), specsec::range_word(rs), {}};
@@ -3421,7 +3421,7 @@ void ChargerTestPage::draw_capture(const transcap::Meta &m) {
     cap.put(K2_P("Peak ")).put_fixed(m.thumb.vmax_mv, 2).put("V ").put(transcap::reason_name(m.reason));
     char fitted[kFitBuf];
     gfx_text(ctx_.content, kLabelFont, 6, kTop + kHeight + 1, fit_text(kLabelFont, cap.view(), 150, fitted), kDim, kBg);
-    if (m.thumb.accept_col != 0xFF) gfx_text(ctx_.content, kLabelFont, 160, kTop + kHeight + 1, K2_P("|Accept"), kCaution, kBg);
+    if (m.thumb.accept_col != 0xFF) gfx_text(ctx_.content, kLabelFont, 160, kTop + kHeight + 1, K2_PSV("|Accept"), kCaution, kBg);
 }
 
 // The verdict band of a detail page (y22..57): the verdict's fill and glyph, the word (font 24; font 12 when `tight`) and `right` (font 12,
@@ -3466,7 +3466,7 @@ void ChargerTestPage::paint_detail() {
         const int name_w = static_cast<int>(val.view().size() * kSmallAdvPx);
         const bool tight = name_w > room_mid, label = tight && name_w > room_small;
         char buf[kFitBuf];
-        draw_band(c, v, word, tight, fit_data(label ? kLabelFont : kSmall, val.view(), label ? room_small : tight ? room_small : room_mid, buf), label);
+        draw_band(c, v, word, tight, fit_data(label ? kLabelFont : kSmall, val.view(), tight ? room_small : room_mid, buf), label);
         detail_step_ = 1;
     }
     while (detail_step_ >= 1 && detail_step_ <= 6) {
@@ -3496,48 +3496,45 @@ void ChargerTestPage::paint_detail() {
         }
         if (pbg && !pbg->admit(2800, true)) return;
         val.clear();
-        const char *key = nullptr;
-        std::string_view sv;
+        std::string_view key, sv;
         uint16_t col = kText;
+        bool use_val = true;
         switch (detail_step_) {
         case 1:
-            key = K2_P("Target");
+            key = K2_PSV("Target");
             if (s.mv) val.put_fixed(s.mv, 2).put("V ").put_u32(s.ma).put("mA");
             else { val.put(K2_P("No request")); col = kDim; }
-            sv = val.view();
             break;
         case 2:
-            key = K2_P("Measured");
-            if (measured_shown(s)) { val.put_fixed(s.measured_mv, 2).put_char('V'); col = kVolt; }
-            else { val.put("--"); col = kFaint; }
-            sv = val.view();
+            key = K2_PSV("Measured");
+            put_measured_v(val, col, s, 2);
             break;
         case 3:
             if (is_capped(s)) {
-                key = K2_P("Reached");
+                key = K2_PSV("Reached");
                 val.put(result_layout::reach_span(result_layout::reach(steps, s.algorithm, s.pos)).view());
                 col = kCaution;
             } else {
-                key = K2_P("Window");
+                key = K2_PSV("Window");
                 if (s.mv) val.put_fixed(s.mv * 95 / 100, 2).put_char('-').put_fixed(s.mv * 105 / 100, 2).put_char('V');
                 else { val.put("--"); col = kDim; }
             }
-            sv = val.view();
             break;
         case 4: {
-            key = K2_P("Reason");
+            key = K2_PSV("Reason");
             const bool deviates = result_layout::deviates(s, s_.runner_.sweep_view());
             char pk[16] = {};
             if (deviates) { put_off(val, s_.runner_.sweep_view(), s); sv = val.view(); }
-            else if (s.reason == ct::Reason::ProgCheck && ct::caution_text(s, pk)) { val.put(pk); sv = val.view(); }   // "overshoot +1": the first flag and how many more (<= 12 cells)
-            else sv = detail_name(s);
-            if (sv.empty()) { sv = "--"; col = kDim; }   // a pass has no reason: the placeholder the Window row uses
+            else if (s.reason == ct::Reason::ProgCheck && ct::caution_text(s, pk)) { val.put(pk); sv = val.view(); }
+            else strpack::assign_sv(sv, detail_name(s));
+            if (sv.empty()) { sv = "--"; col = kDim; }
             else if (s.verdict == ct::Verdict::Fail || deviates || result_layout::caution(s)) col = kCaution;
+            use_val = false;
             break;
         }
         case 5:
-            if (ct::is_mi_mode(s)) {   // the offer before the chain ("not listed": a new PDO; "not kept": a resumed run lost it)
-                key = K2_P("Before");
+            if (ct::is_mi_mode(s)) {
+                key = K2_PSV("Before");
                 const auto* m = s_.runner_.mi_mode(s);
                 if (m && m->before) val.put(mi_unlock::mode_text({0, m->before, m->pos}, false, kDet.value_chars).view());
                 else { val.put(m ? K2_P("not listed") : K2_P("not kept")); col = kDim; }
@@ -3545,28 +3542,27 @@ void ChargerTestPage::paint_detail() {
                 key = "Mode";
                 val.put(mode.view());
             } else {
-                key = K2_P("Header");
-                // An answer under what the offer proves says both (pd_version::conflict); the PD version itself is the Results line.
+                key = K2_PSV("Header");
                 const auto clash = pd_version::conflict(run_version(e));
-                if (clash.len) { key = K2_P("Revision"); val.put(clash.view()); col = kCaution; }
+                if (clash.len) { key = K2_PSV("Revision"); val.put(clash.view()); col = kCaution; }
                 else {
                     val.put(pd::wire_revision_name(e.wire_rev));
                     if (e.reported.valid) val.put(K2_P("  RMDO ")).put_u32(e.reported.rev_major).put_char('.').put_u32(e.reported.rev_minor);
                 }
             }
-            sv = val.view();
             break;
         default:
             if (ct::is_mi_mode(s)) {   // the offer the chain unlocked (the row's own PDO)
-                key = K2_P("After");
+                key = K2_PSV("After");
                 val.put(mi_unlock::mode_text({0, s.pdo, s.pos}, false, kDet.value_chars).view());
-                sv = val.view();
                 break;
             }
-            key = K2_P("Scope");
-            sv = K2_P("Voltage hold");
+            key = K2_PSV("Scope");
+            sv = K2_PSV("Voltage hold");
+            use_val = false;
             break;
         }
+        if (use_val) sv = val.view();
         kit::kv_row(c, kDet, kit::kv_row_y(kDet, detail_step_ - 1), key, sv, col);
         if (detail_step_ == 6) {
             gfx_fill(c, 0, kit::kv_row_y(kDet, 6), c.w, 1, kRule);
@@ -3607,7 +3603,9 @@ void ChargerTestPage::paint_spec_detail() {
         StrBuf<20> v;
         uint16_t color = kText;
         spectext::detail_value(detail_step_, static_cast<int>(chk), cell, v, color);
-        kit::kv_row(ctx_.content, kSpecDet, kit::kv_row_y(kSpecDet, detail_step_), spectext::kDetailKeys[detail_step_], v.view(), color);
+        std::string_view key;
+        strpack::assign_sv(key, spectext::kDetailKeys[detail_step_]);
+        kit::kv_row(ctx_.content, kSpecDet, kit::kv_row_y(kSpecDet, detail_step_), key, v.view(), color);
         ++detail_step_;
     }
     laid_ = true;

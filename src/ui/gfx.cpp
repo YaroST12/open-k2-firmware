@@ -209,4 +209,8 @@ K2_HOT void FieldBase::draw_buf(char *cur, std::string_view text K2_TRUNC_DEF) {
     field_draw_buf(surf_, *font_, x_, y_, chars_, align_, fg_, bg_, valid_, cur, text K2_TRUNC_ARG);
 }
 
+K2_HOT void FieldBase::draw(std::string_view text K2_TRUNC_DEF) {
+    field_draw_buf(surf_, *font_, x_, y_, chars_, align_, fg_, bg_, valid_, cur_data(), text K2_TRUNC_ARG);
+}
+
 }  // namespace k2

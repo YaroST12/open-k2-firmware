@@ -5,6 +5,7 @@
 #pragma once
 #include <cstdint>
 
+#include "k2/core/bss_zero.hpp"
 #include "k2/drivers/buttons.hpp"
 
 namespace k2 {
@@ -52,13 +53,13 @@ public:
     }
 
 private:
-    bool armed_ = false;
-    bool sampled_ = false;
-    bool confirmed_ = false;
-    uint32_t first_ms_ = 0;
-    uint32_t ms_ = 0;
-    uint32_t until_ms_ = 0;
-    uint32_t free_ms_ = 0;
+    bool armed_ K2_BSS_INIT(false);
+    bool sampled_ K2_BSS_INIT(false);
+    bool confirmed_ K2_BSS_INIT(false);
+    uint32_t first_ms_ K2_BSS_INIT(0);
+    uint32_t ms_ K2_BSS_INIT(0);
+    uint32_t until_ms_ K2_BSS_INIT(0);
+    uint32_t free_ms_ K2_BSS_INIT(0);
 };
 
 }  // namespace k2

@@ -145,7 +145,7 @@ bool GraphsPage::paint_head(int k, const Shown &s, bool digits) {
     const int vc = gr::value_chars(b);
     const int chars = vc + static_cast<int>(unit.size() + mx.view().size());
     const int16_t gx = g_.group_x(chars);
-    const uint32_t sig = mix_u32(mix(mix(mix_init(), span), mx.view()), (static_cast<uint32_t>(ink) << 16) | dim);
+    const uint32_t sig = mix_u32(mix(mix(span), mx.view()), (static_cast<uint32_t>(ink) << 16) | dim);
     if (!head_ok_[k] || sig != head_sig_[k]) {
         const int16_t ltop = top_for_baseline(kLabelFont, static_cast<int16_t>(y0 + gr::kLabelBase));
         const std::string_view label = kLabel[k];
@@ -190,7 +190,7 @@ bool GraphsPage::paint_info(const Shown &s, bool digits) {
     // keeps five cells, right-aligned, so the blank ones lie in the gap the layout keeps.
     const gr::InfoLayout l = gr::info_layout(s.word.view().size(), s.proto.view().size(), el.size(), g_.right());
     const uint16_t pink = s.mode == hm::Mode::Stale ? kStale : kText;
-    uint32_t sig = mix_u32(mix(mix(mix_init(), s.word.view()), s.proto.view()), (static_cast<uint32_t>(s.word_ink) << 16) | pink);
+    uint32_t sig = mix_u32(mix(mix(s.word.view()), s.proto.view()), (static_cast<uint32_t>(s.word_ink) << 16) | pink);
     sig = mix_u32(sig, (static_cast<uint32_t>(static_cast<uint16_t>(l.proto_x)) << 1) | (l.elapsed ? 1u : 0u));
     const int16_t ex = static_cast<int16_t>(g_.right() + 1 - kElChars * kSmall.adv);
     if (!info_ok_ || sig != info_sig_) {

@@ -24,7 +24,7 @@ from check_64bit import NUM_RX, iter_source_files, strip_cxx  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 MIN_LEN = 5
-EXEMPT_CALLS = {"K2_P", "static_assert", "sizeof", "asm", "__asm__", "__asm", "__attribute__", "_Pragma",
+EXEMPT_CALLS = {"K2_P", "K2_PSV", "static_assert", "sizeof", "asm", "__asm__", "__asm", "__attribute__", "_Pragma",
                 "alignof", "__has_include"}
 FORMAT_CALLS = {"K2LOG": 0, "K2_TPUT": 1}   # macro -> argument that is its format (K2LOG: stripped; K2_TPUT packs it)
 COMPARE_CALLS = {"same", "eq", "strcmp", "strncmp", "strcasecmp", "memcmp", "memcpy", "strcpy", "strncpy", "starts_with",
@@ -205,7 +205,7 @@ def literals(text: str) -> list[Literal]:
 
 def wrapped_literals(text: str) -> list[bytes]:
     """Values of the K2_P(...) literals (and K2_TPUT formats) of a source, in order (the pair table's training corpus)."""
-    return [lit.value for lit in literals(text) if lit.context in ("K2_P", "K2_TPUT")]
+    return [lit.value for lit in literals(text) if lit.context in ("K2_P", "K2_PSV", "K2_TPUT")]
 
 
 def _marks(raw_lines: list[str]) -> tuple[dict[int, str | None], set[int]]:

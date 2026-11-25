@@ -187,6 +187,8 @@ public:
     [[gnu::noinline]] StrBufBase &put_age(uint32_t seconds);
     std::string_view view() const { return {data(), n_}; }
     const char *c_str() const { return data(); }
+    uint16_t size() const { return n_; }
+    bool empty() const { return n_ == 0; }
 
 protected:
     StrBufBase() = default;

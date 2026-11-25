@@ -180,7 +180,7 @@ struct Budget {
 // A cached text cell under a paint budget: it repaints only when its text or colour changed and the budget admits its box.
 [[gnu::noinline]] void put_cell(const Surface &c, const Font &f, int16_t x, int16_t y, uint8_t chars, Align align, uint32_t &sig,
                                 std::string_view text, uint16_t color, int box_px, Budget &b K2_TRUNC_DECL) {
-    const uint32_t h = mix_u32(mix(mix_init(), text), color) | 1u;
+    const uint32_t h = mix_u32(mix(text), color) | 1u;
     if (h == sig || !b.admit(box_px)) return;
     sig = h;
     put_cell_raw(c, f, x, y, chars, align, text, color K2_TRUNC_ARG);

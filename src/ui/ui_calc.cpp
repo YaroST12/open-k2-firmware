@@ -9,10 +9,14 @@
 
 namespace k2 {
 
+[[gnu::noinline]] uint32_t mix_u32(uint32_t h, uint32_t v) { return (h ^ v) * 16777619u; }
+[[gnu::noinline]] uint32_t mix_u32(uint32_t v) { return (2166136261u ^ v) * 16777619u; }
+
 [[gnu::noinline]] uint32_t mix(uint32_t h, std::string_view s) {
     for (char ch : s) h = (h ^ static_cast<uint8_t>(ch)) * 16777619u;
     return (h ^ 0xFFu) * 16777619u;
 }
+[[gnu::noinline]] uint32_t mix(std::string_view s) { return mix(mix_init(), s); }
 
 void EnergyMeter::reset(uint32_t now_ms) {
     uj_ = 0;

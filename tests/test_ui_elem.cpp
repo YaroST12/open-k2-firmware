@@ -6,6 +6,7 @@
 #include "test_util.h"
 #include "fake_lcd.h"
 #include "k2/ui/ui_elem.hpp"
+#include "k2/ui/ui_pages.hpp"
 #include "k2/ui/ui_widgets.hpp"
 #include "k2/ui/ui_style.hpp"
 
@@ -36,8 +37,14 @@ static void test_elem_zero_sig() {
 
 static void test_hash_helpers() {
     CHECK_EQ(mix_u32(0u, 0u), 0u);
-    CHECK_EQ(mix(mix_init(), "abc") == mix(mix_init(), "abd"), 0);   // different text, different hash
-    CHECK_EQ(mix(mix_init(), "abc"), mix(mix_init(), "abc"));         // deterministic
+    CHECK_EQ(mix_u32(42u), mix_u32(mix_init(), 42u));
+    CHECK_EQ(mix("abc"), mix(mix_init(), "abc"));
+    CHECK_EQ(mix("abc") == mix("abd"), 0);   // different text, different hash
+    const uint16_t u16[] = {0x1234u, 0x5678u};
+    CHECK_EQ(pg::mix_u16s(mix_init(), u16, 2), mix_u32(mix_u32(u16[0]), u16[1]));
+    const uint8_t b[] = {1u, 2u, 3u, 4u};
+    CHECK_EQ(pg::mix_bytes(b, 4), pg::mix_bytes(mix_init(), b, 4));
+    CHECK_EQ(pg::mix_bytes(b, 4) == pg::mix_bytes(b, 3), 0);
 }
 
 static void test_icon_cell() {

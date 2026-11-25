@@ -27,10 +27,14 @@ enum : std::uint8_t {
 };
 enum : std::uint8_t { kSrcCaps = 1, kRequest = 2, kSnkCaps = 4, kEnterUsb = 8, kEprRequest = 9, kEprMode = 10, kVdm = 15 };
 enum : std::uint8_t { kExtSkedb = 15 };
+constexpr std::uint16_t rd16(const std::uint8_t* p) {
+    return std::uint16_t(p[0] | p[1] << 8);
+}
+
 // A request waiting for its answer.
 enum : std::uint8_t { kPendNone, kPendRequest, kPendPr, kPendDr, kPendVconn, kPendFr, kPendEusb };
 constexpr std::uint8_t swap_bit(std::uint8_t pend) {
-    return pend == kPendPr ? 1 : pend == kPendDr ? 2 : pend == kPendVconn ? 4 : pend == kPendFr ? 8 : 0;
+    return (pend >= kPendPr && pend <= kPendFr) ? std::uint8_t(1u << (pend - kPendPr)) : 0;
 }
 constexpr std::uint16_t kSvidPd = 0xFF00, kSvidDp = 0xFF01, kSvidTbt = 0x8087;
 
@@ -114,6 +118,12 @@ Best best_of(std::span<const std::uint32_t> pdos) {
     return b;
 }
 
+[[gnu::noinline]] bool share_at_least(std::uint32_t part, std::uint32_t total, unsigned pct) {
+    return total == 0 || mul_div_u32(part, 100u, total) >= pct;
+}
+
+[[gnu::noinline]] void reset_session(Session& s) { s = Session(); }
+
 }  // namespace
 
 // ---- feeding ----
@@ -142,8 +152,8 @@ void Analyzer::tick(std::uint32_t ts_us) {
     frac_us_ %= 1000;
 }
 
-void Analyzer::begin(bool by_attach) {
-    cur_ = Session();
+[[gnu::noinline]] void Analyzer::begin(bool by_attach) {
+    reset_session(cur_);
     cur_.open = cur_.attached = true;
     cur_.cc_seen = by_attach;
     cur_.start_ms = cur_.end_ms = now_ms_;
@@ -168,7 +178,7 @@ void Analyzer::begin(bool by_attach) {
 
 // An over-draw burst ends (draw back under the limit for kOverGapMs, the contract changed, or the session ended):
 // it counts when it lasted kOverBurstMs, first to last sample above.
-void Analyzer::close_burst() {
+[[gnu::noinline]] void Analyzer::close_burst() {
     if (!over_on_) return;
     over_on_ = false;
     Session& s = cur_;
@@ -180,7 +190,7 @@ void Analyzer::close_burst() {
     inc(s.bursts);
 }
 
-void Analyzer::finish() {
+[[gnu::noinline]] void Analyzer::finish() {
     if (!cur_.open) return;
     close_burst();
     hold_to(cur_.ended ? cur_.detach_ms : now_ms_);
@@ -189,7 +199,7 @@ void Analyzer::finish() {
     last_ = cur_;
     have_last_ = true;
     finished_++;
-    cur_ = Session();
+    reset_session(cur_);
 }
 
 // The K2's sink session ends where the device's begins: CC stays attached, so no detach splits them. The source's
@@ -268,7 +278,7 @@ void Analyzer::sustain(std::uint32_t dt, std::uint32_t ma) {
         blk_over_mas_ = sat_add(blk_over_mas_, std::uint64_t(ma) * dt);
     }
     if (blk_ms_ < kSustainMs) return;
-    if (std::uint64_t(blk_over_ms_) * 100 >= std::uint64_t(blk_ms_) * kSustainPct) {
+    if (share_at_least(blk_over_ms_, blk_ms_, kSustainPct)) {
         if (s.sus_ms == 0) s.sus_first_ms = v_ms_ - blk_ms_;
         s.sus_ms = sat_add(s.sus_ms, blk_ms_);
         s.sus_over_ms = sat_add(s.sus_over_ms, blk_over_ms_);
@@ -296,8 +306,6 @@ static void band_of(std::uint16_t c_mv, std::uint32_t& lo, std::uint32_t& hi) {
 // CC or PD record, opens the session (its contract unseen). After the first session only CC and PD do.
 bool Analyzer::first_vbus_opens(std::uint16_t mv) const { return mv > kUpMv && !have_last_ && finished_ == 0 && !cc_any_; }
 
-// A ring VBUS record. It is emitted on large changes, so it stays the fast witness of VBUS loss and of the unplug; the
-// draw and band evidence come from it only while the session has no power windows.
 // The draw is a magnitude: the sign only says which port feeds which (negative: top port to bottom).
 static std::int16_t mag16(std::int16_t ma) { return ma >= 0 ? ma : ma == INT16_MIN ? INT16_MAX : std::int16_t(-ma); }
 
@@ -310,25 +318,33 @@ static Window magnitudes(const Window& w) {
     return m;
 }
 
-void Analyzer::sample(std::uint16_t mv, std::int16_t ma) {
-    ma = mag16(ma);
-    if (!win_) { pre_mv_ = mv; pre_ma_ = ma; pre_have_ = true; }
+[[gnu::noinline]] bool Analyzer::prep_vbus(std::uint16_t mv, std::uint16_t vmin, std::int16_t ma, bool is_win) {
+    if (is_win || !win_) { pre_mv_ = mv; pre_ma_ = ma; pre_have_ = true; }
+    if (is_win) win_ = true;
     Session& s = cur_;
-    if (s.open && s.ended && mv < kLostMv) unplug_ = true;
-    if (!s.open && first_vbus_opens(mv)) begin(false);
-    if (!s.open || !s.attached) return;
+    if (s.open && s.ended && vmin < kLostMv) unplug_ = true;
+    if (!s.open && first_vbus_opens(vmin)) begin(false);
+    if (!s.open || !s.attached) return false;
     if (mv > kUpMv && s.up_mv == 0) s.up_mv = mv;
-    if (settled() && s.c_mv && mv < kLostMv && !lost_pend_) {
+    if (settled() && s.c_mv && vmin < kLostMv && !lost_pend_) {
         lost_pend_ = true;
         lost_pend_ms_ = now_ms_;
         lost_pend_ma_ = s.have_v ? i_ma_ : 0;
     }
+    return true;
+}
+
+// A ring VBUS record. It is emitted on large changes, so it stays the fast witness of VBUS loss and of the unplug; the
+// draw and band evidence come from it only while the session has no power windows.
+void Analyzer::sample(std::uint16_t mv, std::int16_t ma) {
+    ma = mag16(ma);
+    if (!prep_vbus(mv, mv, ma, false)) return;
     if (win_) {   // a real sample at its own moment (often between the windows' 20 Hz ones): VBUS evidence only
         band(mv, mv, ma > 0 ? std::uint16_t(ma) : 0);
         return;
     }
     hold_to(now_ms_);
-    s.have_v = true;
+    cur_.have_v = true;
     v_mv_ = mv;
     i_ma_ = ma;
     v_ms_ = now_ms_;
@@ -343,20 +359,8 @@ void Analyzer::power_window(std::uint32_t ts_us, const Window& in) {
     const Window w = magnitudes(in);
     tick(ts_us);
     timers();
-    pre_mv_ = w.mv;
-    pre_ma_ = w.ma;
-    pre_have_ = true;
+    if (!prep_vbus(w.mv, w.vmin, w.ma, true)) return;
     Session& s = cur_;
-    if (s.open && s.ended && w.vmin < kLostMv) unplug_ = true;
-    win_ = true;
-    if (!s.open && first_vbus_opens(w.vmin)) begin(false);
-    if (!s.open || !s.attached) return;
-    if (w.mv > kUpMv && s.up_mv == 0) s.up_mv = w.mv;
-    if (settled() && s.c_mv && w.vmin < kLostMv && !lost_pend_) {
-        lost_pend_ = true;
-        lost_pend_ms_ = now_ms_;
-        lost_pend_ma_ = s.have_v ? i_ma_ : 0;
-    }
     // the window ends now and its mean stands for the time since the previous one
     v_mv_ = w.mv;
     i_ma_ = w.ma;
@@ -463,7 +467,28 @@ bool WindowAcc::add(std::uint32_t now_ms, std::uint16_t mv, std::int16_t ma, Win
     return true;
 }
 
-void Analyzer::timers() {
+[[gnu::noinline]] void Analyzer::note_miss(std::uint8_t& cnt, std::uint32_t since, bool only_if_zero) {
+    if (!blind(since) && cnt++ == 0 && (!only_if_zero || cur_.miss_ms == 0)) cur_.miss_ms = since;
+}
+
+[[gnu::noinline]] void Analyzer::refuse_swap(std::uint8_t kind, std::uint8_t b, bool by_src, std::uint8_t ans, std::uint32_t ms) {
+    cur_.refused |= b;
+    if (by_src) cur_.refused_by_src |= b;
+    if (kind == kPendPr) {
+        cur_.refused_ans = ans;
+        cur_.refused_ms = ms;
+        cur_.refused_mv = cur_.contract ? cur_.c_mv : v_mv_;
+    }
+}
+
+[[gnu::noinline]] void Analyzer::record_mode_nak(unsigned svid, bool cable) {
+    const std::uint8_t bit = svid == kSvidDp ? 1 : svid == kSvidTbt ? 2 : 4;
+    const unsigned sh = cable ? 4 : 0;
+    if (!(cur_.mode_nak & (7u << sh))) (cable ? cur_.cable_nak_ms : cur_.mode_nak_ms) = now_ms_;
+    cur_.mode_nak |= std::uint8_t(bit << sh);
+}
+
+[[gnu::noinline]] void Analyzer::timers() {
     Session& s = cur_;
     if (!s.open) return;
     if (s.ended && now_ms_ - s.detach_ms > kReattachMs) { finish(); return; }
@@ -487,21 +512,19 @@ void Analyzer::timers() {
     }
     if (pend_ != kPendNone && now_ms_ - pend_ms_ > kMissingMs) {
         if (pend_ == kPendRequest) {
-            if (!blind(pend_ms_) && s.no_accept++ == 0) s.miss_ms = pend_ms_;
+            note_miss(s.no_accept, pend_ms_, false);
         } else if (const std::uint8_t b = blind(pend_ms_) ? 0 : swap_bit(pend_)) {
-            s.refused |= b;   // never answered
-            if (pend_ == kPendPr) { s.refused_ans = 0; s.refused_ms = pend_ms_; s.refused_mv = s.contract ? s.c_mv : v_mv_; }
-            if (!pend_from_src_) s.refused_by_src |= b;
+            refuse_swap(pend_, b, !pend_from_src_, 0, pend_ms_);   // never answered
         }
         pend_ = kPendNone;
     }
     if (wait_psrdy_ && now_ms_ - accept_ms_ > kPsRdyMissingMs) {
         wait_psrdy_ = false;
-        if (!blind(accept_ms_) && s.no_psrdy++ == 0 && s.miss_ms == 0) s.miss_ms = accept_ms_;
+        note_miss(s.no_psrdy, accept_ms_, true);
     }
 }
 
-void Analyzer::ps_rdy() {
+[[gnu::noinline]] void Analyzer::ps_rdy() {
     Session& s = cur_;
     wait_psrdy_ = false;
     const std::uint32_t dt = now_ms_ - accept_ms_;
@@ -513,7 +536,7 @@ void Analyzer::ps_rdy() {
     last_pwr_ms_ = now_ms_;
 }
 
-void Analyzer::gap() {
+[[gnu::noinline]] void Analyzer::gap() {
     inc(cur_.gaps);
     gap_ms_ = now_ms_;
 }
@@ -536,7 +559,7 @@ void Analyzer::feed_record(std::uint8_t type, std::uint32_t ts_us, std::span<con
         cc_any_ = true;
         // a session VBUS opened (the capture started mid-session) with no PD in it yet and too short to judge: the
         // tail of a session before the capture, dropped at its first CC event
-        if (s.open && !s.cc_seen && s.msgs == 0 && now_ms_ - s.start_ms < kDrawSettleMs) cur_ = Session();
+        if (s.open && !s.cc_seen && s.msgs == 0 && now_ms_ - s.start_ms < kDrawSettleMs) reset_session(cur_);
         if (p[0] == 1) {   // attach
             if (s.open && s.ended && !unplug_) {   // a CC bounce with VBUS kept: the same session goes on
                 s.ended = false;
@@ -560,20 +583,19 @@ void Analyzer::feed_record(std::uint8_t type, std::uint32_t ts_us, std::span<con
         }
         return;
     case Type::Vbus:
-        if (p.size() >= 4) sample(std::uint16_t(p[0] | p[1] << 8), std::int16_t(p[2] | p[3] << 8));
+        if (p.size() >= 4) sample(rd16(&p[0]), std::int16_t(rd16(&p[2])));
         return;
     case Type::Rx:
-        if (p.size() < 7) return;
-        message(true, p[0], std::uint16_t(p[1] | p[2] << 8), p.subspan(3, p.size() - 7), rd32(&p[p.size() - 4]));
-        if (cur_.open) cur_.link.feed_message(true, p);
-        return;
     case Type::Tx: {
-        if (p.size() < 2) return;
-        const bool has_token = (p.size() - 2) % 4 == 1;
-        const std::uint8_t token = has_token ? p[p.size() - 1] : 0xE0;
-        const auto objs = p.subspan(2, p.size() - 2 - (has_token ? 1 : 0));
-        message(false, token, std::uint16_t(p[0] | p[1] << 8), objs, 0);
-        if (cur_.open) cur_.link.feed_message(false, p.first(p.size() - (has_token ? 1 : 0)));
+        const bool rx = Type(type) == Type::Rx;
+        if (p.size() < (rx ? 7u : 2u)) return;
+        const std::size_t off = rx ? 1 : 0;
+        const bool has_token = !rx && (p.size() - 2) % 4 == 1;
+        const std::uint8_t token = rx ? p[0] : (has_token ? p[p.size() - 1] : 0xE0);
+        const std::size_t link_len = p.size() - (has_token ? 1 : 0);
+        const std::size_t obj_len = p.size() - (rx ? 7 : 2 + (has_token ? 1 : 0));
+        message(rx, token, rd16(&p[off]), p.subspan(off + 2, obj_len), rx ? rd32(&p[p.size() - 4]) : 0);
+        if (cur_.open) cur_.link.feed_message(rx, p.first(link_len));
         return;
     }
     case Type::TxResult:
@@ -610,14 +632,14 @@ void Analyzer::feed_record(std::uint8_t type, std::uint32_t ts_us, std::span<con
         if (s.open && s.active && p.size() >= 1 && (p[0] & 1)) hand_over();
         return;
     case Type::RxRepeat:
-        if (s.open && p.size() >= 2) s.caps = std::uint16_t(s.caps + (p[0] | p[1] << 8));
+        if (s.open && p.size() >= 2) s.caps = std::uint16_t(s.caps + rd16(&p[0]));
         return;
     default:
         return;
     }
 }
 
-void Analyzer::contract_from_rdo() {
+[[gnu::noinline]] void Analyzer::contract_from_rdo() {
     Session& s = cur_;
     const unsigned pos = s.rdo >> 28 & 0xF;
     s.c_mv = s.c_ma = s.c_pdo_ma = 0;
@@ -629,6 +651,100 @@ void Analyzer::contract_from_rdo() {
     s.c_ma = r.op_ma;
     s.c_pdo_ma = pdo.max_ma;
     s.pps = pdo.type == PdoType::Pps || pdo.type == PdoType::Avs;
+}
+
+[[gnu::noinline]] void Analyzer::cable_message(bool from_src, bool ext, unsigned type, unsigned n, const std::uint8_t* o) {
+    Session& s = cur_;
+    if (from_src) {   // the cable plug speaks
+        s.cable_answered = true;
+        if (!ext && n >= 1 && type == kVdm) {
+            const std::uint32_t v = rd32(o);
+            // a plug may NAK with the PD SID: the mode is the one the port asked it to enter
+            const unsigned svid = (v >> 16) == kSvidPd ? cable_mode_svid_ : v >> 16, ctype = v >> 6 & 3;
+            if ((v >> 15 & 1) && (v & 0x1F) == 4 && (ctype == 2 || ctype == 3))   // Enter_Mode NAK / BUSY
+                record_mode_nak(svid, true);
+        }
+        return;
+    }
+    inc(s.cable_frames);
+    if (!ext && n >= 1 && type == kVdm) {
+        const std::uint32_t v = rd32(o);
+        if ((v >> 15 & 1) && (v >> 6 & 3) == 0) {
+            if ((v & 0x1F) == 1) inc(s.cable_tries);
+            if ((v & 0x1F) == 4) cable_mode_svid_ = std::uint16_t(v >> 16);
+        }
+    }
+}
+
+[[gnu::noinline]] void Analyzer::pend_answer(bool from_src, unsigned type) {
+    Session& s = cur_;
+    const std::uint8_t kind = pend_;
+    pend_ = kPendNone;
+    last_pwr_ms_ = now_ms_;
+    if (kind == kPendRequest) {
+        if (type == kAccept) {
+            const std::uint32_t dt = now_ms_ - pend_ms_;
+            if (dt > spec::kAcceptLimitMs + kAnswerSlackMs && dt > s.late_accept_ms) s.late_accept_ms = std::uint16_t(dt);
+            wait_psrdy_ = true;
+            accept_ms_ = now_ms_;
+        } else if (type == kWait) {
+            inc(s.waits);
+        } else {
+            if (s.rejects++ == 0) s.reject_ms = now_ms_;
+        }
+    } else if (kind == kPendEusb) {
+        if (type != kAccept) s.eusb_refused = true;
+    } else if (const std::uint8_t b = swap_bit(kind)) {
+        if (type == kAccept) {
+            if (kind == kPendPr) {   // the roles turn: what was the sink's is the source's now
+                s.contract = false;
+                s.n_src = 0;
+                s.offer_mw = s.offer_ma = s.offer_top_mv = 0;
+                s.n_snk = 0;
+                s.snk_mw = s.snk_mv = s.snk_ma = s.snk_top_mv = 0;
+                s.snk_higher = false;
+                s.snk_vid = s.snk_pid = 0;
+                const std::uint32_t t = s.snk_idh;
+                s.snk_idh = s.src_idh;
+                s.src_idh = t;
+                const bool h = s.snk_host;
+                s.snk_host = s.src_host;
+                s.src_host = h;
+            }
+        } else {
+            refuse_swap(kind, b, from_src, std::uint8_t(type), now_ms_);
+        }
+    }
+}
+
+[[gnu::noinline]] void Analyzer::vdm_message(bool from_src, unsigned n, const std::uint8_t* o) {
+    Session& s = cur_;
+    const std::uint32_t v = rd32(o);
+    if (!(v >> 15 & 1)) return;
+    const unsigned svid = v >> 16, ctype = v >> 6 & 3, cmd = v & 0x1F;
+    const std::uint32_t key = svid << 8 | cmd;
+    VdmKey* k = nullptr;
+    for (auto& e : s.vdm) if (e.count && e.key == key) k = &e;
+    if (ctype == 0) {
+        if (!k) {
+            k = &s.vdm[0];
+            for (auto& e : s.vdm) if (e.count < k->count) k = &e;
+            *k = VdmKey{};
+            k->key = key;
+        } else if (now_ms_ - k->last_ms <= kVdmRepeatMs) {
+            inc(k->fast);
+        }
+        inc(k->count);
+        k->last_ms = now_ms_;
+    } else if (k) {
+        k->answer = std::uint8_t(ctype);
+    }
+    if (ctype == 1 && cmd == 1 && svid == kSvidPd && n >= 4) {
+        const std::uint32_t idh = rd32(o + 4), prod = rd32(o + 12);
+        if (from_src) s.src_idh = idh;
+        else { s.snk_idh = idh; s.snk_vid = std::uint16_t(idh); s.snk_pid = std::uint16_t(prod >> 16); }
+    }
+    if (cmd == 4 && (ctype == 2 || ctype == 3)) record_mode_nak(svid, false);
 }
 
 void Analyzer::message(bool rx, std::uint8_t token, std::uint16_t hdr, std::span<const std::uint8_t> objs, std::uint32_t crc) {
@@ -689,80 +805,16 @@ void Analyzer::message(bool rx, std::uint8_t token, std::uint16_t hdr, std::span
     }
     const std::uint8_t* o = objs.data();
 
-    if (sop != 0) {   // the cable: SOP' / SOP''
-        if (from_src) {   // the cable plug speaks
-            s.cable_answered = true;
-            if (!ext && n >= 1 && type == kVdm) {
-                const std::uint32_t v = rd32(o);
-                // a plug may NAK with the PD SID: the mode is the one the port asked it to enter
-                const unsigned svid = (v >> 16) == kSvidPd ? cable_mode_svid_ : v >> 16, ctype = v >> 6 & 3;
-                if ((v >> 15 & 1) && (v & 0x1F) == 4 && (ctype == 2 || ctype == 3)) {   // Enter_Mode NAK / BUSY
-                    if (!(s.mode_nak & 0x70)) s.cable_nak_ms = now_ms_;
-                    s.mode_nak |= std::uint8_t((svid == kSvidDp ? 1 : svid == kSvidTbt ? 2 : 4) << 4);
-                }
-            }
-            return;
-        }
-        inc(s.cable_frames);
-        if (!ext && n >= 1 && type == kVdm) {
-            const std::uint32_t v = rd32(o);
-            if ((v >> 15 & 1) && (v >> 6 & 3) == 0 && (v & 0x1F) == 1) inc(s.cable_tries);
-            if ((v >> 15 & 1) && (v >> 6 & 3) == 0 && (v & 0x1F) == 4) cable_mode_svid_ = std::uint16_t(v >> 16);
-        }
-        return;
-    }
+    if (sop != 0) { cable_message(from_src, ext, type, n, o); return; }
 
-    if (s.msgs < 0xFFFF) s.msgs++;
+    inc(s.msgs);
     if (!from_src) s.sink_answered = true;
-    if (from_src) s.src_host = dfp;
-    else s.snk_host = dfp;
+    (from_src ? s.src_host : s.snk_host) = dfp;
 
     // An answer to the pending request (from the other side).
     if (!ext && n == 0 && pend_ != kPendNone && from_src != (pend_from_src_ != 0) &&
         (type == kAccept || type == kReject || type == kWait || type == kNotSupported)) {
-        const std::uint8_t kind = pend_;
-        pend_ = kPendNone;
-        last_pwr_ms_ = now_ms_;
-        if (kind == kPendRequest) {
-            if (type == kAccept) {
-                const std::uint32_t dt = now_ms_ - pend_ms_;
-                if (dt > spec::kAcceptLimitMs + kAnswerSlackMs && dt > s.late_accept_ms) s.late_accept_ms = std::uint16_t(dt);
-                wait_psrdy_ = true;
-                accept_ms_ = now_ms_;
-            } else if (type == kWait) {
-                if (s.waits < 0xFF) s.waits++;
-            } else {
-                if (s.rejects++ == 0) s.reject_ms = now_ms_;
-            }
-        } else if (kind == kPendEusb) {
-            if (type != kAccept) s.eusb_refused = true;
-        } else if (const std::uint8_t b = swap_bit(kind)) {
-            if (type == kAccept) {
-                if (kind == kPendPr) {   // the roles turn: what was the sink's is the source's now
-                    s.contract = false;
-                    s.n_src = 0;
-                    s.offer_mw = s.offer_ma = s.offer_top_mv = 0;
-                    s.n_snk = 0;
-                    s.snk_mw = s.snk_mv = s.snk_ma = s.snk_top_mv = 0;
-                    s.snk_higher = false;
-                    s.snk_vid = s.snk_pid = 0;
-                    const std::uint32_t t = s.snk_idh;
-                    s.snk_idh = s.src_idh;
-                    s.src_idh = t;
-                    const bool h = s.snk_host;
-                    s.snk_host = s.src_host;
-                    s.src_host = h;
-                }
-            } else {
-                s.refused |= b;
-                if (from_src) s.refused_by_src |= b;
-                if (kind == kPendPr) {
-                    s.refused_ans = std::uint8_t(type);
-                    s.refused_ms = now_ms_;
-                    s.refused_mv = s.contract ? s.c_mv : v_mv_;
-                }
-            }
-        }
+        pend_answer(from_src, type);
         return;
     }
 
@@ -779,17 +831,14 @@ void Analyzer::message(bool rx, std::uint8_t token, std::uint16_t hdr, std::span
                 s.offer_ma = b.ma;
                 s.offer_top_mv = b.top_mv;
             }
-            if (pend_ == kPendRequest) { if (!blind(pend_ms_) && s.no_accept++ == 0) s.miss_ms = pend_ms_; pend_ = kPendNone; }
-            if (wait_psrdy_) {
-                wait_psrdy_ = false;
-                if (!blind(accept_ms_) && s.no_psrdy++ == 0 && s.miss_ms == 0) s.miss_ms = accept_ms_;
-            }
+            if (pend_ == kPendRequest) { note_miss(s.no_accept, pend_ms_, false); pend_ = kPendNone; }
+            if (wait_psrdy_) { wait_psrdy_ = false; note_miss(s.no_psrdy, accept_ms_, true); }
             last_pwr_ms_ = now_ms_;
             return;
         case kRequest:
         case kEprRequest: {
             if (from_src) return;
-            if (pend_ == kPendRequest && !blind(pend_ms_)) { if (s.no_accept++ == 0) s.miss_ms = pend_ms_; }
+            if (pend_ == kPendRequest) note_miss(s.no_accept, pend_ms_, false);
             s.rdo = rd32(o);
             s.rdo_ms = now_ms_;
             s.req_dev = rx;
@@ -800,8 +849,7 @@ void Analyzer::message(bool rx, std::uint8_t token, std::uint16_t hdr, std::span
             if (!pps && rx) inc(s.req_fixed);   // the K2's own Requests (an active test script) are not the device's
             pend_ = kPendRequest;
             pend_from_src_ = 0;
-            pend_ms_ = now_ms_;
-            last_pwr_ms_ = now_ms_;
+            pend_ms_ = last_pwr_ms_ = now_ms_;
             return;
         }
         case kSnkCaps:
@@ -828,45 +876,16 @@ void Analyzer::message(bool rx, std::uint8_t token, std::uint16_t hdr, std::span
             if ((v >> 24 & 0xFF) == 4) { s.epr_failed = true; s.epr_reason = std::uint8_t(v >> 16); }
             return;
         }
-        case kVdm: {
-            const std::uint32_t v = rd32(o);
-            if (!(v >> 15 & 1)) return;
-            const unsigned svid = v >> 16, ctype = v >> 6 & 3, cmd = v & 0x1F;
-            const std::uint32_t key = svid << 8 | cmd;
-            VdmKey* k = nullptr;
-            for (auto& e : s.vdm) if (e.count && e.key == key) k = &e;
-            if (ctype == 0) {
-                if (!k) {
-                    k = &s.vdm[0];
-                    for (auto& e : s.vdm) if (e.count < k->count) k = &e;
-                    *k = VdmKey{};
-                    k->key = key;
-                } else if (now_ms_ - k->last_ms <= kVdmRepeatMs) {
-                    inc(k->fast);
-                }
-                inc(k->count);
-                k->last_ms = now_ms_;
-            } else if (k) {
-                k->answer = std::uint8_t(ctype);
-            }
-            if (ctype == 1 && cmd == 1 && svid == kSvidPd && n >= 4) {
-                const std::uint32_t idh = rd32(o + 4), prod = rd32(o + 12);
-                if (from_src) s.src_idh = idh;
-                else { s.snk_idh = idh; s.snk_vid = std::uint16_t(idh); s.snk_pid = std::uint16_t(prod >> 16); }
-            }
-            if (cmd == 4 && (ctype == 2 || ctype == 3)) {
-                if (!(s.mode_nak & 7)) s.mode_nak_ms = now_ms_;
-                s.mode_nak |= svid == kSvidDp ? 1 : svid == kSvidTbt ? 2 : 4;
-            }
+        case kVdm:
+            vdm_message(from_src, n, o);
             return;
-        }
         default:
             return;
         }
     }
     if (ext) {
         if (type == kExtSkedb && !from_src && objs.size() >= 2 + 21) {
-            const unsigned eh = o[0] | o[1] << 8;
+            const unsigned eh = rd16(o);
             if ((eh >> 11 & 0xF) == 0 && !(eh >> 10 & 1)) {
                 s.skedb_op_w = o[2 + 19];
                 s.skedb_max_w = o[2 + 20];
@@ -912,10 +931,43 @@ void Analyzer::message(bool rx, std::uint8_t token, std::uint16_t hdr, std::span
 
 namespace {
 
-void add(Report& r, Sev sev, Group g, Code c, std::uint32_t t, std::int32_t a = 0, std::int32_t b = 0, std::int32_t cc = 0,
-         std::int32_t d = 0) {
+constexpr std::uint32_t fmeta(Sev s, Group g, Code c) {
+    return std::uint32_t(s) | (std::uint32_t(g) << 8) | (std::uint32_t(c) << 16);
+}
+
+[[gnu::noinline]] void add_x(Report& r, std::uint32_t meta, std::uint32_t t, std::int32_t a, std::int32_t b,
+                             std::int32_t cc = 0, std::int32_t d = 0) {
     if (r.n >= kMaxFindings) return;
-    r.f[r.n++] = Finding{sev, g, c, t, a, b, cc, d};
+    r.f[r.n++] = Finding{Sev(meta & 0xFF), Group(meta >> 8 & 0xFF), Code(meta >> 16 & 0xFF), t, a, b, cc, d};
+}
+
+[[gnu::noinline]] void add(Report& r, std::uint32_t meta, std::uint32_t t = 0, std::int32_t a = 0) {
+    add_x(r, meta, t, a, 0, 0, 0);
+}
+
+struct U8Rule {
+    std::uint8_t Session::* v;
+    std::uint32_t Session::* ts;
+    std::uint8_t min_v, hi_v;
+    Sev lo_sev, hi_sev;
+    Group g;
+    Code c;
+};
+
+[[gnu::noinline]] void eval_rules(Report& r, const Session& s, const U8Rule* rules, std::size_t n) {
+    for (std::size_t i = 0; i < n; ++i) {
+        const auto& ru = rules[i];
+        const std::uint8_t val = s.*(ru.v);
+        if (val < ru.min_v) continue;
+        const Sev sev = val >= ru.hi_v ? ru.hi_sev : ru.lo_sev;
+        const std::uint32_t ms = ru.ts ? s.*(ru.ts) : 0;
+        const std::uint32_t t = (ru.ts && ms >= s.start_ms) ? ms - s.start_ms : 0;
+        add(r, fmeta(sev, ru.g, ru.c), t, val);
+    }
+}
+
+[[gnu::noinline]] std::uint32_t at_off(const Session& s, std::uint32_t ms) {
+    return ms >= s.start_ms ? ms - s.start_ms : 0;
 }
 
 // The source's noun from its ID header product types (UFP bits 29:27, DFP bits 25:23), else its data role.
@@ -945,7 +997,7 @@ Report evaluate(const Session& s, const TwinHint* twin, std::uint32_t now_ms) {
     if (s.eusb_refused) r.lanes.eusb = false;   // seen, not agreed
     // PD seen: any SOP message, a reset, or the cable asked on SOP'; VBUS above 5 V means a contract was made earlier
     r.no_pd = s.msgs == 0 && s.caps == 0 && s.hard == 0 && s.cable_frames == 0 && s.up_mv == 0;
-    auto at = [&](std::uint32_t ms) __attribute__((noinline)) { return ms >= s.start_ms ? ms - s.start_ms : 0; };   // 25 uses
+    auto at = [&](std::uint32_t ms) { return at_off(s, ms); };
 
     r.offer_mw = s.offer_mw;
     const std::uint16_t off_ma = s.offer_ma;
@@ -977,31 +1029,31 @@ Report evaluate(const Session& s, const TwinHint* twin, std::uint32_t now_ms) {
     // -- power --
     const bool short_power = !s.active && r.need_mw && r.offer_mw && r.need_mw > r.offer_mw;
     if (short_power)
-        add(r, Sev::Fail, Group::Power, Code::PowerShort, at(s.rdo_ms), std::int32_t(r.need_mw), std::int32_t(r.offer_mw),
-            r.need_mv, r.need_ma);
+        add_x(r, fmeta(Sev::Fail, Group::Power, Code::PowerShort), at(s.rdo_ms), std::int32_t(r.need_mw),
+              std::int32_t(r.offer_mw), r.need_mv, r.need_ma);
     if (!s.active && s.contract_seen && s.mismatch)
-        add(r, Sev::Warn, Group::Power, Code::MismatchFlag, at(s.rdo_ms));
+        add(r, fmeta(Sev::Warn, Group::Power, Code::MismatchFlag), at(s.rdo_ms));
     else if (short_power && s.contract_seen)
-        add(r, Sev::Info, Group::Power, Code::NoMismatchFlag, at(s.rdo_ms), s.c_mv, s.c_ma);
+        add_x(r, fmeta(Sev::Info, Group::Power, Code::NoMismatchFlag), at(s.rdo_ms), s.c_mv, s.c_ma);
     if (s.active) {
         if (s.contract_seen)
-            add(r, Sev::Info, Group::Power, Code::ActiveSink, at(s.contract_ms), s.c_mv, s.c_ma, std::int32_t(s.rdo >> 28 & 0xF));
+            add_x(r, fmeta(Sev::Info, Group::Power, Code::ActiveSink), at(s.contract_ms), s.c_mv, s.c_ma,
+                  std::int32_t(s.rdo >> 28 & 0xF));
     } else if (s.contract_seen) {
         // sustained (a share of the contract time) or in bursts (each kOverBurstMs or longer)
-        const bool over = s.over_c_ma && ((s.over_ms >= kOverMinMs &&
-                                           std::uint64_t(s.over_ms) * 100 >= std::uint64_t(s.cobs_ms) * kOverSharePct) ||
+        const bool over = s.over_c_ma && ((s.over_ms >= kOverMinMs && share_at_least(s.over_ms, s.cobs_ms, kOverSharePct)) ||
                                           s.bursts);
         if (over) {
             // c: share % | bursts << 8 | offer at the peak (10 mA) << 16
             // d: VBUS fell / hard reset bits | shortest burst (0.1 s) << 2 | longest << 12 | above the offer << 22
             const auto ds = [](std::uint32_t ms) { return std::uint32_t(ms / 100 > 999 ? 999 : ms / 100); };
             const std::uint32_t share = s.cobs_ms ? mul_div_u32(s.over_ms, 100u, s.cobs_ms) : 0;
-            add(r, s.over_fault ? Sev::Fail : Sev::Warn, Group::Power, Code::OverDraw, at(s.over_first_ms), s.over_peak_ma,
-                s.over_c_ma,
-                std::int32_t((share > 100 ? 100 : share) | std::uint32_t(s.bursts) << 8 |
-                             std::uint32_t(s.over_off_ma / 10) << 16),
-                std::int32_t((s.over_fault & 3) | ds(s.burst_min_ms) << 2 | ds(s.burst_max_ms) << 12 |
-                             std::uint32_t(s.over_fault >> 2 & 1) << 22));
+            add_x(r, fmeta(s.over_fault ? Sev::Fail : Sev::Warn, Group::Power, Code::OverDraw), at(s.over_first_ms),
+                  s.over_peak_ma, s.over_c_ma,
+                  std::int32_t((share > 100 ? 100 : share) | std::uint32_t(s.bursts) << 8 |
+                               std::uint32_t(s.over_off_ma / 10) << 16),
+                  std::int32_t((s.over_fault & 3) | ds(s.burst_min_ms) << 2 | ds(s.burst_max_ms) << 12 |
+                               std::uint32_t(s.over_fault >> 2 & 1) << 22));
         }
         // kSustainMs blocks mostly above the contract: a Fail when the level is above the offer too, or with VBUS
         // falling / a reset. a: the mean while above, c: offer | share % << 16, d: the blocks' time (ms)
@@ -1009,114 +1061,125 @@ Report evaluate(const Session& s, const TwinHint* twin, std::uint32_t now_ms) {
             const std::uint32_t lvl = mul_div_u32(s.sus_mas, 1000u, s.sus_over_ms);
             const std::uint32_t share = mul_div_u32(s.sus_over_ms, 100u, s.sus_ms);
             const bool far = s.sus_off_ma && lvl > over_limit_ma(s.sus_off_ma);
-            add(r, far || (s.over_fault & 3) ? Sev::Fail : Sev::Warn, Group::Power, Code::OverSustained,
-                at(s.sus_first_ms), std::int32_t(lvl), s.sus_c_ma, std::int32_t(s.sus_off_ma | share << 16),
-                std::int32_t(s.sus_ms));
+            add_x(r, fmeta(far || (s.over_fault & 3) ? Sev::Fail : Sev::Warn, Group::Power, Code::OverSustained),
+                  at(s.sus_first_ms), std::int32_t(lvl), s.sus_c_ma, std::int32_t(s.sus_off_ma | share << 16),
+                  std::int32_t(s.sus_ms));
         }
-        if (!over && !s.sus_ms && s.c_ma && s.cobs_ms >= kDrawSettleMs &&
-            std::uint64_t(s.pin_ms) * 100 >= std::uint64_t(s.cobs_ms) * kPinSharePct)
-            add(r, Sev::Warn, Group::Power, Code::Pinned, at(s.contract_ms), s.c_ma, std::int32_t(s.pin_ms * 100 / s.cobs_ms),
-                std::int32_t(s.cobs_ms));
+        if (!over && !s.sus_ms && s.c_ma && s.cobs_ms >= kDrawSettleMs && share_at_least(s.pin_ms, s.cobs_ms, kPinSharePct))
+            add_x(r, fmeta(Sev::Warn, Group::Power, Code::Pinned), at(s.contract_ms), s.c_ma,
+                  std::int32_t(s.pin_ms * 100 / s.cobs_ms), std::int32_t(s.cobs_ms));
         const std::int32_t mw = std::int32_t(mean_of(s.cmj, s.cobs_ms));
         if (s.cobs_ms > 0)
-            add(r, Sev::Info, Group::Power, Code::Draw, at(s.contract_ms), s.c_mv, s.c_ma, mw, std::int32_t(s.cobs_ms));
+            add_x(r, fmeta(Sev::Info, Group::Power, Code::Draw), at(s.contract_ms), s.c_mv, s.c_ma, mw,
+                  std::int32_t(s.cobs_ms));
         // a 5 V contract while the device declares more and the offer has more
         const bool snk_more = s.n_snk && (s.snk_higher || s.snk_top_mv > kUpMv);
         if (s.c_mv && s.c_mv <= kUpMv && snk_more && s.offer_top_mv > kUpMv)
-            add(r, Sev::Warn, Group::Power, Code::FiveVoltOnly, at(s.contract_ms), s.offer_top_mv,
-                s.snk_top_mv > kUpMv ? s.snk_top_mv : s.offer_top_mv);
+            add_x(r, fmeta(Sev::Warn, Group::Power, Code::FiveVoltOnly), at(s.contract_ms), s.offer_top_mv,
+                  s.snk_top_mv > kUpMv ? s.snk_top_mv : s.offer_top_mv);
     } else if (s.caps || s.rdo) {   // an offer (or a Request) on this leg, and no Accept + PS_RDY after it
-        add(r, Sev::Info, Group::Power, Code::NoContract, 0, std::int32_t(mean_mv));
+        add(r, fmeta(Sev::Info, Group::Power, Code::NoContract), 0, std::int32_t(mean_mv));
     } else {
         // PD traffic (swaps, VDMs: they need a contract) or VBUS above 5 V with no offer seen: the contract was
         // made before the K2 attached
         if (!r.no_pd)
-            add(r, Sev::Info, Group::Power, Code::ContractUnseen, 0, s.up_mv ? s.up_mv : std::int32_t(mean_mv),
-                s.up_mv || s.obs_ms ? 1 : 0);
+            add_x(r, fmeta(Sev::Info, Group::Power, Code::ContractUnseen), 0, s.up_mv ? s.up_mv : std::int32_t(mean_mv),
+                  s.up_mv || s.obs_ms ? 1 : 0);
         if (s.obs_ms && mean_mv >= kLostMv)   // (no VBUS: a charger waiting for a sink, nothing to draw)
-            add(r, Sev::Info, Group::Power, Code::Draw, 0, 0, 0, std::int32_t(mean_of(s.mj, s.obs_ms)),
-                std::int32_t(s.obs_ms));
+            add_x(r, fmeta(Sev::Info, Group::Power, Code::Draw), 0, 0, 0, std::int32_t(mean_of(s.mj, s.obs_ms)),
+                  std::int32_t(s.obs_ms));
     }
     // input cut-outs: the device's draw falls to nothing inside a window while VBUS holds in band (the source kept
     // its voltage, so the device let go); they make the separate "reduced its draw" line moot
     const bool cuts = !s.active && s.cut_n >= kCutMin;
     if (cuts)
-        add(r, Sev::Warn, Group::Power, Code::InputCuts, at(s.cut_ms), s.cut_n, s.win_n);
+        add_x(r, fmeta(Sev::Warn, Group::Power, Code::InputCuts), at(s.cut_ms), s.cut_n, s.win_n);
     if (!s.active && s.drops && !cuts)
-        add(r, Sev::Info, Group::Power, Code::DrawReduced, at(s.drop_ms), s.drop_from_ma, s.drop_min_ma, s.drops,
-            s.drops_quiet ? 1 : 0);
+        add_x(r, fmeta(Sev::Info, Group::Power, Code::DrawReduced), at(s.drop_ms), s.drop_from_ma, s.drop_min_ma,
+              s.drops, s.drops_quiet ? 1 : 0);
 
     // -- contract instability --
+    static constexpr U8Rule kContract1[] = {
+        {&Session::hard, &Session::hard_ms, 1, 0xFF, Sev::Fail, Sev::Fail, Group::Contract, Code::HardReset},
+        {&Session::reattaches, &Session::reattach_ms, 1, 0xFF, Sev::Warn, Sev::Warn, Group::Contract, Code::Reattach},
+    };
+    static constexpr U8Rule kContract2[] = {
+        {&Session::rejects, &Session::reject_ms, 1, 0xFF, Sev::Warn, Sev::Warn, Group::Contract, Code::Rejected},
+        {&Session::waits, nullptr, 2, 0xFF, Sev::Warn, Sev::Warn, Group::Contract, Code::WaitLoop},
+        {&Session::no_accept, &Session::miss_ms, 1, 0xFF, Sev::Warn, Sev::Warn, Group::Contract, Code::NoAccept},
+        {&Session::no_psrdy, &Session::miss_ms, 1, 0xFF, Sev::Warn, Sev::Warn, Group::Contract, Code::NoPsRdy},
+    };
+    static constexpr U8Rule kLinkRules[] = {
+        {&Session::no_goodcrc, nullptr, 1, 3, Sev::Info, Sev::Warn, Group::Link, Code::NoGoodCrc},
+        {&Session::retries, nullptr, 1, 3, Sev::Info, Sev::Warn, Group::Link, Code::Retries},
+        {&Session::tx_fail, nullptr, 1, 0xFF, Sev::Warn, Sev::Warn, Group::Link, Code::TxFail},
+        {&Session::rx_bad, nullptr, 1, 3, Sev::Info, Sev::Warn, Group::Link, Code::RxBad},
+    };
     const unsigned n0 = r.n;
-    if (s.hard) add(r, Sev::Fail, Group::Contract, Code::HardReset, at(s.hard_ms), s.hard);
-    if (s.reattaches) add(r, Sev::Warn, Group::Contract, Code::Reattach, at(s.reattach_ms), s.reattaches);
-    if (s.caps >= 3 && !s.sink_answered) add(r, Sev::Fail, Group::Contract, Code::CapsUnanswered, 0, s.caps);
-    if (s.soft) add(r, s.soft > 2 ? Sev::Fail : Sev::Warn, Group::Contract, Code::SoftReset, at(s.soft_ms), s.soft, s.soft_k2);
-    if (s.rejects) add(r, Sev::Warn, Group::Contract, Code::Rejected, at(s.reject_ms), s.rejects);
-    if (s.waits >= 2) add(r, Sev::Warn, Group::Contract, Code::WaitLoop, 0, s.waits);
-    if (s.no_accept) add(r, Sev::Warn, Group::Contract, Code::NoAccept, at(s.miss_ms), s.no_accept);
-    if (s.no_psrdy) add(r, Sev::Warn, Group::Contract, Code::NoPsRdy, at(s.miss_ms), s.no_psrdy);
-    if (s.late_accept_ms) add(r, Sev::Warn, Group::Contract, Code::LateAccept, 0, s.late_accept_ms);
-    if (s.late_psrdy_ms) add(r, Sev::Warn, Group::Contract, Code::LatePsRdy, 0, s.late_psrdy_ms, s.epr ? 1 : 0);
-    if (s.req_fixed >= kManyRequests) add(r, Sev::Warn, Group::Contract, Code::ManyRequests, 0, s.req_fixed);
+    eval_rules(r, s, kContract1, 2);
+    if (s.caps >= 3 && !s.sink_answered) add(r, fmeta(Sev::Fail, Group::Contract, Code::CapsUnanswered), 0, s.caps);
+    if (s.soft) add_x(r, fmeta(s.soft > 2 ? Sev::Fail : Sev::Warn, Group::Contract, Code::SoftReset), at(s.soft_ms),
+                      s.soft, s.soft_k2);
+    eval_rules(r, s, kContract2, 4);
+    if (s.late_accept_ms) add(r, fmeta(Sev::Warn, Group::Contract, Code::LateAccept), 0, s.late_accept_ms);
+    if (s.late_psrdy_ms) add_x(r, fmeta(Sev::Warn, Group::Contract, Code::LatePsRdy), 0, s.late_psrdy_ms, s.epr ? 1 : 0);
+    if (s.req_fixed >= kManyRequests) add(r, fmeta(Sev::Warn, Group::Contract, Code::ManyRequests), 0, s.req_fixed);
     r.quiet_contract = r.n == n0;
 
     // -- power quality --
     const unsigned n1 = r.n;
     if (s.lost)
-        add(r, Sev::Fail, Group::Quality, Code::VbusLost, at(s.lost_ms), s.lost, s.lost_ma, s.lost_c_ma);
-    if (s.low_mv) add(r, Sev::Warn, Group::Quality, Code::VbusLow, at(s.low_ms), s.low_mv, s.low_c, s.low_ma);
-    if (s.high_mv) add(r, Sev::Warn, Group::Quality, Code::VbusHigh, at(s.high_ms), s.high_mv, s.high_c);
+        add_x(r, fmeta(Sev::Fail, Group::Quality, Code::VbusLost), at(s.lost_ms), s.lost, s.lost_ma, s.lost_c_ma);
+    if (s.low_mv) add_x(r, fmeta(Sev::Warn, Group::Quality, Code::VbusLow), at(s.low_ms), s.low_mv, s.low_c, s.low_ma);
+    if (s.high_mv) add_x(r, fmeta(Sev::Warn, Group::Quality, Code::VbusHigh), at(s.high_ms), s.high_mv, s.high_c);
     r.quiet_quality = r.n == n1;
     r.band_checked = s.contract_seen && s.cobs_ms > 0 && !s.pps;
 
     // -- link quality --
     const unsigned n2 = r.n;
-    if (s.no_goodcrc) add(r, s.no_goodcrc >= 3 ? Sev::Warn : Sev::Info, Group::Link, Code::NoGoodCrc, 0, s.no_goodcrc);
-    if (s.retries) add(r, s.retries >= 3 ? Sev::Warn : Sev::Info, Group::Link, Code::Retries, 0, s.retries);
-    if (s.tx_fail) add(r, Sev::Warn, Group::Link, Code::TxFail, 0, s.tx_fail);
-    if (s.rx_bad) add(r, s.rx_bad >= 3 ? Sev::Warn : Sev::Info, Group::Link, Code::RxBad, 0, s.rx_bad);
+    eval_rules(r, s, kLinkRules, 4);
     r.quiet_link = r.n == n2;
-    if (s.gaps) add(r, Sev::Info, Group::Link, Code::CaptureGap, 0, s.gaps);
+    if (s.gaps) add(r, fmeta(Sev::Info, Group::Link, Code::CaptureGap), 0, s.gaps);
 
     // -- roles and modes --
     const unsigned n3 = r.n;
     for (std::uint8_t b = 1; b <= 8; b <<= 1)
         if (s.refused & b)
-            add(r, Sev::Info, Group::Roles, Code::SwapRefused, b == 1 ? at(s.refused_ms) : 0, b, (s.refused_by_src & b) ? 1 : 0,
-                b == 1 ? s.refused_ans : 0, b == 1 ? s.refused_mv : 0);
-    if (s.mode_nak & 7) add(r, Sev::Warn, Group::Roles, Code::ModeNak, at(s.mode_nak_ms), s.mode_nak & 7);
+            add_x(r, fmeta(Sev::Info, Group::Roles, Code::SwapRefused), b == 1 ? at(s.refused_ms) : 0, b,
+                  (s.refused_by_src & b) ? 1 : 0, b == 1 ? s.refused_ans : 0, b == 1 ? s.refused_mv : 0);
+    if (s.mode_nak & 7) add(r, fmeta(Sev::Warn, Group::Roles, Code::ModeNak), at(s.mode_nak_ms), s.mode_nak & 7);
     // the cable plug NAKs its own Enter_Mode (SOP'): the port's mode is agreed on SOP, so this alone is Info
-    if (s.mode_nak & 0x70) add(r, Sev::Info, Group::Roles, Code::ModeNak, at(s.cable_nak_ms), s.mode_nak >> 4 & 7, 1);
-    if (s.eusb_refused) add(r, Sev::Warn, Group::Roles, Code::EnterUsbRefused, 0);
-    if (s.epr_failed) add(r, Sev::Warn, Group::Roles, Code::EprFailed, 0, s.epr_reason);
+    if (s.mode_nak & 0x70)
+        add_x(r, fmeta(Sev::Info, Group::Roles, Code::ModeNak), at(s.cable_nak_ms), s.mode_nak >> 4 & 7, 1);
+    if (s.eusb_refused) add(r, fmeta(Sev::Warn, Group::Roles, Code::EnterUsbRefused));
+    if (s.epr_failed) add(r, fmeta(Sev::Warn, Group::Roles, Code::EprFailed), 0, s.epr_reason);
     const auto& L = s.link.link();
     // a 3 A e-marker while the device needs more current than that: the cable caps the offer (sources hold 5 A back)
     if (L.cable_emarker && L.cable_amps == 3 && r.need_ma > 3000 && off_ma <= 3000)
-        add(r, short_power ? Sev::Warn : Sev::Info, Group::Roles, Code::CableCap, 0, r.need_ma);
+        add(r, fmeta(short_power ? Sev::Warn : Sev::Info, Group::Roles, Code::CableCap), 0, r.need_ma);
     {
         const VdmKey* top = nullptr;
         for (const auto& e : s.vdm) if (e.fast >= kVdmLoopMin && (!top || e.count > top->count)) top = &e;
-        if (top) add(r, Sev::Info, Group::Roles, Code::VdmLoop, 0, std::int32_t(top->key), top->count, top->answer);
+        if (top) add_x(r, fmeta(Sev::Info, Group::Roles, Code::VdmLoop), 0, std::int32_t(top->key), top->count, top->answer);
     }
-    if (s.cable_tries && !s.cable_answered) add(r, Sev::Info, Group::Roles, Code::CableSilent, 0, s.cable_frames, s.cable_tries);
+    if (s.cable_tries && !s.cable_answered)
+        add_x(r, fmeta(Sev::Info, Group::Roles, Code::CableSilent), 0, s.cable_frames, s.cable_tries);
     r.quiet_roles = r.n == n3;
 
     // rank: Fail, Warn, Info (stable: the group order stays inside a severity)
     for (unsigned i = 1; i < r.n; i++)
         for (unsigned j = i; j > 0 && r.f[j].sev < r.f[j - 1].sev; j--) { const Finding t = r.f[j]; r.f[j] = r.f[j - 1]; r.f[j - 1] = t; }
 
-    bool unstable = false, degraded = false;
+    bool unstable = false, degraded = false, over = false;
     for (unsigned i = 0; i < r.n; i++) {
         const Finding& f = r.f[i];
         if (f.group == Group::Contract || f.group == Group::Quality || f.group == Group::Link) {
             if (f.sev == Sev::Fail) unstable = true;
             else if (f.sev == Sev::Warn) degraded = true;
         }
+        over = over || f.code == Code::OverDraw || f.code == Code::OverSustained;
     }
     r.link = unstable ? 2 : degraded ? 1 : 0;
-    bool over = false;
-    for (unsigned i = 0; i < r.n; i++) over = over || r.f[i].code == Code::OverDraw || r.f[i].code == Code::OverSustained;
     r.power = r.no_pd ? kPowerNoPd
               : s.active ? kPowerActive
               : short_power ? kPowerShort
@@ -1135,84 +1198,271 @@ namespace {
 using detail::Out;
 
 const char* answer_name(unsigned a) {
-    switch (a) {
-    case 1: return "ACK";
-    case 2: return "NAK";
-    case 3: return "BUSY";
-    case 4: return K2_P("Not_Supported");
-    default: return K2_P("nothing");
-    }
+    static constexpr const char* const kAns[] = {K2_P("nothing"), "ACK", "NAK", "BUSY", K2_P("Not_Supported")};
+    return a >= 1 && a <= 4 ? kAns[a] : kAns[0];
 }
 const char* ctl_answer(unsigned t) {
     return t == kReject ? K2_P("rejected") : t == kWait ? K2_P("answered Wait") : t == kNotSupported ? K2_P("answered Not_Supported") : K2_P("not answered");
 }
 const char* vdm_cmd(unsigned key) {
+    static constexpr const char* const kVdm1_6[] = {
+        K2_P("Discover_Identity"), K2_P("Discover_SVIDs"), K2_P("Discover_Modes"),
+        K2_P("Enter_Mode"), K2_P("Exit_Mode"), K2_P("Attention"),
+    };
     const unsigned cmd = key & 0x1F, svid = key >> 8;
-    switch (cmd) {
-    case 1: return K2_P("Discover_Identity");
-    case 2: return K2_P("Discover_SVIDs");
-    case 3: return K2_P("Discover_Modes");
-    case 4: return K2_P("Enter_Mode");
-    case 5: return K2_P("Exit_Mode");
-    case 6: return K2_P("Attention");
-    case 16: return svid == kSvidDp ? K2_P("DP Status") : K2_P("VDM 16");
-    case 17: return svid == kSvidDp ? K2_P("DP Configure") : K2_P("VDM 17");
-    default: return K2_P("VDM request");
+    if (cmd >= 1 && cmd <= 6) return kVdm1_6[cmd - 1];
+    if (cmd == 16) return svid == kSvidDp ? K2_P("DP Status") : K2_P("VDM 16");
+    if (cmd == 17) return svid == kSvidDp ? K2_P("DP Configure") : K2_P("VDM 17");
+    return K2_P("VDM request");
+}
+
+enum StrId : std::uint8_t {
+    S_comma, S_space, S_on, S_on_a, S_contract, S_x, S_at, S_sp_at, S_to, S_first_at,
+    S_needs, S_gives, S_max, S_flagged_mm, S_no_mm, S_draws_over, S_draws_far, S_drew_less, S_reduced_draw,
+    S_cuts_title, S_stays_over,
+    S_pinned_t, S_contract_lim, S_contract_cap, S_draws_c, S_unseen_t, S_nocontract_t,
+    S_hard_1, S_hard_n, S_soft_1, S_soft_n, S_reattach_t, S_x_3s, S_rejected_t,
+    S_wait_t, S_many_req_t, S_no_acc_t, S_late_acc_t, S_ms_req, S_no_psrdy_t,
+    S_late_psrdy_t, S_ms_acc, S_caps_unans_t, S_vbus_fell, S_vbus_rose, S_vbus_lost_t,
+    S_nogc_1, S_nogc_n, S_retry_1, S_retry_n, S_txfail_t, S_rxbad_1, S_rxbad_n,
+    S_eusb_t, S_epr_t, S_cablecap_t, S_asked, S_cablesil_t, S_gap_1, S_gap_n,
+    S_mm_n, S_nomm_n1, S_nomm_n2, S_pinned_n1, S_pct_of, S_observed, S_peak,
+    S_5v_n1, S_5v_n2, S_nocontract_n, S_active_n, S_reattach_n, S_wait_n, S_many_req_n,
+    S_no_acc_n, S_caps_unans_n, S_cuts_n1, S_of, S_cuts_n2, S_cuts_n3, S_nogc_n_note,
+    S_retry_n_note, S_txfail_n, S_rxbad_n_note, S_eusb_n, S_epr_n, S_cablecap_n,
+    S_vdmloop_n1, S_vdmloop_n2, S_cablesil_n1, S_x_paren, S_req_1, S_req_n,
+    S_cablesil_n2, S_gap_n_note,
+    S_count
+};
+
+static constexpr const char* const kStrs[] = {
+    ", ", " ", " on ", K2_P(" on a "), K2_P(" contract"), "x", "at ", " at ", " to ", K2_P("first at "),
+    K2_P(" needs "), K2_P(" gives "), " max", K2_P(" flagged capability mismatch"), K2_P(" did not flag capability mismatch"),
+    K2_P(" draws above its contract: up to "), K2_P(" draws far above its contract: up to "),
+    K2_P(" drew less, with PD traffic around it"), K2_P(" reduced its draw, contract unchanged"),
+    K2_P("'s input cuts out repeatedly"), K2_P(" stays over its contract, at "),
+    K2_P("Draw pinned at the "), K2_P(" contract limit"), K2_P("Contract "), K2_P(", draws "),
+    K2_P("Contract not observed (the K2 attached after it)"), K2_P("No contract made, VBUS "),
+    K2_P(" hard reset"), K2_P(" hard resets"), K2_P(" soft reset on SOP"), K2_P(" soft resets on SOP"),
+    K2_P("Re-attached "), K2_P("x within 3 s"), K2_P("Request rejected "),
+    K2_P("Request answered Wait "), K2_P(" Requests in one session"), K2_P("Request not answered "),
+    K2_P("Accept late: "), K2_P(" ms after the Request"), K2_P("No PS_RDY after Accept "),
+    K2_P("PS_RDY late: "), K2_P(" ms after Accept"), K2_P("Sink never answered the offer"),
+    K2_P("VBUS fell to "), K2_P("VBUS rose to "), K2_P("VBUS lost with the contract up"),
+    K2_P(" message without GoodCRC"), K2_P(" messages without GoodCRC"), K2_P(" retry on SOP"), K2_P(" retries on SOP"),
+    K2_P(" K2 transmissions not acknowledged"), K2_P(" garbled frame"), K2_P(" garbled frames"),
+    K2_P("Enter_USB refused"), K2_P("EPR entry failed"), K2_P("Cable limits the offer to 3 A"),
+    K2_P(" asked "), K2_P("Cable plug never answered on SOP'"), K2_P(" frame the K2 missed"), K2_P(" frames the K2 missed"),
+    K2_P("set in its Request at "), K2_P("its Request took "), K2_P(" without the mismatch bit"),
+    K2_P(">= 95 % of it for "), K2_P(" % of "), K2_P("observed "), K2_P(", peak "),
+    K2_P("the offer goes to "), K2_P(", the device's sink caps to "),
+    K2_P("an offer on this leg, no Accept and PS_RDY after it"), K2_P("no load on the K2, so no draw to judge"),
+    K2_P("CC detached and came back, first at "), K2_P("the source asked the sink to retry"),
+    K2_P("fixed-voltage, by the device; PPS keep-alives and the K2's own not counted"),
+    K2_P("no Accept, Reject or Wait, first at "), K2_P(" Source_Capabilities, no GoodCRC, no Request"),
+    K2_P("0 mA in "), " of ", K2_P(" windows from "), K2_P("; VBUS stayed up: the device let go"),
+    K2_P("SOP frames the other end did not acknowledge"), K2_P("the same frame sent again"),
+    K2_P("no GoodCRC from the partner on SOP"), K2_P("unknown FIFO token, frame dropped"),
+    K2_P("not accepted by the other end"), K2_P("EPR_Mode Enter_Failed, reason "),
+    K2_P("e-marker says 3 A, the device asks up to "), K2_P("answered "), K2_P("; harmless to power"),
+    K2_P("Discover_Identity sent "), "x (", K2_P(" request"), K2_P(" requests"),
+    K2_P(" + retries); no cable chip on this leg"),
+    K2_P("seen by their GoodCRC or the next MessageID; a capture gap, not a link fault"),
+};
+static_assert(sizeof(kStrs) / sizeof(kStrs[0]) == S_count);
+static_assert(S_count < 0xC0);
+
+constexpr std::uint8_t S(StrId id) { return std::uint8_t(1 + id); }
+
+enum Op : std::uint8_t {
+    OP_END = 0,
+    OP_CAP_SNK = 0xC0,
+    OP_SRC,
+    OP_WATTS_A,
+    OP_WATTS_B,
+    OP_AMPS_A,
+    OP_AMPS_B,
+    OP_AMPS_PEAK,
+    OP_VOLTS_A,
+    OP_VOLTS_B,
+    OP_VOLTS2_A,
+    OP_U_A,
+    OP_U_B,
+    OP_DUR_C,
+    OP_DUR_D,
+    OP_CLOCK,
+    OP_VDM,
+    OP_ANS,
+    OP_U_PLUR_A,
+    OP_U_PLUR_B,
+    OP_SEL_D_BIT,
+};
+
+struct ProgEntry {
+    Code code;
+    std::uint8_t ops[10];
+};
+struct ProgTable {
+    std::array<std::uint8_t, std::size_t(Code::CaptureGap) + 1> off{};
+    std::array<std::uint8_t, 254> data{};
+    std::uint8_t len = 0;
+};
+
+consteval ProgTable build_prog(std::span<const ProgEntry> entries) {
+    ProgTable t;
+    t.off.fill(0xFF);
+    for (const auto& e : entries) {
+        t.off[std::size_t(e.code)] = t.len;
+        for (std::size_t i = 0; i < sizeof(e.ops); ++i) {
+            t.data[t.len++] = e.ops[i];
+            if (e.ops[i] == OP_END) break;
+        }
+    }
+    return t;
+}
+
+template <ProgTable T>
+consteval auto trim_prog() {
+    std::array<std::uint8_t, T.len> out{};
+    for (std::size_t i = 0; i < T.len; ++i) out[i] = T.data[i];
+    return out;
+}
+
+consteval ProgTable make_title_tbl() {
+    constexpr ProgEntry kTitleEntries[] = {
+        {Code::PowerShort, {OP_CAP_SNK, S(S_needs), OP_WATTS_A, S(S_comma), OP_SRC, S(S_gives), OP_WATTS_B, S(S_max), 0}},
+        {Code::MismatchFlag, {OP_CAP_SNK, S(S_flagged_mm), 0}},
+        {Code::NoMismatchFlag, {OP_CAP_SNK, S(S_no_mm), 0}},
+        {Code::OverDraw, {OP_CAP_SNK, OP_SEL_D_BIT, 22, S_draws_over, OP_AMPS_A, S(S_on_a), OP_AMPS_B, S(S_contract), 0}},
+        {Code::Pinned, {S(S_pinned_t), OP_AMPS_A, S(S_contract_lim), 0}},
+        {Code::DrawReduced, {OP_CAP_SNK, OP_SEL_D_BIT, 0xFF, S_drew_less, 0}},
+        {Code::ContractUnseen, {S(S_unseen_t), 0}},
+        {Code::NoContract, {S(S_nocontract_t), OP_VOLTS_A, 0}},
+        {Code::HardReset, {OP_U_PLUR_A, S_hard_1, 0}},
+        {Code::SoftReset, {OP_U_PLUR_A, S_soft_1, 0}},
+        {Code::Reattach, {S(S_reattach_t), OP_U_A, S(S_x_3s), 0}},
+        {Code::Rejected, {S(S_rejected_t), OP_U_A, S(S_x), 0}},
+        {Code::WaitLoop, {S(S_wait_t), OP_U_A, S(S_x), 0}},
+        {Code::ManyRequests, {OP_U_A, S(S_many_req_t), 0}},
+        {Code::NoAccept, {S(S_no_acc_t), OP_U_A, S(S_x), 0}},
+        {Code::LateAccept, {S(S_late_acc_t), OP_U_A, S(S_ms_req), 0}},
+        {Code::NoPsRdy, {S(S_no_psrdy_t), OP_U_A, S(S_x), 0}},
+        {Code::LatePsRdy, {S(S_late_psrdy_t), OP_U_A, S(S_ms_acc), 0}},
+        {Code::CapsUnanswered, {S(S_caps_unans_t), 0}},
+        {Code::VbusLow, {S(S_vbus_fell), OP_VOLTS2_A, S(S_on_a), OP_VOLTS_B, S(S_contract), 0}},
+        {Code::VbusHigh, {S(S_vbus_rose), OP_VOLTS2_A, S(S_on_a), OP_VOLTS_B, S(S_contract), 0}},
+        {Code::VbusLost, {S(S_vbus_lost_t), 0}},
+        {Code::InputCuts, {OP_CAP_SNK, S(S_cuts_title), 0}},
+        {Code::OverSustained, {OP_CAP_SNK, S(S_stays_over), OP_AMPS_A, S(S_on), OP_AMPS_B, 0}},
+        {Code::NoGoodCrc, {OP_U_PLUR_A, S_nogc_1, 0}},
+        {Code::Retries, {OP_U_PLUR_A, S_retry_1, 0}},
+        {Code::TxFail, {OP_U_A, S(S_txfail_t), 0}},
+        {Code::RxBad, {OP_U_PLUR_A, S_rxbad_1, 0}},
+        {Code::EnterUsbRefused, {S(S_eusb_t), 0}},
+        {Code::EprFailed, {S(S_epr_t), 0}},
+        {Code::CableCap, {S(S_cablecap_t), 0}},
+        {Code::VdmLoop, {OP_VDM, S(S_asked), OP_U_B, S(S_x), 0}},
+        {Code::CableSilent, {S(S_cablesil_t), 0}},
+        {Code::CaptureGap, {OP_U_PLUR_A, S_gap_1, 0}},
+    };
+    return build_prog(kTitleEntries);
+}
+
+consteval ProgTable make_note_tbl() {
+    constexpr ProgEntry kNoteEntries[] = {
+        {Code::MismatchFlag, {S(S_mm_n), OP_CLOCK, 0}},
+        {Code::NoMismatchFlag, {S(S_nomm_n1), OP_VOLTS_A, S(S_space), OP_AMPS_B, S(S_nomm_n2), 0}},
+        {Code::Pinned, {S(S_pinned_n1), OP_U_B, S(S_pct_of), OP_DUR_C, 0}},
+        {Code::Draw, {S(S_observed), OP_DUR_D, S(S_peak), OP_AMPS_PEAK, 0}},
+        {Code::FiveVoltOnly, {S(S_5v_n1), OP_VOLTS_A, S(S_5v_n2), OP_VOLTS_B, 0}},
+        {Code::NoContract, {S(S_nocontract_n), 0}},
+        {Code::ActiveSink, {S(S_active_n), 0}},
+        {Code::HardReset, {S(S_first_at), OP_CLOCK, 0}},
+        {Code::Reattach, {S(S_reattach_n), OP_CLOCK, 0}},
+        {Code::Rejected, {S(S_first_at), OP_CLOCK, 0}},
+        {Code::WaitLoop, {S(S_wait_n), 0}},
+        {Code::ManyRequests, {S(S_many_req_n), 0}},
+        {Code::NoAccept, {S(S_no_acc_n), OP_CLOCK, 0}},
+        {Code::NoPsRdy, {S(S_first_at), OP_CLOCK, 0}},
+        {Code::CapsUnanswered, {OP_U_A, S(S_caps_unans_n), 0}},
+        {Code::VbusHigh, {S(S_at), OP_CLOCK, 0}},
+        {Code::InputCuts, {S(S_cuts_n1), OP_U_A, S(S_of), OP_U_B, S(S_cuts_n2), OP_CLOCK, S(S_cuts_n3), 0}},
+        {Code::NoGoodCrc, {S(S_nogc_n_note), 0}},
+        {Code::Retries, {S(S_retry_n_note), 0}},
+        {Code::TxFail, {S(S_txfail_n), 0}},
+        {Code::RxBad, {S(S_rxbad_n_note), 0}},
+        {Code::EnterUsbRefused, {S(S_eusb_n), 0}},
+        {Code::EprFailed, {S(S_epr_n), OP_U_A, 0}},
+        {Code::CableCap, {S(S_cablecap_n), OP_AMPS_A, 0}},
+        {Code::VdmLoop, {S(S_vdmloop_n1), OP_ANS, S(S_vdmloop_n2), 0}},
+        {Code::CableSilent, {S(S_cablesil_n1), OP_U_A, S(S_x_paren), OP_U_PLUR_B, S_req_1, S(S_cablesil_n2), 0}},
+        {Code::CaptureGap, {S(S_gap_n_note), 0}},
+    };
+    return build_prog(kNoteEntries);
+}
+
+constexpr ProgTable kTitleTbl = make_title_tbl();
+constexpr ProgTable kNoteTbl = make_note_tbl();
+static_assert(kTitleTbl.len <= 254 && kNoteTbl.len <= 254);
+static constexpr auto kTitleOff = kTitleTbl.off;
+static constexpr auto kNoteOff = kNoteTbl.off;
+static constexpr auto kTitleProg = trim_prog<kTitleTbl>();
+static constexpr auto kNoteProg = trim_prog<kNoteTbl>();
+
+[[gnu::noinline]] void emit_prog(const Report& r, const Finding& f, Out& o, const std::uint8_t* p) {
+    while (const std::uint8_t op = *p++) {
+        if (op < 0xC0) { o.s(kStrs[op - 1]); continue; }
+        switch (op) {
+        case OP_CAP_SNK: o.cap(r.snk_noun); break;
+        case OP_SRC: o.s(r.src_noun); break;
+        case OP_WATTS_A: o.watts(f.a); break;
+        case OP_WATTS_B: o.watts(f.b); break;
+        case OP_AMPS_A: o.amps(f.a); break;
+        case OP_AMPS_B: o.amps(f.b); break;
+        case OP_AMPS_PEAK: o.amps(r.peak_ma); break;
+        case OP_VOLTS_A: o.volts(f.a); break;
+        case OP_VOLTS_B: o.volts(f.b); break;
+        case OP_VOLTS2_A: o.volts2(f.a); break;
+        case OP_U_A: o.u(std::uint32_t(f.a)); break;
+        case OP_U_B: o.u(std::uint32_t(f.b)); break;
+        case OP_DUR_C: o.dur(std::uint32_t(f.c)); break;
+        case OP_DUR_D: o.dur(std::uint32_t(f.d)); break;
+        case OP_CLOCK: o.clock(f.t_ms); break;
+        case OP_VDM: o.s(vdm_cmd(std::uint32_t(f.a))); break;
+        case OP_ANS: o.s(answer_name(std::uint32_t(f.c))); break;
+        case OP_U_PLUR_A: o.u(std::uint32_t(f.a)); o.s(kStrs[*p++ + (f.a == 1 ? 0 : 1)]); break;
+        case OP_U_PLUR_B: o.u(std::uint32_t(f.b)); o.s(kStrs[*p++ + (f.b == 1 ? 0 : 1)]); break;
+        case OP_SEL_D_BIT: {
+            const std::uint8_t bit = *p++, idx = *p++;
+            const bool set = bit >= 32 ? f.d != 0 : (std::uint32_t(f.d) >> bit & 1) != 0;
+            o.s(kStrs[idx + (set ? 1 : 0)]);
+            break;
+        }
+        default: break;
+        }
     }
 }
 
 void title(const Report& r, const Finding& f, Out& o) {
+    const std::uint8_t off = kTitleOff[std::size_t(f.code)];
+    if (off != 0xFF) { emit_prog(r, f, o, &kTitleProg[off]); return; }
     switch (f.code) {
-    case Code::PowerShort: o.cap(r.snk_noun); o.s(K2_P(" needs ")); o.watts(f.a); o.s(", "); o.s(r.src_noun); o.s(K2_P(" gives ")); o.watts(f.b); o.s(" max"); break;
-    case Code::MismatchFlag: o.cap(r.snk_noun); o.s(K2_P(" flagged capability mismatch")); break;
-    case Code::NoMismatchFlag: o.cap(r.snk_noun); o.s(K2_P(" did not flag capability mismatch")); break;
-    case Code::OverDraw:
-        o.cap(r.snk_noun); o.s(f.d >> 22 & 1 ? K2_P(" draws far above its contract: up to ") : K2_P(" draws above its contract: up to "));
-        o.amps(f.a); o.s(K2_P(" on a ")); o.amps(f.b); o.s(K2_P(" contract"));
-        break;
-    case Code::InputCuts: o.cap(r.snk_noun); o.s(K2_P("'s input cuts out repeatedly")); break;
-    case Code::OverSustained:   // "Laptop stays over its contract, at 3.89 A on 3.25 A" (the level while over)
-        o.cap(r.snk_noun); o.s(K2_P(" stays over its contract, at ")); o.amps(f.a); o.s(" on "); o.amps(f.b);
-        break;
-    case Code::Pinned: o.s(K2_P("Draw pinned at the ")); o.amps(f.a); o.s(K2_P(" contract limit")); break;
     case Code::Draw:
-        if (f.a) { o.s(K2_P("Contract ")); o.volts(f.a); o.c(' '); o.amps(f.b); o.s(K2_P(", draws ")); o.watts(f.c); }
-        else { o.s(K2_P("Draws ")); o.watts(f.c); o.s(" at "); o.volts(r.vbus_mv); }
+        if (f.a) { o.s(kStrs[S_contract_cap]); o.volts(f.a); o.c(' '); o.amps(f.b); o.s(kStrs[S_draws_c]); o.watts(f.c); }
+        else { o.s(K2_P("Draws ")); o.watts(f.c); o.s(kStrs[S_sp_at]); o.volts(r.vbus_mv); }
         break;
-    case Code::DrawReduced: o.cap(r.snk_noun); o.s(f.d ? K2_P(" reduced its draw, contract unchanged") : K2_P(" drew less, with PD traffic around it")); break;
     case Code::FiveVoltOnly: o.s(K2_P("5 V contract, ")); o.s(r.snk_noun[0] == 'K' ? "K2" : K2_P("the device")); o.s(K2_P(" can use ")); o.volts(f.b > f.a ? f.a : f.b); break;
-    case Code::ContractUnseen: o.s(K2_P("Contract not observed (the K2 attached after it)")); break;
-    case Code::NoContract: o.s(K2_P("No contract made, VBUS ")); o.volts(f.a); break;
     case Code::ActiveSink:
         o.s(K2_P("K2 is the sink: "));
-        if (f.a) { o.volts(f.a); o.c(' '); o.amps(f.b); o.s(K2_P(" contract")); }
+        if (f.a) { o.volts(f.a); o.c(' '); o.amps(f.b); o.s(kStrs[S_contract]); }
         else { o.s(K2_P("contract on PDO ")); o.u(std::uint32_t(f.c)); }   // its PDO is not in the captured offer
         break;
-    case Code::HardReset: o.u(std::uint32_t(f.a)); o.s(f.a == 1 ? K2_P(" hard reset") : K2_P(" hard resets")); break;
-    case Code::SoftReset: o.u(std::uint32_t(f.a)); o.s(f.a == 1 ? K2_P(" soft reset on SOP") : K2_P(" soft resets on SOP")); break;
-    case Code::Reattach: o.s(K2_P("Re-attached ")); o.u(std::uint32_t(f.a)); o.s(K2_P("x within 3 s")); break;
-    case Code::Rejected: o.s(K2_P("Request rejected ")); o.u(std::uint32_t(f.a)); o.c('x'); break;
-    case Code::WaitLoop: o.s(K2_P("Request answered Wait ")); o.u(std::uint32_t(f.a)); o.c('x'); break;
-    case Code::ManyRequests: o.u(std::uint32_t(f.a)); o.s(K2_P(" Requests in one session")); break;
-    case Code::NoAccept: o.s(K2_P("Request not answered ")); o.u(std::uint32_t(f.a)); o.c('x'); break;
-    case Code::LateAccept: o.s(K2_P("Accept late: ")); o.u(std::uint32_t(f.a)); o.s(K2_P(" ms after the Request")); break;
-    case Code::NoPsRdy: o.s(K2_P("No PS_RDY after Accept ")); o.u(std::uint32_t(f.a)); o.c('x'); break;
-    case Code::LatePsRdy: o.s(K2_P("PS_RDY late: ")); o.u(std::uint32_t(f.a)); o.s(K2_P(" ms after Accept")); break;
-    case Code::CapsUnanswered: o.s(K2_P("Sink never answered the offer")); break;
-    case Code::VbusLow: o.s(K2_P("VBUS fell to ")); o.volts2(f.a); o.s(K2_P(" on a ")); o.volts(f.b); o.s(K2_P(" contract")); break;
-    case Code::VbusHigh: o.s(K2_P("VBUS rose to ")); o.volts2(f.a); o.s(K2_P(" on a ")); o.volts(f.b); o.s(K2_P(" contract")); break;
-    case Code::VbusLost: o.s(K2_P("VBUS lost with the contract up")); break;
-    case Code::NoGoodCrc: o.u(std::uint32_t(f.a)); o.s(f.a == 1 ? K2_P(" message without GoodCRC") : K2_P(" messages without GoodCRC")); break;
-    case Code::Retries: o.u(std::uint32_t(f.a)); o.s(f.a == 1 ? K2_P(" retry on SOP") : K2_P(" retries on SOP")); break;
-    case Code::TxFail: o.u(std::uint32_t(f.a)); o.s(K2_P(" K2 transmissions not acknowledged")); break;
-    case Code::RxBad: o.u(std::uint32_t(f.a)); o.s(f.a == 1 ? K2_P(" garbled frame") : K2_P(" garbled frames")); break;
     case Code::SwapRefused: {
         const char* who = f.b ? r.src_noun : r.snk_noun;
+        o.cap(who);
         if (f.a == 1) {
-            o.cap(f.b ? r.src_noun : r.snk_noun);
             o.s(f.b ? K2_P(" refuses to take power on this port") : K2_P(" refuses to source power on this port"));
         } else {
-            o.cap(who);
             o.s(f.a == 2 ? K2_P(" refused a data role swap") : f.a == 4 ? K2_P(" refused a VCONN swap") : K2_P(" refused a fast role swap"));
         }
         break;
@@ -1222,16 +1472,13 @@ void title(const Report& r, const Finding& f, Out& o) {
         o.s(f.a & 1 ? (f.b ? K2_P("DP alt mode") : K2_P("DP alt mode refused")) : f.a & 2 ? (f.b ? K2_P("Thunderbolt mode") : K2_P("Thunderbolt mode refused"))
                     : (f.b ? K2_P("an alt mode") : K2_P("Alt mode refused")));
         break;
-    case Code::EnterUsbRefused: o.s(K2_P("Enter_USB refused")); break;
-    case Code::EprFailed: o.s(K2_P("EPR entry failed")); break;
-    case Code::CableCap: o.s(K2_P("Cable limits the offer to 3 A")); break;
-    case Code::VdmLoop: o.s(vdm_cmd(std::uint32_t(f.a))); o.s(K2_P(" asked ")); o.u(std::uint32_t(f.b)); o.c('x'); break;
-    case Code::CableSilent: o.s(K2_P("Cable plug never answered on SOP'")); break;
-    case Code::CaptureGap: o.u(std::uint32_t(f.a)); o.s(f.a == 1 ? K2_P(" frame the K2 missed") : K2_P(" frames the K2 missed")); break;
+    default: break;
     }
 }
 
 void note(const Report& r, const Finding& f, Out& o) {
+    const std::uint8_t off = kNoteOff[std::size_t(f.code)];
+    if (off != 0xFF) { emit_prog(r, f, o, &kNoteProg[off]); return; }
     switch (f.code) {
     case Code::PowerShort:
         o.s(K2_P("need: "));
@@ -1244,9 +1491,6 @@ void note(const Report& r, const Finding& f, Out& o) {
         }
         o.volts(f.c); o.c(' '); o.amps(f.d);
         break;
-    case Code::MismatchFlag: o.s(K2_P("set in its Request at ")); o.clock(f.t_ms); break;
-    case Code::NoMismatchFlag: o.s(K2_P("its Request took ")); o.volts(f.a); o.c(' '); o.amps(f.b); o.s(K2_P(" without the mismatch bit")); break;
-    case Code::Pinned: o.s(K2_P(">= 95 % of it for ")); o.u(std::uint32_t(f.b)); o.s(K2_P(" % of ")); o.dur(std::uint32_t(f.c)); break;
     case Code::OverDraw: {
         const unsigned bursts = std::uint32_t(f.c) >> 8 & 0xFF, lo = std::uint32_t(f.d) >> 2 & 0x3FF, hi = std::uint32_t(f.d) >> 12 & 0x3FF;
         const auto tenths = [&o](unsigned ds) { o.u(ds / 10); o.c('.'); o.u(ds % 10); };
@@ -1270,64 +1514,42 @@ void note(const Report& r, const Finding& f, Out& o) {
         else if (f.d & 2) o.s(K2_P("; then a hard reset"));
         break;
     }
-    case Code::Draw:
-        o.s(K2_P("observed ")); o.dur(std::uint32_t(f.d)); o.s(K2_P(", peak ")); o.amps(r.peak_ma);
-        break;
     case Code::DrawReduced:
-        o.amps(f.a); o.s(" to "); o.amps(f.b); o.s(" at "); o.clock(f.t_ms);
-        if (f.c > 1) { o.s(", "); o.u(std::uint32_t(f.c)); o.s(K2_P(" drops")); }
+        o.amps(f.a); o.s(kStrs[S_to]); o.amps(f.b); o.s(kStrs[S_sp_at]); o.clock(f.t_ms);
+        if (f.c > 1) { o.s(kStrs[S_comma]); o.u(std::uint32_t(f.c)); o.s(K2_P(" drops")); }
         o.s(f.d ? K2_P("; no PD message, VBUS kept") : K2_P("; PD messages around it"));
         break;
-    case Code::FiveVoltOnly: o.s(K2_P("the offer goes to ")); o.volts(f.a); o.s(K2_P(", the device's sink caps to ")); o.volts(f.b); break;
     case Code::ContractUnseen:
         if (f.b) { o.s(K2_P("VBUS ")); o.volts(f.a); o.s(K2_P(" when the K2 saw it")); }
         else o.s(K2_P("no VBUS reading in this capture"));
         break;
-    case Code::NoContract: o.s(K2_P("an offer on this leg, no Accept and PS_RDY after it")); break;
-    case Code::ActiveSink: o.s(K2_P("no load on the K2, so no draw to judge")); break;
-    case Code::HardReset: o.s(K2_P("first at ")); o.clock(f.t_ms); break;
     case Code::SoftReset:
-        o.s(K2_P("first at ")); o.clock(f.t_ms);
-        if (f.b) { o.s(", "); o.u(std::uint32_t(f.b)); o.s(K2_P(" sent by the K2")); }
+        o.s(kStrs[S_first_at]); o.clock(f.t_ms);
+        if (f.b) { o.s(kStrs[S_comma]); o.u(std::uint32_t(f.b)); o.s(K2_P(" sent by the K2")); }
         break;
-    case Code::Reattach: o.s(K2_P("CC detached and came back, first at ")); o.clock(f.t_ms); break;
-    case Code::Rejected: o.s(K2_P("first at ")); o.clock(f.t_ms); break;
-    case Code::WaitLoop: o.s(K2_P("the source asked the sink to retry")); break;
-    case Code::ManyRequests: o.s(K2_P("fixed-voltage, by the device; PPS keep-alives and the K2's own not counted")); break;
-    case Code::NoAccept: o.s(K2_P("no Accept, Reject or Wait, first at ")); o.clock(f.t_ms); break;
-    case Code::LateAccept: o.s(K2_P("limit ")); o.u(spec::kAcceptLimitMs); o.s(" ms"); break;
-    case Code::NoPsRdy: o.s(K2_P("first at ")); o.clock(f.t_ms); break;
-    case Code::LatePsRdy: o.s(K2_P("limit ")); o.u(f.b ? spec::kPsTransitionEprMaxMs : spec::kPsTransitionMaxMs); o.s(" ms"); break;
-    case Code::CapsUnanswered: o.u(std::uint32_t(f.a)); o.s(K2_P(" Source_Capabilities, no GoodCRC, no Request")); break;
+    case Code::LateAccept:
+    case Code::LatePsRdy:
+        o.s(K2_P("limit "));
+        o.u(f.code == Code::LateAccept ? spec::kAcceptLimitMs : f.b ? spec::kPsTransitionEprMaxMs : spec::kPsTransitionMaxMs);
+        o.s(" ms");
+        break;
     case Code::VbusLow:
         if (f.b) { o.c('-'); o.u(std::uint32_t((f.b - f.a) * 100 + f.b / 2) / std::uint32_t(f.b)); o.s(" %, "); }
-        o.s("at "); o.amps(f.c); o.s(", "); o.clock(f.t_ms);
-        break;
-    case Code::InputCuts:
-        // "0 mA in 552 of 9345 windows from 0:47; VBUS stayed up: the device let go"
-        o.s(K2_P("0 mA in ")); o.u(std::uint32_t(f.a)); o.s(" of "); o.u(std::uint32_t(f.b));
-        o.s(K2_P(" windows from ")); o.clock(f.t_ms); o.s(K2_P("; VBUS stayed up: the device let go"));
+        o.s(kStrs[S_at]); o.amps(f.c); o.s(kStrs[S_comma]); o.clock(f.t_ms);
         break;
     case Code::OverSustained:
-        // "83 % of 20 s above 3.46 A from 16:05; offer 3.5 A" (worst case, 72 chars:
-        // "100 % of 59 min 59 s above 3.46 A from 1:16:05; offer 3.5 A")
-        o.u(std::uint32_t(f.c) >> 16); o.s(K2_P(" % of ")); o.dur(std::uint32_t(f.d)); o.s(K2_P(" above "));
+        o.u(std::uint32_t(f.c) >> 16); o.s(kStrs[S_pct_of]); o.dur(std::uint32_t(f.d)); o.s(K2_P(" above "));
         o.amps(std::int32_t(over_limit_ma(std::uint32_t(f.b)))); o.s(K2_P(" from ")); o.clock(f.t_ms);
         if (f.c & 0xFFFF) { o.s(K2_P("; offer ")); o.amps(f.c & 0xFFFF); }
         break;
-    case Code::VbusHigh: o.s("at "); o.clock(f.t_ms); break;
     case Code::VbusLost:
-        o.s("at "); o.clock(f.t_ms); o.s(K2_P(", CC still attached"));
-        if (f.c && f.b * 1000 > f.c * 1050) { o.s(K2_P("; drew ")); o.amps(f.b); o.s(" on "); o.amps(f.c); o.s(K2_P(": over-current signature")); }
+        o.s(kStrs[S_at]); o.clock(f.t_ms); o.s(K2_P(", CC still attached"));
+        if (f.c && f.b * 1000 > f.c * 1050) { o.s(K2_P("; drew ")); o.amps(f.b); o.s(kStrs[S_on]); o.amps(f.c); o.s(K2_P(": over-current signature")); }
         break;
-    case Code::NoGoodCrc: o.s(K2_P("SOP frames the other end did not acknowledge")); break;
-    case Code::Retries: o.s(K2_P("the same frame sent again")); break;
-    case Code::TxFail: o.s(K2_P("no GoodCRC from the partner on SOP")); break;
-    case Code::RxBad: o.s(K2_P("unknown FIFO token, frame dropped")); break;
     case Code::SwapRefused:
         if (f.a == 1) {
             o.s(K2_P("PR_Swap ")); o.s(ctl_answer(std::uint32_t(f.c)));
-            if (f.t_ms) { o.s(" at "); o.clock(f.t_ms); }
+            if (f.t_ms) { o.s(kStrs[S_sp_at]); o.clock(f.t_ms); }
             if (f.b) { o.s(K2_P("; it stays the ")); o.milli(f.d ? f.d : 5000, 0); o.s(K2_P(" V source")); }
             else o.s(K2_P("; it stays the sink"));
         } else {
@@ -1338,15 +1560,7 @@ void note(const Report& r, const Finding& f, Out& o) {
         o.s(f.b ? K2_P("Enter_Mode NAK on SOP' at ") : K2_P("Enter_Mode NAK at ")); o.clock(f.t_ms);
         if (f.b) o.s(K2_P("; the cable plug only, not the port"));
         break;
-    case Code::EnterUsbRefused: o.s(K2_P("not accepted by the other end")); break;
-    case Code::EprFailed: o.s(K2_P("EPR_Mode Enter_Failed, reason ")); o.u(std::uint32_t(f.a)); break;
-    case Code::CableCap: o.s(K2_P("e-marker says 3 A, the device asks up to ")); o.amps(f.a); break;
-    case Code::VdmLoop: o.s(K2_P("answered ")); o.s(answer_name(std::uint32_t(f.c))); o.s(K2_P("; harmless to power")); break;
-    case Code::CableSilent:
-        o.s(K2_P("Discover_Identity sent ")); o.u(std::uint32_t(f.a)); o.s("x (");
-        o.u(std::uint32_t(f.b)); o.s(f.b == 1 ? K2_P(" request") : K2_P(" requests")); o.s(K2_P(" + retries); no cable chip on this leg"));
-        break;
-    case Code::CaptureGap: o.s(K2_P("seen by their GoodCRC or the next MessageID; a capture gap, not a link fault")); break;
+    default: break;
     }
 }
 
@@ -1365,16 +1579,11 @@ void lanes_note(const Report& r, Out& o) {
 }
 
 const char* head_power(std::uint8_t p) {
-    switch (p) {
-    case kPowerShort: return K2_P("power short");
-    case kPowerOk: return K2_P("power OK");
-    case kPowerUnknown: return K2_P("need not known");
-    case kPowerUnseen: return K2_P("contract not observed");
-    case kPowerNone: return K2_P("no contract made");
-    case kPowerActive: return K2_P("K2 is the sink");
-    case kPowerOver: return K2_P("draw over contract");
-    default: return "";
-    }
+    static constexpr const char* const kPow[] = {
+        "", K2_P("power short"), K2_P("power OK"), K2_P("need not known"), K2_P("contract not observed"),
+        K2_P("no contract made"), K2_P("K2 is the sink"), "", K2_P("draw over contract"),
+    };
+    return p < (sizeof(kPow) / sizeof(kPow[0])) ? kPow[p] : "";
 }
 
 void head(const Report& r, Out& o) {
@@ -1502,15 +1711,13 @@ namespace detail {
 }
 [[gnu::noinline]] void Out::dur(std::uint32_t ms) {
     const std::uint32_t t = ms / 1000;
-    if (tight) {
-        if (t < 60) { u(t); c('s'); }
-        else if (t < 3600) { u(t / 60); c('m'); two(t % 60); c('s'); }
-        else { u(t / 3600); c('h'); two(t / 60 % 60); c('m'); }
-        return;
-    }
-    if (t < 60) { u(t); s(" s"); return; }
-    if (t < 3600) { u(t / 60); s(K2_P(" min ")); u(t % 60); s(" s"); return; }
-    u(t / 3600); s(" h "); u(t / 60 % 60); s(" min");
+    if (t < 60) { u(t); s(tight ? "s" : " s"); return; }
+    const bool min_only = t < 3600;
+    const std::uint32_t hi = min_only ? t / 60 : t / 3600;
+    const std::uint32_t lo = (min_only ? t : t / 60) % 60;
+    u(hi);
+    if (tight) { c(min_only ? 'm' : 'h'); two(lo); c(min_only ? 's' : 'm'); }
+    else { s(min_only ? K2_P(" min ") : " h "); u(lo); s(min_only ? " s" : " min"); }
 }
 
 }  // namespace detail

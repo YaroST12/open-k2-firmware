@@ -28,6 +28,10 @@ int cells_rt(const char *s) {
     return n;
 }
 
+void assign_sv(std::string_view &dst, const char *s) {
+    dst = s ? std::string_view(s) : std::string_view{};
+}
+
 }  // namespace k2::strpack
 
 #ifndef __arm__

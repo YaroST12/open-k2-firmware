@@ -18,22 +18,8 @@ namespace k2 {
 enum class Tri : uint8_t { Unknown, No, Yes };
 
 // Fixed-point append helpers shared by the Connection page rows: "3A", "1.5A", "0.5A" / "5V", "20.2V".
-template <size_t N>
-void put_a(StrBuf<N> &s, uint32_t ma) {   // "3A", "1.5A", "3.25A"
-    if (ma % 1000 == 0) s.put_u32(ma / 1000);
-    else if (ma % 100 == 0) s.put_fixed(int32_t(ma / 100 * 100), 1);
-    else if (ma % 10 == 0) s.put_fixed(int32_t(ma), 2);
-    else s.put_fixed(int32_t(ma), 3);
-    s.put_char('A');
-}
-
-template <size_t N>
-void put_v(StrBuf<N> &s, uint32_t mv) {
-    if (mv % 1000 == 0) s.put_u32(mv / 1000);
-    else if (mv % 100 == 0) s.put_fixed(int32_t(mv), 1);
-    else if (mv % 10 == 0) s.put_fixed(int32_t(mv), 2);
-    else s.put_fixed(int32_t(mv), 3);
-}
+void put_a(StrBufBase &s, uint32_t ma);   // "3A", "1.5A", "3.25A"
+void put_v(StrBufBase &s, uint32_t mv);
 
 struct MatchInput {
     const pd::SourceCaps &caps;

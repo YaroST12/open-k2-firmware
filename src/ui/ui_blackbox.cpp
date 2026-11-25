@@ -153,6 +153,7 @@ int BlackBoxPage::sel_row() const {
 // Row i of the list: a group header (the key and vendor dim, the capture count at the right), a capture (icon of the
 // trigger, its name, the time span; the open row adds the sequence number and the message count) or, last, the live link.
 void BlackBoxPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
+    using namespace std::string_view_literals;
     auto &p = *static_cast<BlackBoxPage *>(ctx);
     // The RowSpec views the page scratch (shared with the timeline's strip columns, which the list never needs).
     char *const abuf = p.sc_.row.a, *const tbuf = p.sc_.row.tail;
@@ -160,8 +161,8 @@ void BlackBoxPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
     out.marker = kit::Marker::Icon;
     if (i >= p.nrows_) {
         out.icon = Icon::Cable;
-        out.text = K2_P("Live link");
-        out.tail = pdtrace::live_link().any() ? "seen" : K2_P("not seen");
+        out.text = K2_PSV("Live link");
+        out.tail = pdtrace::live_link().any() ? "seen"sv : K2_PSV("not seen");
         return;
     }
     const Row &r = p.rows_[i];
@@ -184,9 +185,9 @@ void BlackBoxPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
     capture_parts(cp, info, pdtrace::capture_data(r.slot));
     out.icon = trigger_icon(info.trigger);
     out.marker_color = trigger_color(info.trigger);
-    out.text = trigger_name(info.trigger);
+    strpack::assign_sv(out.text, trigger_name(info.trigger));
     if (cp.rec) {
-        out.tail = "REC";
+        out.tail = "REC"sv;
         out.tail_color = kCaution;
         return;
     }
@@ -198,9 +199,9 @@ void BlackBoxPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
 
 void BlackBoxPage::paint_empty_text() {
     const Surface &c = ctx_.content;
-    gfx_text(c, kSmall, 8, 30, K2_P("No captures yet"), kText, kBg);
-    gfx_text(c, kLabelFont, 8, 54, K2_P("Contract, hard reset,"), kDim, kBg);
-    gfx_text(c, kLabelFont, 8, 68, K2_P("VBUS dip or detach"), kDim, kBg);
+    gfx_text(c, kSmall, 8, 30, K2_PSV("No captures yet"), kText, kBg);
+    gfx_text(c, kLabelFont, 8, 54, K2_PSV("Contract, hard reset,"), kDim, kBg);
+    gfx_text(c, kLabelFont, 8, 68, K2_PSV("VBUS dip or detach"), kDim, kBg);
 }
 
 void BlackBoxPage::paint_list() {
@@ -227,7 +228,7 @@ void BlackBoxPage::paint_timeline_head() {
     CaptureParts cp;
     capture_parts(cp, info, data());
     const std::string_view at = cp.rec ? std::string_view("REC") : cp.all;
-    uint32_t sig = pg::mix_str(2166136261u, at);
+    uint32_t sig = pg::mix_str(at);
     sig = pg::mix_str(sig, std::string_view(k.key, k.n));
     sig = pg::mix_cstr(sig, k.vendor);
     sig = mix_u32(sig, static_cast<uint8_t>(info.trigger));
@@ -269,10 +270,13 @@ void BlackBoxPage::paint_link() {
     for (int i = 0; i < 5; i++) sig = pg::mix_cstr(sig, rows[i]);
     if (link_painted_ && sig == link_sig_) return;
     pg::clear_body(c);
-    gfx_text(c, kSmall, 8, kTlHeadY, link_live_ ? K2_P("Live link") : "Link", kText, kBg);
+    gfx_text(c, kSmall, 8, kTlHeadY, link_live_ ? K2_PSV("Live link") : std::string_view("Link"), kText, kBg);
     for (int i = 0; i < 5; i++) {
         const bool seen = rows[i][0] != 0;
-        kit::kv_row(c, kLinkLayout, kit::kv_row_y(kLinkLayout, i), kLinkNames[i], seen ? rows[i] : K2_P("not seen"), seen ? kText : kDim);
+        std::string_view key, val = K2_PSV("not seen");
+        strpack::assign_sv(key, kLinkNames[i]);
+        if (seen) strpack::assign_sv(val, rows[i]);
+        kit::kv_row(c, kLinkLayout, kit::kv_row_y(kLinkLayout, i), key, val, seen ? kText : kDim);
     }
     gfx_fill(c, 0, kit::kv_row_y(kLinkLayout, 5), c.w, 1, kRule);
     link_painted_ = true;
@@ -289,7 +293,7 @@ void BlackBoxPage::draw_strip() {
     const view::Strip st =
         view::vbus_strip(recs, std::span<uint8_t>(sc_.heights, size_t(strip_w_)), uint8_t(kStripH - 1));
     if (!st.valid) {
-        gfx_text(c, kLabelFont, kStripX, kStripY + 8, K2_P("no VBUS samples"), kDim, kBg);
+        gfx_text(c, kLabelFont, kStripX, kStripY + 8, K2_PSV("no VBUS samples"), kDim, kBg);
         return;
     }
     for (int x = 0; x < strip_w_; x++) {

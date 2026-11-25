@@ -285,8 +285,7 @@ size_t Remote::mi_cable_auth(std::span<const uint8_t> p, std::span<uint8_t> out)
         emk_spoof::MiAuthCfg c;
         c.on = p[1] != 0;
         c.key = p[2];
-        c.trailing = std::uint32_t(p[3]) | (std::uint32_t(p[4]) << 8) | (std::uint32_t(p[5]) << 16) |
-                     (std::uint32_t(p[6]) << 24);
+        c.trailing = remote::detail::rd32(&p[3]);
         c.half = p[7];
         c.reply = p[8];
         c.payload = p[9];
@@ -295,10 +294,7 @@ size_t Remote::mi_cable_auth(std::span<const uint8_t> p, std::span<uint8_t> out)
     const emk_spoof::MiAuthCfg c = emk_spoof::mi_auth();
     out[0] = c.on ? 1 : 0;
     out[1] = c.key;
-    out[2] = std::uint8_t(c.trailing);
-    out[3] = std::uint8_t(c.trailing >> 8);
-    out[4] = std::uint8_t(c.trailing >> 16);
-    out[5] = std::uint8_t(c.trailing >> 24);
+    remote::detail::wr32(&out[2], c.trailing);
     out[6] = c.half;
     out[7] = c.reply;
     out[8] = c.payload;
@@ -892,40 +888,25 @@ remote::PdAttachResult Remote::pd_attach(uint16_t target_mv, uint16_t target_ma,
 
     const pd::SourceCaps& caps = pd::active_caps();
 
-    // No valid capability list (whatever the active-CC line says: a charger that already waits shows its Rp there with
-    // no list yet): present the single Rd (PD mode) and wait for the source caps. The verdict above guarantees
-    // nothing is inline, so this is the plain sink attach.
+    bool raised = false;
     if (pd::attach_step(caps.valid, caps.num_pdos) == pd::AttachStep::PresentRd) {
         fusb302::unit_attach(false);
         K2LOG("[RMT] pd attach: presented Rd, waiting for caps\n");
-        return {remote::Status::Ok, 0, pd_trigger()};
-    }
-
-    // Select the best PDO for the target voltage
-    pd::Choice c = pd::pick_attach_pdo(caps, target_mv, target_ma, cap_mv);
-
-    if (c.pos == 0) {
-        // No suitable PDO found, return current status
+    } else if (const pd::Choice c = pd::pick_attach_pdo(caps, target_mv, target_ma, cap_mv); c.pos == 0) {
         K2LOG("[RMT] pd attach: no suitable PDO for %d mV\n", static_cast<int>(target_mv));
-        return {remote::Status::Ok, 0, pd_trigger()};
+    } else {
+        const uint16_t chosen_mv = c.mv != 0 ? c.mv : caps.pdos[c.pos - 1].max_mv;
+        if (chosen_mv > pd::kAttachDefaultMv && !confirm) {
+            K2LOG("[RMT] pd attach refused: confirm needed (chosen pos=%d %d mV)\n", static_cast<int>(c.pos), static_cast<int>(chosen_mv));
+            return {remote::Status::NeedConfirm, 0, {}};
+        }
+        const pd::Err e = fusb302::sink_request(c, confirm);
+        if (e != pd::Err::Ok) {
+            K2LOG("[RMT] pd attach: sink_request err=%s\n", pd::err_name(e));
+        }
+        raised = e == pd::Err::Ok && chosen_mv > pd::kAttachDefaultMv;
     }
-
-    // The PDO choice may sit above the target (nearest fixed offer): the confirm rule applies to what is requested.
-    const uint16_t chosen_mv = c.mv != 0 ? c.mv : caps.pdos[c.pos - 1].max_mv;
-    if (chosen_mv > pd::kAttachDefaultMv && !confirm) {
-        K2LOG("[RMT] pd attach refused: confirm needed (chosen pos=%d %d mV)\n", static_cast<int>(c.pos), static_cast<int>(chosen_mv));
-        return {remote::Status::NeedConfirm, 0, {}};
-    }
-
-    // Request the selected PDO
-    const pd::Err e = fusb302::sink_request(c, confirm);
-    if (e != pd::Err::Ok) {
-        K2LOG("[RMT] pd attach: sink_request err=%s\n", pd::err_name(e));
-    }
-
-    // Return the current trigger status. Only a request the sink engine accepted for a level above 5 V holds the output
-    // under host control, so only that arms the dead-man lease (a failed request, Rd-only or no-PDO attach raised nothing).
-    return {remote::Status::Ok, 0, pd_trigger(), e == pd::Err::Ok && chosen_mv > pd::kAttachDefaultMv};
+    return {remote::Status::Ok, 0, pd_trigger(), raised};
 }
 
 remote::PdTriggerSnapshot Remote::pd_trigger() {
@@ -1118,28 +1099,34 @@ bootinfo::PowerSample Remote::boot_sample(uint16_t i) {
     return {uint16_t(i * boottrace::kPeriodMs), s.vbus_mv, s.cc1_mv, s.cc2_mv, s.aux_mv, s.plus};
 }
 
+bool Remote::debug_busy_refuse() const {
+    if (!ui_.charger_test_busy()) return false;
+    K2LOG("[TEST] debug refused: test running\n");
+    return true;
+}
+
 remote::Status Remote::debug_fake_pdos(uint8_t n) {
-    if (ui_.charger_test_busy()) { K2LOG("[TEST] debug refused: test running\n"); return remote::Status::Busy; }
+    if (debug_busy_refuse()) return remote::Status::Busy;
     ui_.debug_fake_pdos(n, systick::millis());
     K2LOG("[RMT] debug fake pdos=%d\n", static_cast<int>(n));
     return remote::Status::Ok;
 }
 
 remote::Status Remote::debug_link(bool attached) {
-    if (ui_.charger_test_busy()) { K2LOG("[TEST] debug refused: test running\n"); return remote::Status::Busy; }
+    if (debug_busy_refuse()) return remote::Status::Busy;
     ui_.debug_link(attached, systick::millis());
     return remote::Status::Ok;
 }
 
 remote::Status Remote::debug_pd_msg(uint8_t sop, uint16_t header, std::span<const uint8_t> payload) {
-    if (ui_.charger_test_busy()) { K2LOG("[TEST] debug refused: test running\n"); return remote::Status::Busy; }
+    if (debug_busy_refuse()) return remote::Status::Busy;
     fusb302::feed(sop, header, payload);
     K2LOG("[RMT] debug pd-msg sop=%d header=0x%04X objects=%d\n", sop, header, int((header >> 12) & 7));
     return remote::Status::Ok;
 }
 
 remote::Status Remote::debug_cc_matrix(uint8_t v, uint16_t modes) {
-    if (ui_.charger_test_busy()) { K2LOG("[TEST] debug refused: test running\n"); return remote::Status::Busy; }
+    if (debug_busy_refuse()) return remote::Status::Busy;
     if (v > 7) return remote::Status::BadArg;
     fusb302::debug_cc_matrix(v, modes);
     K2LOG("[RMT] debug cc-matrix levels=%u modes=%03x\n", v, modes);
@@ -1154,7 +1141,7 @@ static std::int32_t cc_probe_vbus_mv() {
 }
 
 remote::Status Remote::debug_cc_probe(const ccprobe::Args &a, ccprobe::Result &out) {
-    if (ui_.charger_test_busy()) { K2LOG("[TEST] debug refused: test running\n"); return remote::Status::Busy; }
+    if (debug_busy_refuse()) return remote::Status::Busy;
     K2LOG("[CCPROBE] start sw0=%02X pc=%u ms=%u modes=%X\n", a.sw0, a.pc, a.ms, a.modes);
     const ccprobe::Refusal why = fusb302::cc_probe(a, cc_probe_vbus_mv, out);
     if (why != ccprobe::Refusal::None) {
@@ -1174,8 +1161,7 @@ remote::Status Remote::debug_cc_probe(const ccprobe::Args &a, ccprobe::Result &o
 
 // The silent-cable-chip probe (docs/K2_PORTS_SPEC.md, k2/pd/ra_probe.hpp). Raw samples only; the verdict is the classifier's.
 remote::Status Remote::ra_probe(const raprobe::Args &a, raprobe::Result &out) {
-    if (ui_.charger_test_busy()) {
-        K2LOG("[TEST] debug refused: test running\n");
+    if (debug_busy_refuse()) {
         out.refusal = static_cast<uint8_t>(raprobe::Refusal::Running);
         return remote::Status::Busy;
     }
@@ -1235,7 +1221,7 @@ eeprom::CalResult Remote::eeprom_cal_clear(std::span<const uint8_t, eeprom::kCal
 remote::VconnSnapshot Remote::debug_vconn(uint8_t op) {
     remote::VconnSnapshot s;
     s.ok = 1;
-    if (ui_.charger_test_busy()) { K2LOG("[TEST] debug refused: test running\n"); s.ok = 0; }
+    if (debug_busy_refuse()) { s.ok = 0; }
     else if (op == 1) s.ok = fusb302::vconn_request() ? 1 : 0;
     else if (op == 2) fusb302::vconn_off();
     else if (op == 3) s.ok = fusb302::vconn_roundtrip() ? 1 : 0;
@@ -1250,7 +1236,7 @@ remote::VconnSnapshot Remote::debug_vconn(uint8_t op) {
 remote::EprInfoSnapshot Remote::debug_epr_info(uint8_t op) {
     remote::EprInfoSnapshot s;
     s.ok = 1;
-    if (ui_.charger_test_busy()) { K2LOG("[TEST] debug refused: test running\n"); s.ok = 0; }
+    if (debug_busy_refuse()) { s.ok = 0; }
     else if (op != 0) s.err = static_cast<uint8_t>(fusb302::epr_info_request(op == 2));
     s.state = static_cast<uint8_t>(fusb302::sink_status().epr_info);
     const pd::SourceCaps &list = fusb302::epr_info_list();
@@ -1683,9 +1669,8 @@ size_t Remote::blackbox(uint8_t op, uint32_t arg, std::span<uint8_t> out) {
         const std::uint32_t off = arg & 0xFFFF;
         const std::size_t n = dpsniff::read_record(off, out.subspan(pdtrace::kReadHeader), used, total);
         out[0] = 0;
-        const std::uint32_t next = off + used, len = static_cast<std::uint32_t>(total);
-        for (int i = 0; i < 4; i++) out[1 + i] = static_cast<uint8_t>(next >> (8 * i));
-        for (int i = 0; i < 4; i++) out[5 + i] = static_cast<uint8_t>(len >> (8 * i));
+        remote::detail::wr32(&out[1], off + used);
+        remote::detail::wr32(&out[5], static_cast<std::uint32_t>(total));
         return pdtrace::kReadHeader + n;
     }
     return pdtrace::remote(op, arg, out);
@@ -1796,15 +1781,17 @@ size_t Remote::battery(std::span<const uint8_t> p, std::span<uint8_t> out) {
 // running owns the capture (it re-arms before each step), so a manual arm is refused while one runs.
 size_t Remote::transcap(std::span<const uint8_t> p, std::span<uint8_t> out) {
     namespace tc = k2::transcap;
-    auto put = [&out](size_t at, uint32_t v, unsigned n) { for (unsigned i = 0; i < n; i++) out[at + i] = static_cast<uint8_t>(v >> (8 * i)); };
-    auto get32 = [](const uint8_t *q) { return uint32_t(q[0]) | uint32_t(q[1]) << 8 | uint32_t(q[2]) << 16 | uint32_t(q[3]) << 24; };
+    using remote::detail::rd32;
+    using remote::detail::wr16;
+    using remote::detail::wr32;
     switch (p[0]) {
     case remote::kTcStatus: {
         const auto s = tc::status();
         out[0] = static_cast<uint8_t>(s.state); out[1] = static_cast<uint8_t>(s.reason);
         out[2] = static_cast<uint8_t>((s.fast ? 1 : 0) | (s.keep ? 2 : 0));
-        put(3, s.samples, 2); out[5] = s.markers; put(6, s.lost, 4); put(10, s.span_us, 4);
-        put(14, s.max_gap_us, 4); put(18, s.trigger_age_ms, 4); put(22, s.saved_seq, 4);
+        wr16(&out[3], static_cast<uint16_t>(s.samples)); out[5] = s.markers;
+        wr32(&out[6], s.lost); wr32(&out[10], s.span_us);
+        wr32(&out[14], s.max_gap_us); wr32(&out[18], s.trigger_age_ms); wr32(&out[22], s.saved_seq);
         return remote::kTcStatusBytes;
     }
     case remote::kTcArm:
@@ -1812,16 +1799,16 @@ size_t Remote::transcap(std::span<const uint8_t> p, std::span<uint8_t> out) {
         return 1;
     case remote::kTcTrigger: out[0] = tc::trigger(tc::Reason::Manual) ? 1 : 0; return 1;
     case remote::kTcDisarm: tc::disarm(); out[0] = 0; return 1;
-    case remote::kTcSave: put(0, tc::save_now(0, 0xFFFF), 4); return 4;
-    case remote::kTcLive: return tc::read_live(get32(&p[1]), out.first(std::min(out.size(), remote::kMaxRspPayload)));
-    case remote::kTcStored: return tc::read_stored(get32(&p[1]), get32(&p[5]), out.first(std::min(out.size(), remote::kMaxRspPayload)));
+    case remote::kTcSave: wr32(out.data(), tc::save_now(0, 0xFFFF)); return 4;
+    case remote::kTcLive: return tc::read_live(rd32(&p[1]), out.first(std::min(out.size(), remote::kMaxRspPayload)));
+    case remote::kTcStored: return tc::read_stored(rd32(&p[1]), rd32(&p[5]), out.first(std::min(out.size(), remote::kMaxRspPayload)));
     case remote::kTcList: {
         std::array<tc::Meta, tc::kMaxStored> m{};
         const size_t n = std::min(tc::list_stored(m), remote::kMaxRspPayload / remote::kTcListEntry);
         out[0] = static_cast<uint8_t>(n);
         for (size_t i = 0; i < n; i++) {
             const size_t at = 1 + i * remote::kTcListEntry;
-            put(at, m[i].seq, 4); put(at + 4, m[i].run_id, 4); put(at + 8, m[i].step, 2);
+            wr32(&out[at], m[i].seq); wr32(&out[at + 4], m[i].run_id); wr16(&out[at + 8], m[i].step);
             out[at + 10] = static_cast<uint8_t>(m[i].reason);
         }
         return 1 + n * remote::kTcListEntry;
@@ -1832,11 +1819,11 @@ size_t Remote::transcap(std::span<const uint8_t> p, std::span<uint8_t> out) {
 
 size_t Remote::emlib(std::span<const uint8_t> p, std::span<uint8_t> out) {
     using remote::kEmErrInline;
-    auto le16 = [](const uint8_t *q) { return static_cast<uint16_t>(q[0] | (q[1] << 8)); };
-    auto put16 = [&out](size_t at, uint32_t v) { out[at] = static_cast<uint8_t>(v); out[at + 1] = static_cast<uint8_t>(v >> 8); };
+    using remote::detail::rd16;
+    using remote::detail::wr16;
     auto err = [&out](emlib::Err e) { out[0] = static_cast<uint8_t>(e); return size_t{1}; };
     auto save_rsp = [&](const emlib::Result &r) {
-        out[0] = static_cast<uint8_t>(r.err); put16(1, r.seq); out[3] = r.existed ? 1 : 0;
+        out[0] = static_cast<uint8_t>(r.err); wr16(&out[1], r.seq); out[3] = r.existed ? 1 : 0;
         return size_t{4};
     };
     auto arm_err = [](emk_spoof::Err a) -> uint8_t {
@@ -1849,23 +1836,24 @@ size_t Remote::emlib(std::span<const uint8_t> p, std::span<uint8_t> out) {
         const unsigned start = p.size() > 1 ? p[1] : 0;
         const unsigned n = start >= total ? 0 : std::min<unsigned>(total - start, remote::kEmListMax);
         out[0] = 0; out[1] = static_cast<uint8_t>(std::min(total, 255u)); out[2] = static_cast<uint8_t>(n);
-        for (unsigned i = 0; i < n; i++) put16(3 + 2 * i, all[start + i]);
+        for (unsigned i = 0; i < n; i++) wr16(&out[3 + 2 * i], all[start + i]);
         return 3 + 2 * n;
     }
     case remote::kEmGet: {
         emlib::Entry e;
-        if (!storage::lib_get(le16(&p[1]), e)) return err(emlib::Err::NotFound);
-        out[0] = 0; put16(1, e.seq);
+        if (!storage::lib_get(rd16(&p[1]), e)) return err(emlib::Err::NotFound);
+        out[0] = 0; wr16(&out[1], e.seq);
         for (size_t i = 0; i < remote::kEmNameMax; i++) out[3 + i] = static_cast<uint8_t>(e.name[i]);
-        put16(27, emrec::vdo(e.rec, 1) & 0xFFFF); put16(29, emrec::vdo(e.rec, 3) >> 16);
+        wr16(&out[27], static_cast<uint16_t>(emrec::vdo(e.rec, 1) & 0xFFFF));
+        wr16(&out[29], static_cast<uint16_t>(emrec::vdo(e.rec, 3) >> 16));
         return 31;
     }
     case remote::kEmSave: return save_rsp(storage::lib_save_current());
-    case remote::kEmDelete: return err(storage::lib_remove(le16(&p[1])));
+    case remote::kEmDelete: return err(storage::lib_remove(rd16(&p[1])));
     case remote::kEmRename: {
-        const uint16_t seq = le16(&p[1]);
+        const uint16_t seq = rd16(&p[1]);
         const emlib::Err e = storage::lib_rename(seq, std::string_view(reinterpret_cast<const char *>(&p[3]), p.size() - 3));
-        out[0] = static_cast<uint8_t>(e); put16(1, seq);
+        out[0] = static_cast<uint8_t>(e); wr16(&out[1], seq);
         return 3;
     }
     case remote::kEmLearn: {
@@ -1896,25 +1884,29 @@ size_t Remote::emlib(std::span<const uint8_t> p, std::span<uint8_t> out) {
         return emk_quirk::encode_seen(emk_spoof::seen(), p[1], out);
     default: {   // kEmSpoof
         uint8_t e = 0;
-        if (p[1] == remote::kEmSpoofArm) {
-            emlib::Entry ent;
-            emk_quirk::Quirks quirks;
+        if (p[1] == remote::kEmSpoofArm || p[1] == remote::kEmSpoofBuiltin) {
+            const bool is_arm = p[1] == remote::kEmSpoofArm;
             if (ui_.spoof_busy()) {
-                K2LOG("[TEST] spoof refused: tool busy\n");
+                if (is_arm) K2LOG("[TEST] spoof refused: tool busy\n");
                 e = remote::kEmErrBusy;
-            } else if (!storage::lib_get(le16(&p[2]), ent, quirks)) e = static_cast<uint8_t>(emlib::Err::NotFound);
-            else {
-                e = arm_err(emk_spoof::arm(ent.rec, quirks));
-                if (e == 0) { spoof_seq_ = ent.seq; eekeep::spoof_user_armed({ctcable::Kind::Saved, ent.seq}); }
-            }
-        } else if (p[1] == remote::kEmSpoofBuiltin) {
-            if (ui_.spoof_busy()) e = remote::kEmErrBusy;
-            else {
+            } else {
+                emlib::Entry ent;
                 emk_quirk::Quirks quirks;
-                emk_quirk::builtin_quirks(p[2], quirks);
-                e = arm_err(emk_spoof::arm(emrec::builtin_cable(p[2]), quirks));
-                spoof_seq_ = 0;
-                if (e == 0 && ctcable::valid({ctcable::Kind::Builtin, uint16_t(p[2])})) eekeep::spoof_user_armed({ctcable::Kind::Builtin, uint16_t(p[2])});
+                if (is_arm && !storage::lib_get(rd16(&p[2]), ent, quirks)) {
+                    e = static_cast<uint8_t>(emlib::Err::NotFound);
+                } else {
+                    if (!is_arm) {
+                        ent.rec = emrec::builtin_cable(p[2]);
+                        emk_quirk::builtin_quirks(p[2], quirks);
+                    }
+                    e = arm_err(emk_spoof::arm(ent.rec, quirks));
+                    spoof_seq_ = (is_arm && e == 0) ? ent.seq : 0;
+                    if (e == 0) {
+                        const ctcable::Choice c{is_arm ? ctcable::Kind::Saved : ctcable::Kind::Builtin,
+                                                is_arm ? ent.seq : uint16_t(p[2])};
+                        if (is_arm || ctcable::valid(c)) eekeep::spoof_user_armed(c);
+                    }
+                }
             }
         } else if (p[1] == remote::kEmSpoofDisarm) {
             emk_spoof::disarm();
@@ -1927,8 +1919,9 @@ size_t Remote::emlib(std::span<const uint8_t> p, std::span<uint8_t> out) {
             if (!storage::lib_get(spoof_seq_, ent, quirks) || !emk_spoof::matches(ent.rec, quirks)) spoof_seq_ = 0;
         }
         out[0] = e; out[1] = on ? 1 : 0;
-        put16(2, std::min<uint32_t>(emk_spoof::requests(), 0xFFFF)); put16(4, std::min<uint32_t>(emk_spoof::replies(), 0xFFFF));
-        put16(6, on ? spoof_seq_ : 0);
+        wr16(&out[2], static_cast<uint16_t>(std::min<uint32_t>(emk_spoof::requests(), 0xFFFF)));
+        wr16(&out[4], static_cast<uint16_t>(std::min<uint32_t>(emk_spoof::replies(), 0xFFFF)));
+        wr16(&out[6], on ? spoof_seq_ : 0);
         return 8;
     }
     }

@@ -672,9 +672,9 @@ void CardsPage::update(uint32_t now_ms) {
 void CardsPage::paint_empty() {
     const Surface &c = ctx_.content;
     // The body ground and the four constant lines in one pass; the table is width-checked at compile time.
-    static constexpr const char *kEmptyTitle = K2_P("No report cards yet");
-    static constexpr const char *kEmptyHint[3] = {K2_P("Finish a Charger test and the"), K2_P("K2 keeps one card per charger"),
-                                                   K2_P("that offers PD source caps.")};
+    static constexpr std::string_view kEmptyTitle = K2_PSV("No report cards yet");
+    static constexpr std::string_view kEmptyHint[3] = {K2_PSV("Finish a Charger test and the"), K2_PSV("K2 keeps one card per charger"),
+                                                       K2_PSV("that offers PD source caps.")};
     static_assert(fits_px_p(8, kEmptyTitle, 224 - 16) && all_fit_p(kEmptyHint, 6, 224 - 16), "empty-state copy fits (16 px font: 8 px/cell, 12 px font: 6)");
     const kit::TextRun runs[4] = {{8, 30, &kSmall, kEmptyTitle, kText},      {8, 54, &kLabelFont, kEmptyHint[0], kDim},
                                   {8, 68, &kLabelFont, kEmptyHint[1], kDim}, {8, 82, &kLabelFont, kEmptyHint[2], kDim}};
@@ -752,7 +752,7 @@ void CardsPage::paint_cell(int row, bool focused) {
     if (row == 0) {   // PD fixed
         const rc::GroupResult &r = cd.group[0];
         const tone::Tone pt = tone::group(cd, 0);
-        draw_cell_head(c, 8, int16_t(g.y + 1), kit::kTextX, ty, 84 - 4 - kit::kTextX, K2_P("PD fixed"), pt, r.verdict == rc::GV::Skip, bg);
+        draw_cell_head(c, 8, int16_t(g.y + 1), kit::kTextX, ty, 84 - 4 - kit::kTextX, K2_PSV("PD fixed"), pt, r.verdict == rc::GV::Skip, bg);
         StrBuf<16> a, b;
         cards_group_max_text(r, a);
         cards_group_fail_text(r, b);
@@ -837,7 +837,7 @@ void CardsPage::paint_detail() {
     cards_handover_text(cd, ho);
     const bool tried = cd.handover != charger_test::HandoverOutcome::NotTried;
     const bool ho_bad = cd.handover == charger_test::HandoverOutcome::Fault || cd.handover == charger_test::HandoverOutcome::Reboot;
-    kit::kv_row(c, kHandover, y_h, K2_P("Handover"), ho.view(), ho_bad ? kError : tried ? kText : kFaint, true);
+    kit::kv_row(c, kHandover, y_h, K2_PSV("Handover"), ho.view(), ho_bad ? kError : tried ? kText : kFaint, true);
     // A QC4+/QC5 source gets one fact line ahead of the groups ("QC5 (Qualcomm VID, PPS 3.3-21V)").
     int16_t ly = int16_t(y_h + kDP);
     {
@@ -861,7 +861,7 @@ void CardsPage::paint_detail() {
         if (!mi_.view().empty()) {   // the Xiaomi section of the card's block: the modes the 0x2717 chain unlocked, or how it stopped
             gfx_fill(c, 0, ly, c.w, 1, kRule);
             const int16_t ty = int16_t(ly + kit::row_text_y(kDP, kLabelFont.height));
-            put_line(c, kLabelFont, 8, ty, 40, K2_P("Xiaomi"), kDim, kBg);
+            put_line(c, kLabelFont, 8, ty, 40, K2_PSV("Xiaomi"), kDim, kBg);
             put_marked(c, kLabelFont, kMiValueX, ty, kRightEdge - kMiValueX, mi_.view(), kText, kBg);   // the Handover row's value column
             ly = int16_t(ly + kDP);
         }
@@ -870,7 +870,7 @@ void CardsPage::paint_detail() {
     const int first = 1 + int(cd.n_ranges), cells = rows() - first;
     if (cells <= 0) {
         gfx_fill(c, 0, ly, c.w, 1, kRule);
-        put_line(c, kLabelFont, 8, int16_t(ly + kit::row_text_y(kDP, kLabelFont.height)), c.w - 16, K2_P("No legacy protocols tested"), kFaint, kBg);
+        put_line(c, kLabelFont, 8, int16_t(ly + kit::row_text_y(kDP, kLabelFont.height)), c.w - 16, K2_PSV("No legacy protocols tested"), kFaint, kBg);
     } else {
         const int lines = (cells + 1) / 2;
         for (int i = 0; i <= lines; i++) gfx_fill(c, 0, int16_t(ly + kDP * i), c.w, 1, kRule);
@@ -902,7 +902,7 @@ void CardsPage::paint_detail() {
         y = int16_t(y + r.height());
     }
     gfx_fill(c, 0, y, c.w, 1, kRule);
-    if (y + 14 <= kFooterY) put_line(c, kLabelFont, 8, int16_t(y + 4), c.w - 16, K2_P("Per-step results are not stored"), kFaint, kBg);
+    if (y + 14 <= kFooterY) put_line(c, kLabelFont, 8, int16_t(y + 4), c.w - 16, K2_PSV("Per-step results are not stored"), kFaint, kBg);
 }
 
 // Sub-screen of the focused row: every value the card stores for that protocol group or range.
@@ -940,11 +940,11 @@ void CardsPage::paint_confirm() {
     StrBuf<24> t;
     cards_title_text(cur_, t);
     char fitted[kFitBuf];
-    kit::draw_alert_band(c, kit::kBodyY, false, K2_P("DELETE?"));
+    kit::draw_alert_band(c, kit::kBodyY, false, K2_PSV("DELETE?"));
     gfx_text(c, kSmall, 8, 68, fit_text_mid(kSmall, t.view(), c.w - 16, fitted), kText, kBg);
-    put_line(c, kLabelFont, 8, 92, c.w - 16, K2_P("History of this charger is lost."), kDim, kBg);
-    put_line(c, kLabelFont, 8, 106, c.w - 16, K2_P("The next test starts a new card."), kDim, kBg);
-    draw_footer_cached(c, FooterTone::Caution, K2_P("History is lost for good"), foot_);
+    put_line(c, kLabelFont, 8, 92, c.w - 16, K2_PSV("History of this charger is lost."), kDim, kBg);
+    put_line(c, kLabelFont, 8, 106, c.w - 16, K2_PSV("The next test starts a new card."), kDim, kBg);
+    draw_footer_cached(c, FooterTone::Caution, K2_PSV("History is lost for good"), foot_);
 }
 
 }  // namespace k2

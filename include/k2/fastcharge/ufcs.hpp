@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <span>
 
+#include "k2/core/bss_zero.hpp"
 #include "k2/fastcharge/ufcs_tune.hpp"
 #include "k2/core/strpack.hpp"
 
@@ -238,8 +239,8 @@ constexpr Parse decode(std::span<const std::uint8_t> in, Frame& f, std::size_t& 
 // 1 = 20 mV), max voltage [55:40] and min voltage [39:24] in 10 mV, max current [23:8] and min current
 // [7:0] in 10 mA. step_ma is 0 for a reserved step code: such a mode cannot be requested.
 struct Cap {
-    int min_mv = 0, max_mv = 0, min_ma = 0, max_ma = 0;
-    std::uint8_t pos = 0, step_mv = 0, step_ma = 0;   // one byte each: the engine keeps seven of these in RAM
+    int min_mv K2_BSS_INIT(0), max_mv K2_BSS_INIT(0), min_ma K2_BSS_INIT(0), max_ma K2_BSS_INIT(0);
+    std::uint8_t pos K2_BSS_INIT(0), step_mv K2_BSS_INIT(0), step_ma K2_BSS_INIT(0);   // one byte each: the engine keeps seven of these in RAM
 };
 
 // Entries decoded into `out`; 0 for an empty payload or a length that is not a multiple of 8.

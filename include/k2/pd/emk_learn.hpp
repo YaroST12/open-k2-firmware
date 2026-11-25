@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <span>
 
+#include "k2/core/bss_zero.hpp"
 #include "k2/pd/emk_quirk.hpp"
 #include "k2/pd/emk_variant.hpp"
 #include "k2/pd/emrec.hpp"
@@ -103,17 +104,17 @@ struct Result {
     emrec::Record& rec;                           // the Discover Identity answer as a saved-clone record
     emk_quirk::Quirks& quirks;
     emk_variant::Answered answered;               // the scan orientation and table row the cable answered (set by the caller; learn() leaves it)
-    std::uint8_t read_mode = 0;                   // how the scan ran: 0 none, 1 cable alone, 2 source attached (emk_attached::Mode; set by the caller)
-    std::uint8_t read_acks = 0;                   // query variants the chip acknowledged during the scan (set by the caller)
-    std::uint8_t pull_down = 0;                   // Ra probe verdict after a cable-alone read that found nothing (raclass::PullDown value; set by the caller; 0 = not probed)
-    std::uint8_t svids = 0;                       // SVIDs the cable listed
-    std::uint8_t probes = 0;                      // exchanges made
-    std::uint8_t silent = 0;                      // probes the cable did not answer
-    bool truncated = false;                       // more answers than quirk rows: the rest was dropped
-    bool log_full = false;
-    std::uint8_t nlog = 0;                        // whole transcript entries kept
-    std::uint16_t log_len = 0;                    // bytes of `logbuf` in use
-    std::array<std::uint8_t, kLogBytes> logbuf{};
+    std::uint8_t read_mode K2_BSS_INIT(0);        // how the scan ran: 0 none, 1 cable alone, 2 source attached (emk_attached::Mode; set by the caller)
+    std::uint8_t read_acks K2_BSS_INIT(0);        // query variants the chip acknowledged during the scan (set by the caller)
+    std::uint8_t pull_down K2_BSS_INIT(0);        // Ra probe verdict after a cable-alone read that found nothing (raclass::PullDown value; set by the caller; 0 = not probed)
+    std::uint8_t svids K2_BSS_INIT(0);            // SVIDs the cable listed
+    std::uint8_t probes K2_BSS_INIT(0);           // exchanges made
+    std::uint8_t silent K2_BSS_INIT(0);           // probes the cable did not answer
+    bool truncated K2_BSS_INIT(false);            // more answers than quirk rows: the rest was dropped
+    bool log_full K2_BSS_INIT(false);
+    std::uint8_t nlog K2_BSS_INIT(0);             // whole transcript entries kept
+    std::uint16_t log_len K2_BSS_INIT(0);         // bytes of `logbuf` in use
+    std::array<std::uint8_t, kLogBytes> logbuf K2_BSS_ZERO;
 
     void clear_log() { nlog = 0; log_len = 0; log_full = false; }
     bool push_log(Step step, const Request& req, const Reply& rep);

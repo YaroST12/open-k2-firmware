@@ -51,7 +51,7 @@ public:
 
     // Backend interface for remote::handle_request (public so the dispatcher template can call it).
     remote::PingInfo ping();
-    remote::ChargerTestSnapshot charger_test_results() const;
+    [[gnu::noinline]] remote::ChargerTestSnapshot charger_test_results() const;
     remote::ChargerTestView charger_test_view();   // the wizard / Waiting / Running screens as data (0x0B req [3])
     remote::ChargerTestStartReply charger_test_start(uint8_t flags);   // 0x0B req [4, flags]: the device's own START (confirmed)
     uint8_t charger_test_cancel();                                     // 0x0B req [5]: the device's own stop; remote::kCtStop*
@@ -132,15 +132,15 @@ public:
     // `over_load` is the lab-only bypass (k2_remote `pd request --over-load`); the UI never sets it.
     remote::PdOpResult pd_request(uint8_t pos, uint16_t mv, uint16_t ma, bool confirm, bool over_load = false);
     remote::PdOpResult pd_release();
-    remote::StopInfo stop();   // cancel a charger test, stop FC (measured 5 V release), release PD, disarm a spoof (k2/core/stop.hpp)
+    [[gnu::noinline]] remote::StopInfo stop();   // cancel a charger test, stop FC (measured 5 V release), release PD, disarm a spoof (k2/core/stop.hpp)
     // The host dead-man lease (k2/core/lease.hpp): the dispatcher arms / refreshes it, poll() ticks it and runs stop() on expiry or an unplug.
     void lease_touch();
-    void lease_arm();
+    [[gnu::noinline]] void lease_arm();
     remote::LeaseInfo lease(uint8_t op, uint16_t secs);   // op 0 status, op 1 set the length (seconds, 0 = default)
     remote::PdOpResult pd_hard_reset(uint8_t flags = 0);   // flags: kPdFlagConfirm | kPdFlagResetInline (lab-only inline reset, remote `pd reset` only)
     remote::HandbackResult pd_handback(uint8_t flags = 0); // flags: kPdFlagConfirm only; phase-1 lab hand-back (remote `pd handback` only), verdict in the result
     remote::PdAttachResult pd_attach(uint16_t target_mv, uint16_t target_ma, bool confirm);   // pd::attach_verdict: 5 V default, above 5 V needs confirm, inline / busy refused
-    remote::PdTriggerSnapshot pd_trigger();
+    [[gnu::noinline]] remote::PdTriggerSnapshot pd_trigger();
     remote::MatchSnapshot match_info();
     remote::UsbLinkSnapshot usb_link();
     remote::MemorySnapshot memory();   // the cached memstat figures (k2/core/memstat.hpp)
@@ -161,23 +161,26 @@ public:
     remote::VoocSnapshot vooc_monitor(uint8_t set);           // inline VOOC monitor: 0 off, 1 on, 2 keep; never drives
     svooc::Refusal svooc_start(uint8_t cap_s, bool usb_a, const svooc::Params &params);    // guarded no-load SuperVOOC trigger (FC op 5), remote only; usb_a = far-sink waiver; params = responder knobs
     void svooc_stop();
-    remote::SvoocSnapshot svooc_info();
+    [[gnu::noinline]] remote::SvoocSnapshot svooc_info();
     size_t svooc_pairs(uint16_t from, std::span<svooc::PairRow> out);   // the run's command>reply pairs (FC op 5 / 3)
-    bool lines_locked();                                      // the SuperVOOC trigger holds D+/D- (fctrig::svooc_running)
+    // The SuperVOOC trigger holds D+/D- (or watches VBUS come back): the dispatcher answers Busy to every op that drives or
+    // claims D+/D-, the sniffer or the output load (fc scan / trigger, vooc switch, lab sniff 0/1/3, lab load, UFCS probe,
+    // the FcScan action) before the backend sees it.
+    [[gnu::noinline]] bool lines_locked();
     // --- end vooc-monitor ---
-    remote::UfcsInfo ufcs_info();                         // UFCS tuner / 5 V probe (k2::fctrig)
+    [[gnu::noinline]] remote::UfcsInfo ufcs_info();                         // UFCS tuner / 5 V probe (k2::fctrig)
     uint32_t ufcs_get(uint8_t field);
     remote::Status ufcs_set(uint8_t field, uint32_t value);
     remote::Status ufcs_op(uint8_t op);                    // kUfcsReset / kUfcsProbe / kUfcsStop
     size_t ufcs_read(uint16_t off, std::span<uint8_t> out);
     // ---- PD Stress (Cmd::PdStress): thin glue over Ui::pd_stress() (k2/ui/pd_stress_session.hpp) ----
-    remote::PdStressInfo pdstress_info();
+    [[gnu::noinline]] remote::PdStressInfo pdstress_info();
     remote::Status pdstress_start(const remote::PdStressStart &s);   // Busy when another tool owns the ports; other refusals show in info().start
     void pdstress_stop();                                            // never refused: ends a run or drops a pending resume
     size_t pdstress_read(uint16_t off, std::span<uint8_t> out);
     // ---- end PD Stress ----
     // ---- PD Spec Check (Cmd::PdSpec): thin glue over Ui::pd_spec() (k2/ui/pd_spec_session.hpp) ----
-    remote::PdSpecInfo pdspec_info();
+    [[gnu::noinline]] remote::PdSpecInfo pdspec_info();
     remote::Status pdspec_start(const remote::PdSpecStart &s);   // Busy when another tool owns the ports; other refusals show in info().start
     void pdspec_stop();                                          // never refused
     size_t pdspec_read(uint16_t off, std::span<uint8_t> out);
@@ -199,7 +202,7 @@ public:
     remote::Status qrtest_show(uint8_t version, uint8_t px, uint8_t quiet);
     bool qrtest_stop();
     size_t blackbox(uint8_t op, uint32_t arg, std::span<uint8_t> out);   // PD black box ring (k2::pdtrace)
-    bool ports_busy();   // a charger test or an FC release owns the link
+    [[gnu::noinline]] bool ports_busy();   // a charger test or an FC release owns the link
     size_t emlib(std::span<const uint8_t> req, std::span<uint8_t> out);   // saved-cable library and spoof (k2::storage, k2::emk_spoof)
     size_t mi_cable_auth(std::span<const uint8_t> req, std::span<uint8_t> out);   // Xiaomi cable-side auth config (k2::emk_spoof::MiAuthCfg); req [0] reads, [1,on,key,trailing(4),half,reply,payload] sets; out [on,key,trailing(4),half,reply,payload]
     size_t cards(std::span<const uint8_t> req, std::span<uint8_t> out);   // charger report cards (k2::report_card::hw)
@@ -213,6 +216,7 @@ public:
     void set_log(bool on);
 
 private:
+    bool debug_busy_refuse() const;
     uint16_t spoof_seq_ K2_BSS_INIT(0);   // library number armed through the remote, for the status reply
     uint8_t ufcs_start_ K2_BSS_INIT(0);   // ufcs::ProbeStart of the last probe op, for the UFCS status block
     static constexpr unsigned kQueueDepth = 4;
