@@ -1888,6 +1888,7 @@ static void test_settings_long_back_row() {
     // Settings > Home boxes: OK on Box 1/2/3 opens radio picker; OK commits & returns, BACK cancels & returns, Reset defaults restores {Pd, Energy, Rotating}.
     ui.open_place(bench::Place::K2, kT0 + 180);
     ui.context().keep.settings_sel = SettingsPage::kHomeBoxesRow;
+    CHECK_STR(label(ui, Button::Ok), "Open");   // a chevron row opens a page
     press(ui, Button::Ok, ButtonEvent::Short, kT0 + 190);
     CHECK_EQ(ui.menu() == Menu::HomeBoxes, 1);
     CHECK_EQ(ui.list_state().count, HomeBoxesPage::kRows);

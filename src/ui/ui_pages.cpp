@@ -2419,7 +2419,7 @@ bool SettingsPage::on_event(Event e) {
 
 Strip SettingsPage::labels() const {
     const auto row = static_cast<SettingRow>(sel_);
-    const bool opens = row < SettingRow::RotateButtons || row >= SettingRow::Display;
+    const bool opens = row < SettingRow::RotateButtons || row >= SettingRow::HomeBoxes;   // the chevron rows
     const bool cycles = row == SettingRow::Smoothing || row == SettingRow::TestLevel || row == SettingRow::SweepDepth || row == SettingRow::LongBack;
     return setting_labels(base_labels(), opens ? sl::Open : cycles ? sl::Cycle : sl::Toggle);
 }
