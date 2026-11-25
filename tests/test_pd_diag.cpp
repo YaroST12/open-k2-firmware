@@ -768,6 +768,24 @@ void test_over_sustained_blocks() {
     }
 }
 
+// Current the other way (negative: the charger on the top port) is the same draw: the peak and the power are magnitudes.
+void test_reverse_current_is_a_draw() {
+    Trace t;
+    t.cc(true);
+    t.contract(kRgCaps, rdo(3, 3250, 3250));
+    t.vbus(19700, -2900);
+    t.wins_for(10000, 19700, -2900, 19500, 19900, -3100, -2700);
+    Run run;
+    run.go(t);
+    run.dump("reverse current");
+    CHECK_EQ(run.r.peak_ma, 3100);
+    const Finding* d = run.find(Code::Draw);
+    CHECK_COND(d != nullptr);
+    if (d) CHECK_COND(d->c > 55000 && d->c < 58000);   // 19.7 V x 2.9 A
+    EXPECT_NO(run, Code::OverDraw);
+    EXPECT_NO(run, Code::InputCuts);
+}
+
 void test_over_draw_fail_when_vbus_drops() {
     Trace t;
     t.cc(true);
@@ -1835,6 +1853,7 @@ int main() {
     test_fixture_novoo_then_ramp();
     test_over_sustained_blocks();
     test_over_draw_fail_when_vbus_drops();
+    test_reverse_current_is_a_draw();
     test_over_draw_fail_when_source_resets();
     test_five_volt_only();
     test_draw_reduced_quiet_is_the_device();

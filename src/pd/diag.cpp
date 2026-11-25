@@ -298,7 +298,20 @@ bool Analyzer::first_vbus_opens(std::uint16_t mv) const { return mv > kUpMv && !
 
 // A ring VBUS record. It is emitted on large changes, so it stays the fast witness of VBUS loss and of the unplug; the
 // draw and band evidence come from it only while the session has no power windows.
+// The draw is a magnitude: the sign only says which port feeds which (negative: top port to bottom).
+static std::int16_t mag16(std::int16_t ma) { return ma >= 0 ? ma : ma == INT16_MIN ? INT16_MAX : std::int16_t(-ma); }
+
+static Window magnitudes(const Window& w) {
+    Window m = w;
+    m.ma = mag16(w.ma);
+    const std::int16_t a = mag16(w.imin), b = mag16(w.imax);
+    m.imax = a > b ? a : b;
+    m.imin = w.imin <= 0 && w.imax >= 0 ? 0 : a < b ? a : b;   // a window through zero touched 0
+    return m;
+}
+
 void Analyzer::sample(std::uint16_t mv, std::int16_t ma) {
+    ma = mag16(ma);
     if (!win_) { pre_mv_ = mv; pre_ma_ = ma; pre_have_ = true; }
     Session& s = cur_;
     if (s.open && s.ended && mv < kLostMv) unplug_ = true;
@@ -326,7 +339,8 @@ void Analyzer::sample(std::uint16_t mv, std::int16_t ma) {
     observe(w);
 }
 
-void Analyzer::power_window(std::uint32_t ts_us, const Window& w) {
+void Analyzer::power_window(std::uint32_t ts_us, const Window& in) {
+    const Window w = magnitudes(in);
     tick(ts_us);
     timers();
     pre_mv_ = w.mv;

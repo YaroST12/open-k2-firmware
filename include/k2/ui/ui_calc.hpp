@@ -12,14 +12,14 @@
 
 namespace k2 {
 
-// Integrates forward power over time (trapezoid rule) in microjoules. Negative (reverse) power
-// counts as 0: energy only accumulates, it is never subtracted.
+// Integrates |power| over time (trapezoid rule) in microjoules: both directions count, nothing is subtracted (the sign
+// says which port feeds which; the samples come deadbanded, so idle adds nothing).
 // mW * ms = uJ, so no scaling is needed. The first update after reset() only sets the baseline.
 class EnergyMeter {
 public:
     void reset(uint32_t now_ms);
     void update(uint32_t now_ms, int32_t power_mw);
-    // Also integrates the forward current (mA * ms = uC, 1 mAh = 3.6e6 uC); reverse counts as 0.
+    // Also integrates |current| (mA * ms = uC, 1 mAh = 3.6e6 uC).
     void update(uint32_t now_ms, int32_t power_mw, int32_t current_ma);
     int64_t microcoulombs() const { return uc_; }
     int32_t mah() const { return math::div_i64_to_i32(uc_, 3'600'000); }
