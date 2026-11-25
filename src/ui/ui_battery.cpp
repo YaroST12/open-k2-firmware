@@ -59,7 +59,7 @@ const char *mode_name(bt::Mode m) {
     case bt::Mode::Discharge: return K2_P("Dischg");
     case bt::Mode::RoundTrip: break;
     }
-    return "Round";
+    return K2_P("Round");
 }
 
 bool live_any() { return bt::hw::service().rec().state() != bt::State::Idle; }
@@ -180,7 +180,7 @@ void BatteryPage::action_row(Act a, bool focused, kit::RowSpec &out) {
     case Act::Time:
         tail_.put(view::hms(s.secs).view());
         if (s.gaps) note_row_.put_u32(s.gaps).put(s.gaps == 1 ? K2_P(" gap not counted") : K2_P(" gaps not counted"));
-        else if (s.phases == 2) note_row_.put(view::hms(s.secs - s.phase_secs).view()).put(" in, ").put(view::hms(s.phase_secs).view()).put(" out");
+        else if (s.phases == 2) note_row_.put(view::hms(s.secs - s.phase_secs).view()).put(K2_P(" in, ")).put(view::hms(s.phase_secs).view()).put(K2_P(" out"));
         break;
     case Act::Eff:
         if (s.eff != bt::kNoRatio) tail_.put(view::pct(s.eff).view());
@@ -195,7 +195,7 @@ void BatteryPage::action_row(Act a, bool focused, kit::RowSpec &out) {
     case Act::Next: note = kNotes[5]; break;
     case Act::Finish: note = kNotes[6]; break;
     case Act::Wiring:
-        tail_.put(same ? K2_P("Same port") : "Moved");
+        tail_.put(same ? K2_P("Same port") : K2_P("Moved"));
         note = same ? kNotes[7] : kNotes[8];
         break;
     case Act::EndMa:
@@ -240,7 +240,7 @@ void BatteryPage::run_row(int i, bool focused, kit::RowSpec &out) {
     out.tail = tail_.view();
     out.tail_color = r.eff_final ? kInk : kInk2;
     if (focused) {
-        note_row_.put(view::wh(r.sum.uwh_in).view()).put(" in, ").put(view::wh(r.sum.uwh_out).view()).put(" out, ");
+        note_row_.put(view::wh(r.sum.uwh_in).view()).put(K2_P(" in, ")).put(view::wh(r.sum.uwh_out).view()).put(K2_P(" out, "));
         note_row_.put(view::hm(r.secs).view());
         out.note = note_row_.view();
     }
@@ -350,8 +350,8 @@ void BatteryPage::ok() {
         if (a == Act::EndPhase) sv.rec().end_phase();
         else if (a == Act::Finish) sv.rec().finish();
         else {
-            static constexpr const char *kCont[] = {"Run continues", "A run is measuring", "No power monitor",
-                                                    "No run to continue", "Only the newest run"};   // Service::Cont
+            static constexpr const char *kCont[] = {K2_P("Run continues"), K2_P("A run is measuring"), K2_P("No power monitor"),
+                                                    K2_P("No run to continue"), K2_P("Only the newest run")};   // Service::Cont
             const auto c = sv.continue_run(shown_.id, bt::hw::monitor_online());
             refuse(kCont[static_cast<int>(c)], c == bt::Service::Cont::Ok ? FooterTone::Ok : FooterTone::Caution);
             if (c != bt::Service::Cont::Ok) return;
@@ -389,7 +389,7 @@ void BatteryPage::ok() {
     case Act::Share: {
         if (view_ != View::Stored) bt::hw::service().rec().to_record(rec_);
         const std::size_t len = bt::encode(rec_, ctx_.ui->share_buffer());
-        ctx_.ui->open_share(qrshare::Type::Battery, qrshare::kSchemaBattery, "Battery run", len, ctx_.now);
+        ctx_.ui->open_share(qrshare::Type::Battery, qrshare::kSchemaBattery, "Battery run", len, ctx_.now);   // k2-plain: share title is memcpy'd
         return;   // the share view is on top now
     }
     case Act::In:

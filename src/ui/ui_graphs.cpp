@@ -28,7 +28,7 @@ namespace {
 
 using Band = gr::Band;
 constexpr int kBands = gr::kBands, kCols = gr::kCols;
-constexpr const char *kLabel[kBands] = {"POWER", "VBUS", "IBUS", "ENERGY"};
+constexpr const char *kLabel[kBands] = {"POWER", "VBUS", "IBUS", "ENERGY"};   // k2-plain: measured by size()
 constexpr int kElChars = 5;   // hm::fmt_elapsed: never over five characters
 constexpr uint8_t kNoRow = GraphsPage::kNoRow, kUnknown = GraphsPage::kUnknown;
 
@@ -101,7 +101,7 @@ void GraphsPage::sample_shown(Shown &s, uint32_t now_ms) {
         }
         if (stale) s.word_ink = kStale;
     } else {
-        s.word.put(s.mode == hm::Mode::NoMeter ? "No meter" : "No source");
+        s.word.put(s.mode == hm::Mode::NoMeter ? K2_P("No meter") : K2_P("No source"));
         s.word_ink = kDim;
     }
 }

@@ -51,10 +51,10 @@ constexpr int16_t row_top(int row) { return static_cast<int16_t>(kGridY0 + row *
 
 struct Cell { const char *key; uint8_t chars; };
 // In slot order from SWh: left, right, left, right ... The value widths are the cells' worst cases.
-constexpr Cell kCells[SCount - kFirstCell] = {
+constexpr Cell kCells[SCount - kFirstCell] = {   // k2-plain-begin: keys_clear() measures them at compile time
     {"Wh", 7}, {"PDO", 9}, {"Ah", 7}, {"Cable", 8}, {"Time", 8}, {"Max", 5}, {"Temp", 4}, {"D+", 5},
     {"R", 6}, {"D-", 5}, {"CC1", 5}, {"FC", 8}, {"CC2", 5}, {"USB", 10}, {"Flow", 8}, {"Alt", 10},
-};
+};   // k2-plain-end
 constexpr bool keys_clear() {   // a key never reaches into its value's cells
     for (int i = 0; i < SCount - kFirstCell; i++) {
         const int key_end = ((i & 1) ? kKeyR : kKeyL) + 6 * static_cast<int>(std::string_view(kCells[i].key).size());
@@ -237,7 +237,7 @@ void DetailPage::update(uint32_t now_ms) {
         s.clear(); s.put_abs_fixed(pm.power_mw, pm.power_mw >= 99995 ? 1 : 2);
         if (!put(SW, s.view(), live_col)) return;
     } else {
-        if (!put(SV, "--.--", kFaint) || !put(SA, "-.---", kFaint) || !put(SW, "--.--", kFaint)) return;
+        if (!put(SV, "--.--", kFaint) || !put(SA, "-.---", kFaint) || !put(SW, "--.--", kFaint)) return;   // k2-plain: cell-sized placeholders
     }
 
     // PDO: the negotiated contract ("20V 5A", PPS "5.4V 2.2A").

@@ -7,6 +7,7 @@
 #include <span>
 #include <string_view>
 
+#include "k2/core/strpack.hpp"
 #include "k2/ui/font_aa.hpp"
 #include "k2/ui/gfx.hpp"
 #include "k2/drivers/lcd.hpp"
@@ -65,7 +66,7 @@ void draw_line_in(const Area& a, int y, const char* text) {
     char pad[kCells + 1];
     const int cells = std::min(kCells, a.w / 6);
     int n = 0;
-    while (n < cells && text[n]) { pad[n] = text[n]; n++; }
+    strpack::for_chars(text, [&](char c) { if (n < cells) pad[n++] = c; });   // packed or plain
     while (n < cells) pad[n++] = ' ';
     pad[n] = '\0';
     gfx_text(Surface{static_cast<int16_t>(a.x), 0, static_cast<int16_t>(a.w), kPanelPx}, font_12, 0, static_cast<int16_t>(y),

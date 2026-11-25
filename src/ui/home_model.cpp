@@ -161,12 +161,12 @@ void format_proto(const ProtoInfo &p, ProtoText &out) {
     case ProtoKind::Fcp: out.tag.put("FCP"); fixed(out.value, p); break;
     case ProtoKind::Scp: out.tag.put("SCP"); fixed(out.value, p); break;
     case ProtoKind::Ufcs: out.tag.put("UFCS"); range(out.value, p); break;
-    case ProtoKind::Svooc: out.tag.put("SVOOC"); fixed(out.value, p); break;
+    case ProtoKind::Svooc: out.tag.put(K2_P("SVOOC")); fixed(out.value, p); break;
     case ProtoKind::TypeC: out.tag.put("CC"); fixed(out.value, p); break;
     case ProtoKind::Dcp: out.tag.put("DCP"); fixed(out.value, p); break;
-    case ProtoKind::Detecting: out.tag.put(".."); out.value.put("Detecting"); break;
-    case ProtoKind::Unknown: out.tag.put("?"); out.value.put("Unknown source"); break;
-    case ProtoKind::None: out.tag.put("--"); out.value.put("No source"); break;
+    case ProtoKind::Detecting: out.tag.put(".."); out.value.put(K2_P("Detecting")); break;
+    case ProtoKind::Unknown: out.tag.put("?"); out.value.put(K2_P("Unknown source")); break;
+    case ProtoKind::None: out.tag.put("--"); out.value.put(K2_P("No source")); break;
     }
 }
 
@@ -202,17 +202,17 @@ void format_idle_wait(raguard::WaitKind wait, ProtoText &out) {
     out.value.clear();
     out.tag.put("--");
     switch (wait) {
-    case raguard::WaitKind::ChargerWaiting: out.value.put("Charger waiting"); break;
-    case raguard::WaitKind::DualRolePort:   out.value.put("Dual-role port"); break;
+    case raguard::WaitKind::ChargerWaiting: out.value.put(K2_P("Charger waiting")); break;
+    case raguard::WaitKind::DualRolePort:   out.value.put(K2_P("Dual-role port")); break;
     case raguard::WaitKind::NoSource:
-    case raguard::WaitKind::Unknown:        out.value.put("No source"); break;
+    case raguard::WaitKind::Unknown:        out.value.put(K2_P("No source")); break;
     }
 }
 
 void format_lines(bool data_lines, int32_t a_mv, int32_t b_mv, LinesText &out) {
     out.tag.clear();
     out.value.clear();
-    out.tag.put(data_lines ? "D+/D-" : "CC1/2");
+    out.tag.put(data_lines ? K2_P("D+/D-") : K2_P("CC1/2"));
     for (int i = 0; i < 2; i++) {
         const int32_t mv = i ? b_mv : a_mv;
         if (mv < 0) out.value.put("-.--");
@@ -300,9 +300,9 @@ void alarm_text(Alarm a, uint32_t abs, uint32_t max, StrBuf<20> &out, char unit,
     const int n = fmt_level(t, max);
     const std::string_view lim{t, static_cast<size_t>(n)};
     if (a == Alarm::Over) {
-        out.put("OVER ").put(lim).put_char(unit).put(" LIMIT");
+        out.put(K2_P("OVER ")).put(lim).put_char(unit).put(K2_P(" LIMIT"));
     } else {
-        out.put_u32(pct_of(abs, max)).put("% OF ").put(lim).put_char(unit);
+        out.put_u32(pct_of(abs, max)).put(K2_P("% OF ")).put(lim).put_char(unit);
     }
 }
 

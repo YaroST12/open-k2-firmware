@@ -22,6 +22,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include "k2/core/strpack.hpp"
 #include "k2/core/bss_zero.hpp"
 #include <optional>
 #include <span>
@@ -34,11 +35,13 @@
 namespace k2 {
 
 // The footer a run puts on the page that is up, 8 px a character in 220 px: every form must fit (the widest family, two-digit counts).
+// k2-plain-begin: fit-check samples, never drawn
 inline constexpr const char* kPdSpecFooters[] = {
     "PD Spec: Transitions 56/56",
     "PD Spec: PPS/AVS 16/16",
     "PD Spec: stopping",
 };
+// k2-plain-end
 static_assert(all_fit(kPdSpecFooters, 8, 220), "a PD Spec Check footer is wider than the footer band");
 
 class PdSpecSession final : private pdspec::Env {
@@ -88,7 +91,7 @@ public:
 
     // The line for the footer of the page that is up; nullptr when no run goes on. Info tone.
     const char* footer() const { return foot_.c_str()[0] ? foot_.c_str() : nullptr; }
-    const char* busy_reason() const { return running() ? "PD Spec: stop it" : nullptr; }
+    const char* busy_reason() const { return running() ? K2_P("PD Spec: stop it") : nullptr; }
     // Another tool on the ports, which start() refuses (nullptr = free). The holds and the contract a run makes itself do not count.
     const char* foreign_busy() const;
 

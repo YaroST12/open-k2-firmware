@@ -20,8 +20,8 @@ inline constexpr int kMaxPct = idle::kMaxPct;
 // The pick lists (0 = never). A value set from the remote that is not listed shows as text and leaves every radio off.
 inline constexpr std::array<std::uint16_t, 5> kDimAfter{0, 30, 60, 120, 300};
 inline constexpr std::array<std::uint16_t, 5> kOffAfter{0, 120, 300, 600, 1800};
-inline constexpr std::array<const char*, 5> kDimNames{"Never", "30 s", "60 s", "2 min", "5 min"};
-inline constexpr std::array<const char*, 5> kOffNames{"Never", "2 min", "5 min", "10 min", "30 min"};
+inline constexpr std::array<const char*, 5> kDimNames{K2_P("Never"), "30 s", "60 s", K2_P("2 min"), K2_P("5 min")};
+inline constexpr std::array<const char*, 5> kOffNames{K2_P("Never"), K2_P("2 min"), K2_P("5 min"), K2_P("10 min"), K2_P("30 min")};
 
 // One 10 % step up (dir > 0) or down, from any level; stays in 10..100.
 constexpr std::uint8_t step_brightness(std::uint8_t cur, int dir) {
@@ -61,7 +61,7 @@ constexpr std::size_t format_span(std::span<char> out, std::uint16_t secs, bool 
     if (out.empty()) return 0;
     std::size_t n = 0;
     if (secs == 0) {
-        n = detail::put_str(out, n, brief ? "off" : "Never");
+        n = detail::put_str(out, n, brief ? "off" : K2_P("Never"));
     } else if (secs < 120) {
         n = detail::put_num(out, n, secs);
         n = detail::put_str(out, n, brief ? "s" : " s");

@@ -19,6 +19,7 @@
 #include <span>
 #include <string_view>
 
+#include "k2/core/strpack.hpp"
 #include "k2/core/fmt.hpp"
 #include "k2/ui/qr.hpp"
 #include "k2/ui/qrshare_link.hpp"
@@ -107,16 +108,16 @@ namespace k2::qrtest {
 inline int check_show(std::uint8_t version, std::uint8_t px, std::uint8_t quiet, char* reason) {
     const std::span<char> out(reason, kReasonMax);
     if (version < kVersionMin || version > kVersionMax)
-        return static_cast<int>(fmt::format(out, "version %u outside %u..%u", unsigned(version),
+        return static_cast<int>(fmt::format(out, K2_P("version %u outside %u..%u"), unsigned(version),
                                             unsigned(kVersionMin), unsigned(kVersionMax)));
     if (px < kPxMin || px > kPxMax)
-        return static_cast<int>(fmt::format(out, "px %u outside %u..%u", unsigned(px), unsigned(kPxMin), unsigned(kPxMax)));
+        return static_cast<int>(fmt::format(out, K2_P("px %u outside %u..%u"), unsigned(px), unsigned(kPxMin), unsigned(kPxMax)));
     if (quiet < kQuietMin || quiet > kQuietMax)
-        return static_cast<int>(fmt::format(out, "quiet %u outside %u..%u", unsigned(quiet), unsigned(kQuietMin),
+        return static_cast<int>(fmt::format(out, K2_P("quiet %u outside %u..%u"), unsigned(quiet), unsigned(kQuietMin),
                                             unsigned(kQuietMax)));
     const FitRow r = fit_row(version, px, quiet);
     if (!r.fits)
-        return static_cast<int>(fmt::format(out, "box %u px over the %d px panel", unsigned(r.box), kPanelPx));
+        return static_cast<int>(fmt::format(out, K2_P("box %u px over the %d px panel"), unsigned(r.box), kPanelPx));
     return 0;   // accepted (and then version <= kMaxShownVersion: px >= 2 keeps box >= (m + 2) * 2 <= 240)
 }
 
@@ -136,7 +137,7 @@ constexpr int max_fit_version(int px, int quiet) {
 }  // namespace detail
 
 inline int list_line(int index, std::span<char> out) {
-    if (index == 0) return static_cast<int>(fmt::format(out, "# v m p q box fit c r\n"));
+    if (index == 0) return static_cast<int>(fmt::format(out, K2_P("# v m p q box fit c r\n")));
     if (index < 1 || index >= kListLines) return 0;
     const int c = (index - 1) / 2;                       // combo index
     const bool boundary = (index - 1) % 2 == 1;         // second row of the combo: the first refused version
@@ -146,7 +147,7 @@ inline int list_line(int index, std::span<char> out) {
     const int v = boundary ? top + 1 : top;
     if (v < kVersionMin || v > kVersionMax) return 0;
     const FitRow r = fit_row(v, px, quiet);
-    return static_cast<int>(fmt::format(out, "v%u m%u p%u q%u box%u %s c%u r%u\n", unsigned(r.version), unsigned(r.modules),
+    return static_cast<int>(fmt::format(out, K2_P("v%u m%u p%u q%u box%u %s c%u r%u\n"), unsigned(r.version), unsigned(r.modules),
                                         unsigned(r.px), unsigned(r.quiet), unsigned(r.box), r.fits ? "fit" : "no",
                                         unsigned(r.chars), unsigned(r.record)));
 }
@@ -188,7 +189,7 @@ inline std::size_t build_link(int version, int px, std::span<char> out) {
     if (version < kVersionMin || version > kVersionMax || px < kPxMin || px > kPxMax) return 0;
     const std::size_t rec = max_record(version);
     char label[24];
-    const int ll = static_cast<int>(fmt::format(std::span<char>(label, sizeof label), "QR scan test v%u %upx",
+    const int ll = static_cast<int>(fmt::format(std::span<char>(label, sizeof label), K2_P("QR scan test v%u %upx"),
                                                 unsigned(version), unsigned(px)));
     if (ll <= 0) return 0;
     const std::size_t head = qrshare::link::kHead;   // kBase + the version digit + the kind letter + '.'
