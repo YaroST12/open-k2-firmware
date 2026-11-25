@@ -528,6 +528,118 @@ private:
     void* ctx_;
     void (*fn_)(void*, const Step&);
 };
+namespace {
+struct PlanCtx {
+    Unit unit;
+    Options o;
+    const Input& in;
+    AddRef out;
+    bool light;
+    bool light_open = false;
+    uint8_t light_pos = 0;
+    Algorithm light_alg = Algorithm::Count;
+    uint32_t light_pdo = 0;
+    size_t n_low = 0;
+    uint8_t low_pos = 0;
+    unsigned sweep_budget = 0;
+};
+
+[[gnu::noinline]] void plan_add(PlanCtx& ctx, Step s) {
+    if (!ctx.light) { ctx.out(s); return; }
+    if (is_mi_chain(s)) { ctx.out(s); return; }   // nothing requested: the chain outcome is read at any level
+    if (s.group == Group::Pd) {
+        const bool same = s.pos && s.algorithm == ctx.light_alg && s.pos == ctx.light_pos;
+        ctx.light_alg = s.algorithm; ctx.light_pos = s.pos;
+        if (same) return;
+        if (s.detail == kDetailEprOffered) { s.reason = Reason::Advertised; s.detail = 0; }   // listed in SPR mode, never entered
+        else if (s.verdict == Verdict::Pending) {
+            const auto p = pd::decode_pdo(s.pdo);
+            s.verdict = Verdict::Skip; s.reason = Reason::Advertised; s.mv = p.max_mv; s.ma = p.max_ma;
+            s.continuous = s.hunt = false; s.detail = 0;
+        }
+        ctx.out(s); return;
+    }
+    if (s.verdict != Verdict::Pending) { ctx.out(s); return; }
+    const bool above_only = s.group == Group::Afc || s.group == Group::Qc3Plus ||
+                            s.algorithm == Algorithm::Qc2ClassB || s.algorithm == Algorithm::Qc3ClassB;
+    if (!above_only && s.mv == 5000) { if (!ctx.light_open) ctx.out(s); ctx.light_open = true; return; }   // a later 5 V row adds nothing
+    if (s.group == Group::Ufcs && s.pdo) {   // a mode the adapter reported: one row, at its top
+        if (s.pdo == ctx.light_pdo) return;
+        ctx.light_pdo = s.pdo;
+        if (UfcsMode m; ufcs_mode_of(s, m)) { s.mv = uint16_t(m.max_mv); s.ma = uint16_t(m.max_ma); }
+        s.verdict = Verdict::Skip; s.reason = Reason::Advertised; s.continuous = false;
+        ctx.out(s); return;
+    }
+    s.verdict = Verdict::Skip;
+    s.reason = s.group == Group::Scp && ctx.in.fc_caps && ctx.in.fc_caps->scp.valid ? Reason::Advertised : Reason::LightLevel;
+    ctx.out(s);
+}
+
+[[gnu::noinline]] void plan_emit(PlanCtx& ctx, const Step& s) {
+    const bool low = low_programmable(s);
+    if (ctx.unit == Unit::PdLow ? low : !low) plan_add(ctx, s);
+}
+
+[[gnu::noinline]] void plan_skip(PlanCtx& ctx, Step& s, Reason r) {
+    s.verdict = Verdict::Skip; s.reason = r;
+    if (r == Reason::OverCap && (s.algorithm == Algorithm::Epr || s.algorithm == Algorithm::EprAvs)) s.detail = monitor_detail(ctx.in.cap_mv);
+    plan_emit(ctx, s);
+}
+
+[[gnu::noinline]] void plan_level(PlanCtx& ctx, Step& s, unsigned mv, bool continuous = false, unsigned ma = 0, bool offered = true) {
+    s.mv = static_cast<uint16_t>(mv); s.continuous = continuous; s.ma = static_cast<uint16_t>(ma);
+    s.reason = limit_reason(mv, ctx.in, s.algorithm);
+    if (s.reason == Reason::None && !offered) s.reason = Reason::NoOffer;   // outside what the charger reported
+    s.verdict = s.reason == Reason::None ? Verdict::Pending : Verdict::Skip;
+    plan_add(ctx, s);
+}
+
+[[gnu::noinline]] void plan_levels(PlanCtx& ctx, Step& s, const uint16_t* mvs, size_t count, bool cont_rest, bool cont_first = false) {
+    for (size_t n = 0; n < count; ++n) plan_level(ctx, s, mvs[n], n ? cont_rest : cont_first);
+}
+
+[[gnu::noinline]] uint16_t pdo_current(const pd::Pdo& p, const Input& in, unsigned mv, unsigned ceiling = kPlanRowMa) {
+    return static_cast<uint16_t>(std::min({ceiling, unsigned(pd::current_limit_ma(p, mv)),
+                                           unsigned(used_cable_ma(in))}) / 50 * 50);
+}
+
+[[gnu::noinline]] void plan_emit_sweep(PlanCtx& ctx, Step& s, const pd::Pdo& p, unsigned cap, bool pps) {
+    if (!ctx.sweep_budget) return;
+    const auto pr = ctsweep::point_range(p.min_mv, p.max_mv, cap);
+    if (!ctsweep::point_count(pr)) { s.detail = kDetailSweep; plan_skip(ctx, s, limit_reason(p.max_mv, ctx.in, s.algorithm)); return; }
+    const unsigned cable = cable_ma(ctx.in);
+    for (int k = 0; k < (pps ? 2 : 1); ++k) {
+        const auto part = pps ? ctsweep::part_range(pr, k != 0) : pr;
+        const unsigned n = ctsweep::point_count(part);
+        if (!n || !ctx.sweep_budget) continue;
+        Step w = s;
+        w.mv = static_cast<uint16_t>(part.lo);
+        w.ma = static_cast<uint16_t>(ctsweep::point_ma(p, part.lo, cable));
+        w.continuous = false;
+        w.verdict = w.ma ? Verdict::Pending : Verdict::Skip;
+        w.reason = w.ma ? Reason::None : Reason::NoOffer;
+        w.detail = kDetailSweep;   // the runner's marker; it survives finish(), so the results strip finds the row
+        plan_emit(ctx, w);
+        ctx.sweep_budget -= std::min(n, ctx.sweep_budget);
+    }
+}
+[[gnu::noinline]] Reason base_fault_core(const Input& in) {
+    return in.vbus_mv < 0 || in.cap_mv < 5000 ? Reason::NoMonitor
+         : in.loop_lock ? Reason::Loop
+         : in.inline_load ? Reason::Inline
+         : Reason::None;
+}
+[[gnu::noinline]] Reason base_fault(const Input& in) {
+    const Reason r = base_fault_core(in);
+    return r != Reason::None ? r : in.fake ? Reason::Fake : Reason::None;
+}
+[[gnu::noinline]] bool pd_released(const pd::SinkStatus& pd) {
+    return !pd::user_hold(pd) && !pd.epr_mode &&
+           (pd.state == pd::SinkState::Idle || pd.state == pd::SinkState::Failed ||
+            (pd.state == pd::SinkState::Ready && pd.mv == 5000));
+}
+}  // namespace
+
 // The rows of one unit, in plan order. Pd and PdLow share the PD plan: the low programmable rows (below 5 V) are the PdLow unit.
 void plan_unit(Unit unit, const pd::SourceCaps& caps, Options o, const Input& in, AddRef out) {
     // Light (Options::level, with_level): VBUS stays at 5 V. The PD plan asks nothing: every PDO / APDO the source lists (the 5 V
@@ -536,107 +648,41 @@ void plan_unit(Unit unit, const pd::SourceCaps& caps, Options o, const Input& in
     // the adapter reported); a legacy level nothing advertises, and a protocol only told apart above 5 V (AFC, QC3+, QC Class B),
     // is a LightLevel skip. No hunts, walks, sweeps or full-current rows (one row per offer). Rows that already carry a reason
     // (not offered, over the monitor, the cable) keep it.
-    const bool light = o.level == Level::Light;
-    bool light_open = false;                                  // the unit's 5 V handshake row is planned
-    uint8_t light_pos = 0; Algorithm light_alg = Algorithm::Count; uint32_t light_pdo = 0;   // the offer the last row named
-    auto add = [&](Step s) {
-        if (!light) { out(s); return; }
-        if (is_mi_chain(s)) { out(s); return; }   // nothing requested: the chain outcome is read at any level
-        if (s.group == Group::Pd) {
-            const bool same = s.pos && s.algorithm == light_alg && s.pos == light_pos;
-            light_alg = s.algorithm; light_pos = s.pos;
-            if (same) return;
-            if (s.detail == kDetailEprOffered) { s.reason = Reason::Advertised; s.detail = 0; }   // listed in SPR mode, never entered
-            else if (s.verdict == Verdict::Pending) {
-                const auto p = pd::decode_pdo(s.pdo);
-                s.verdict = Verdict::Skip; s.reason = Reason::Advertised; s.mv = p.max_mv; s.ma = p.max_ma;
-                s.continuous = s.hunt = false; s.detail = 0;
-            }
-            out(s); return;
-        }
-        if (s.verdict != Verdict::Pending) { out(s); return; }
-        const bool above_only = s.group == Group::Afc || s.group == Group::Qc3Plus ||
-                                s.algorithm == Algorithm::Qc2ClassB || s.algorithm == Algorithm::Qc3ClassB;
-        if (!above_only && s.mv == 5000) { if (!light_open) out(s); light_open = true; return; }   // a later 5 V row adds nothing
-        if (s.group == Group::Ufcs && s.pdo) {   // a mode the adapter reported: one row, at its top
-            if (s.pdo == light_pdo) return;
-            light_pdo = s.pdo;
-            if (UfcsMode m; ufcs_mode_of(s, m)) { s.mv = uint16_t(m.max_mv); s.ma = uint16_t(m.max_ma); }
-            s.verdict = Verdict::Skip; s.reason = Reason::Advertised; s.continuous = false;
-            out(s); return;
-        }
-        s.verdict = Verdict::Skip;
-        s.reason = s.group == Group::Scp && in.fc_caps && in.fc_caps->scp.valid ? Reason::Advertised : Reason::LightLevel;
-        out(s);
-    };
+    PlanCtx ctx{unit, o, in, out, o.level == Level::Light};
+    ctx.sweep_budget = (o.pps_sweep || o.avs_sweep) ? ctsweep::kMaxPoints : 0;   // the deep sweeps' point record, shared by the APDOs
     const bool pd_unit = unit == Unit::Pd || unit == Unit::PdLow;
-    size_t n_low = 0; uint8_t low_pos = 0;
-    unsigned sweep_budget = (o.pps_sweep || o.avs_sweep) ? ctsweep::kMaxPoints : 0;   // the deep sweeps' point record, shared by the APDOs
-    auto emit = [&](const Step& s) {   // the PD plan is generated whole; each of its two units keeps its own rows
-        const bool low = low_programmable(s);
-        if (unit == Unit::PdLow ? low : !low) add(s);
-    };
     for (const auto algorithm : kPlanOrder) {
         if (!o.contains(algorithm)) continue;
         Step s; s.algorithm = algorithm; s.group = group(algorithm);
         if (pd_unit ? s.group != Group::Pd : s.group != static_cast<Group>(unit)) continue;
         const unsigned cap = std::min<unsigned>(in.cap_mv, cable_limit_mv(in, algorithm));
-        auto skip = [&](Reason r) {
-            s.verdict = Verdict::Skip; s.reason = r;
-            if (r == Reason::OverCap && (algorithm == Algorithm::Epr || algorithm == Algorithm::EprAvs)) s.detail = monitor_detail(in.cap_mv);
-            emit(s);
-        };
-        if (algorithm >= Algorithm::Pd30Revision && algorithm <= Algorithm::Pd32Revision) { skip(Reason::RevisionUntestable); continue; }
+        if (algorithm >= Algorithm::Pd30Revision && algorithm <= Algorithm::Pd32Revision) { plan_skip(ctx, s, Reason::RevisionUntestable); continue; }
         if (s.group != Group::Pd) {
-            auto level = [&](unsigned mv, bool continuous = false, unsigned ma = 0, bool offered = true) {
-                s.mv = static_cast<uint16_t>(mv); s.continuous = continuous; s.ma = static_cast<uint16_t>(ma);
-                s.reason = limit_reason(mv, in, algorithm);
-                if (s.reason == Reason::None && !offered) s.reason = Reason::NoOffer;   // outside what the charger reported
-                s.verdict = s.reason == Reason::None ? Verdict::Pending : Verdict::Skip;
-                add(s);
-            };
             // pattern qc-redetect-after-reset (power strip USB-A, 2026-11-07): a QC row that opened its own session started 0.5-0.7 s
             // after the previous row's reset of D+/D- and got no handshake, right after the same charger passed the row before it
             // (QC2 12 V after 9 V, the QC3 Class B 5 V after the QC3 unit). So one HVDCP handshake per unit: the first QC2 row (5 V)
             // and the first QC3 row open the session, every later level is a retarget in it (QC2: the D+/D- levels, QC3: pulses), and
             // the Class B rows of the unit (default-selected, own algorithms) go on in the same session when their Class A rows are in the plan. A Class B row
             // selected alone opens its own. The engine takes 20 V in a session that started as QC2 / QC3 (qc2_levels, clamp_qc3_mv).
-            if (algorithm == Algorithm::Qc2ClassB) { level(20000, o.contains(Algorithm::Qc2)); continue; }   // Class B (20 V) fixed level
-            if (algorithm == Algorithm::Qc3ClassB) {   // Class B ramp 5/12/20/12/5
-                const unsigned targets[] = {5000, 12000, 20000, 12000, 5000};
-                for (unsigned n = 0; n < 5; ++n) level(targets[n], n != 0 || o.contains(Algorithm::Qc3));
-                continue;
-            }
+            static constexpr uint16_t kQc3b[] = {5000, 12000, 20000, 12000, 5000};
+            static constexpr uint16_t kQc3[] = {5000, 9000, 12000, 9000, 5000};
+            static constexpr uint16_t kQc2[] = {5000, 9000, 12000};
+            static constexpr uint16_t kAfc[] = {9000, 12000};
+            static constexpr uint16_t kVivo[] = {5000, 9000, 11000, 5000};
+            static constexpr uint16_t kUfcsDef[] = {5000, 9000, 11000, 5000, 12000};
+            if (algorithm == Algorithm::Qc2ClassB) { plan_level(ctx, s, 20000, o.contains(Algorithm::Qc2)); continue; }   // Class B (20 V) fixed level
+            if (algorithm == Algorithm::Qc3ClassB) { plan_levels(ctx, s, kQc3b, std::size(kQc3b), true, o.contains(Algorithm::Qc3)); continue; }
             switch (s.group) {
-            case Group::Qc2: level(5000); level(9000, true); level(12000, true); break;   // Class B 20 V: the Qc2ClassB algorithm
+            case Group::Qc2: plan_levels(ctx, s, kQc2, std::size(kQc2), true); break;
             case Group::Qc3:
-            case Group::Qc3Plus: {
-                const unsigned targets[] = {5000, 9000, 12000u, 9000, 5000};   // QC3 spec range 3.6-12 V
-                for (unsigned n = 0; n < 5; ++n) level(targets[n], n != 0);
-                break;
-            }
-            // AFC 12 V is a retarget in the 9 V session (pattern afc-redetect-after-reset): as a fresh session it started 0.7 s
-            // after our own reset, before the charger had redone its D+/D- detection, and got no AFC answer (Baseus 140W,
-            // 2026-11-07; the Xiaomi bank's 12 V row the same way). The engine sends the 12 V byte in the live session.
-            case Group::Afc: level(9000); level(12000, true); break;
-            // FCP: the 5 V row opens the session (caps read, voltage write), 9 V and 12 V are retargets in it. A fresh session per
-            // row restarted the D+/D- reset hold between rows, the same pattern as afc-redetect-after-reset; the engine's
-            // set_target rewrites the voltage register in the live session without reading the caps again.
-            case Group::Fcp: level(5000); level(9000, true); level(12000, true); break;
-            // One UFCS session for the whole unit: each level is a new Request in it (8.2.4.2). A fresh session per row made the
-            // Baseus FH22 charger cut VBUS on the Exit and the next row's handshake ran into the dark source (2026-11-07).
-            // 11 V is the top of the common 5.5-11 V UFCS mode (the Baseus FH22 charger: 11 V 4 A = its 44 W). 12 V last: a level
-            // the source does not offer fails its row and skips the rest of the session, so the step back down to 5 V is
-            // proven first. 20 V asks 3 A: the 60 W mode (5-20 V or 11-21 V at 3 A, e.g. the CUKTECH 10 charger's C1); the
-            // Request names the current, no load draws it. A source without a mode up to 20 V fails 12 V and skips it.
-            // With the charger's own Output_Capabilities (fc_caps, known only once the unit's first row read them) the levels are the
-            // bottom, middle and top of each mode instead, at 1 A (the mode's smallest current when that is higher), within the
-            // monitor ceiling and the cable: a mode wholly above that is one named skip row, never a request.
+            case Group::Qc3Plus: plan_levels(ctx, s, kQc3, std::size(kQc3), true); break;
+            case Group::Afc: plan_levels(ctx, s, kAfc, std::size(kAfc), true); break;
+            case Group::Fcp: plan_levels(ctx, s, kQc2, std::size(kQc2), true); break;   // 5000, 9000, 12000
             case Group::Ufcs: {
                 const size_t modes = in.fc_caps ? std::min<size_t>(in.fc_caps->ufcs_n, in.fc_caps->ufcs.size()) : 0;
                 if (!modes) {
-                    level(5000); level(9000, true); level(11000, true); level(5000, true); level(12000, true);
-                    level(20000, true, kUfcs60wMa);
+                    plan_levels(ctx, s, kUfcsDef, std::size(kUfcsDef), true);
+                    plan_level(ctx, s, 20000, true, kUfcs60wMa);
                     break;
                 }
                 const ufcs::Cap* by_min[ufcs::kMaxCaps];
@@ -648,39 +694,30 @@ void plan_unit(Unit unit, const pd::SourceCaps& caps, Options o, const Input& in
                 }
                 unsigned last = 5000;
                 auto ma_of = [](const ufcs::Cap& c) { return static_cast<unsigned>(std::clamp(kUfcsLevelMa, c.min_ma, std::max(c.min_ma, c.max_ma))); };
-                // Every row names the mode it samples (pack_ufcs_mode): the Results chip shows its current, the Detail page its range.
                 auto tag = [&](const ufcs::Cap& c) { s.pdo = pack_ufcs_mode(c.min_mv, c.max_mv, c.min_ma, c.max_ma); };
-                auto next = [&](unsigned mv, const ufcs::Cap& c) { if (mv != last) { last = mv; tag(c); level(mv, true, ma_of(c)); } };
-                const ufcs::Cap* home = by_min[0];   // the mode the baseline and the step back to 5 V are judged in: the one that reaches it
+                auto next_mv = [&](unsigned mv, const ufcs::Cap& c) { if (mv != last) { last = mv; tag(c); plan_level(ctx, s, mv, true, ma_of(c)); } };
+                const ufcs::Cap* home = by_min[0];
                 for (size_t n = 0; n < modes; ++n)
                     if (by_min[n]->min_mv <= 5000 && 5000 <= by_min[n]->max_mv) home = by_min[n];
-                tag(*home); level(5000);
+                tag(*home); plan_level(ctx, s, 5000);
                 for (size_t n = 0; n < modes; ++n) {
                     const ufcs::Cap& c = *by_min[n];
                     const unsigned bottom = static_cast<unsigned>(std::max(c.min_mv, 0));
                     const unsigned top = std::min<unsigned>(static_cast<unsigned>(std::max(c.max_mv, 0)), cap);
-                    next(bottom, c);
+                    next_mv(bottom, c);
                     if (bottom >= cap || top <= bottom) continue;
                     const unsigned mid = (bottom + top) / 2 / 100 * 100;
-                    if (mid > bottom && mid < top) next(mid, c);
-                    next(top, c);
+                    if (mid > bottom && mid < top) next_mv(mid, c);
+                    next_mv(top, c);
                 }
-                next(5000, *home);
+                next_mv(5000, *home);
                 break;
             }
-            case Group::Vivo: level(5000); level(9000); level(11000); level(5000); break;   // 11 V: unidentified-charger cap
-            // SCP (docs/FASTCHARGE_PROTOCOLS.md section 2): the handshake (ping, Reg 0x80/0x7E type bits, limits
-            // 0x90..0x97) writes no current; the 10 V row asks 2.25 A (22.5 W). The
-            // direct-charge rows (4.5 V 5 A, 5 V 4.5 A) only set the limit: the suite draws no current (a load aborts the
-            // row, see load_fault), so the cable's current rating gates nothing. Each row is its own session: a detect-only session ends after its reads.
-            // With the adapter's own limits (fc_caps.scp, read in the unit's first session) the rows stay inside them: a level above
-            // the reported maximum is a NoOffer row, the currents are asked at no more than the reported maximum (the row names what
-            // it asks, and the engine writes the same), and the top level it reported joins the plan, within the monitor. The reported
-            // minimum is not a gate: the limits decode is inferred, and a CUKTECH USB-A port that reports 5.5 V as its minimum takes the
-            // 5 V target (docs/CHARGER_QUIRKS.md), so a floor read from it would skip rows the port runs.
+            case Group::Vivo: plan_levels(ctx, s, kVivo, std::size(kVivo), false); break;
             case Group::Scp: {
                 if (!in.fc_caps || !in.fc_caps->scp.valid) {
-                    level(5000); level(10000, false, kScpLowMa); level(4500, false, 5000); level(5000, false, 4500);
+                    plan_level(ctx, s, 5000); plan_level(ctx, s, 10000, false, kScpLowMa);
+                    plan_level(ctx, s, 4500, false, 5000); plan_level(ctx, s, 5000, false, 4500);
                     break;
                 }
                 const auto& lim = in.fc_caps->scp;
@@ -688,26 +725,26 @@ void plan_unit(Unit unit, const pd::SourceCaps& caps, Options o, const Input& in
                 const auto ask = [&](unsigned ma) { return std::min<unsigned>(ma, static_cast<unsigned>(lim.max_ma)); };
                 const unsigned low_ma = ask(kScpLowMa);
                 const unsigned top = std::min<unsigned>(static_cast<unsigned>(lim.max_mv), cap);
-                level(5000);
-                level(10000, false, low_ma, inside(10000));
-                if (top > 5000 && top != 10000) level(top, false, low_ma, inside(top));
-                level(4500, false, ask(5000), inside(4500));
-                level(5000, false, ask(4500), inside(5000));
+                plan_level(ctx, s, 5000);
+                plan_level(ctx, s, 10000, false, low_ma, inside(10000));
+                if (top > 5000 && top != 10000) plan_level(ctx, s, top, false, low_ma, inside(top));
+                plan_level(ctx, s, 4500, false, ask(5000), inside(4500));
+                plan_level(ctx, s, 5000, false, ask(4500), inside(5000));
                 break;
             }
-            default: level(5000); break;
+            default: plan_level(ctx, s, 5000); break;
             }
             continue;
         }
         // No source list: a self-powered K2 that heard PD in this attach knows the source gave it up (its caps went unanswered
         // while the K2 was PD-silent), which is a different finding from a charger that never advertised PD.
-        if (!caps.valid) { skip(in.self_powered && in.pd_seen_attach ? Reason::PdGaveUp : Reason::NoOffer); continue; }
+        if (!caps.valid) { plan_skip(ctx, s, in.self_powered && in.pd_seen_attach ? Reason::PdGaveUp : Reason::NoOffer); continue; }
         const unsigned wire = algorithm == Algorithm::Pd2Fixed ? 1 : 2;
         if (caps.spec_rev != wire) {
             if ((algorithm == Algorithm::Pd2Fixed || algorithm == Algorithm::Pd3Fixed) &&
                 o.contains(Algorithm::Pd2Fixed) && o.contains(Algorithm::Pd3Fixed) &&
                 (caps.spec_rev == 1 || caps.spec_rev == 2)) continue;
-            skip(Reason::RevisionUntestable); continue;
+            plan_skip(ctx, s, Reason::RevisionUntestable); continue;
         }
         if ((algorithm == Algorithm::Epr || algorithm == Algorithm::EprAvs) && !caps.epr) {
             // The charger listed its EPR levels without an entry (EPR_Get_Source_Cap in SPR mode): one row per level, named, never run.
@@ -719,7 +756,7 @@ void plan_unit(Unit unit, const pd::SourceCaps& caps, Options o, const Input& in
                 listed = true;
                 s.pos = static_cast<uint8_t>(i + 1); s.pdo = p.raw; s.mv = p.max_mv; s.ma = 0; s.continuous = false;
                 s.avs = p.type == pd::PdoType::Avs; s.detail = kDetailEprOffered;
-                skip(Reason::CableLimit);
+                plan_skip(ctx, s, Reason::CableLimit);
             }
             if (listed) continue;
             // An answer with no EPR PDO at all (positions 8+ all zero; zero words are padding, USB PD R3.2 EPR_Source_Capabilities) from a source whose PDO 1 has the EPR
@@ -728,7 +765,7 @@ void plan_unit(Unit unit, const pd::SourceCaps& caps, Options o, const Input& in
             for (size_t i = 7; info && i < std::min<size_t>(info->num_pdos, info->pdos.size()); ++i) any_epr |= info->pdos[i].raw != 0;
             const bool withheld = info && epr_capable_caps(caps) && !any_epr && !epr_cable_unfit(in);
             if (withheld) s.detail = kDetailEprWithheld;
-            skip(epr_capable_caps(caps) && (withheld || epr_cable_unfit(in)) ? Reason::CableLimit : Reason::NoOffer); continue;
+            plan_skip(ctx, s, epr_capable_caps(caps) && (withheld || epr_cable_unfit(in)) ? Reason::CableLimit : Reason::NoOffer); continue;
         }
         bool found = false;
         // The fixed rows (SPR fixed, and the EPR fixed ones in their own section) run from the top voltage down (2026-11-17: a shared-port
@@ -755,142 +792,82 @@ void plan_unit(Unit unit, const pd::SourceCaps& caps, Options o, const Input& in
             s.ma = 0;
             s.continuous = false; s.verdict = Verdict::Pending; s.reason = Reason::None; s.detail = 0;
             s.avs = p.type == pd::PdoType::Avs;
-            if ((algorithm == Algorithm::Epr || algorithm == Algorithm::EprAvs) && !epr_cable(in)) { skip(Reason::CableLimit); continue; }
+            if ((algorithm == Algorithm::Epr || algorithm == Algorithm::EprAvs) && !epr_cable(in)) { plan_skip(ctx, s, Reason::CableLimit); continue; }
             if ((s.avs && (p.raw >> 28) != (epr ? 0xD : 0xE)) ||
                 (epr && p.type != pd::PdoType::Fixed && !s.avs)) {
-                skip(Reason::UnsupportedOffer); continue;
+                plan_skip(ctx, s, Reason::UnsupportedOffer); continue;
             }
             if (p.type != pd::PdoType::Fixed && p.type != pd::PdoType::Pps && !s.avs) {
-                skip(Reason::NotImplemented); continue;
+                plan_skip(ctx, s, Reason::NotImplemented); continue;
             }
-            if (!p.min_mv || p.max_mv < p.min_mv) { skip(Reason::UnsupportedOffer); continue; }
-            // The current a row asks: the offer's limit at `mv` and the cable's, never above `ceiling` (the rows stay at 1 A
-            // except the full-current PPS row below, which asks the APDO's whole advertised current).
-            auto current = [&](unsigned mv, unsigned ceiling = kPlanRowMa) {
-                return static_cast<uint16_t>(std::min({ceiling, unsigned(pd::current_limit_ma(p, mv)),
-                                                       unsigned(used_cable_ma(in))}) / 50 * 50);
-            };
-            s.ma = current(s.mv);
+            if (!p.min_mv || p.max_mv < p.min_mv) { plan_skip(ctx, s, Reason::UnsupportedOffer); continue; }
+            s.ma = pdo_current(p, in, s.mv);
             if (p.min_mv > cap || (p.type == pd::PdoType::Fixed && p.max_mv > cap)) {
-                skip(limit_reason(p.max_mv, in, algorithm)); continue;
+                plan_skip(ctx, s, limit_reason(p.max_mv, in, algorithm)); continue;
             }
             if (p.type == pd::PdoType::Fixed) {
-                if (!s.ma) skip(Reason::NoOffer); else emit(s);
+                if (!s.ma) plan_skip(ctx, s, Reason::NoOffer); else plan_emit(ctx, s);
                 continue;
             }
             const unsigned quantum = s.avs ? 100 : 20;
             const unsigned lo = (p.min_mv + quantum - 1) / quantum * quantum;
             const unsigned hi = std::min<unsigned>(p.max_mv, cap) / quantum * quantum;
-            if (lo > hi) { skip(limit_reason(p.max_mv, in, algorithm)); continue; }
-            // Step up first, ending at the minimum: a no-load source drains slowly, so down-steps come last and from
-            // above the 5 V contract the row starts from.
+            if (lo > hi) { plan_skip(ctx, s, limit_reason(p.max_mv, in, algorithm)); continue; }
             const unsigned mid0 = ((lo + hi) / 2) / quantum * quantum;
             const unsigned mid = std::max(mid0, std::min<unsigned>(5000 / quantum * quantum, hi));
             const unsigned low_mid = std::max(lo, ((lo + mid) / 2) / quantum * quantum);
-            // Step-resolution row (ROADMAP "PPS coverage" item 2; a Deep check since 2026-11-18, next to the sweeps: pps_sweep for a PPS
-            // APDO, avs_sweep for an AVS one): one row per APDO, from the mid level, five Requests of one quantum (20 mV PPS, 100 mV
-            // AVS; the runner walks them). Emitted after the APDO's own rows so a plan that would overflow kMaxSteps drops it first.
-            // Only above the 5 V contract and when the walk fits inside the offer: a low walk could cut the output.
             const auto walk_row = [&] {
                 if (mid <= 5000 || mid + kStepWalkCount * quantum > hi) return;
-                Step w = s; w.mv = static_cast<uint16_t>(mid); w.ma = current(mid); w.continuous = false;
+                Step w = s; w.mv = static_cast<uint16_t>(mid); w.ma = pdo_current(p, in, mid); w.continuous = false;
                 w.verdict = w.ma ? Verdict::Pending : Verdict::Skip;
                 w.reason = w.ma ? Reason::None : Reason::NoOffer;
                 w.detail = kDetailStepWalk;   // the runner's marker while the row is in flight
-                emit(w);
+                plan_emit(ctx, w);
             };
             const unsigned targets[] = {mid, hi, mid, low_mid, lo};
             for (unsigned n = 0; n < 5; ++n) {
-                s.mv = static_cast<uint16_t>(targets[n]); s.ma = current(s.mv); s.continuous = n != 0;
+                s.mv = static_cast<uint16_t>(targets[n]); s.ma = pdo_current(p, in, s.mv); s.continuous = n != 0;
                 s.verdict = s.ma ? Verdict::Pending : Verdict::Skip;
                 s.reason = s.ma ? Reason::None : Reason::NoOffer;
                 if (s.ma && low_programmable(s)) {
-                    if (!n_low || low_pos != s.pos) s.continuous = false;   // the first one starts from a released 5 V contract
-                    ++n_low; low_pos = s.pos;
+                    if (!ctx.n_low || ctx.low_pos != s.pos) s.continuous = false;   // the first one starts from a released 5 V contract
+                    ++ctx.n_low; ctx.low_pos = s.pos;
                 }
-                emit(s);
+                plan_emit(ctx, s);
             }
             if (p.max_mv > cap) {
-                s.mv = p.max_mv; s.ma = current(s.mv); s.continuous = false;
-                skip(limit_reason(p.max_mv, in, algorithm));
+                s.mv = p.max_mv; s.ma = pdo_current(p, in, s.mv); s.continuous = false;
+                plan_skip(ctx, s, limit_reason(p.max_mv, in, algorithm));
             }
             if (p.type == pd::PdoType::Pps) {
-                // Full-current row, last of the APDO: the top voltage at the whole advertised current, clamped to the cable
-                // (3 A unread, see cable_ma). The 1 A rows prove the voltage steps; this one proves the source holds the voltage
-                // at its rated current (11 V 5 A, 20 V 2 A). Not a hunt: it asks what the APDO offers, so it is judged like the
-                // other PPS rows. Skipped when it would repeat the 1 A row at the top.
-                // An APDO above 5 A has no cable that carries it: the row asks the advertised current for a cable vouched for
-                // above 5 A. Any other cable leaves a neutral CableLimit skip that keeps the advertised current for the chip,
-                // after the row at what the cable does hold (the 5 A, below), so the source's rated current is still proven.
                 const unsigned advertised = pd::current_limit_ma(p, static_cast<uint16_t>(hi)) / 50 * 50;
                 const bool over5 = advertised > 5000;
-                if (over5 && over5_cable_ma(in) > 5000) {
-                    Step f = s; f.mv = static_cast<uint16_t>(hi); f.ma = static_cast<uint16_t>(advertised); f.hunt = false;
+                auto emit_full = [&](uint16_t ma) {
+                    Step f = s; f.mv = static_cast<uint16_t>(hi); f.ma = ma; f.hunt = false;
                     f.continuous = false; f.verdict = Verdict::Pending; f.reason = Reason::None;
-                    emit(f);
+                    plan_emit(ctx, f);
+                };
+                if (over5 && over5_cable_ma(in) > 5000) {
+                    emit_full(static_cast<uint16_t>(advertised));
                     continue;
                 }
-                const uint16_t full = current(hi, ~0u);
-                if (full > current(hi)) {
-                    Step f = s; f.mv = static_cast<uint16_t>(hi); f.ma = full; f.hunt = false;
-                    f.continuous = false; f.verdict = Verdict::Pending; f.reason = Reason::None;
-                    emit(f);
-                }
+                const uint16_t full = pdo_current(p, in, hi, ~0u);
+                if (full > pdo_current(p, in, hi)) emit_full(full);
                 if (over5) {
                     s.mv = static_cast<uint16_t>(hi); s.ma = static_cast<uint16_t>(advertised); s.hunt = false; s.continuous = false;
-                    skip(Reason::CableLimit);
+                    plan_skip(ctx, s, Reason::CableLimit);
                 }
                 if (o.pps_sweep) walk_row();
-                // Deep sweep (ROADMAP "PPS deep sweep", Options::pps_sweep, on at Level::Deep or by the Tests list line):
-                // emitted last of the APDO's rows (a plan that would overflow kMaxSteps drops it first), split at
-                // ctsweep::kSplitMv (user decision 2026-11-14). The part from 5 V up is a Pd row right after the APDO's own
-                // checks, so any unit list with pd and a self-powered K2 sweep it; the part below 5 V is a low programmable
-                // row (its mv is its first setpoint), so it runs in PdLow with the APDO's other low rows. The points (every
-                // 100 mV, capped at `cap`, 1 A never above the offer or the cable) live in the runner's sweep record.
-                if (p.type == pd::PdoType::Pps && o.pps_sweep && sweep_budget) {
-                    const auto pr = ctsweep::point_range(p.min_mv, p.max_mv, cap);
-                    if (!ctsweep::point_count(pr)) { s.detail = kDetailSweep; skip(limit_reason(p.max_mv, in, algorithm)); }
-                    else for (const bool low : {false, true}) {
-                        const auto part = ctsweep::part_range(pr, low);
-                        const unsigned n = ctsweep::point_count(part);
-                        if (!n || !sweep_budget) continue;
-                        Step w = s; w.mv = static_cast<uint16_t>(part.lo);
-                        w.ma = static_cast<uint16_t>(ctsweep::point_ma(p, part.lo, cable_ma(in)));
-                        w.continuous = false;
-                        w.verdict = w.ma ? Verdict::Pending : Verdict::Skip;
-                        w.reason = w.ma ? Reason::None : Reason::NoOffer;
-                        w.detail = kDetailSweep;   // the runner's marker; it survives finish(), so the results strip finds the row
-                        emit(w);
-                        sweep_budget -= std::min(n, sweep_budget);
-                    }
-                }
+                if (o.pps_sweep) plan_emit_sweep(ctx, s, p, cap, true);
             }
-            // AVS deep sweep (ROADMAP "AVS deep sweep", opt-in via Options::avs_sweep): ONE row per AVS APDO, emitted
-            // last of its rows like the PPS sweep above. The points are every 100 mV (the AVS Request granularity)
-            // across the APDO, capped at `cap` (the monitor ceiling and the cable's voltage limit - an APDO top above
-            // the ceiling reads "above the K2's monitor"), at 1 A never above the APDO's PDP-derived current or the
-            // cable. EPR AVS APDOs (pos >= 8) reach here only with an EPR identity: the epr_cable check above skipped
-            // the whole APDO with the existing EPR skip reasons otherwise.
-            if (s.avs && o.avs_sweep) walk_row();
-            if (s.avs && o.avs_sweep && sweep_budget) {
-                const auto pr = ctsweep::point_range(p.min_mv, p.max_mv, cap);
-                const unsigned n = ctsweep::point_count(pr);
-                if (!n) { s.detail = kDetailSweep; skip(limit_reason(p.max_mv, in, algorithm)); }
-                else {
-                    Step w = s; w.mv = static_cast<uint16_t>(pr.lo);
-                    w.ma = static_cast<uint16_t>(ctsweep::point_ma(p, pr.lo, cable_ma(in)));
-                    w.continuous = false;
-                    w.verdict = w.ma ? Verdict::Pending : Verdict::Skip;
-                    w.reason = w.ma ? Reason::None : Reason::NoOffer;
-                    w.detail = kDetailSweep;
-                    emit(w);
-                    sweep_budget -= std::min(n, sweep_budget);
-                }
+            if (s.avs && o.avs_sweep) {
+                walk_row();
+                plan_emit_sweep(ctx, s, p, cap, false);
             }
         }
         if (!found) {
             s = {}; s.algorithm = algorithm; s.group = Group::Pd;
-            skip(Reason::NoOffer);
+            plan_skip(ctx, s, Reason::NoOffer);
         }
     }
     // The Xiaomi unit's chain row, last of the Pd unit: the modes it finds run in the same attach (the source keeps the unlocked list
@@ -898,7 +875,7 @@ void plan_unit(Unit unit, const pd::SourceCaps& caps, Options o, const Input& in
     // It rides the fixed or the PPS selection (the modes it finds are fixed or PPS levels) and carries the first one selected.
     if (unit == Unit::Pd && (o.contains(Algorithm::Pd3Fixed) || o.contains(Algorithm::Pps))) {
         Step m; m.group = Group::Pd; m.algorithm = o.contains(Algorithm::Pd3Fixed) ? Algorithm::Pd3Fixed : Algorithm::Pps; m.hunt = true;
-        add(m);
+        plan_add(ctx, m);
     }
 }
 // Row layout: the units in execution order, each with its own rows. The PD rows (Pd, PdLow) can be re-planned when the source list
@@ -1224,7 +1201,7 @@ void Runner::follow_list(const pd::SourceCaps& caps, const Input& in) {
     unsigned follow = 0, withdrawn = 0, back = 0;
     bool moved = false;       // any change, a refreshed PDO word included: the evidence follows the list
     bool plan_moved = false;  // a row was withdrawn, came back or moved slot: the plan itself changed
-    const auto withdraw = [this](Step& s) { s.verdict = Verdict::Skip; s.reason = Reason::Withdrawn; env_.record(s); };
+    const auto withdraw = [this](Step& s) { record_skip(s, Reason::Withdrawn); };
     // The row in flight first: its offer is looked up by voltage / range anywhere on its side of the SPR / EPR boundary,
     // not at the slot it asked - an offer that only moved slot re-queues the row (it finishes at the new slot), only an
     // offer that is gone ends it as withdrawn and releases to 5 V (the sink's single-Request gate serialises that release).
@@ -1286,25 +1263,13 @@ void Runner::follow_list(const pd::SourceCaps& caps, const Input& in) {
             }
         } else if (s.verdict == Verdict::Skip && s.reason == Reason::Withdrawn && &s != flight_row && unit_of(s) == unit_) {
             // A PDO that came back: the row is pending again (its unit has not ended).
-            const int at = offer_at(s);
-            if (at >= 0) {
-                if (s.pos < 8 || caps.epr) {
-                    const uint32_t raw = caps.pdos[static_cast<size_t>(at)].raw;
-                    if (s.pos != at + 1 || s.pdo != raw) { s.pos = static_cast<uint8_t>(at + 1); s.pdo = raw; }
-                }
-                s.verdict = Verdict::Pending; s.reason = Reason::None; env_.record(s);
-                ++back; moved = plan_moved = true;
-            }
+            if (revive_withdrawn_row(s, caps)) { ++back; moved = plan_moved = true; }
         }
     }
     plan_sig_ = caps_sig(caps);
     if (back) wd_wait_ = false;   // an offer came back: a later re-split gets its own wait
     if (moved) caps_evidence(caps);   // the evidence follows the list only when a row actually moved (an EPR exit keeps EprTable)
-    if (plan_moved) {
-        ++revision_; env_.plan_changed();   // once per re-plan, and only when the plan really changed
-        if (evidence_.rebalanced < 255) ++evidence_.rebalanced;
-        env_.replan(follow, withdrawn, back);
-    }
+    if (plan_moved) note_replan(follow, withdrawn, back);
 }
 Reason Runner::start(const pd::SourceCaps& caps, Options o, Input in, bool confirmed) {
     o.selected &= kAllAlgorithms;
@@ -1344,24 +1309,19 @@ Reason Runner::start(const pd::SourceCaps& caps, Options o, Input in, bool confi
     pd_skips_recorded_ = !late_pd_; pd_skips_held_ = false;
     for (size_t n = 0; n < count_; ++n) if (steps_[n].verdict == Verdict::Skip && (mode(unit_of(steps_[n])) != Mode::Pd || pd_skips_recorded_)) env_.record(steps_[n]);
     resumed_ = 0; reattach_ = 0; reattach_planned_ = false; loaded_ = false; plan_frozen_ = false;
-    selfpwr_ = in.self_powered; suspended_ = adopt_ = held_ = false; jwait_ms_ = 0;
+    reset_run_state();
+    selfpwr_ = in.self_powered; held_ = false; jwait_ms_ = 0;
     session_ = in.session; resets_ = link_resets(in.pd);
-    handover_ = {}; unit_ = Unit::Count; mode_ = Mode::Pd;
-    ceiling_pending_ = ceiling_done_ = ceil_stopping_ = ceil_recover_ = ceil_cycled_ = false; ceil_ms_ = ceil_stop_ms_ = ceil_low_ms_ = 0; ceil_why_ = 0;
-    spec_done_ = spec_stopping_ = spec_fault_ = false; spec_ms_ = spec_stop_ms_ = 0; spec_pending_ = spec_wanted();
-    attached_ = detached_ = ending_ = silent_ = legacy_active_ = never_dark_ = dipped_ = dark_ = rel_rd_ = false; attach_try_ = 0;
+    ceiling_done_ = false; ceil_ms_ = ceil_stop_ms_ = ceil_low_ms_ = 0; ceil_why_ = 0;
+    spec_done_ = false; spec_ms_ = spec_stop_ms_ = 0; spec_pending_ = spec_wanted();
     unit_time_.fill(0); time_ms_ = 0; time_pending_ = true;
     never_dark_ = in.no_cc;   // a port with no CC does not go dark: the first detach is the short one too
     own_rel_ = false; reann_ = 0;
-    rp_restart_ = false; contract_wrong_ = false; attach_max_mv_ = 0;
-    pre_ms_ = 0;
-    pd_retry_ = cut_index_ = SIZE_MAX; retries_ = epr_tries_ = 0; settle_ms_ = settle_until_ = 0; auth_open_ = false;
+    pre_ms_ = 0; retries_ = epr_tries_ = 0; settle_ms_ = settle_until_ = 0; auth_open_ = false;
     xiaomi_seen_ = xiaomi_reset_ = x_svid_ = x_authed_ = false; tail_at_ = 0; hr_count_ = link_resets(in.pd);
-    last_ms_ = phase_ms_ = in.now; stable_ = stopping_ = pd_owned_ = fc_owned_ = recover_ = hot_ = sag_cut_ = sag_open_ = false; busy_retry_at_ = 0;
-    cut_wait_ = cut_dark_ = false; cut_start_ms_ = cut_back_ms_ = 0; cut_retry_idx_ = SIZE_MAX; cut_tries_ = 0; cut_last_mv_ = -1; n_cut_onsets_ = 0; race_reset();
-    list_tracking_ = false; flight_restart_ = wd_wait_ = false;   // the settle window is seeded by the first poll, not opened by START
+    last_ms_ = phase_ms_ = in.now; sag_cut_ = sag_open_ = false; busy_retry_at_ = 0;
     reason_ = Reason::None; refusal_mv_ = 0;
-    probe_ = (has_unit(o.units, Unit::Pd) || has_unit(o.units, Unit::PdLow)) ? Probe::Pending : Probe::Off;   // ask the charger who it is once, at the end of the first Pd unit
+    probe_ = (has_unit(o.units, Unit::Pd) || has_unit(o.units, Unit::PdLow)) ? Probe::Pending : Probe::Off;
     state_ = State::Baseline;
     // An already elevated source is not safe to take over blindly. A reading inside a dip is the fall of a port cut: the Baseline waits for
     // the comeback (bounded, see kDipMinMv) instead of ending the run before it began.
@@ -1492,11 +1452,7 @@ void Runner::request(const Input& in) {
         // The park rides the Busy-retry path below (busy_retry_at_); the row's own timeout bounds the wait, and the
         // restart is not a try (tries is set only in finish(), from source failures).
         if (!list_settled(in.now)) { busy_retry_at_ = list_ms_ + kListSettleMs; return; }
-        const auto err = env_.request_pd(pd_choice(s));
-        // Busy = identify/probe/prep still running (CUKTECH C1: the first 5 V row raced the probe, flaky fail):
-        // retry within the row's normal timeout instead of failing instantly.
-        if (err == pd::Err::Busy) { busy_retry_at_ = in.now + 200; return; }
-        if (err != pd::Err::Ok) finish(in, Verdict::Fail, Reason::Request, 128 + static_cast<uint8_t>(err));
+        send_pd_request(in, s, false);
     } else {
         // An SCP row joins the kept or live session of the row before it (scp_next picked it): same session, no release in between.
         const bool chained = s.group == Group::Scp && s.ma > 0 && legacy_tune(LegacyKnob::Chain) >= 1 && (in.fc_held || in.fc_state == fc::State::Active);
@@ -1611,7 +1567,7 @@ void Runner::skip_group_rows(Group g, bool raises_only, uint8_t detail) {
     for (size_t n = 0; n < count_; ++n) {
         auto& o = steps_[n];
         if (o.verdict != Verdict::Pending || o.group != g || (raises_only && o.mv <= 5000)) continue;
-        o.verdict = Verdict::Skip; o.reason = Reason::Request; o.detail = detail; env_.record(o);
+        record_skip(o, Reason::Request, detail);
     }
 }
 // pattern usb-a-dpdm-open: the DCP check read D+/D- open and the source never spoke PD, so a D+/D- unit that got no reply says nothing about
@@ -1628,7 +1584,7 @@ void Runner::lines_open_sweep() {
         if (o.group == Group::Pd || o.group >= Group::Count) continue;
         const bool silent = o.verdict == Verdict::Skip && o.reason == Reason::Request && no_reply(o.group, fc::Fail(o.detail));
         if (o.verdict != Verdict::Pending && !silent) continue;
-        o.verdict = Verdict::Skip; o.reason = Reason::LinesOpen; o.detail = uint8_t(silent_code(o.group)); env_.record(o);
+        record_skip(o, Reason::LinesOpen, static_cast<int>(silent_code(o.group)));
     }
 }
 void Runner::release(const Input& in, bool stop) {
@@ -1850,7 +1806,7 @@ void Runner::finish_row(const Input& in, Verdict v, Reason r, uint8_t detail) {
             // own algorithm and keep their verdict logic (a failed 12 V still leaves "Class A only" / the handshake failure to the
             // 20 V row); once the session is released they open a fresh one.
             for (size_t n = index_ + 1; n < count_ && steps_[n].continuous && steps_[n].algorithm == s.algorithm; ++n) {
-                steps_[n].verdict = Verdict::Skip; steps_[n].reason = r; steps_[n].detail = detail; env_.record(steps_[n]);
+                record_skip(steps_[n], r, detail);
             }
         }
         // The held session hops to the next row inside this call, so the raise rows a no-change end rules out are skipped here, before it
@@ -2083,21 +2039,12 @@ void Runner::next(const Input& in) {
         caps_now_.valid && list_settled(in.now)) {
         unsigned back = 0;
         for (auto& s : std::span<Step>(steps_.data(), count_)) {
-            if (s.verdict != Verdict::Skip || s.reason != Reason::Withdrawn || unit_of(s) != unit_) continue;
-            const int at = s.pos >= 8 ? (caps_now_.epr ? find_offer(caps_now_, s) : (epr_capable_caps(caps_now_) ? 0 : -1))
-                                       : find_offer(caps_now_, s);
-            if (at < 0) continue;
-            if (s.pos < 8 || caps_now_.epr) {
-                const uint32_t raw = caps_now_.pdos[static_cast<size_t>(at)].raw;
-                s.pos = static_cast<uint8_t>(at + 1); s.pdo = raw;
-            }
-            s.verdict = Verdict::Pending; s.reason = Reason::None; env_.record(s); ++back;
+            if (s.verdict == Verdict::Skip && s.reason == Reason::Withdrawn && unit_of(s) == unit_ &&
+                revive_withdrawn_row(s, caps_now_)) ++back;
         }
         if (back) {
             wd_wait_ = false;   // a revival re-arms the wait for the next re-split
-            ++revision_; env_.plan_changed();
-            if (evidence_.rebalanced < 255) ++evidence_.rebalanced;
-            env_.replan(0, 0, back);
+            note_replan(0, 0, back);
             const size_t j = pick();
             if (j != SIZE_MAX && attached_ && !ending_ && unit_of(steps_[j]) == unit_) { index_ = j; request(in); return; }
         }
@@ -2144,22 +2091,19 @@ void Runner::skip_pending(Reason r) {
     for (const auto& s : std::span<const Step>(steps_.data(), count_)) left |= s.verdict == Verdict::Pending;
     if (left) env_.closing(r);
     for (auto& s : std::span<Step>(steps_.data(), count_)) {
-        if (s.verdict != Verdict::Pending) continue;
-        s.verdict = Verdict::Skip; s.reason = r; env_.record(s);
+        if (s.verdict == Verdict::Pending) record_skip(s, r);
     }
     if (!pd_skips_recorded_ || pd_skips_held_) record_pd_skips(true);
 }
 // The rest of the running unit is over (its charger never fell back, the offers changed, PD showed up): the run goes on.
 void Runner::skip_unit(Reason r) {
     for (auto& s : std::span<Step>(steps_.data(), count_)) {
-        if (s.verdict != Verdict::Pending || unit_of(s) != unit_) continue;
-        s.verdict = Verdict::Skip; s.reason = r; env_.record(s);
+        if (s.verdict == Verdict::Pending && unit_of(s) == unit_) record_skip(s, r);
     }
 }
 void Runner::skip_legacy_units(Reason r) {
     for (auto& s : std::span<Step>(steps_.data(), count_)) {
-        if (s.verdict != Verdict::Pending || mode(unit_of(s)) != Mode::Legacy) continue;
-        s.verdict = Verdict::Skip; s.reason = r; env_.record(s);
+        if (s.verdict == Verdict::Pending && mode(unit_of(s)) == Mode::Legacy) record_skip(s, r);
     }
 }
 bool Runner::legacy_row_ran() const {
@@ -2320,7 +2264,7 @@ void Runner::poll_detach(const Input& in) {
         rel_rd_ = false; ending_ = false;
         if (in.vbus_mv >= kUnsafeLowMv && !safe5(in.vbus_mv)) { unsafe(Reason::Release); return; }   // end_legacy() gives Rd back
         pd_owned_ = fc_owned_ = recover_ = false;
-        if (stopping_) { end_legacy(); state_ = State::Stopped; return; }
+        if (stopping_) { stop_run(State::Stopped); return; }
         next(in); return;
     }
     if (ending_) { ending_ = false; next(in); }
@@ -2360,23 +2304,21 @@ void Runner::poll_attach(const Input& in, const pd::SourceCaps& caps, uint32_t g
         // are skipped "source lost", the ceiling's record stays), not a charger that kept PD up ("blocked by PD" after 80 s).
         if (ceil_cycled_ && attach_max_mv_ < kUnsafeLowMv && in.now - att_ms_ >= kRecoverMs) {
             ceil_cycled_ = false;
-            reason_ = Reason::Lost; skip_pending(reason_); end_legacy(); state_ = State::Stopped;
+            stop_run(State::Stopped, Reason::Lost, true);
             return;
         }
         // PD-silent: caps are heard and recorded, never acknowledged. VBUS cycles around the source's Hard Resets are expected.
         if (late_pd_ && caps.valid) replan_pd(caps, in, true);
-        if (safe5(in.vbus_mv) && in.pd_quiet_ms >= quiet_ms() && in.fc_state == fc::State::Idle) {
-            if (!stable_ || gap > 250) { stable_ = true; stable_ms_ = in.now; }
-            if (in.now - stable_ms_ >= legacy_tune(LegacyKnob::SteadyMs)) {
-                if (handover_.outcome == HandoverOutcome::NotTried) handover_ = {HandoverOutcome::FellBack, in.now - unit_ms_};
-                attached_ = silent_ = true; session_ = in.session; resets_ = link_resets(in.pd); hot_ = false; caps_gone_ms_ = in.now;
-                ceil_cycled_ = false; own_rel_ = false; reann_ = 0;
-                // The first handshake waits 1000 ms after the PD-silent attach (the baseline settle is 500 of it).
-                baseline_wait(legacy_tune(LegacyKnob::FirstWaitMs), unit_ == Unit::Afc ? kAfcPreMs : 0, in.now, pre_ms_, stable_ms_);
-                state_ = State::Baseline; stable_ = true; phase_ms_ = in.now;
-                return;
-            }
-        } else stable_ = false;
+        if (stable_tick(safe5(in.vbus_mv) && in.pd_quiet_ms >= quiet_ms() && in.fc_state == fc::State::Idle,
+                        in.now, gap, legacy_tune(LegacyKnob::SteadyMs))) {
+            if (handover_.outcome == HandoverOutcome::NotTried) handover_ = {HandoverOutcome::FellBack, in.now - unit_ms_};
+            attached_ = silent_ = true; session_ = in.session; resets_ = link_resets(in.pd); hot_ = false; caps_gone_ms_ = in.now;
+            ceil_cycled_ = false; own_rel_ = false; reann_ = 0;
+            // The first handshake waits 1000 ms after the PD-silent attach (the baseline settle is 500 of it).
+            baseline_wait(legacy_tune(LegacyKnob::FirstWaitMs), unit_ == Unit::Afc ? kAfcPreMs : 0, in.now, pre_ms_, stable_ms_);
+            state_ = State::Baseline; stable_ = true; phase_ms_ = in.now;
+            return;
+        }
         // Rp on the line and still no VBUS: the retry's Rd cycle now, not after the give-up wait.
         const bool rp_no_vbus = caps.active_cc && in.vbus_mv >= 0 && in.vbus_mv < pd::kVSafe0Mv && in.now - att_ms_ >= kLegacyNoVbusMs;
         if (rp_no_vbus && !selfpwr_ && !attach_try_ && handover_.outcome != HandoverOutcome::StayedPd) {
@@ -2427,10 +2369,7 @@ void Runner::poll_attach(const Input& in, const pd::SourceCaps& caps, uint32_t g
     attached_ = true; session_ = in.session; resets_ = link_resets(in.pd); hot_ = false; caps_gone_ms_ = in.now; ceil_cycled_ = false;
     // EPR PDOs only exist after EPR entry: an EPR-capable source on an EPR cable is entered first, then the rows are rebuilt.
     // A cable that cannot carry EPR gets no entry, only the informational list (stage 4).
-    if (epr_stage_ == 3 && unit_ == Unit::Pd) {
-        epr_stage_ = !caps.epr && epr_capable_caps(caps) && caps.active_cc ? (epr_cable_unfit(in) || opts_.level == Level::Light ? 4 : 1) : 0;
-        info_ = 0; info_rows_ = false;
-    }
+    if (epr_stage_ == 3 && unit_ == Unit::Pd) decide_epr_stage(caps, in);
     state_ = State::Baseline; stable_ = false; phase_ms_ = in.now;   // the usual 500 ms of vSafe5V, then the first row
 }
 // The SVOOC ceiling stage (svooc_ceiling.hpp). One stage per run, queued by finish() once the VOOC family was detected and the
@@ -2481,8 +2420,7 @@ void Runner::end_ceiling(const Input& in, svooc_ceiling::End e) {
 }
 void Runner::poll_ceiling(const Input& in) {
     if (!ceil_stopping_) {
-        const Reason fault = in.vbus_mv < 0 || in.cap_mv < 5000 ? Reason::NoMonitor : in.loop_lock ? Reason::Loop :
-            in.inline_load ? Reason::Inline : in.fake ? Reason::Fake : Reason::None;
+        const Reason fault = base_fault(in);
         const auto e = fault != Reason::None ? svooc_ceiling::End::Aborted : svooc_ceiling::end_of(in.svooc, in.now - ceil_ms_);
         if (e == svooc_ceiling::End::None) return;
         if (fault != Reason::None)   // the record names the Runner's guard, in the trigger's own abort codes
@@ -2535,8 +2473,7 @@ void Runner::poll_spec(const Input& in) {
     if (spec_pt_.what == SpecWhat::Fixed || spec_pt_.what == SpecWhat::Pps || spec_pt_.what == SpecWhat::Avs) spec_hold_ = spec_pt_;
     if (!spec_stopping_) {
         if (!in.spec_running) { end_spec(in, specsec::End::Done); return; }
-        const Reason fault = in.vbus_mv < 0 || in.cap_mv < 5000 ? Reason::NoMonitor : in.loop_lock ? Reason::Loop :
-            in.inline_load ? Reason::Inline : in.fake ? Reason::Fake : Reason::None;
+        const Reason fault = base_fault(in);
         if (fault != Reason::None || in.now - spec_ms_ >= specsec::kMaxMs) {   // a guard of the run, or the engine's own cap passed
             spec_fault_ = true; spec_stopping_ = true; spec_stop_ms_ = in.now;
             env_.spec_stop();
@@ -2580,7 +2517,7 @@ void Runner::cancel(Input in) {
         return;
     }
     if (state_ == State::Releasing) { cut_wait_ = race_wait_ = false; stopping_ = true; skip_pending(reason_); return; }
-    if (state_ == State::Detach || state_ == State::Attach) { skip_pending(reason_); end_legacy(); state_ = State::Stopped; return; }
+    if (state_ == State::Detach || state_ == State::Attach) { stop_run(State::Stopped, Reason::None, true); return; }
     if (index_ < count_ && steps_[index_].verdict == Verdict::Running) {
         auto& s = steps_[index_]; s.verdict = Verdict::Fail; s.reason = reason_;
         s.measured_mv = static_cast<uint16_t>(std::clamp(in.vbus_mv, 0, 65535)); env_.record(s);
@@ -2601,13 +2538,10 @@ void Runner::restore(const Options& o, const Evidence& e, uint32_t run_id, std::
     opts_.units = resolve(opts_); n_order_ = opts_.units.n; order_ = opts_.units.u;
     // A resumed run re-sweeps a pending sweep row from its first point: the record starts empty, the journaled row is the plan.
     sweep_used_ = 0; n_sweep_rows_ = 0; sweep_n_ = 0; sweep_mv_ = sweep_lo_ = sweep_hi_ = 0;
-    handover_ = {}; unit_ = Unit::Count; mode_ = Mode::Pd; epr_stage_ = 0; info_ = 0; info_rows_ = false;
-    attached_ = detached_ = ending_ = silent_ = legacy_active_ = dark_ = false; pd_skips_recorded_ = true; pd_skips_held_ = false;
-    pd_owned_ = fc_owned_ = stopping_ = stable_ = recover_ = hot_ = false; probe_ = Probe::Off; pd_retry_ = cut_index_ = SIZE_MAX;
-    cut_wait_ = cut_dark_ = false; cut_start_ms_ = cut_back_ms_ = 0; cut_retry_idx_ = SIZE_MAX; cut_tries_ = 0; cut_last_mv_ = -1; n_cut_onsets_ = 0; race_reset();
-    selfpwr_ = suspended_ = adopt_ = false;
-    ceiling_pending_ = ceil_stopping_ = ceil_recover_ = ceil_cycled_ = false; ceiling_done_ = true;   // a resumed run never repeats the stage (it is not journaled)
-    spec_pending_ = spec_stopping_ = spec_fault_ = false; spec_done_ = true;   // nor the spec stage (its result is: evidence_.spec)
+    reset_run_state();
+    epr_stage_ = 0; info_ = 0; info_rows_ = false;
+    pd_skips_recorded_ = true; probe_ = Probe::Off;
+    ceiling_done_ = true; spec_done_ = true;
     for (auto& s : std::span<Step>(steps_.data(), count_)) if (s.verdict == Verdict::Running) s.verdict = Verdict::Pending;
     // The EPR proof (the source accepted EPR entry: it checked the cable itself) is not journaled as such, but its trace is: the EPR
     // list was heard (EprTable), or EPR rows were planned (a plan only holds them for a 50 V / 5 A cable). A cable the K2 reads live
@@ -2649,9 +2583,7 @@ void Runner::restore(const Options& o, const Evidence& e, uint32_t run_id, std::
         } else {
             // The unit cannot be tested on this supply: all its rows are skipped and the next unit runs.
             for (size_t n = phase_index; n < count_; ++n)
-                if (steps_[n].verdict == Verdict::Pending && unit_of(steps_[n]) == u) {
-                    steps_[n].verdict = Verdict::Skip; steps_[n].reason = Reason::RebootLimit; env_.record(steps_[n]);
-                }
+                if (steps_[n].verdict == Verdict::Pending && unit_of(steps_[n]) == u) record_skip(steps_[n], Reason::RebootLimit);
             reason_ = Reason::RebootLimit;
             if (phase == Phase::Handover) handover_ = {HandoverOutcome::Reboot, 0};
         }
@@ -2739,6 +2671,356 @@ void Runner::poll(Input in, const pd::SourceCaps& caps) {
     // Stored rows change only with a state/index transition; timer-only polls do not invalidate reads.
     if (state_ != state || reason_ != reason || index_ != index) ++revision_;
 }
+[[gnu::noinline]] void Runner::reset_run_state() {
+    handover_ = {}; unit_ = Unit::Count; mode_ = Mode::Pd;
+    attached_ = detached_ = ending_ = silent_ = legacy_active_ = never_dark_ = dipped_ = dark_ = rel_rd_ = false; attach_try_ = 0;
+    pd_skips_held_ = false;
+    pd_owned_ = fc_owned_ = stopping_ = stable_ = recover_ = hot_ = false;
+    pd_retry_ = cut_index_ = SIZE_MAX;
+    cut_wait_ = cut_dark_ = false; cut_start_ms_ = cut_back_ms_ = 0; cut_retry_idx_ = SIZE_MAX; cut_tries_ = 0; cut_last_mv_ = -1; n_cut_onsets_ = 0; race_reset();
+    selfpwr_ = suspended_ = adopt_ = false;
+    ceiling_pending_ = ceil_stopping_ = ceil_recover_ = ceil_cycled_ = false;
+    spec_pending_ = spec_stopping_ = spec_fault_ = false;
+    rp_restart_ = contract_wrong_ = false; attach_max_mv_ = 0;
+    list_tracking_ = flight_restart_ = wd_wait_ = false;
+}
+
+[[gnu::noinline]] bool Runner::stable_tick(bool cond, uint32_t now, uint32_t gap, uint32_t hold_ms) {
+    if (!cond) { stable_ = false; return false; }
+    if (!stable_ || gap > 250) { stable_ = true; stable_ms_ = now; }
+    return now - stable_ms_ >= hold_ms;
+}
+
+[[gnu::noinline]] void Runner::stop_run(State st, Reason r, bool skip) {
+    if (r != Reason::None) reason_ = r;
+    if (skip) skip_pending(reason_);
+    end_legacy();
+    state_ = st;
+    pd_owned_ = fc_owned_ = recover_ = gone_ = false;
+}
+
+[[gnu::noinline]] void Runner::record_skip(Step& s, Reason r, int detail) {
+    s.verdict = Verdict::Skip;
+    s.reason = r;
+    if (detail >= 0) s.detail = static_cast<uint8_t>(detail);
+    env_.record(s);
+}
+
+[[gnu::noinline]] void Runner::send_pd_request(const Input& in, const Step& s, bool restart) {
+    const auto err = env_.request_pd(pd_choice(s));
+    if (err == pd::Err::Busy) {
+        if (restart) flight_restart_ = true;
+        busy_retry_at_ = in.now + 200;
+    } else if (err != pd::Err::Ok) {
+        finish(in, Verdict::Fail, Reason::Request, 128 + static_cast<uint8_t>(err));
+    }
+}
+
+[[gnu::noinline]] void Runner::fail_and_recover(const Input& in, Verdict v, Reason r, uint8_t detail, bool is_pd) {
+    if (is_pd) {
+        if (low_programmable(steps_[index_])) cut_index_ = index_;
+        pd_owned_ = false;
+    } else {
+        sag_cut_ = true;
+    }
+    recover_ = true;
+    session_ = in.session;
+    finish(in, v, r, detail);
+    if (state_ == State::Releasing) phase_ms_ = in.now;
+}
+
+[[gnu::noinline]] void Runner::decide_epr_stage(const pd::SourceCaps& caps, const Input& in) {
+    epr_stage_ = !caps.epr && epr_capable_caps(caps) && caps.active_cc
+        ? (epr_cable_unfit(in) || opts_.level == Level::Light ? 4 : 1) : 0;
+    info_ = 0; info_rows_ = false;
+}
+
+[[gnu::noinline]] void Runner::epr_refused(const pd::SourceCaps& caps, const Input& in) {
+    epr_stage_ = 0; epr_info_rows(caps, in);
+    epr_skips(Reason::EprRefused, uint8_t(kDetailEprFail + std::min<unsigned>(in.pd.epr_fail, 7)));
+}
+
+[[gnu::noinline]] bool Runner::finish_class_b(const Input& in, const Step& s, uint8_t detail) {
+    if (is_class_b_peak(s) && s.algorithm == Algorithm::Qc2ClassB && qc3_class_b_peak_passed({steps_.data(), count_})) {
+        finish(in, Verdict::Fail, Reason::Qc3Only20V, detail);
+        return true;
+    }
+    if (class_a_only(s, {steps_.data(), count_})) {
+        finish(in, Verdict::Skip, Reason::ClassAOnly);
+        return true;
+    }
+    return false;
+}
+
+[[gnu::noinline]] bool Runner::revive_withdrawn_row(Step& s, const pd::SourceCaps& caps) {
+    const int at = s.pos >= 8 ? (caps.epr ? find_offer(caps, s) : (epr_capable_caps(caps) ? 0 : -1))
+                              : find_offer(caps, s);
+    if (at < 0) return false;
+    if (s.pos < 8 || caps.epr) {
+        const uint32_t raw = caps.pdos[static_cast<size_t>(at)].raw;
+        s.pos = static_cast<uint8_t>(at + 1); s.pdo = raw;
+    }
+    s.verdict = Verdict::Pending; s.reason = Reason::None; env_.record(s);
+    return true;
+}
+
+[[gnu::noinline]] void Runner::note_replan(unsigned follow, unsigned withdrawn, unsigned back) {
+    ++revision_; env_.plan_changed();
+    if (evidence_.rebalanced < 255) ++evidence_.rebalanced;
+    env_.replan(follow, withdrawn, back);
+}
+
+[[gnu::noinline]] void Runner::poll_releasing(Input& in, const pd::SourceCaps& caps, uint32_t gap,
+                                              bool offers_changed, bool legacy_pending, bool pd_active, bool tail_wait) {
+    // A non-PD source that browned out (a bank asked for a level it does not have) comes back on its own:
+    // wait for vSafe5V instead of ending the run. A PD contract that vanished still stops it.
+    // pattern budget-reannounce-mid-run: the sink verifies the 5 V release against VBUS and, as the last resort, sends a
+    // Hard Reset of its own. That dip is the recovery of this release (the port comes back at 5 V), not a lost source.
+    if (pd_owned_ && in.pd.hard_resets != rel_hr_) {
+        pd_owned_ = false; recover_ = true; phase_ms_ = in.now; stable_ = false; rel_hr_ = in.pd.hard_resets;
+    }
+    // The SVOOC ceiling stage is over and the adapter dropped its output instead of going back to 5 V (it waits for a new
+    // sink): the run's own unit boundary brings it back, Rd off and on again, with the stage's result kept.
+    if (ceil_recover_ && !stopping_ && !pd_owned_ && !fc_owned_ && in.vbus_mv >= 0 && in.vbus_mv < kUnsafeLowMv) {
+        if (!ceil_low_ms_) ceil_low_ms_ = in.now ? in.now : 1;
+        if (in.now - ceil_low_ms_ >= svooc_ceiling::kDropMs) {
+            K2LOG("[CT] svooc_cap vbus=%dmV after the stage: Rd cycle\n", int(in.vbus_mv));
+            ceil_recover_ = false; ceil_low_ms_ = 0; recover_ = false; ceil_cycled_ = true;
+            ending_ = true; begin_detach(in);
+            return;
+        }
+    } else ceil_low_ms_ = 0;
+    bool dropped = in.session != session_ || (in.vbus_mv >= 0 && in.vbus_mv < 1000);
+    if (dropped && pd_owned_ && !stopping_ && index_ < count_ && low_programmable(steps_[index_])) {
+        // The low edge cost the source its output while the row was handed back: wait for it like a cut row.
+        cut_index_ = index_; pd_owned_ = false; recover_ = true; phase_ms_ = in.now;
+    }
+    if (dropped && !pd_owned_ && !stopping_) {
+        if (!recover_) { recover_ = true; phase_ms_ = in.now; }
+        session_ = in.session; stable_ = false;
+    } else if (recover_) session_ = in.session;
+    // pattern output-reset-after-unanswered-scp: a PD-silent Legacy unit whose source cut its output and is back waits for the
+    // announcement that may follow (kRestartCapsMs, kLegacyQuietMs after a frame, kRestartSettleMs at most) before its next row.
+    if (!recover_ || pd_owned_ || mode_ != Mode::Legacy || !silent_ || !attached_) restart_dark_ = restart_wait_ = false;
+    else if (in.vbus_mv >= 0 && in.vbus_mv < 1000) { restart_dark_ = true; restart_wait_ = false; }
+    else if (restart_dark_ && safe5(in.vbus_mv)) { restart_dark_ = false; restart_wait_ = true; restart_ms_ = in.now; }
+    if (restart_wait_) {
+        const uint32_t back = in.now - restart_ms_;
+        const bool heard = in.pd_quiet_ms < back;   // a frame since VBUS came back
+        restart_wait_ = back < kRestartSettleMs && (heard ? in.pd_quiet_ms < quiet_ms() : back < (reann_ == 2 ? quiet_ms() : kRestartCapsMs));
+    }
+    // pattern reannounce-after-own-release: same wait, counted from our own release (no VBUS dip to count from).
+    if (own_rel_) {
+        const uint32_t since = in.now - own_rel_ms_;
+        const bool heard = in.pd_quiet_ms < since;   // a frame since the release
+        if (heard) reann_ = 2;
+        else if (since >= kOwnReleaseCapsMs) reann_ = 1;
+        own_rel_ = !stopping_ && silent_ && attached_ && mode_ == Mode::Legacy && !restart_wait_ && !restart_dark_ && since < kOwnReleaseSettleMs &&
+                   (heard ? in.pd_quiet_ms < quiet_ms() : since < kOwnReleaseCapsMs);
+    }
+    // pattern legacy-start-races-announcement: the retried first step waits for real quiet (kLegacyQuietMs), at most kRestartSettleMs.
+    if (race_wait_) race_wait_ = !stopping_ && silent_ && attached_ && mode_ == Mode::Legacy && in.now - race_ms_ < kRestartSettleMs && in.pd_quiet_ms < kLegacyQuietMs;
+    const Reason changed = dropped && pd_owned_ ? Reason::Lost : in.loop_lock ? Reason::Loop :
+        in.inline_load ? Reason::Inline : in.fake ? Reason::Fake :
+        in.vbus_mv < 0 || in.cap_mv < 5000 ? Reason::NoMonitor : Reason::None;
+    if (changed != Reason::None) { stopping_ = true; reason_ = changed; skip_pending(changed); }
+    // Offers that changed or PD that showed up end the unit's rows, not the run.
+    else if (!stopping_) {
+        const Reason unit_stop = offers_changed ? Reason::CapsChanged :
+            legacy_pending && pd_active && !restart_wait_ && !own_rel_ && !race_wait_ && !(restart_dark_ && reann_ == 2) ? Reason::PdActive : Reason::None;
+        if (unit_stop != Reason::None) skip_unit(unit_stop);
+    }
+    if ((restart_wait_ || own_rel_ || race_wait_) && !stopping_) { stable_ = false; return; }
+    // The next row is a PD row and the source has not announced its list again (it just came back from a cut or a Hard Reset):
+    // a request now is refused ("no source caps") and would fail the row. Wait; offers_changed ends it after kCapsReturnMs.
+    bool wait_caps = false;
+    if (!stopping_ && mode_ == Mode::Pd) {
+        const size_t i = pick();
+        const bool pd_next = i != SIZE_MAX && steps_[i].group == Group::Pd && unit_of(steps_[i]) == unit_;
+        wait_caps = !caps.valid && pd_next;
+        if (pd_next && (steps_[i].algorithm == Algorithm::Epr || steps_[i].algorithm == Algorithm::EprAvs) &&
+            !in.pd.epr_mode && in.now < settle_until_) wait_caps = true;
+        if (pd_next && is_mi_chain(steps_[i]) && mi_chain_wait(in)) wait_caps = true;
+        if (pd_next && tail_wait) wait_caps = true;
+    }
+    const bool released = (!pd_owned_ || pd_released(in.pd)) &&
+                          (!fc_owned_ || in.fc_state == fc::State::Idle) &&
+                          (!ceiling_pending_ || in.lines_free);
+    const uint32_t need = recover_ ? std::max<uint32_t>(100u, settle_ms_) : (hot_ || pd_owned_) ? 500u : 0u;
+    if (stable_tick(safe5(in.vbus_mv) && released && !in.inline_load && in.cap_mv >= 5000, in.now, gap, need) && !wait_caps) {
+        if (cut_wait_) cut_resolve(in);
+        end_sag_recovery(in);
+        pd_owned_ = fc_owned_ = recover_ = false; cut_index_ = SIZE_MAX; settle_ms_ = 0;
+        if (stopping_) stop_run(State::Stopped);
+        else next(in);
+    }
+    if (state_ == State::Releasing && !in.pd.verifying && !(wait_caps && safe5(in.vbus_mv)) && !dip_wait(in) &&
+        in.now - phase_ms_ >= (recover_ ? kRecoverMs : 8000)) {
+        if (cut_wait_) cut_resolve(in);
+        if (recover_ && in.vbus_mv >= 0 && in.vbus_mv < 1000 && cut_index_ < count_) {
+            auto& cut = steps_[cut_index_];
+            cut.verdict = Verdict::Fail; cut.reason = Reason::ShutOff; cut.measured_mv = 0; env_.record(cut);
+            skip_pending(Reason::ShutOff); stop_run(State::Done); cut_index_ = SIZE_MAX;
+        } else if (in.vbus_mv >= 0 && in.vbus_mv < kUnsafeLowMv) {
+            stop_run(State::Stopped, Reason::Lost, true);
+        } else if (safe5(in.vbus_mv) && !in.inline_load && in.cap_mv >= 5000) {
+            end_sag_recovery(in);
+            pd_owned_ = fc_owned_ = recover_ = false;
+            if (stopping_) stop_run(State::Stopped); else next(in);
+        } else if (fc_owned_ && !pd_owned_ && !selfpwr_ && mode_ == Mode::Legacy && !rel_rd_ && !in.inline_load && in.vbus_mv >= 0 && !safe5(in.vbus_mv)) {
+            K2LOG("[CT] release left VBUS at %dmV: Rd off\n", int(in.vbus_mv));
+            rel_rd_ = true; ending_ = true; begin_detach(in);
+        } else unsafe(Reason::Release);
+    }
+}
+
+[[gnu::noinline]] void Runner::poll_baseline(Input& in, const pd::SourceCaps& caps, uint32_t gap, bool pd_active) {
+    if (epr_stage_ == 2 && link_resets(in.pd) != resets_) {
+        resets_ = link_resets(in.pd); pd_owned_ = false; stable_ = false; phase_ms_ = in.now;
+        if (epr_tries_ < kEprEntryRetries) { pre_ms_ = kEprSettleMs + kEprSettleStepMs * epr_tries_; ++epr_tries_; epr_stage_ = 1; }
+        else { pre_ms_ = kEprSettleMs; epr_refused(caps, in); }
+        return;
+    }
+    if (epr_stage_ < 2 && epr_tries_ && !safe5(in.vbus_mv) && in.vbus_mv >= 1000 && in.now - phase_ms_ < kRecoverMs) {
+        stable_ = false; return;
+    }
+    if (dip_wait(in)) { stable_ = false; return; }
+    if (!safe5(in.vbus_mv)) { unsafe(Reason::Release); return; }
+    if (mode_ == Mode::Pd && epr_stage_ == 0) regrow_plan(caps, in);
+    if (!stable_tick(true, in.now, gap, 500 + pre_ms_)) return;
+    pre_ms_ = 0;
+    if (probe_ == Probe::Closing) {
+        if (in.pd.state == pd::SinkState::Ready) {
+            probe_ = env_.probe_identity(true) ? Probe::Running : Probe::Off;
+            probe_ms_ = in.now;
+        } else if (in.now - phase_ms_ < kProbeMaxMs) return;
+        else probe_ = Probe::Off;
+    }
+    if (probe_ == Probe::Running) {
+        if (!in.probe_done && in.now - probe_ms_ < kProbeMaxMs) return;
+        end_probe();
+    }
+    if (epr_stage_ == 4) {
+        if (in.pd.state != pd::SinkState::Ready) {
+            if (in.now - phase_ms_ < kEprReadyMs) return;
+            epr_stage_ = 0;
+        } else if (!ask_info(in)) return;
+        else { epr_stage_ = 0; epr_info_rows(caps, in); }
+    }
+    if (epr_stage_ == 1) {
+        if (in.pd.state != pd::SinkState::Ready) {
+            if (in.now - phase_ms_ < kEprReadyMs) return;
+            epr_stage_ = 0; epr_skips(Reason::NoContract);
+        } else if (!epr_cable(in) && !ask_info(in)) {
+            return;
+        } else {
+            const auto err = env_.request_pd({0, 0, 0});
+            if (err == pd::Err::Ok) { epr_stage_ = 2; epr_ms_ = in.now; pd_owned_ = true; resets_ = link_resets(in.pd); return; }
+            epr_refused(caps, in);
+        }
+    }
+    if (epr_stage_ == 2) {
+        if (caps.epr && !caps.epr_partial && in.pd.epr_mode && in.pd.state == pd::SinkState::Ready &&
+            in.pd.result == pd::SinkResult::Ok && !in.pd.held) {
+            epr_stage_ = 0; epr_proof_ = in.epr_proof = true;
+            replan_pd(caps, in, true);
+        } else if (in.pd.state == pd::SinkState::Failed || in.now - epr_ms_ >= 8000) {
+            epr_refused(caps, in);
+            release(in, false); return;
+        } else return;
+    }
+    if (attached_ && pd_active) skip_unit(Reason::PdActive);
+    next(in);
+}
+
+[[gnu::noinline]] void Runner::poll_active(Input& in, uint32_t gap) {
+    const auto& s = steps_[index_];
+    if (link_resets(in.pd) != resets_) {
+        if (s.group == Group::Pd && can_retry(s)) { retry_pd_row(in); return; }
+        fail_and_recover(in, Verdict::Fail, Reason::HardReset, 0, true);
+        return;
+    }
+    const bool ready = s.group == Group::Pd ?
+        in.pd.state == pd::SinkState::Ready && in.pd.result == pd::SinkResult::Ok && in.pd.pos == s.pos &&
+        in.pd.mv == (is_step_walk(s) ? walk_mv_ : is_sweep(s) ? sweep_mv_ : s.mv) :
+        in.fc_state == fc::State::Active;
+    Step eff = s;
+    if (is_step_walk(s)) eff.mv = walk_mv_;
+    if (is_sweep(s)) eff.mv = sweep_mv_;
+    if (s.group != Group::Pd && in.fc_state == fc::State::Failed && (in.fc_fail == fc::Fail::Detected || in.fc_fail == fc::Fail::NoVoltage)) {
+        finish(in, Verdict::Pass, Reason::None, static_cast<uint8_t>(in.fc_fail));
+        return;
+    }
+    if ((s.group == Group::Pd && (in.pd.state == pd::SinkState::Failed ||
+        (in.pd.state == pd::SinkState::Ready && in.pd.result != pd::SinkResult::None && in.pd.result != pd::SinkResult::Ok))) ||
+        (s.group != Group::Pd && in.fc_state == fc::State::Failed)) {
+        if (s.group == Group::Qc3Plus && in.fc_fail == fc::Fail::NoResponse) {
+            finish(in, Verdict::Skip, Reason::NoQc3Plus, static_cast<uint8_t>(in.fc_fail));
+            return;
+        }
+        if (finish_class_b(in, s, static_cast<uint8_t>(in.fc_fail))) return;
+        const auto group = s.group;
+        const bool unanswered = never_answered(group, in.fc_fail);
+        bool heard = false;
+        for (size_t n = 0; n < index_; ++n) heard |= steps_[n].group == group && steps_[n].verdict == Verdict::Pass;
+        const bool no_answer = silent_vooc(group, in.fc_fail) || (unanswered && !heard);
+        finish(in, no_answer ? Verdict::Skip : Verdict::Fail, Reason::Request, group == Group::Pd ? static_cast<uint8_t>(in.pd.result) : static_cast<uint8_t>(in.fc_fail));
+        if (cut_wait_ || race_wait_) return;
+        const bool scp_ignores_raise = group == Group::Scp && in.fc_fail == fc::Fail::NoChange && s.mv > 5000;
+        const bool dead_unit = unanswered && !(heard && in.fc_fail == fc::Fail::NoHandshake);
+        if (dead_unit || scp_ignores_raise) skip_group_rows(group, !dead_unit, static_cast<uint8_t>(in.fc_fail));
+        return;
+    }
+    const bool banded = band_ok(eff, in, gap);
+    if (state_ == State::Requesting) {
+        if (busy_retry_at_ && in.now >= busy_retry_at_) {
+            if (!list_settled(in.now)) busy_retry_at_ = list_ms_ + kListSettleMs;
+            else {
+                busy_retry_at_ = 0;
+                send_pd_request(in, s, false);
+            }
+        }
+        if (ready && is_sweep(s)) walk_steady_.add(in.now, in.vbus_mv);
+        if (stable_tick(ready && (banded || is_sweep(s)), in.now, gap, is_sweep(s) ? kSweepHoldMs : 500u) ||
+            (ready && is_sweep(s) && sweep_settled(in))) {
+            if (is_step_walk(s)) { walk_step(in, eff); return; }
+            if (is_sweep(s)) { sweep_point(in, eff); return; }
+            state_ = State::Holding; phase_ms_ = stable_ms_;
+            prog_on_ = prog_wanted(s) && env_.prog_begin(s);
+        }
+        track_plateau(in, ready, s.group == Group::Pd && in.pd.held && in.pd.pos == s.pos && in.pd.mv == eff.mv &&
+                      (in.pd.state == pd::SinkState::Requesting || in.pd.state == pd::SinkState::Transition), gap);
+        if (is_class_b_peak(s) && in.vbus_mv >= 0) {
+            peak_lo_mv_ = std::min<uint16_t>(peak_lo_mv_, static_cast<uint16_t>(std::min(in.vbus_mv, 65535)));
+            peak_hi_mv_ = std::max<uint16_t>(peak_hi_mv_, static_cast<uint16_t>(std::min(in.vbus_mv, 65535)));
+        }
+        if (state_ == State::Requesting && ready && !banded && !is_sweep(s) && plat_mv_ && in.now - plat_ms_ >= kCappedPlateauMs &&
+            capped(eff, in, ready)) {
+            finish(in, Verdict::Fail, Reason::Capped);
+            return;
+        }
+        const uint32_t timeout = s.group == Group::Qc2 ? fc::kQc2TransitionMs + 3000 : 12000;
+        const bool stuck_at_12v = is_class_b_peak(s) && in.now - phase_ms_ >= kClassAStuckMs &&
+                                  peak_lo_mv_ >= kClassAStuckLoMv && peak_hi_mv_ <= kClassAStuckHiMv;
+        if (state_ == State::Requesting && (in.now - phase_ms_ >= timeout || stuck_at_12v)) {
+            if (!finish_class_b(in, s, 0)) {
+                finish(in, Verdict::Fail, capped(eff, in, ready) ? Reason::Capped :
+                                  floored(eff, in, ready) ? Reason::Floored : Reason::Timeout);
+            }
+        }
+    } else {
+        const bool renewing = s.group == Group::Pd && in.pd.held && in.pd.pos == s.pos && in.pd.mv == s.mv &&
+            (in.pd.state == pd::SinkState::Requesting || in.pd.state == pd::SinkState::Transition);
+        if ((!ready && !renewing) || !banded) { finish(in, Verdict::Fail, Reason::Voltage); return; }
+        if (gap > 250) phase_ms_ = in.now;
+        if (in.now - phase_ms_ >= hold_ms()) {
+            if (prog_on_ && prog_from_mv_ && prog_from_mv_ != s.mv && spec_feed(in, s, prog_from_mv_, s.mv, pdspec::kSlam, 0)) return;
+            const uint8_t found = prog_on_ ? env_.prog_take(s) : uint8_t(0);
+            finish(in, Verdict::Pass, found ? Reason::ProgCheck : Reason::None, found);
+        }
+    }
+}
+
 void Runner::poll_impl(Input& in, const pd::SourceCaps& caps) {
     if (!busy()) return;
     in.epr_proof = epr_proof_;
@@ -2776,302 +3058,108 @@ void Runner::poll_impl(Input& in, const pd::SourceCaps& caps) {
     if (in.vbus_mv >= 0 && !safe5(in.vbus_mv)) hot_ = true;   // VBUS left vSafe5V: the return needs a settle time
     // A self-powered K2 whose VBUS is gone is dying (or about to be reset): that is not the charger's verdict and not the end of
     // the run. Every unfinished row stays Pending, the journal stays open, the next steady VBUS resumes it.
-    // (A planned detach/attach is not a loss: Detach/Attach already treat the VBUS dip as part of the plan.)
-    // A run with nothing left to measure is just finishing: that stays the normal end.
     if (selfpwr_ && in.vbus_mv >= 0 && in.vbus_mv < 1000 && state_ != State::Detach && state_ != State::Attach && unfinished()) {
         suspend(); return;
     }
     if (state_ != State::Baseline) adopt_ = false;
     else if (adopt_ && in.session != session_ && in.vbus_mv >= 1000) session_ = in.session;
     if (state_ == State::Unsafe) {
-        // Unsafe protects against a source left above vSafe5V. VBUS under kUnsafeLowMv (the vSafe5V low end) for kUnsafeGoneMs
-        // (stable_ms_ times it; the vSafe5V exit below re-arms it itself) means the unplug happened or the source went to
-        // standby: nothing elevated is left, so it ends Unsafe as Stopped. VBUS above vSafe5V never does. Without this a replug did
-        // nothing (the exit below needs VBUS back in vSafe5V, so with nothing attached the run stayed "unsafe" and OK read "Stop"
-        // until a reboot, GaN3 65W 2026-11-08), and a bank parked at a 2 V standby never cleared either (REMAX 10K, 2026-11-08).
         if (in.vbus_mv >= 0 && in.vbus_mv < kUnsafeLowMv) {
             if (!gone_ || gap > 250) { gone_ = true; stable_ms_ = in.now; }
             stable_ = false;
-            if (in.now - stable_ms_ >= kUnsafeGoneMs) { end_legacy(); state_ = State::Stopped; pd_owned_ = fc_owned_ = gone_ = false; }
+            if (in.now - stable_ms_ >= kUnsafeGoneMs) stop_run(State::Stopped);
             return;
         }
         gone_ = false;
-        if (safe5(in.vbus_mv) && !in.inline_load && !pd::user_hold(in.pd) && !in.pd.epr_mode &&
-            (in.pd.state == pd::SinkState::Idle || in.pd.state == pd::SinkState::Failed ||
-             (in.pd.state == pd::SinkState::Ready && in.pd.mv == 5000)) && in.fc_state == fc::State::Idle) {
-            if (!stable_ || gap > 250) { stable_ = true; stable_ms_ = in.now; }
-            if (in.now - stable_ms_ >= 500) { end_legacy(); state_ = State::Stopped; pd_owned_ = fc_owned_ = false; }
-        } else stable_ = false;
+        if (stable_tick(safe5(in.vbus_mv) && !in.inline_load && pd_released(in.pd) && in.fc_state == fc::State::Idle, in.now, gap, 500))
+            stop_run(State::Stopped);
         return;
     }
     if (state_ == State::Detach || state_ == State::Attach) {
-        // The detach and the attach are the plan: VBUS dips and the attach session changes are not a loss here.
-        const Reason fault = in.vbus_mv < 0 || in.cap_mv < 5000 ? Reason::NoMonitor : in.loop_lock ? Reason::Loop :
-            in.inline_load ? Reason::Inline : in.fake ? Reason::Fake : Reason::None;
-        if (fault != Reason::None) { reason_ = fault; skip_pending(fault); end_legacy(); state_ = State::Done; return; }
+        const Reason fault = base_fault(in);
+        if (fault != Reason::None) { stop_run(State::Done, fault, true); return; }
         if (state_ == State::Detach) poll_detach(in); else poll_attach(in, caps, gap);
         return;
     }
     if (state_ == State::Ceiling) { poll_ceiling(in); return; }
     if (state_ == State::Spec) { poll_spec(in); return; }
     bool offers_changed = false, legacy_pending = false, tail_seen = false, tail_wait = false;
-    // A source whose output is dark (VBUS gone) announces nothing: that is "source lost", not "offers changed". The grace for the
-    // list to come back restarts when VBUS does. Lenovo C135, 2026-11-03: the output drained 20 V -> 0 in 9 s after a Hard Reset.
     const bool dark = in.vbus_mv >= 0 && in.vbus_mv < 1000;
     if (caps.valid || dark) caps_gone_ms_ = in.now; else if (!caps_gone_ms_) caps_gone_ms_ = in.now;
-    // A resumed run whose PD rows were still placeholders (no list at START) and that lands in its live Pd attach: the first settled
-    // list plans them (an uninterrupted run does this in the attach), and the EPR entry is decided with it. The same goes for a
-    // resumed run whose EPR entry was still undecided (restore() set stage 3). A resumed Legacy unit first goes through the usual
-    // detach and attach, where poll_attach does the same.
     if ((late_pd_ || (epr_stage_ == 3 && unit_ == Unit::Pd)) && attached_ && mode_ == Mode::Pd && state_ == State::Baseline &&
         ((caps.valid && list_settled(in.now)) || (!caps.valid && !dark && in.now - caps_gone_ms_ >= kCapsReturnMs))) {
         if (late_pd_) replan_pd(caps, in, true);
-        if (epr_stage_ == 3 && unit_ == Unit::Pd) {
-            epr_stage_ = !caps.epr && epr_capable_caps(caps) && caps.active_cc ? (epr_cable_unfit(in) || opts_.level == Level::Light ? 4 : 1) : 0;
-            info_ = 0; info_rows_ = false;
-        }
+        if (epr_stage_ == 3 && unit_ == Unit::Pd) decide_epr_stage(caps, in);
     }
     follow_list(caps, in);   // before the check below: a list that still offers every row is not "changed"
     for (const auto& s : steps()) {
         if ((s.verdict != Verdict::Pending && s.verdict != Verdict::Running) || unit_of(s) != unit_) continue;   // a unit watches its own rows
         if (s.group != Group::Pd) { legacy_pending = true; continue; }
         if (is_mi_chain(s)) continue;   // no offer of its own: the chain row reads whatever list the source holds
-        // A hard reset drops the list until the source re-announces it: that is not a change; identical words resume.
         if (!caps.valid && (dark || in.now - caps_gone_ms_ < kCapsReturnMs)) continue;
-        // A release in EPR mode ends with EPR_Mode Exit and the source announces its SPR list again (Baseus 140W, 2026-11-04):
-        // the EPR rows (position 8 and up) are not in it, but the sink enters EPR again when one is requested. They stay valid
-        // while the SPR list still offers EPR (PDO 1 carries the EPR bit) and its words are unchanged.
         if (caps.valid && !caps.epr && s.pos >= 8 && epr_capable_caps(caps) && caps.spec_rev == evidence_.wire_rev) continue;
         if (caps.valid && caps.spec_rev == evidence_.wire_rev && s.pos > caps.num_pdos) {   // the list is cut short above this row
             tail_seen = true;
             if (preauth_tail(in, tail_wait)) continue;
         }
-        // What still counts as "changed" for a pending / in-flight row is find_offer's answer: a fixed row whose voltage
-        // is still offered (at any current) is not changed, a programmable row whose target still fits the new range and
-        // limit is not changed, and an offer that only moved slot is re-queued by follow_list above, not changed either.
-        // An EPR row (position 8+) on an EPR list is checked like any other; on an SPR list the earlier continue above
-        // already kept it valid while the list still offers EPR.
         const bool covered = !caps.valid ? false : s.pos >= 8
             ? (caps.epr ? find_offer(caps, s) >= 0 : epr_capable_caps(caps))
             : find_offer(caps, s) >= 0;
         if (!caps.valid || caps.spec_rev != evidence_.wire_rev || !s.pos || !covered)
             offers_changed = true;
     }
-    if (!tail_seen) tail_at_ = 0;   // the full list is back: the next cut-short one gets a window of its own
-    if (epr_stage_ == 2) offers_changed = false;   // the list is being replaced by the EPR one
-    // pattern epr-entry-hard-reset: chunk 0 of the EPR list is live as a partial list (6 PDOs) while chunk 1 is awaited; a source that
-    // withholds chunk 1 and Hard Resets leaves that window open. The rows above it are not "changed", the entry is incomplete:
-    // the Hard Reset check below retries the row. (A stalled entry without a reset ends in the row's own timeout.)
+    if (!tail_seen) tail_at_ = 0;
+    if (epr_stage_ == 2) offers_changed = false;
     if (caps.valid && caps.epr && caps.epr_partial) offers_changed = false;
-    // Restart rules, rule 2: the row in flight was re-placed by follow_list (new slot / current word) - re-ask it there
-    // once the list has settled. If the sink already answered the re-announce itself (its re-request of the held level
-    // by voltage, pd_sink), in.pd sits at the new slot and nothing is sent; while the sink is mid-negotiation the
-    // parked Busy-retry carries the new slot. The restart is not a try.
     if (flight_restart_) {
         if (index_ >= count_ || steps_[index_].verdict != Verdict::Running || steps_[index_].group != Group::Pd ||
             (state_ == State::Requesting && busy_retry_at_)) {
-            flight_restart_ = false;   // the row left the plan, or the parked request already carries the new slot
+            flight_restart_ = false;
         } else {
             const Step& fs = steps_[index_];
             if (in.pd.held && in.pd.pos == fs.pos && in.pd.mv == fs.mv && in.pd.state == pd::SinkState::Ready) {
-                flight_restart_ = false;   // the sink's own answer is at the new slot already: the hold stands
+                flight_restart_ = false;
             } else if (list_settled(in.now) && in.pd.state != pd::SinkState::Requesting &&
                        in.pd.state != pd::SinkState::Transition) {
                 flight_restart_ = false;
-                const auto err = env_.request_pd(pd_choice(fs));
-                if (err == pd::Err::Busy) { flight_restart_ = true; busy_retry_at_ = in.now + 200; }
-                else if (err != pd::Err::Ok) finish(in, Verdict::Fail, Reason::Request, 128 + static_cast<uint8_t>(err));
+                send_pd_request(in, fs, true);
             }
         }
     }
-    // A Legacy unit sits PD-silent: any PD frame is PD traffic. (A resumed unit has no such proof: it asks the sink.)
     const bool pd_active = mode_ == Mode::Legacy &&
         (silent_ ? in.pd_quiet_ms < quiet_ms() : (caps.valid && caps.active_cc) || in.pd_traffic);
     if (state_ == State::Releasing) {
-        // A non-PD source that browned out (a bank asked for a level it does not have) comes back on its own:
-        // wait for vSafe5V instead of ending the run. A PD contract that vanished still stops it.
-        // pattern budget-reannounce-mid-run: the sink verifies the 5 V release against VBUS and, as the last resort, sends a
-        // Hard Reset of its own. That dip is the recovery of this release (the port comes back at 5 V), not a lost source.
-        if (pd_owned_ && in.pd.hard_resets != rel_hr_) {
-            pd_owned_ = false; recover_ = true; phase_ms_ = in.now; stable_ = false; rel_hr_ = in.pd.hard_resets;
-        }
-        // The SVOOC ceiling stage is over and the adapter dropped its output instead of going back to 5 V (it waits for a new
-        // sink): the run's own unit boundary brings it back, Rd off and on again, with the stage's result kept.
-        if (ceil_recover_ && !stopping_ && !pd_owned_ && !fc_owned_ && in.vbus_mv >= 0 && in.vbus_mv < kUnsafeLowMv) {
-            if (!ceil_low_ms_) ceil_low_ms_ = in.now ? in.now : 1;
-            if (in.now - ceil_low_ms_ >= svooc_ceiling::kDropMs) {
-                K2LOG("[CT] svooc_cap vbus=%dmV after the stage: Rd cycle\n", int(in.vbus_mv));
-                ceil_recover_ = false; ceil_low_ms_ = 0; recover_ = false; ceil_cycled_ = true;
-                ending_ = true; begin_detach(in);
-                return;
-            }
-        } else ceil_low_ms_ = 0;
-        bool dropped = in.session != session_ || (in.vbus_mv >= 0 && in.vbus_mv < 1000);
-        if (dropped && pd_owned_ && !stopping_ && index_ < count_ && low_programmable(steps_[index_])) {
-            // The low edge cost the source its output while the row was handed back: wait for it like a cut row.
-            cut_index_ = index_; pd_owned_ = false; recover_ = true; phase_ms_ = in.now;
-        }
-        if (dropped && !pd_owned_ && !stopping_) {
-            if (!recover_) { recover_ = true; phase_ms_ = in.now; }
-            session_ = in.session; stable_ = false;
-        } else if (recover_) session_ = in.session;
-        // pattern output-reset-after-unanswered-scp: a PD-silent Legacy unit whose source cut its output and is back waits for the
-        // announcement that may follow (kRestartCapsMs, kLegacyQuietMs after a frame, kRestartSettleMs at most) before its next row.
-        if (!recover_ || pd_owned_ || mode_ != Mode::Legacy || !silent_ || !attached_) restart_dark_ = restart_wait_ = false;
-        else if (in.vbus_mv >= 0 && in.vbus_mv < 1000) { restart_dark_ = true; restart_wait_ = false; }
-        else if (restart_dark_ && safe5(in.vbus_mv)) { restart_dark_ = false; restart_wait_ = true; restart_ms_ = in.now; }
-        if (restart_wait_) {
-            const uint32_t back = in.now - restart_ms_;
-            const bool heard = in.pd_quiet_ms < back;   // a frame since VBUS came back
-            // frames of the source's answer to our release (reann_ 2) just before the cut are 2.5 s of quiet away: wait for that, not 1 s
-            restart_wait_ = back < kRestartSettleMs && (heard ? in.pd_quiet_ms < quiet_ms() : back < (reann_ == 2 ? quiet_ms() : kRestartCapsMs));
-        }
-        // pattern reannounce-after-own-release: same wait, counted from our own release (no VBUS dip to count from).
-        if (own_rel_) {
-            const uint32_t since = in.now - own_rel_ms_;
-            const bool heard = in.pd_quiet_ms < since;   // a frame since the release
-            if (heard) reann_ = 2;
-            else if (since >= kOwnReleaseCapsMs) reann_ = 1;
-            own_rel_ = !stopping_ && silent_ && attached_ && mode_ == Mode::Legacy && !restart_wait_ && !restart_dark_ && since < kOwnReleaseSettleMs &&
-                       (heard ? in.pd_quiet_ms < quiet_ms() : since < kOwnReleaseCapsMs);
-        }
-        // pattern legacy-start-races-announcement: the retried first step waits for real quiet (kLegacyQuietMs), at most kRestartSettleMs.
-        if (race_wait_) race_wait_ = !stopping_ && silent_ && attached_ && mode_ == Mode::Legacy && in.now - race_ms_ < kRestartSettleMs && in.pd_quiet_ms < kLegacyQuietMs;
-        const Reason changed = dropped && pd_owned_ ? Reason::Lost : in.loop_lock ? Reason::Loop :
-            in.inline_load ? Reason::Inline : in.fake ? Reason::Fake :
-            in.vbus_mv < 0 || in.cap_mv < 5000 ? Reason::NoMonitor : Reason::None;
-        if (changed != Reason::None) { stopping_ = true; reason_ = changed; skip_pending(changed); }
-        // Offers that changed or PD that showed up end the unit's rows, not the run.
-        else if (!stopping_) {
-            const Reason unit_stop = offers_changed ? Reason::CapsChanged :
-                legacy_pending && pd_active && !restart_wait_ && !own_rel_ && !race_wait_ && !(restart_dark_ && reann_ == 2) ? Reason::PdActive : Reason::None;
-            if (unit_stop != Reason::None) skip_unit(unit_stop);
-        }
-        if ((restart_wait_ || own_rel_ || race_wait_) && !stopping_) { stable_ = false; return; }
-        // The next row is a PD row and the source has not announced its list again (it just came back from a cut or a Hard Reset):
-        // a request now is refused ("no source caps") and would fail the row. Wait; offers_changed ends it after kCapsReturnMs.
-        bool wait_caps = false;
-        if (!stopping_ && mode_ == Mode::Pd) {
-            const size_t i = pick();
-            const bool pd_next = i != SIZE_MAX && steps_[i].group == Group::Pd && unit_of(steps_[i]) == unit_;
-            wait_caps = !caps.valid && pd_next;
-            // pattern reject-then-reset: an EPR entry does not follow a Reject at once (the source is still settling).
-            if (pd_next && (steps_[i].algorithm == Algorithm::Epr || steps_[i].algorithm == Algorithm::EprAvs) &&
-                !in.pd.epr_mode && in.now < settle_until_) wait_caps = true;
-            // The Xiaomi chain row waits while the source's auth chain is still running: the limits rise after it.
-            if (pd_next && is_mi_chain(steps_[i]) && mi_chain_wait(in)) wait_caps = true;
-            // pattern preauth-list-after-reset: the list is cut short, the rest of it follows (preauth_tail).
-            if (pd_next && tail_wait) wait_caps = true;
-        }
-        const bool released = (!pd_owned_ || (!pd::user_hold(in.pd) && !in.pd.epr_mode &&   // the driver's own 5 V answer is no hold
-                              (in.pd.state == pd::SinkState::Idle ||
-                               (in.pd.state == pd::SinkState::Ready && in.pd.mv == 5000) ||
-                               in.pd.state == pd::SinkState::Failed))) &&
-                              (!fc_owned_ || in.fc_state == fc::State::Idle) &&
-                              // the ceiling stage's trigger needs D+/D- free: the engine's release holds them at 0 V for 500 ms
-                              (!ceiling_pending_ || in.lines_free);
-        if (safe5(in.vbus_mv) && released && !in.inline_load && in.cap_mv >= 5000) {
-            if (!stable_ || gap > 250) { stable_ = true; stable_ms_ = in.now; }
-            // Settle only when VBUS actually moved or a PD contract was held; the source being back ends a recovery.
-            if (!wait_caps && in.now - stable_ms_ >= (recover_ ? std::max<uint32_t>(100u, settle_ms_) : (hot_ || pd_owned_) ? 500u : 0u)) {
-                if (cut_wait_) cut_resolve(in);   // a port cut's casualty: asked again (Pending) or the verdict it would have had
-                end_sag_recovery(in);
-                pd_owned_ = fc_owned_ = recover_ = false; cut_index_ = SIZE_MAX; settle_ms_ = 0;
-                if (stopping_) { end_legacy(); state_ = State::Stopped; }
-                else next(in);
-            }
-        } else stable_ = false;
-        // The sink is still verifying VBUS after its 5 V release (retries, then its own Hard Reset): its window is bounded by the
-        // sink, so this one is not cut short at 8 s.
-        if (state_ == State::Releasing && !in.pd.verifying && !(wait_caps && safe5(in.vbus_mv)) && !dip_wait(in) &&
-            in.now - phase_ms_ >= (recover_ ? kRecoverMs : 8000)) {   // a cut's fall at the window's end waits for its comeback (bounded)
-            if (cut_wait_) cut_resolve(in);   // the window ran out: the verdict the row would have had, before the run ends
-            if (recover_ && in.vbus_mv >= 0 && in.vbus_mv < 1000 && cut_index_ < count_) {
-                // pattern latch-off-low-pps: the source shut its output off on the low edge and stays dead until a replug.
-                // That row carries the reason; the run is complete (everything before it ran), not "source lost".
-                auto& cut = steps_[cut_index_];
-                cut.verdict = Verdict::Fail; cut.reason = Reason::ShutOff; cut.measured_mv = 0; env_.record(cut);
-                skip_pending(Reason::ShutOff); end_legacy(); state_ = State::Done; recover_ = false; cut_index_ = SIZE_MAX;
-            } else if (in.vbus_mv >= 0 && in.vbus_mv < kUnsafeLowMv) {
-                // Nothing came back, or the port dropped to a standby level under vSafe5V (2.05 V on a REMAX 10K USB-A after the
-                // reset): nothing elevated is left, so there is nothing to unplug. The source is lost, the run stops here.
-                reason_ = Reason::Lost; skip_pending(reason_); end_legacy(); state_ = State::Stopped; recover_ = false;
-                pd_owned_ = fc_owned_ = false;
-            } else if (safe5(in.vbus_mv) && !in.inline_load && in.cap_mv >= 5000) {
-                // The release check is not answering but VBUS sits at 5 V: carry on, do not stop the run.
-                end_sag_recovery(in);
-                pd_owned_ = fc_owned_ = recover_ = false;
-                if (stopping_) { end_legacy(); state_ = State::Stopped; } else next(in);
-            } else if (fc_owned_ && !pd_owned_ && !selfpwr_ && mode_ == Mode::Legacy && !rel_rd_ && !in.inline_load && in.vbus_mv >= 0 && !safe5(in.vbus_mv)) {
-                // pattern release-leaves-vbus-up: the D+/D- release left a raised level up (QC2 Class B at 12 V, GaN3 65W). A detach
-                // is the other way down for it: Rd off, and only an output that survives that is unsafe (poll_detach).
-                K2LOG("[CT] release left VBUS at %dmV: Rd off\n", int(in.vbus_mv));
-                rel_rd_ = true; ending_ = true; begin_detach(in);
-            } else unsafe(Reason::Release);
-        }
+        poll_releasing(in, caps, gap, offers_changed, legacy_pending, pd_active, tail_wait);
         return;
     }
-    // A new attach session on a legacy (non-PD) row only counts as a lost source when VBUS also fell below the row's own
-    // level (-15 %): a charger that glitched the CC line but still holds its target keeps the row going. The check is
-    // relative to the row, so a 4.5 V SCP row or a 5 V VOOC row that sags to 4.5-4.7 V is not "source lost".
     const bool baseline = state_ == State::Baseline;
     if (!baseline && (state_ == State::Requesting || state_ == State::Holding) && index_ < count_ && steps_[index_].group == Group::Pd)
         latch_row(in);
-    const bool legacy_row =!baseline && steps_[index_].group != Group::Pd && !pd_owned_;
+    const bool legacy_row = !baseline && steps_[index_].group != Group::Pd && !pd_owned_;
     const int level_mv = legacy_row && steps_[index_].mv ? int(steps_[index_].mv) : 5000;
-    // A session change the row survived (VBUS back within 15 % of its level) is adopted. It is also the sign of a port that sags on
-    // D+/D- lows (pattern usb-a-cuts-on-low-dpdm, JT-P18 USB-A 2026-11-07: every row's own 0 V reset sags VBUS to ~3.6 V and drops
-    // the cable's Rp): sag_cut_ opens the adopt window after this row's release too, so the next reset's tail session is not "lost".
     if (legacy_row && in.session != session_ && in.vbus_mv >= level_mv * 85 / 100) { session_ = in.session; sag_cut_ = true; }
-    // pattern usb-a-cuts-on-low-dpdm: a new session shortly after a legacy row's sag recovery is that sag's tail (the Rp of an A-to-C
-    // cable returns after VBUS), not a lost source. VBUS back at vSafe5V: adopt it; still climbing (1 V up to there): wait, bounded by
-    // the window; under 1 V or past the window it stays Lost below.
     if (sag_open_ && in.now - sag_ms_ >= kSagAdoptMs) sag_open_ = false;
-    // A source that never gives up PD in the PD-silent attach revives it on its own (GaN3 65W A2412-65CC, 2026-11-08): its Hard Reset
-    // drops VBUS under vSafe5V (or to 0 V) before the first Baseline has run a row, and its caps follow. The sink has driven nothing
-    // that could cost it the output (the attach holds no contract), so the sag is the source's: the Baseline waits for it in the same
-    // adopt window as a legacy row's sag tail, bounded by kRecoverMs from the Baseline's start. Past that, VBUS still down is
-    // "5V release failed" / Lost as before; VBUS above vSafe5V never waits. Only before a row of THIS unit has run (after one, a sag
-    // may be the row's own and its recovery owns the window, sag_open_ above) and while no legacy row of the run has cost the source
-    // its output (then a dark Baseline is that row's tail, Lost as before). Unit-scoped, not run-scoped: a source that cuts its own
-    // output while a later unit's Baseline waits (OnePlus 120 W brick, 2026-11-11: VBUS 4.08 V ~600 ms into the QC2 unit's Baseline,
-    // after the vendor units' rows had run and passed in the same attach) has not been driven by this unit either.
     if (baseline && mode_ == Mode::Legacy && !sag_open_ && in.vbus_mv >= 0 && in.vbus_mv < 5500 && !safe5(in.vbus_mv) &&
         in.now - phase_ms_ < kRecoverMs) {
         if (!unit_row_ran() && !legacy_row_cut()) { sag_open_ = own_cut_ = true; sag_ms_ = in.now; }
     }
-    // The JT-P18 USB-A's reset sag dips the fast VBUS reading under 1 V for an instant (0.65 V) while the 2 s samples stay at
-    // 3.8-4.9 V: inside the window a dip waits too, and only VBUS still down when the window closes is a loss.
-    // In the Baseline (the next row's 5 V check) the sag shows first as VBUS below vSafe5V with the session unchanged (JT-P18, the
-    // release check then read "5V release failed"): there any VBUS outside vSafe5V waits too.
     const bool sag_wait = (legacy_row && (in.session != session_ || in.vbus_mv < 1000)) ||
                           (baseline && mode_ == Mode::Legacy && (in.session != session_ || !safe5(in.vbus_mv)));
     if (sag_open_ && sag_wait && !in.inline_load && in.cap_mv >= 5000) {
         if (safe5(in.vbus_mv)) session_ = in.session;
         else { stable_ = false; return; }
     }
-    // The cut's own session changes (the Rp of the cable falls with VBUS and returns after it) belong to the dip, in the Baseline of
-    // either mode: adopted while the dip is open and for kDipTailMs after the comeback.
     if (baseline && in.session != session_ && dip_adopts(in)) session_ = in.session;
-    const Reason fault = in.vbus_mv < 0 || in.cap_mv < 5000 ? Reason::NoMonitor : in.loop_lock ? Reason::Loop :
-        in.inline_load ? Reason::Inline :
-        !baseline && in.ibus_ma > kLoadAbortMa ? Reason::Inline :   // the suite draws no current: a load aborts
+    const Reason core = base_fault_core(in);
+    const Reason fault = core != Reason::None ? core :
+        !baseline && in.ibus_ma > kLoadAbortMa ? Reason::Inline :
         in.session != session_ || in.vbus_mv < 1000 ? Reason::Lost : in.fake ? Reason::Fake :
-        in.vbus_mv > int(pd::overcap_abort_mv(in.cap_mv)) ? Reason::OverCap :   // ceiling + 5 %; requests stay capped at the nominal
+        in.vbus_mv > int(pd::overcap_abort_mv(in.cap_mv)) ? Reason::OverCap :
         in.vbus_mv > (baseline ? cable_mv(in) : measured_cable_limit_mv(in, steps_[index_].algorithm)) ? Reason::CableLimit :
         !baseline && ((steps_[index_].algorithm == Algorithm::Epr || steps_[index_].algorithm == Algorithm::EprAvs) && !epr_cable(in)) ? Reason::CableLimit :
         !baseline && steps_[index_].group != Group::Pd && steps_[index_].group != Group::Ufcs &&
             pd_active ? Reason::PdActive : offers_changed ? Reason::CapsChanged : Reason::None;
-    // UFCS is exempt from the PD-active fault: a source that ignores UFCS starts PD cable discovery (SOP') on CC ~280 ms after the
-    // handshake (Baseus FH22 charger, 2026-11-07), inside the engine's listen window. That traffic is the source falling back, not proof
-    // the row cannot run: the engine's own answer (no response) is the result, and the unit's pd_active check applies between rows.
     if (fault != Reason::None) {
-        // pattern silent-sink-output-off (GaN3 65W A2412-65CC, 2026-11-08): a PD source that switches its output off when the sink
-        // stays silent on PD, and only comes back on a PD attach. VBUS dark in a PD-silent Baseline, past the adopt window above and
-        // before any legacy row has run, is that answer, not a lost or unsafe source (a source that had answered a row and then
-        // loses VBUS stays Lost / recovers). Every legacy unit of the run is skipped (a later PD-silent attach would do the same),
-        // the sink detaches and the next unit is the normal PD attach. When earlier units already ran legacy rows in this attach the
-        // source is not PD-only: the dark output ends THIS unit as Lost (the units after it get their own attach).
         if (fault == Reason::Lost && baseline && mode_ == Mode::Legacy && !selfpwr_ && in.vbus_mv >= 0 && in.vbus_mv < 1000 &&
             !unit_row_ran() && (own_cut_ || !legacy_row_ran())) {
             if (legacy_row_ran()) skip_unit(Reason::Lost); else skip_legacy_units(Reason::PdOnly);
@@ -3079,32 +3167,19 @@ void Runner::poll_impl(Input& in, const pd::SourceCaps& caps) {
             return;
         }
         if (fault == Reason::Lost && !baseline && steps_[index_].group != Group::Pd && !pd_owned_) {
-            // A legacy row cost the source its output: fail the row, wait for 5 V in Releasing, carry on.
-            recover_ = true; sag_cut_ = true; session_ = in.session;
-            finish(in, Verdict::Fail, fault);
-            if (state_ == State::Releasing) phase_ms_ = in.now;
+            fail_and_recover(in, Verdict::Fail, fault, 0, false);
             return;
         }
         if (fault == Reason::Lost && (state_ == State::Requesting || state_ == State::Holding) &&
             steps_[index_].group == Group::Pd) {
-            // pattern cut-and-recover-low-pps: the source's output collapsed on the low edge. Asking again only cuts it again
-            // (the Lenovo C135 comes back by itself ~3.3 s later): that row is recorded at once, as a cut; Releasing turns it
-            // into ShutOff when nothing ever returns.
             const auto& row = steps_[index_];
             const bool cut = low_programmable(row) && in.vbus_mv < int(row.mv) * 85 / 100;
             if (can_retry(row) && !cut) { retry_pd_row(in); return; }
-            // Lost again on the retry: this row fails, the others still get their turn once the source is back
-            // (Releasing waits for it; a source that never returns still ends the run there, as Lost).
-            if (low_programmable(steps_[index_])) cut_index_ = index_;
-            pd_owned_ = false; recover_ = true; session_ = in.session;
-            // pattern pps-off-at-no-load: Accepted, no PS_RDY, VBUS collapsed at no load: "needs load", a skip (see needs_load)
             const bool nl = !cut && needs_load(in);
-            finish(in, nl ? Verdict::Skip : Verdict::Fail, nl ? Reason::NeedsLoad : cut ? Reason::CutRecovered : fault);
-            if (state_ == State::Releasing) phase_ms_ = in.now;
+            fail_and_recover(in, nl ? Verdict::Skip : Verdict::Fail, nl ? Reason::NeedsLoad : cut ? Reason::CutRecovered : fault, 0, true);
             return;
         }
         if (fault == Reason::CableLimit && !baseline) {
-            // The cable limit never ends the run: skip the row, hand the contract back and carry on.
             auto& s = steps_[index_];
             s.verdict = Verdict::Skip; s.reason = fault;
             s.measured_mv = static_cast<uint16_t>(std::clamp(in.vbus_mv, 0, 65535));
@@ -3113,7 +3188,6 @@ void Runner::poll_impl(Input& in, const pd::SourceCaps& caps) {
             return;
         }
         if (fault == Reason::PdActive || fault == Reason::CapsChanged) {
-            // Unit-scoped: this unit's rows end here, the detach follows and the next unit gets its turn.
             skip_unit(fault);
             if (!baseline) finish(in, Verdict::Fail, fault); else release(in, false);
             return;
@@ -3123,198 +3197,7 @@ void Runner::poll_impl(Input& in, const pd::SourceCaps& caps) {
         else release(in, true);
         return;
     }
-    if (baseline) {
-        if (epr_stage_ == 2 && link_resets(in.pd) != resets_) {
-            // pattern epr-entry-hard-reset in the baseline entry: the source reset in the middle of it. Enter again once its SPR
-            // contract has been steady for the settle time (pre_ms_ counts from the next vSafe5V), at most kEprEntryRetries times.
-            resets_ = link_resets(in.pd); pd_owned_ = false; stable_ = false; phase_ms_ = in.now;
-            if (epr_tries_ < kEprEntryRetries) { pre_ms_ = kEprSettleMs + kEprSettleStepMs * epr_tries_; ++epr_tries_; epr_stage_ = 1; }
-            else {   // gave up: the other rows follow once the source has settled
-                pre_ms_ = kEprSettleMs; epr_stage_ = 0; epr_info_rows(caps, in);
-                epr_skips(Reason::EprRefused, uint8_t(kDetailEprFail + std::min<unsigned>(in.pd.epr_fail, 7)));
-            }
-            return;
-        }
-        // The reset left VBUS sagging below vSafe5V while the source re-arms: not an unsafe source, wait (bounded) for it to return.
-        if (epr_stage_ < 2 && epr_tries_ && !safe5(in.vbus_mv) && in.vbus_mv >= 1000 && in.now - phase_ms_ < kRecoverMs) {
-            stable_ = false; return;
-        }
-        // A port cut's fall reads under vSafe5V first (CUKTECH USB-A 4.65 V, then ~2 V for about a second, then back): wait for the
-        // comeback, bounded by kCutWindowMs and kCutRetries dips; a source stuck low, above vSafe5V or not back in time is still unsafe.
-        if (dip_wait(in)) { stable_ = false; return; }
-        if (!safe5(in.vbus_mv)) { unsafe(Reason::Release); return; }
-        if (mode_ == Mode::Pd && epr_stage_ == 0) regrow_plan(caps, in);   // the list may still grow during the baseline
-        if (!stable_ || gap > 250) { stable_ = true; stable_ms_ = in.now; }
-        if (in.now - stable_ms_ >= 500 + pre_ms_) {
-            pre_ms_ = 0;
-            if (probe_ == Probe::Closing) {
-                if (in.pd.state == pd::SinkState::Ready) {   // a live contract: the source is quiet and ACKs
-                    probe_ = env_.probe_identity(true) ? Probe::Running : Probe::Off;
-                    probe_ms_ = in.now;
-                } else if (in.now - phase_ms_ < kProbeMaxMs) return;   // wait a little for the contract to come back
-                else probe_ = Probe::Off;
-            }
-            if (probe_ == Probe::Running) {
-                if (!in.probe_done && in.now - probe_ms_ < kProbeMaxMs) return;   // the charger is being asked; vSafe5V is watched above
-                end_probe();
-            }
-            if (epr_stage_ == 4) {   // the cable cannot carry EPR: no entry, only the levels the charger lists
-                if (in.pd.state != pd::SinkState::Ready) {
-                    if (in.now - phase_ms_ < kEprReadyMs) return;
-                    epr_stage_ = 0;
-                } else if (!ask_info(in)) return;
-                else { epr_stage_ = 0; epr_info_rows(caps, in); }
-            }
-            if (epr_stage_ == 1) {
-                if (in.pd.state != pd::SinkState::Ready) {
-                    if (in.now - phase_ms_ < kEprReadyMs) return;   // the sink is re-contracting (probe, hard reset): wait for Ready
-                    epr_stage_ = 0; epr_skips(Reason::NoContract);   // no contract to enter from
-                } else if (!epr_cable(in) && !ask_info(in)) {
-                    return;   // an unread cable: the levels are asked first, so they survive a refused entry
-                } else {
-                    const auto err = env_.request_pd({0, 0, 0});   // enter EPR mode and read the list, request nothing
-                    if (err == pd::Err::Ok) { epr_stage_ = 2; epr_ms_ = in.now; pd_owned_ = true; resets_ = link_resets(in.pd); return; }
-                    epr_stage_ = 0; epr_info_rows(caps, in);
-                    epr_skips(Reason::EprRefused, uint8_t(kDetailEprFail + std::min<unsigned>(in.pd.epr_fail, 7)));
-                }
-            }
-            if (epr_stage_ == 2) {
-                if (caps.epr && !caps.epr_partial && in.pd.epr_mode && in.pd.state == pd::SinkState::Ready &&
-                    in.pd.result == pd::SinkResult::Ok && !in.pd.held) {
-                    epr_stage_ = 0; epr_proof_ = in.epr_proof = true;
-                    replan_pd(caps, in, true);   // the EPR list replaces the plan's PD rows
-                } else if (in.pd.state == pd::SinkState::Failed || in.now - epr_ms_ >= 8000) {
-                    epr_stage_ = 0; epr_info_rows(caps, in);
-                    epr_skips(Reason::EprRefused, uint8_t(kDetailEprFail + std::min<unsigned>(in.pd.epr_fail, 7)));
-                    release(in, false); return;   // leave EPR if it was entered, then carry on with the other rows
-                } else return;
-            }
-            if (attached_ && pd_active) skip_unit(Reason::PdActive);   // a Legacy attach that sees PD live: its rows cannot run
-                                                                       // (a resumed unit is not attached yet: next() detaches and attaches it)
-            next(in);
-        }
-        return;
-    }
-    const auto& s = steps_[index_];
-    if (link_resets(in.pd) != resets_) {
-        if (s.group == Group::Pd && can_retry(s)) { retry_pd_row(in); return; }
-        // The row failed twice to a source reset: it is marked, the source's return is awaited, the other rows go on.
-        if (low_programmable(steps_[index_])) cut_index_ = index_;
-        pd_owned_ = false; recover_ = true; session_ = in.session;
-        finish(in, Verdict::Fail, Reason::HardReset);
-        if (state_ == State::Releasing) phase_ms_ = in.now;
-        return;
-    }
-    const bool ready = s.group == Group::Pd ?
-        in.pd.state == pd::SinkState::Ready && in.pd.result == pd::SinkResult::Ok && in.pd.pos == s.pos &&
-        in.pd.mv == (is_step_walk(s) ? walk_mv_ : is_sweep(s) ? sweep_mv_ : s.mv) :
-        in.fc_state == fc::State::Active;
-    // The step-walk row is judged at the level of the Request out now, not at the row's base target; so is the sweep row at its point.
-    Step eff = s;
-    if (is_step_walk(s)) eff.mv = walk_mv_;
-    if (is_sweep(s)) eff.mv = sweep_mv_;
-    // SVOOC adapter that clocked and answered SVOOC frames but stops before the cable check: detected and "handshake ok" (cable check accepted, no ramp) are passes.
-    if (s.group != Group::Pd && in.fc_state == fc::State::Failed && (in.fc_fail == fc::Fail::Detected || in.fc_fail == fc::Fail::NoVoltage)) {
-        finish(in, Verdict::Pass, Reason::None, static_cast<uint8_t>(in.fc_fail));
-        return;
-    }
-    if ((s.group == Group::Pd && (in.pd.state == pd::SinkState::Failed ||
-        (in.pd.state == pd::SinkState::Ready && in.pd.result != pd::SinkResult::None && in.pd.result != pd::SinkResult::Ok))) ||
-        (s.group != Group::Pd && in.fc_state == fc::State::Failed)) {
-        if (s.group == Group::Qc3Plus && in.fc_fail == fc::Fail::NoResponse) {   // VBUS never left 5 V: the charger does not do QC3+
-            finish(in, Verdict::Skip, Reason::NoQc3Plus, static_cast<uint8_t>(in.fc_fail));
-            return;
-        }
-        // the 20 V level of a Class B row: the charger stopped answering below it (a Class A charger). Without a QC2 handshake in the
-        // run the row is an ordinary failure below (class_a_only).
-        if (is_class_b_peak(s) && s.algorithm == Algorithm::Qc2ClassB && qc3_class_b_peak_passed({steps_.data(), count_})) {
-            finish(in, Verdict::Fail, Reason::Qc3Only20V, static_cast<uint8_t>(in.fc_fail));
-            return;
-        }
-        if (class_a_only(s, {steps_.data(), count_})) {
-            finish(in, Verdict::Skip, Reason::ClassAOnly);   // no engine detail: the reason is the whole explanation
-            return;
-        }
-        const auto group = s.group;
-        // A VOOC family that never clocked after either wake is "no answer": a skip, since an unloaded adapter may stay silent. So is a
-        // unit that never answered its detection step with nothing before it passed (the first step); a heard charger that fails later is a fail.
-        const bool unanswered = never_answered(group, in.fc_fail);
-        bool heard = false;
-        for (size_t n = 0; n < index_; ++n) heard |= steps_[n].group == group && steps_[n].verdict == Verdict::Pass;
-        const bool no_answer = silent_vooc(group, in.fc_fail) || (unanswered && !heard);
-        finish(in, no_answer ? Verdict::Skip : Verdict::Fail, Reason::Request, group == Group::Pd ? static_cast<uint8_t>(in.pd.result) : static_cast<uint8_t>(in.fc_fail));
-        if (cut_wait_ || race_wait_) return;   // held as a port cut's casualty or a raced start's first step: its retry decides, so the family is not judged "never answered" yet
-        // AFC / FCP / SCP the charger never answered (pattern qc-only-unacked-rise): the protocol is not spoken, so none of its
-        // other levels can prove anything and none of them needs an engine session of its own.
-        // A UFCS source that never answered the opening exchange is the same case (no response to its listen window), and so is a
-        // VIVO charger that sent no frame in its entry window (the engine's NoResponse; a heard charger ends otherwise).
-        // The VOOC family shares its first session's result in finish().
-        // SCP acked a raise's setpoints and VBUS stayed put (the engine's NoChange): the unit takes writes and ignores them, so its
-        // other raise rows would only repeat the 12 s wait and the output reset after it. The 4.5 V and 5 V rows still run.
-        const bool scp_ignores_raise = group == Group::Scp && in.fc_fail == fc::Fail::NoChange && s.mv > 5000;
-        // A QC / UFCS unit heard before that gets no handshake at one level missed that level only: its other rows still run.
-        const bool dead_unit = unanswered && !(heard && in.fc_fail == fc::Fail::NoHandshake);
-        if (dead_unit || scp_ignores_raise) skip_group_rows(group, !dead_unit, static_cast<uint8_t>(in.fc_fail));
-        return;
-    }
-    const bool banded = band_ok(eff, in, gap);
-    if (state_ == State::Requesting) {
-        if (busy_retry_at_ && in.now >= busy_retry_at_) {
-            if (!list_settled(in.now)) busy_retry_at_ = list_ms_ + kListSettleMs;   // a list arrived inside the window: restart it
-            else {
-                busy_retry_at_ = 0;
-                const auto err = env_.request_pd(pd_choice(s));
-                if (err == pd::Err::Busy) busy_retry_at_ = in.now + 200;
-                else if (err != pd::Err::Ok) finish(in, Verdict::Fail, Reason::Request, 128 + static_cast<uint8_t>(err));
-            }
-        }
-        // A sweep point is judged on PS_RDY alone: a steady out-of-band point is RECORDED and the sweep goes on
-        // (only a lost source stops it, via the failure paths below), so its gate is ready, not ready && in band.
-        if (ready && is_sweep(s)) walk_steady_.add(in.now, in.vbus_mv);   // the sweep point's level is the mean of these (sweep_point)
-        if (ready && (banded || is_sweep(s))) {
-            if (!stable_ || gap > 250) { stable_ = true; stable_ms_ = in.now; }
-            if (in.now - stable_ms_ >= (is_sweep(s) ? kSweepHoldMs : 500u) || (is_sweep(s) && sweep_settled(in))) {
-                if (is_step_walk(s)) { walk_step(in, eff); return; }   // the walk advances or finishes instead of holding
-                if (is_sweep(s)) { sweep_point(in, eff); return; }   // the sweep records the point and asks the next one
-                state_ = State::Holding; phase_ms_ = stable_ms_;
-                prog_on_ = prog_wanted(s) && env_.prog_begin(s);
-            }
-        } else stable_ = false;
-        track_plateau(in, ready, s.group == Group::Pd && in.pd.held && in.pd.pos == s.pos && in.pd.mv == eff.mv &&
-                      (in.pd.state == pd::SinkState::Requesting || in.pd.state == pd::SinkState::Transition), gap);
-        if (is_class_b_peak(s) && in.vbus_mv >= 0) {
-            peak_lo_mv_ = std::min<uint16_t>(peak_lo_mv_, static_cast<uint16_t>(std::min(in.vbus_mv, 65535)));
-            peak_hi_mv_ = std::max<uint16_t>(peak_hi_mv_, static_cast<uint16_t>(std::min(in.vbus_mv, 65535)));
-        }
-        // A plateau held for kCappedPlateauMs is the whole proof of a Capped row: the verdict does not wait for the row timeout.
-        if (state_ == State::Requesting && ready && !banded && !is_sweep(s) && plat_mv_ && in.now - plat_ms_ >= kCappedPlateauMs &&
-            capped(eff, in, ready)) {
-            finish(in, Verdict::Fail, Reason::Capped);
-            return;
-        }
-        const uint32_t timeout = s.group == Group::Qc2 ? fc::kQc2TransitionMs + 3000 : 12000;
-        const bool stuck_at_12v = is_class_b_peak(s) && in.now - phase_ms_ >= kClassAStuckMs &&
-                                  peak_lo_mv_ >= kClassAStuckLoMv && peak_hi_mv_ <= kClassAStuckHiMv;
-        if (state_ == State::Requesting && (in.now - phase_ms_ >= timeout || stuck_at_12v)) {
-            if (is_class_b_peak(s) && s.algorithm == Algorithm::Qc2ClassB && qc3_class_b_peak_passed({steps_.data(), count_}))
-                finish(in, Verdict::Fail, Reason::Qc3Only20V);   // VBUS never reached 20 V, but QC3 Class B got there
-            else if (class_a_only(s, {steps_.data(), count_}))
-                finish(in, Verdict::Skip, Reason::ClassAOnly);   // VBUS never reached 20 V: not a Class B charger
-            else {
-                finish(in, Verdict::Fail, capped(eff, in, ready) ? Reason::Capped :
-                                  floored(eff, in, ready) ? Reason::Floored : Reason::Timeout);
-            }
-        }
-    } else {
-        const bool renewing = s.group == Group::Pd && in.pd.held && in.pd.pos == s.pos && in.pd.mv == s.mv &&
-            (in.pd.state == pd::SinkState::Requesting || in.pd.state == pd::SinkState::Transition);
-        if ((!ready && !renewing) || !banded) { finish(in, Verdict::Fail, Reason::Voltage); return; }
-        if (gap > 250) phase_ms_ = in.now;  // Missing samples cannot establish a continuous hold.
-        if (in.now - phase_ms_ >= hold_ms()) {
-            if (prog_on_ && prog_from_mv_ && prog_from_mv_ != s.mv && spec_feed(in, s, prog_from_mv_, s.mv, pdspec::kSlam, 0)) return;
-            const uint8_t found = prog_on_ ? env_.prog_take(s) : uint8_t(0);   // before finish(): the page's record() ends the capture
-            finish(in, Verdict::Pass, found ? Reason::ProgCheck : Reason::None, found);
-        }
-    }
+    if (baseline) { poll_baseline(in, caps, gap, pd_active); return; }
+    poll_active(in, gap);
 }
 }  // namespace k2::charger_test

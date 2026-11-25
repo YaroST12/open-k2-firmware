@@ -717,6 +717,7 @@ private:
     [[gnu::noinline]] FooterTone footer_line(StrBuf<32> &);   // the stage's footer text; returns its tone
     [[gnu::noinline]] void paint_list();            // RowList stages: bind once, then selection and rows
     [[gnu::noinline]] void paint_review();
+    [[gnu::noinline]] bool review_kv(int i, const char *key, std::string_view v, uint16_t color);
     [[gnu::noinline]] void paint_warning();
     [[gnu::noinline]] void paint_waiting(uint32_t now);
     [[gnu::noinline]] void paint_running(uint32_t now);
@@ -737,6 +738,7 @@ private:
     [[gnu::noinline]] void paint_resume();
     [[gnu::noinline]] void paint_hero(bool full, int16_t x, int16_t y, uint8_t chars, int32_t vbus_mv, uint16_t color);
     [[gnu::noinline]] void paint_sweep_hero(int32_t vbus_mv, uint16_t set_mv);   // Running, a sweep row: the signed error and the act / set pair
+    [[gnu::noinline]] void draw_sweep_gauge(int16_t y, int32_t vbus_g, const ctsweep::Live& live, int32_t full, bool fresh);
     // Running's static layout, plain or the sweep row's restack; a switch wipes the body below the progress bar first.
     [[gnu::noinline]] void lay_running(bool sweeping, bool wipe);
     void list_row(int, bool, kit::RowSpec&);   // row_fn's body (fills the page's shared text buffers, consumed at once)

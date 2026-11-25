@@ -970,7 +970,7 @@ private:
     void replan_fc(const Input&);   // the SCP / UFCS rows still to run, planned again from what the unit's first row read (fc::Caps)
     [[gnu::noinline]] size_t replan_fc_rows(const Input&, size_t& first);   // its planning half: rows replaced (0 = none)
     void regrow_plan(const pd::SourceCaps&, const Input&);
-    void follow_list(const pd::SourceCaps&, const Input&);   // the source announced again mid-run (pattern budget-reannounce-mid-run): per PD row the
+    [[gnu::noinline]] void follow_list(const pd::SourceCaps&, const Input&);   // the source announced again mid-run (pattern budget-reannounce-mid-run): per PD row the
     // new list is followed where it still offers the row (new slot and PDO word), rows with no offer are skipped as Withdrawn, rows a
     // withdrawn PDO comes back for are Pending again; before the first PD row the plan is rebuilt from the new list (replan_pd).
     // A COMPLETE EPR_Source_Capabilities outside the K2's own EPR entry/exit (epr_stage_ == 2) is a re-announce like any other (2026-11-09);
@@ -1007,14 +1007,29 @@ private:
     void begin_unit(Unit, const Input&);
     void continue_legacy(Unit, const Input&);
     void begin_detach(const Input&);
-    void poll_detach(const Input&);
-    void poll_attach(const Input&, const pd::SourceCaps&, uint32_t gap);
+    [[gnu::noinline]] void poll_detach(const Input&);
+    [[gnu::noinline]] void poll_attach(const Input&, const pd::SourceCaps&, uint32_t gap);
     void fail_unit(const Input&, const pd::SourceCaps&, Reason = Reason::NoReattach, int measured_mv = -1);
     // ^ measured_mv < 0: record the live in.vbus_mv (a genuine NoReattach keeps the reading at the fail, not a clamped 0)
     void end_legacy();
     void end_probe();
     void end_sag_recovery(const Input& in);
     void retry_pd_row(const Input& in);
+    // Shared compact helpers for poll_impl and its phase handlers.
+    [[gnu::noinline]] bool stable_tick(bool cond, uint32_t now, uint32_t gap, uint32_t hold_ms);
+    [[gnu::noinline]] void stop_run(State st, Reason r = Reason::None, bool skip = false);
+    [[gnu::noinline]] void record_skip(Step& s, Reason r, int detail = -1);
+    [[gnu::noinline]] void send_pd_request(const Input& in, const Step& s, bool restart);
+    [[gnu::noinline]] void fail_and_recover(const Input& in, Verdict v, Reason r, uint8_t detail, bool is_pd);
+    [[gnu::noinline]] void decide_epr_stage(const pd::SourceCaps& caps, const Input& in);
+    [[gnu::noinline]] void epr_refused(const pd::SourceCaps& caps, const Input& in);
+    [[gnu::noinline]] bool finish_class_b(const Input& in, const Step& s, uint8_t detail);
+    [[gnu::noinline]] void reset_run_state();
+    [[gnu::noinline]] bool revive_withdrawn_row(Step& s, const pd::SourceCaps& caps);
+    [[gnu::noinline]] void note_replan(unsigned follow, unsigned withdrawn, unsigned back);
+    [[gnu::noinline]] void poll_releasing(Input& in, const pd::SourceCaps& caps, uint32_t gap, bool offers_changed, bool legacy_pending, bool pd_active, bool tail_wait);
+    [[gnu::noinline]] void poll_baseline(Input& in, const pd::SourceCaps& caps, uint32_t gap, bool pd_active);
+    [[gnu::noinline]] void poll_active(Input& in, uint32_t gap);
     // noinline: LTO folded poll_impl into the single Runner::poll call site (ChargerTestSession::runner_tick), next to the
     // caller's Input copies: 1048 B of frame against FRAME_MAX 1024.
     [[gnu::noinline]] void poll_impl(Input&, const pd::SourceCaps&);
@@ -1024,7 +1039,7 @@ private:
     // once the family session is released (D+/D- free, 5 V), ended by poll_ceiling(). One stage per run.
     bool ceiling_wanted() const;
     bool begin_ceiling(const Input&);   // false = the stage did not start (refused): the run goes on
-    void poll_ceiling(const Input&);
+    [[gnu::noinline]] void poll_ceiling(const Input&);
     void end_ceiling(const Input&, svooc_ceiling::End);
     void note_ceiling(const Input&, svooc_ceiling::End);
     svooc_ceiling::End ceil_end_ = svooc_ceiling::End::None;
@@ -1039,7 +1054,7 @@ private:
     // poll_spec(). One stage per run; a resumed run never repeats it (its result is journaled).
     bool spec_wanted() const;
     bool begin_spec(const Input&);   // false = the stage did not start (refused): the run goes on
-    void poll_spec(const Input&);
+    [[gnu::noinline]] void poll_spec(const Input&);
     void end_spec(const Input&, specsec::End);
     bool spec_pending_ K2_BSS_INIT(false), spec_done_ K2_BSS_INIT(false), spec_stopping_ K2_BSS_INIT(false), spec_fault_ K2_BSS_INIT(false);
     SpecPoint spec_pt_ K2_BSS_ZERO, spec_hold_ K2_BSS_ZERO;   // spec_hold_: the last level point of the stage
@@ -1093,7 +1108,7 @@ private:
     // (walk_grant_ms_ + kWalkSteadyTimeoutMs); both reset when the walk starts and when it advances to the next level.
     WalkSteady walk_steady_;
     uint32_t walk_grant_ms_ K2_BSS_INIT(0);   // first walk_step call at the current granted level (0 = none yet)
-    void walk_step(const Input&, const Step& eff);   // one granted level of the walk: record it, ask for the next or judge the walk
+    [[gnu::noinline]] void walk_step(const Input&, const Step& eff);   // one granted level of the walk: record it, ask for the next or judge the walk
     // The deep-sweep row in flight (is_sweep). The record: one int16 error (measured - setpoint) per point, no heap;
     // sweep_rows_ holds one RowView per APDO part (ctsweep::part_range), filled when the row closes (sweep_close in finish()).
     alignas(4) std::array<int16_t, ctsweep::kMaxPoints> sweep_err_;
@@ -1112,7 +1127,7 @@ private:
     void sweep_begin(const Step&, const Input&);   // request(): the point range from the row's PDO word, the row's record reset
     void sweep_ask(const Input&, const Step&, unsigned mv);   // the Request of one point (or step-back point) through the gate
     bool sweep_settled(const Input&) const;   // the point's early close: steady for kSweepSettleMs since PS_RDY
-    void sweep_point(const Input&, const Step&);   // one granted point: record it, ask the next or finish the row
+    [[gnu::noinline]] void sweep_point(const Input&, const Step&);   // one granted point: record it, ask the next or finish the row
     void sweep_close(Step&);                // finish(): summarize the row's points into sweep_rows_ (and mark a fold, fold_caution)
     void fold_caution(Step& sweep, const ctsweep::Summary&);   // a fold: the sweep row and the APDO's fixed rows above it read Reason::Folded
     bool xiaomi_seen_ K2_BSS_INIT(false), xiaomi_reset_ K2_BSS_INIT(false), x_svid_ K2_BSS_INIT(false), x_authed_ K2_BSS_INIT(false); uint32_t tail_at_ K2_BSS_INIT(0), hr_count_ K2_BSS_INIT(0);

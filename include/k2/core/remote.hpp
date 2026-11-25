@@ -51,34 +51,34 @@ public:
 
     // Backend interface for remote::handle_request (public so the dispatcher template can call it).
     remote::PingInfo ping();
-    remote::ChargerTestSnapshot charger_test_results() const;
-    remote::ChargerTestView charger_test_view();   // the wizard / Waiting / Running screens as data (0x0B req [3])
-    remote::ChargerTestStartReply charger_test_start(uint8_t flags);   // 0x0B req [4, flags]: the device's own START (confirmed)
+    [[gnu::noinline]] remote::ChargerTestSnapshot charger_test_results() const;
+    [[gnu::noinline]] remote::ChargerTestView charger_test_view();   // the wizard / Waiting / Running screens as data (0x0B req [3])
+    [[gnu::noinline]] remote::ChargerTestStartReply charger_test_start(uint8_t flags);   // 0x0B req [4, flags]: the device's own START (confirmed)
     uint8_t charger_test_cancel();                                     // 0x0B req [5]: the device's own stop; remote::kCtStop*
     remote::Status charger_units(std::span<const uint8_t> units);   // unit order of the next charger run (empty = default)
     remote::Status charger_sweep(bool on);   // the PPS deep sweep of the next charger run (on by default; off = opt-out)
     remote::Status charger_avs_sweep(bool on);   // the AVS deep sweep of the next charger run (opt-in)
     remote::ChargerSweepDepthReply charger_sweep_depth(const uint8_t* set);   // sweep step of the next run (ctsweep::Depth; null = read)
     remote::Status charger_level(uint8_t level); // the level of the next charger run (charger_test::Level, below kLevelCount)
-    remote::ChargerCableReply charger_cable(const ctcable::Choice* set);   // cable identity of the START dialog (null = read)
-    remote::ChargerSvoocCapReply charger_svooc_cap(const uint8_t* set);    // SVOOC ceiling stage: mode of the next run (null = read) and the latest result
+    [[gnu::noinline]] remote::ChargerCableReply charger_cable(const ctcable::Choice* set);   // cable identity of the START dialog (null = read)
+    [[gnu::noinline]] remote::ChargerSvoocCapReply charger_svooc_cap(const uint8_t* set);    // SVOOC ceiling stage: mode of the next run (null = read) and the latest result
     remote::ChargerHuntReply charger_hunt(uint8_t slot) const;   // retired: always count 0 (the 6 A hunt rows are gone)
     remote::Status press(uint8_t button, uint16_t ms);
-    remote::StateInfo state();
+    [[gnu::noinline]] remote::StateInfo state();
     [[gnu::noinline]] remote::SessionInfo session();   // GET_STATE part 1: Ui::session() on the wire (a read)
     [[gnu::noinline]] remote::DiagInfo diag();   // GET_STATE part 2: the Diag page counters (a read)
     [[gnu::noinline]] remote::KeysInfo keys();   // GET_STATE part 3: the strip labels of the page on screen (a read)
     remote::CalibrationInfo calibration_info();  // GET_STATE part 4: settings EEPROM calibration trims
-    remote::PdoSnapshot pdos();
-    remote::EmarkerSnapshot emarker();
-    remote::IdentitySnapshot identity();
+    [[gnu::noinline]] remote::PdoSnapshot pdos();
+    [[gnu::noinline]] remote::EmarkerSnapshot emarker();
+    [[gnu::noinline]] remote::IdentitySnapshot identity();
     remote::Status action(uint8_t id, bool confirm);
     remote::Status set_page(uint8_t page);
     void reboot();
     void dfu_enter(uint8_t reset_mode);   // DFU_ENTER confirmed: poll() returns Dfu after the response
     // FACTORY_WIPE: runs the wipe now (seconds, blocks the loop); only when it fully succeeded does
     // poll() return Dfu after the response, otherwise the K2 stays in the app.
-    remote::FactoryWipeInfo factory_wipe(uint8_t reset_mode);
+    [[gnu::noinline]] remote::FactoryWipeInfo factory_wipe(uint8_t reset_mode);
     // FLASH_DUMP: copies memory-mapped flash into `out`; read only. The dispatcher has already limited the
     // window to 0x080E0000..0x08100000.
     void flash_read(uint32_t addr, std::span<uint8_t> out);
@@ -102,8 +102,8 @@ public:
     remote::Status debug_link(bool attached);
     remote::Status debug_pd_msg(uint8_t sop, uint16_t header, std::span<const uint8_t> payload);
     remote::Status debug_cc_matrix(uint8_t v, uint16_t modes);
-    remote::Status debug_cc_probe(const ccprobe::Args &a, ccprobe::Result &out);   // passive only, blocks a.ms; Busy for any other state
-    remote::Status ra_probe(const raprobe::Args &a, raprobe::Result &out);   // the silent-cable-chip probe (~330 ms); passive only, Busy + out.refusal otherwise
+    [[gnu::noinline]] remote::Status debug_cc_probe(const ccprobe::Args &a, ccprobe::Result &out);   // passive only, blocks a.ms; Busy for any other state
+    [[gnu::noinline]] remote::Status ra_probe(const raprobe::Args &a, raprobe::Result &out);   // the silent-cable-chip probe (~330 ms); passive only, Busy + out.refusal otherwise
 #if K2_EEPROM_READ
     eeprom::Err eeprom_probe(uint8_t bus, eeprom::Probe &out);   // lab-only, read-only 24Cxx probe (k2/drivers/eeprom.hpp); Busy while a charger test runs
     eeprom::Err eeprom_read(uint8_t bus, const eeprom::Addr &a, std::span<uint8_t> out);
@@ -114,70 +114,73 @@ public:
 #if K2_EEPROM_CAL_CLEAR
     eeprom::CalResult eeprom_cal_clear(std::span<const uint8_t, eeprom::kCalLen> expected);   // the one write (compare-and-swap); CalErr::Busy while a charger test runs
 #endif
-    remote::VconnSnapshot debug_vconn(uint8_t op);   // 0 status, 1 send VCONN_Swap, 2 VCONN off
-    remote::EprInfoSnapshot debug_epr_info(uint8_t op);   // 0 status, 1 ask (gated on the EPR bit), 2 ask regardless
-    remote::LcdSnapshot debug_lcd();
-    remote::LoopSnapshot debug_loop(uint8_t page, bool reset);   // the main-loop stall counters (k2/core/loop_stats.hpp)
-    remote::AdcRawSnapshot adc_raw();
+    [[gnu::noinline]] remote::VconnSnapshot debug_vconn(uint8_t op);   // 0 status, 1 send VCONN_Swap, 2 VCONN off
+    [[gnu::noinline]] remote::EprInfoSnapshot debug_epr_info(uint8_t op);   // 0 status, 1 ask (gated on the EPR bit), 2 ask regardless
+    [[gnu::noinline]] remote::LcdSnapshot debug_lcd();
+    [[gnu::noinline]] remote::LoopSnapshot debug_loop(uint8_t page, bool reset);   // the main-loop stall counters (k2/core/loop_stats.hpp)
+    [[gnu::noinline]] remote::AdcRawSnapshot adc_raw();
     remote::Status ripple(uint8_t sample_code);   // captures now; poll() streams the samples
     remote::RippleInfo ripple_info() const { return ripple_info_; }
-    remote::IdentifyResult identify_device(uint8_t op);   // 0 status, 1 start, 2 start + confirm
-    remote::RereadResult reread(uint8_t op, uint8_t mask);   // source-cap re-read: 0 status, 1 start, 2 abort, 3 sink-cap-ext mode, 4 force the scan line, 5 Ra mode
+    [[gnu::noinline]] remote::IdentifyResult identify_device(uint8_t op);   // 0 status, 1 start, 2 start + confirm
+    [[gnu::noinline]] remote::RereadResult reread(uint8_t op, uint8_t mask);   // source-cap re-read: 0 status, 1 start, 2 abort, 3 sink-cap-ext mode, 4 force the scan line, 5 Ra mode
 #if K2_OPPO_PROBE
-    remote::OppoView oppo_probe(uint8_t op, const pd::oppo::Config &cfg);   // lab-only OPPO probe: 0 status, 1 start, 2 stop (k2/pd/oppo_probe.hpp)
-    remote::OppoPowerResult oppo_power(uint16_t mv, uint16_t ma, bool confirm);   // lab-only: an advertised point of the list in force
+    [[gnu::noinline]] remote::OppoView oppo_probe(uint8_t op, const pd::oppo::Config &cfg);   // lab-only OPPO probe: 0 status, 1 start, 2 stop (k2/pd/oppo_probe.hpp)
+    [[gnu::noinline]] remote::OppoPowerResult oppo_power(uint16_t mv, uint16_t ma, bool confirm);   // lab-only: an advertised point of the list in force
 #endif
-    remote::LimitView pd_limit(uint8_t op, const pd::LimConfig &cfg);   // PD limiter (k2/pd/pd_limiter.hpp): 0 status, 1/3 arm, 2 off
-    remote::AppleReadResult apple_read(uint8_t op);   // lab-only Apple charger readout (SVID 0x05AC): 0 status, 1 arm + re-request the current contract
+    [[gnu::noinline]] remote::LimitView pd_limit(uint8_t op, const pd::LimConfig &cfg);   // PD limiter (k2/pd/pd_limiter.hpp): 0 status, 1/3 arm, 2 off
+    [[gnu::noinline]] remote::AppleReadResult apple_read(uint8_t op);   // lab-only Apple charger readout (SVID 0x05AC): 0 status, 1 arm + re-request the current contract
     // `over_load` is the lab-only bypass (k2_remote `pd request --over-load`); the UI never sets it.
-    remote::PdOpResult pd_request(uint8_t pos, uint16_t mv, uint16_t ma, bool confirm, bool over_load = false);
+    [[gnu::noinline]] remote::PdOpResult pd_request(uint8_t pos, uint16_t mv, uint16_t ma, bool confirm, bool over_load = false);
     remote::PdOpResult pd_release();
-    remote::StopInfo stop();   // cancel a charger test, stop FC (measured 5 V release), release PD, disarm a spoof (k2/core/stop.hpp)
+    [[gnu::noinline]] remote::StopInfo stop();   // cancel a charger test, stop FC (measured 5 V release), release PD, disarm a spoof (k2/core/stop.hpp)
     // The host dead-man lease (k2/core/lease.hpp): the dispatcher arms / refreshes it, poll() ticks it and runs stop() on expiry or an unplug.
     void lease_touch();
-    void lease_arm();
+    [[gnu::noinline]] void lease_arm();
     remote::LeaseInfo lease(uint8_t op, uint16_t secs);   // op 0 status, op 1 set the length (seconds, 0 = default)
-    remote::PdOpResult pd_hard_reset(uint8_t flags = 0);   // flags: kPdFlagConfirm | kPdFlagResetInline (lab-only inline reset, remote `pd reset` only)
-    remote::HandbackResult pd_handback(uint8_t flags = 0); // flags: kPdFlagConfirm only; phase-1 lab hand-back (remote `pd handback` only), verdict in the result
-    remote::PdAttachResult pd_attach(uint16_t target_mv, uint16_t target_ma, bool confirm);   // pd::attach_verdict: 5 V default, above 5 V needs confirm, inline / busy refused
-    remote::PdTriggerSnapshot pd_trigger();
-    remote::MatchSnapshot match_info();
-    remote::UsbLinkSnapshot usb_link();
+    [[gnu::noinline]] remote::PdOpResult pd_hard_reset(uint8_t flags = 0);   // flags: kPdFlagConfirm | kPdFlagResetInline (lab-only inline reset, remote `pd reset` only)
+    [[gnu::noinline]] remote::HandbackResult pd_handback(uint8_t flags = 0); // flags: kPdFlagConfirm only; phase-1 lab hand-back (remote `pd handback` only), verdict in the result
+    [[gnu::noinline]] remote::PdAttachResult pd_attach(uint16_t target_mv, uint16_t target_ma, bool confirm);   // pd::attach_verdict: 5 V default, above 5 V needs confirm, inline / busy refused
+    [[gnu::noinline]] remote::PdTriggerSnapshot pd_trigger();
+    [[gnu::noinline]] remote::MatchSnapshot match_info();
+    [[gnu::noinline]] remote::UsbLinkSnapshot usb_link();
     remote::MemorySnapshot memory();   // the cached memstat figures (k2/core/memstat.hpp)
     remote::PowerSnapshot power();     // idle power state and settings (k2/core/idle_hw.hpp)
     void power_set(const remote::PowerSet& s);
     void request_seen(bool state_changing);   // every request, before it runs: the idle machine counts it as activity
     void shell_control_seen();                // a control request (remote::shell_control): the screen says the shell is driving
     remote::Status fc_cmd(uint8_t op, uint8_t proto, uint16_t mv, uint8_t flags);
-    remote::FcInfo fc_info();
-    remote::StoreInfo store_cmd(uint8_t op, uint8_t slot);   // explicit flash-store actions (k2::storage)
+    [[gnu::noinline]] remote::FcInfo fc_info();
+    [[gnu::noinline]] remote::StoreInfo store_cmd(uint8_t op, uint8_t slot);   // explicit flash-store actions (k2::storage)
     void cable_r_reset();
     void cable_r_mode(bool kelvin);
-    remote::CableRInfo cable_r_info();
-    remote::LabResult lab_load(uint8_t duty, uint16_t ms);
-    remote::SniffInfo lab_sniff(uint8_t sub);
-    remote::ListenInfo lab_listen(uint8_t sub, uint8_t secs, uint8_t port, uint8_t flags);   // listen attach (k2::fusb302::listen_*)
+    [[gnu::noinline]] remote::CableRInfo cable_r_info();
+    [[gnu::noinline]] remote::LabResult lab_load(uint8_t duty, uint16_t ms);
+    [[gnu::noinline]] remote::SniffInfo lab_sniff(uint8_t sub);
+    [[gnu::noinline]] remote::ListenInfo lab_listen(uint8_t sub, uint8_t secs, uint8_t port, uint8_t flags);   // listen attach (k2::fusb302::listen_*)
     // --- vooc-monitor (k2/vooc-detect) ---
-    remote::VoocSnapshot vooc_monitor(uint8_t set);           // inline VOOC monitor: 0 off, 1 on, 2 keep; never drives
+    [[gnu::noinline]] remote::VoocSnapshot vooc_monitor(uint8_t set);           // inline VOOC monitor: 0 off, 1 on, 2 keep; never drives
     svooc::Refusal svooc_start(uint8_t cap_s, bool usb_a, const svooc::Params &params);    // guarded no-load SuperVOOC trigger (FC op 5), remote only; usb_a = far-sink waiver; params = responder knobs
     void svooc_stop();
-    remote::SvoocSnapshot svooc_info();
+    [[gnu::noinline]] remote::SvoocSnapshot svooc_info();
     size_t svooc_pairs(uint16_t from, std::span<svooc::PairRow> out);   // the run's command>reply pairs (FC op 5 / 3)
-    bool lines_locked();                                      // the SuperVOOC trigger holds D+/D- (fctrig::svooc_running)
+    // The SuperVOOC trigger holds D+/D- (or watches VBUS come back): the dispatcher answers Busy to every op that drives or
+    // claims D+/D-, the sniffer or the output load (fc scan / trigger, vooc switch, lab sniff 0/1/3, lab load, UFCS probe,
+    // the FcScan action) before the backend sees it.
+    [[gnu::noinline]] bool lines_locked();
     // --- end vooc-monitor ---
-    remote::UfcsInfo ufcs_info();                         // UFCS tuner / 5 V probe (k2::fctrig)
+    [[gnu::noinline]] remote::UfcsInfo ufcs_info();                         // UFCS tuner / 5 V probe (k2::fctrig)
     uint32_t ufcs_get(uint8_t field);
     remote::Status ufcs_set(uint8_t field, uint32_t value);
     remote::Status ufcs_op(uint8_t op);                    // kUfcsReset / kUfcsProbe / kUfcsStop
     size_t ufcs_read(uint16_t off, std::span<uint8_t> out);
     // ---- PD Stress (Cmd::PdStress): thin glue over Ui::pd_stress() (k2/ui/pd_stress_session.hpp) ----
-    remote::PdStressInfo pdstress_info();
+    [[gnu::noinline]] remote::PdStressInfo pdstress_info();
     remote::Status pdstress_start(const remote::PdStressStart &s);   // Busy when another tool owns the ports; other refusals show in info().start
     void pdstress_stop();                                            // never refused: ends a run or drops a pending resume
     size_t pdstress_read(uint16_t off, std::span<uint8_t> out);
     // ---- end PD Stress ----
     // ---- PD Spec Check (Cmd::PdSpec): thin glue over Ui::pd_spec() (k2/ui/pd_spec_session.hpp) ----
-    remote::PdSpecInfo pdspec_info();
+    [[gnu::noinline]] remote::PdSpecInfo pdspec_info();
     remote::Status pdspec_start(const remote::PdSpecStart &s);   // Busy when another tool owns the ports; other refusals show in info().start
     void pdspec_stop();                                          // never refused
     size_t pdspec_read(uint16_t off, std::span<uint8_t> out);
@@ -199,12 +202,12 @@ public:
     remote::Status qrtest_show(uint8_t version, uint8_t px, uint8_t quiet);
     bool qrtest_stop();
     size_t blackbox(uint8_t op, uint32_t arg, std::span<uint8_t> out);   // PD black box ring (k2::pdtrace)
-    bool ports_busy();   // a charger test or an FC release owns the link
-    size_t emlib(std::span<const uint8_t> req, std::span<uint8_t> out);   // saved-cable library and spoof (k2::storage, k2::emk_spoof)
-    size_t mi_cable_auth(std::span<const uint8_t> req, std::span<uint8_t> out);   // Xiaomi cable-side auth config (k2::emk_spoof::MiAuthCfg); req [0] reads, [1,on,key,trailing(4),half,reply,payload] sets; out [on,key,trailing(4),half,reply,payload]
+    [[gnu::noinline]] bool ports_busy();   // a charger test or an FC release owns the link
+    [[gnu::noinline]] size_t emlib(std::span<const uint8_t> req, std::span<uint8_t> out);   // saved-cable library and spoof (k2::storage, k2::emk_spoof)
+    [[gnu::noinline]] size_t mi_cable_auth(std::span<const uint8_t> req, std::span<uint8_t> out);   // Xiaomi cable-side auth config (k2::emk_spoof::MiAuthCfg); req [0] reads, [1,on,key,trailing(4),half,reply,payload] sets; out [on,key,trailing(4),half,reply,payload]
     size_t cards(std::span<const uint8_t> req, std::span<uint8_t> out);   // charger report cards (k2::report_card::hw)
-    size_t twin(std::span<const uint8_t> req, std::span<uint8_t> out);    // device twins (k2::twin::wire over k2::storage and k2::twin_hw)
-    size_t transcap(std::span<const uint8_t> req, std::span<uint8_t> out);   // transition capture (k2::transcap)
+    [[gnu::noinline]] size_t twin(std::span<const uint8_t> req, std::span<uint8_t> out);    // device twins (k2::twin::wire over k2::storage and k2::twin_hw)
+    [[gnu::noinline]] size_t transcap(std::span<const uint8_t> req, std::span<uint8_t> out);   // transition capture (k2::transcap)
     size_t diagnose(std::span<const uint8_t> req, std::span<uint8_t> out);   // Black Box diagnosis (k2::pd::diag::live)
     size_t trace_hid(std::span<const uint8_t> req, std::span<uint8_t> out);   // Black Box push over HID (k2::trace_hid_hw)
     size_t battery(std::span<const uint8_t> req, std::span<uint8_t> out);    // battery recorder (k2::battery::wire over battery::hw)
@@ -213,6 +216,7 @@ public:
     void set_log(bool on);
 
 private:
+    bool debug_busy_refuse() const;
     uint16_t spoof_seq_ K2_BSS_INIT(0);   // library number armed through the remote, for the status reply
     uint8_t ufcs_start_ K2_BSS_INIT(0);   // ufcs::ProbeStart of the last probe op, for the UFCS status block
     static constexpr unsigned kQueueDepth = 4;

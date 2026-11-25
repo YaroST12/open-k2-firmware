@@ -308,6 +308,13 @@ private:
     void hand_over();   // the K2 latched an inline sink: its own sink session ends, the device's begins
     bool first_vbus_opens(std::uint16_t mv) const;   // VBUS up on a trace that started mid-session
     void sustain(std::uint32_t dt, std::uint32_t ma);   // the kSustainMs blocks against the contract
+    bool prep_vbus(std::uint16_t mv, std::uint16_t vmin, std::int16_t ma, bool is_win);
+    void note_miss(std::uint8_t& cnt, std::uint32_t since, bool only_if_zero);
+    void refuse_swap(std::uint8_t kind, std::uint8_t b, bool by_src, std::uint8_t ans, std::uint32_t ms);
+    void record_mode_nak(unsigned svid, bool cable);
+    void cable_message(bool from_src, bool ext, unsigned type, unsigned n, const std::uint8_t* o);
+    void vdm_message(bool from_src, unsigned n, const std::uint8_t* o);
+    void pend_answer(bool from_src, unsigned type);
 
     // Live tracking: not part of the evidence, so not kept with the last session. Grouped by width (no padding).
     struct Frame {
