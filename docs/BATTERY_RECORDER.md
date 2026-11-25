@@ -6,7 +6,7 @@ Battery page of the ring (page 9).
 
 | Part | Where |
 | :--- | :--- |
-| Pure logic: integrator, phase end rule, curve, record, totals | `include/k2/battery/battery.hpp`, `src/battery/battery.cpp`; host test `tests/test_battery.cpp` |
+| Pure logic: integrator, phase end rule, curve, record, totals | `include/k2/battery/battery.hpp`, `src/battery/battery.cpp`; host tests `tests/test_battery.cpp`, `tests/test_battery_synth.cpp` (synthetic runs against closed forms, the real curves replayed) |
 | Stored runs and the service (writes, SRAM checkpoint, boot) | `src/battery/battery_store.cpp` |
 | K2 glue (volume, `.noinit` checkpoint, power monitor, `[BATT]` log lines) | `k2/battery/battery_hw.hpp`, `src/battery/battery_hw.cpp`; `main.cpp` (boot), `main_loop.cpp` (poll) |
 | Remote protocol (CMD_BATTERY 0x58) | `k2/battery/battery_wire.hpp`, `src/battery/battery_wire.cpp`; host test `tests/test_remote_proto.cpp` |
@@ -96,6 +96,10 @@ it, not the wait between two phases; `split` marks the discharge's first point.
 | 244 | gap seconds u32: the time the resumes are known to have lost (a lower bound, see below) |
 | 248 | CRC-16/CCITT of bytes 0..247 |
 
+A version 1 record written before the columns went by kind (05313146) can hold a phase's energy in the other column (the
+2026-11-24 discharges: 30.994 Wh "in", 0 out). `decode()` and `battery_rec.py` swap such a phase's columns, in and out
+with their mAh, so it reads as the kind's own (the rule a running phase follows).
+
 The same bytes are the flash file, the remote's `read` payload and the QR share (type `BATT`, schema 1).
 
 ## Storage and writes
@@ -141,6 +145,35 @@ The same bytes are the flash file, the remote's `read` payload and the QR share 
 | Cold boot after a finished run | Nothing to resume; the run is on flash. A finished or ended run never resumes by itself (Continue reopens it by hand). |
 | Firmware update (DFU) | The app wipes SRAM before it enters the bootloader: a cold boot as above. |
 
+## Efficiency of separate runs
+
+A discharge and a charge recorded as two runs (the wiring moved between them, or the bank was emptied first) have no
+round-trip efficiency of their own. The K2 pairs them over the kept runs (`view::pair`, newest first):
+
+- The newest stretch of Charge or Discharge runs and the stretch of the other kind just before it; each stretch summed, so
+  a phase split over several runs (a charge stopped and started again as a new run) counts whole.
+- Efficiency = Wh out of the discharge stretch / Wh in of the charge stretch, in either order (discharged first, then
+  recharged, or the other way).
+- A round trip ends the scan (it has its own efficiency); a `Cut short` run inside a stretch voids the pair (its energy is
+  short by what it lost); an empty run is skipped.
+- Only the 3 kept runs count: once a fourth run prunes the other kind's last run, there is no pair. Two charges in a row
+  count as one split charge; use `Continue run` for a split phase and start a new run only for a new phase.
+
+Example (runs/battery, 2026-11-24): discharge 3 (30.994 Wh), charges 4 and 5 (23.804 + 13.076 Wh) -> 84.0 %. After 4
+alone it reads 130.2 % (half the charge measured); after the later charge 6 the discharge is pruned: no pair.
+
+Screen: Saved runs heads the pair: `84.0%` with a chip `#3-5` (the ids it spans) and `30.99Wh out / 36.88Wh in`.
+Shell: `battery list` and `battery read --all` add `battery_pair` (`from_id`, `to_id`, `out_uwh`, `in_uwh`,
+`efficiency_permille`, or null), computed by `battery_rec.pair` over the records read back (the same rule).
+
+## Synthetic tests
+
+`tests/test_battery_synth.cpp` feeds the recorder made-up V/I streams and checks Wh, mAh and time against closed forms:
+constant power (exact to 1 uWh), V and I ramps (22.5 Wh within 2 mWh: rounding plus the dead band), CC/CV with an
+exponential taper and the auto end, pauses longer and shorter than the end time, both signs and wirings, a loop stall
+(gap), a continue, a round trip (80.0 %), the pair rule, and the real curves of runs 3..6 replayed point by point (within
+1.5 % of the recorded totals: the points average V and I apart and are quantised).
+
 ## Screen (ring page 9 Battery)
 
 - Bench row: `No run`, `Charging 1h05m, 12.34Wh`, `Charged 12.34Wh, waiting`, `Round trip 80.0%`, `Discharged 9.87Wh`,
@@ -149,8 +182,13 @@ The same bytes are the flash file, the remote's `read` payload and the QR share 
   `Round trip` or `Cut short`, one line with the wiring, the time and the energy), then the rows: the facts (In, Out, Time,
   Efficiency) and what can be done now (Start charge / discharge / round trip, Wiring, End below, End after, Saved runs,
   Share as QR, and Continue run under the facts of an ended run; while a run is in progress End charge or End discharge,
-  Start discharge, Finish run). Saved runs lists the stored runs newest first; OK opens one (its identity, facts and Share
-  as QR; the newest also Continue run while nothing measures). BACK steps back out, then leaves the place.
+  Start discharge, Finish run). Saved runs lists the stored runs newest first (tail: the Wh, the efficiency of a round
+  trip, `cut`; focused note: a round trip's Wh in and out, else the other unit and the time) and heads the pair of separate
+  runs when there is one; OK opens one (its identity, facts and Share as QR; the newest also Continue run while nothing
+  measures). BACK steps back out, then leaves the place.
+- Fit: the identity line holds 32 cells (`kit::kIdLineCells`) and is painted through `fit_data`, which counts a cut but
+  does not fail the walk, so `test_ui_battery` checks its longest texts (`Same port, 99h59m59s, 123.4Wh`); the walks of
+  `test_ui_no_truncation` and `test_ui_battery` cover 3-digit ids, 123.4 Wh, 99999 mAh and 99h59m59s in all rotations.
 - Running indicator: while a run measures or waits, a 5 x 5 accent dot sits in the content's top-right corner on every page
   but a QR code; when the run stops the page repaints whole once.
 
@@ -164,8 +202,8 @@ The same bytes are the flash file, the remote's `read` payload and the QR share 
 | `start charge\|discharge\|round-trip [--wiring same-port\|moved]` | starts a run (refusals: busy, no monitor) |
 | `end`, `next`, `finish` | ends the phase, starts the discharge, ends the run |
 | `config [--end-ma N] [--end-s N] [--wiring W]` | the end rule and the next run's wiring |
-| `list` | stored run ids, newest first |
-| `read [id] [--all]` | a record decoded (id 0 or none: the run in RAM), with the curve |
+| `list` | stored run ids, newest first, and the efficiency of separate runs (`battery_pair`) |
+| `read [id] [--all]` | a record decoded (id 0 or none: the run in RAM), with the curve; `--all` adds `battery_pair` |
 | `continue [id]` | reopens the newest run's last phase (see Continue; refusals: busy, no monitor, no-run, not-newest) |
 
 A refusal exits non-zero with the reason. The QR share decodes with `tools/k2_qr.py`.
