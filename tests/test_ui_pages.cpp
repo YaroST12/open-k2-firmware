@@ -3079,6 +3079,45 @@ static void dump_ui(const char *name, int rot) {
     }
 }
 
+// K2_DUMP=dir: Saved cables and Ripple settings at their ends (k2/cablewrap), every rotation.
+static void test_list_end_renders() {
+    if (!std::getenv("K2_DUMP")) return;
+    for (int rot = 0; rot < 4; rot++) {
+        Ui &ui = fresh_ui();
+        g_stub = StubState();
+        for (uint16_t s = 1; s <= 3; s++) {
+            emlib::Entry e;
+            e.seq = s;
+            const char nm[] = "Cable-1";
+            for (std::size_t i = 0; i < sizeof nm; i++) e.name[i] = nm[i];
+            e.name[6] = char('0' + s);
+            e.rec = emrec::make({std::array<uint32_t, 5>{0xFF00A041, (3u << 27) | 0x05ACu, 0, 0x12340005u + s, (2u << 21) | (3u << 9) | (2u << 5)}.data(), 5}, 2);
+            g_stub.lib.push_back(e);
+        }
+        uint32_t t = 50000;
+        ui.set_rotation(uint8_t(rot), t);
+        const auto shot = [&](const char *n) { for (int i = 0; i < 4; i++) ui.tick(t += 100); t = settle(ui, t); dump_ui(n, rot); };
+        const auto key = [&](Button b) { ui.on_button(b, ButtonEvent::Short, t += 50); t = settle(ui, t); };
+        ui.goto_page(static_cast<uint8_t>(Page::Lines), t += 100);
+        ui.push_menu(Menu::Emarker, t += 100);
+        shot("saved_cables_first");
+        key(Button::Plus); key(Button::Plus);
+        shot("saved_cables_last");
+        key(Button::Ok);
+        shot("saved_cable_detail_last");
+        key(Button::Minus); key(Button::Minus);
+        shot("saved_cable_detail_first");
+        ui.goto_page(static_cast<uint8_t>(Page::Ripple), t += 100);
+        key(Button::Ok);                                     // the settings rows
+        shot("ripple_settings_first");
+        for (int i = 0; i < 3; i++) key(Button::Plus);
+        shot("ripple_settings_last");
+        key(Button::Back);
+        g_stub = StubState();
+        ui.goto_page(uint8_t(Page::Home), t += 100);
+    }
+}
+
 static void test_strip_fix_renders() {
     if (!std::getenv("K2_DUMP")) return;
     for (int rot = 0; rot < 4; rot++) {
@@ -3193,6 +3232,7 @@ static void test_pd_limit_renders() {
 int main() {
     test_pd_limit_renders();
     test_strip_fix_renders();
+    test_list_end_renders();
     test_pd_limit_live_contract_resets_then_arms();
     test_pd_limit_confirm_window();
     test_pd_limit_no_live_contract_no_reset();
