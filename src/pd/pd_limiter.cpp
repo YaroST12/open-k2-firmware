@@ -5,6 +5,7 @@
 
 #include <algorithm>
 
+#include "k2/core/strpack.hpp"
 #include "k2/pd/pd.hpp"
 
 namespace k2::pd {
@@ -34,6 +35,11 @@ struct LabelOut {
     }
     void str(const char* s) {
         while (*s) ch(*s++);
+    }
+    void text(const char* p) {   // a K2_P literal
+        char b[24];
+        const std::string_view v = strpack::unpack(p, b);
+        for (char c : v) ch(c);
     }
     void u(std::uint32_t v) {
         char t[10];
@@ -163,6 +169,28 @@ LimRefusal lim_gate(const LimFacts& f, const LimConfig& cfg) {
 
 LimRefusal lim_gate(const LimFacts& f, std::uint32_t limit_mw) {
     return lim_gate(f, lim_config_watts(limit_mw));
+}
+
+std::size_t lim_fixed_note(const LimTech& t, std::span<char> out) {
+    LabelOut o{out.first(std::min(out.size(), kLimNoteMax))};
+    if (!t.enabled) {
+        o.text(K2_P("fixed offers left out"));
+        return o.n;
+    }
+    o.text(K2_P("fixed 5"));
+    const std::uint16_t top = t.max_mv ? t.max_mv : 20000;
+    if (top > 5000) {
+        o.ch('-');
+        o.tenth(top, 'V');
+    } else {
+        o.ch('V');
+    }
+    o.text(K2_P(" offers"));
+    if (t.max_ma) {
+        o.str(", ");
+        o.amps(t.max_ma);
+    }
+    return o.n;
 }
 
 std::size_t lim_label(const LimConfig& cfg, std::span<char> out) {

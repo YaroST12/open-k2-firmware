@@ -103,6 +103,11 @@ std::uint16_t lim_avs_offer_ma(std::span<const Pdo> pdos, std::uint16_t mv);
 inline constexpr std::size_t kLimLabelMax = 5;
 std::size_t lim_label(const LimConfig& cfg, std::span<char> out);
 
+// The Fixed row's note in the limit picker: the fixed range the limit keeps ("fixed 5-12V offers, 3A"), at most kLimNoteMax
+// characters (a row note). Returns the length written.
+inline constexpr std::size_t kLimNoteMax = 29;
+std::size_t lim_fixed_note(const LimTech& t, std::span<char> out);
+
 // The picker's levels: whole watts of the charger's own fixed offers below its best, lowest first. mv/ma is the offer that
 // sets the level (the first of equal powers). Offers outside kLimMinMw..kLimMaxMw are dropped, never clamped.
 struct LimPick {

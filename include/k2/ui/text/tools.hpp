@@ -49,7 +49,6 @@ inline constexpr const char *kLimRowMode = "Mode", *kLimRowMaxV = K2_P("Max V"),
 inline constexpr const char *kLimNoteOff = K2_P("limits PD Fixed, PPS or AVS");   // the row with no limit set
 inline constexpr const char *kLimNoteNone = K2_P("no limit, every offer shown");  // the picker's Off
 inline constexpr const char *kLimNoteAbove = K2_P("limit active: ");              // then e.g. "9V3A" / "27W"
-inline constexpr const char *kLimNoteFixed = K2_P("fixed 5-20V offers");
 inline constexpr const char *kLimNotePps = K2_P("PPS voltage range and A");
 inline constexpr const char *kLimNoteAvs = K2_P("SPR AVS 15/20V and A");
 inline constexpr const char *kLimNoteApply = K2_P("arms selected PD limit");
@@ -58,7 +57,7 @@ inline constexpr const char *kLimNoteMode = K2_P("include in forged offers");
 inline constexpr const char *kLimNoteStepV = K2_P("pick max voltage");
 inline constexpr const char *kLimNoteStepA = K2_P("pick max current");
 inline constexpr const char *kLimNoteAmpsAt = "at ", *kLimNoteAnyV = K2_P("any voltage");
-inline constexpr const char *kLimNotes[] = {kLimNoteOff, kLimNoteNone, kLimNoteFixed, kLimNotePps, kLimNoteAvs, kLimNoteApply,
+inline constexpr const char *kLimNotes[] = {kLimNoteOff, kLimNoteNone, kLimNotePps, kLimNoteAvs, kLimNoteApply,
                                             kLimNoteNoOffer, kLimNoteMode, kLimNoteStepV, kLimNoteStepA};
 static_assert(all_fit_p(kLimNotes, kLabelAdv, kit::kNoteMaxPx), "a PD limit note is wider than its line");
 static_assert(fits_px_p(kLabelAdv, kLimNoteAbove, kit::kNoteMaxPx - 5 * static_cast<int>(kLabelAdv)), "the PD limit note plus label is over its line");

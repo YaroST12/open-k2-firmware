@@ -229,6 +229,18 @@ int main() {
         c = {}; c.avs.max_mv = 15000;
         CHECK_COND(lim_config_valid(c));
 
+        // The Fixed row's note follows the limit picked (a static "5-20V" read wrong after Max V 12V).
+        {
+            char nb[kLimNoteMax + 1]{};
+            const auto note = [&](LimTech t) { return std::string(nb, lim_fixed_note(t, nb)); };
+            CHECK_STR(note({}).c_str(), "fixed 5-20V offers");
+            CHECK_STR(note({true, 12000, 0}).c_str(), "fixed 5-12V offers");
+            CHECK_STR(note({true, 5000, 0}).c_str(), "fixed 5V offers");
+            CHECK_STR(note({true, 15000, 3250}).c_str(), "fixed 5-15V offers, 3.25A");
+            CHECK_STR(note({true, 0, 1500}).c_str(), "fixed 5-20V offers, 1.5A");
+            CHECK_STR(note({false, 0, 0}).c_str(), "fixed offers left out");
+            CHECK_EQ(note({true, 20000, 4750}).size() <= kLimNoteMax, true);
+        }
         char buf[8]{};
         std::size_t n = lim_label(lim_config_watts(27000), buf);
         CHECK_STR(std::string(buf, n).c_str(), "27W");

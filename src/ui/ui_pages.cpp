@@ -2968,7 +2968,7 @@ void ToolsPage::limit_row(int index, bool focused, kit::RowSpec &out) const {
     if (index >= 1 && index <= 3) {
         struct Meta { const char *text, *note; };
         static constexpr Meta kMeta[3] = {
-            {tx::kLimFixed, tx::kLimNoteFixed},
+            {tx::kLimFixed, nullptr},   // pd::lim_fixed_note
             {tx::kLimPps,   tx::kLimNotePps},
             {tx::kLimAvs,   tx::kLimNoteAvs},
         };
@@ -2989,7 +2989,14 @@ void ToolsPage::limit_row(int index, bool focused, kit::RowSpec &out) const {
         out.tail_color = !t.enabled || t.max_mv || t.max_ma ? kCaution : (held::showing_held() ? kStale : kDim);
         if (held::showing_held() && has_caps_) out.text_color = kStale;
         out.chevron = true;
-        if (focused) out.note = kMeta[k].note;
+        if (focused && k == 0) {   // the Fixed range follows the limit picked
+            char b[pd::kLimNoteMax + 1];
+            note_.clear();
+            note_.put(std::string_view(b, pd::lim_fixed_note(t, b)));
+            out.note = note_.view();
+        } else if (focused) {
+            out.note = kMeta[k].note;
+        }
         return;
     }
     if (index == 4) {
