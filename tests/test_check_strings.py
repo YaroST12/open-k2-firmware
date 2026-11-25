@@ -71,6 +71,10 @@ class Exemptions(unittest.TestCase):
         ])
         self.assertEqual(lines(src), [3, 3])
 
+    def test_k2_tput_packs_its_format_itself(self):
+        src = 'K2_TPUT(t, "\\"runs\\":%u,", n, "a plain argument");'
+        self.assertEqual(lines(src), [1])
+
     def test_preprocessor_directives_pass_but_macro_bodies_do_not(self):
         src = "\n".join([
             '#include "k2/core/strpack.hpp"',
@@ -93,6 +97,16 @@ class Exemptions(unittest.TestCase):
         ])
         self.assertEqual(lines(src), [])
 
+    def test_compared_or_copied_literals_stay_plain(self):
+        src = "\n".join([
+            'if (tok == "--confirm" || "--release" != tok) {}',
+            'if (same(t[0], "status") || std::strcmp(a, "abcdef") == 0) {}',
+            'std::memcpy(p, "/emk/0000.emk", 14);',
+            'std::strncpy(t->text, "Class A chip", 15);',
+            'f(tok == x ? "chosen text" : "other text");',
+        ])
+        self.assertEqual(lines(src), [5, 5])
+
     def test_literals_that_cannot_be_packed(self):
         src = "\n".join([
             'f("\xe2\x86\x92 arrow");',     # UTF-8 bytes: K2_P is ASCII-only
@@ -104,8 +118,8 @@ class Exemptions(unittest.TestCase):
 
     def test_marker_with_a_reason(self):
         src = "\n".join([
-            'if (same(tok, "status")) {}   // k2-plain: shell token compared to input',
-            'if (same(tok, "version")) {}  // k2-plain:',
+            'usb_string("K2 tester");   // k2-plain: USB string descriptor bytes',
+            'usb_string("K2 serial");   // k2-plain:',
         ])
         hits = c.scan_text("src/x.cpp", src)
         self.assertEqual([h.line for h in hits], [2])
@@ -159,8 +173,8 @@ class Allowlist(unittest.TestCase):
 
 class SharedScanner(unittest.TestCase):
     def test_wrapped_literals_feed_the_pair_table(self):
-        src = 'f(K2_P("Cable "\n       "read")); g("plain text"); h(K2_P("x\\ty"));'
-        self.assertEqual(c.wrapped_literals(src), [b"Cable read", b"x\ty"])
+        src = 'f(K2_P("Cable "\n       "read")); g("plain text"); h(K2_P("x\\ty")); K2_TPUT(t, "n=%u", n);'
+        self.assertEqual(c.wrapped_literals(src), [b"Cable read", b"x\ty", b"n=%u"])
 
 
 if __name__ == "__main__":

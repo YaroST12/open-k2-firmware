@@ -40,6 +40,9 @@ def _read(name):
     return (PD_DIR / name).read_text()
 
 
+_LIT = r'(?:K2_P\(\s*)?"([^"]*)"\s*\)?'   # a C string literal, K2_P-packed or plain
+
+
 def _strip_comments(s):
     return re.sub(r"//[^\n]*", "", s)
 
@@ -57,7 +60,7 @@ def _case_strings(text, func, enum):
     m = re.search(r"const char\* " + func + r"\([^)]*\)\s*\{(.*?)\n\}", text, re.S)
     if not m:
         raise ValueError(f"function {func} not found")
-    return dict(re.findall(r"case " + enum + r"::(\w+):\s*return\s*\"([^\"]*)\";", m.group(1)))
+    return dict(re.findall(r"case " + enum + r"::(\w+):\s*return\s*" + _LIT + ";", m.group(1)))
 
 
 def load_tables():
@@ -69,7 +72,7 @@ def load_tables():
     rows = re.search(r"kDefs\s*\{\{(.*?)\n\}\};", res, re.S).group(1)
     defs = [{"key": k, "label": l, "kind": kd.lower(), "unit": u.lower(), "weight": int(w), "inferred": inf == "true"}
             for k, l, kd, u, w, inf in
-            re.findall(r"\{\"(\w+)\",\s*\"([^\"]*)\",\s*Kind::(\w+),\s*Unit::(\w+),\s*(\d+)(?:,\s*(true|false))?\}", rows)]
+            re.findall(r"\{" + _LIT + r",\s*" + _LIT + r",\s*Kind::(\w+),\s*Unit::(\w+),\s*(\d+)(?:,\s*(true|false))?\}", rows)]
     if len(defs) != len(check_names):
         raise ValueError(f"result.hpp: {len(defs)} kDefs rows for {len(check_names)} checks")
     for d, n in zip(defs, check_names):

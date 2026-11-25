@@ -5,7 +5,7 @@
 
 Scans src/ and include/k2/ (no third_party/) for plain string literals. A literal passes when it is:
   - inside K2_P(...), static_assert(...), sizeof(...), asm(...), __attribute__((...)), [[...]] or _Pragma(...)
-  - the format of a K2LOG(...) call (stripped from flash; its other string arguments are checked)
+  - the format of K2LOG(fmt, ...) (stripped from flash) or K2_TPUT(buf, fmt, ...) (packs it); other arguments are checked
   - on a preprocessor line other than #define (#include, #pragma, #error, ...), or extern "C" / operator""
   - not packable: non-ASCII bytes, an embedded NUL, a wide/char16/char32 literal
   - shorter than MIN_LEN decoded bytes (below break-even: a 4-byte string packs to 4.7 B with its NUL, plain 5 B)
@@ -26,7 +26,9 @@ ROOT = Path(__file__).resolve().parent.parent
 MIN_LEN = 5
 EXEMPT_CALLS = {"K2_P", "static_assert", "sizeof", "asm", "__asm__", "__asm", "__attribute__", "_Pragma",
                 "alignof", "__has_include"}
-FORMAT_CALLS = {"K2LOG"}
+FORMAT_CALLS = {"K2LOG": 0, "K2_TPUT": 1}   # macro -> argument that is its format (K2LOG: stripped; K2_TPUT packs it)
+COMPARE_CALLS = {"same", "eq", "strcmp", "strncmp", "strcasecmp", "memcmp", "memcpy", "strcpy", "strncpy", "starts_with",
+                 "ends_with"}
 MARK = "k2-plain"
 
 _IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
@@ -51,6 +53,8 @@ class Literal(NamedTuple):
     value: bytes       # adjacent pieces joined, escapes resolved
     wide: bool
     context: str       # "" = plain code; else the reason it never reaches flash as text (call name, "pp", ...)
+    start: int         # offsets of the first quote (prefix included) and past the last one in the source text
+    end: int
 
 
 def unescape(body: bytes) -> bytes:
@@ -79,17 +83,20 @@ def literals(text: str) -> list[Literal]:
     bol = True                  # at the beginning of a line (only blanks so far)
     pp = None                   # directive name while inside a preprocessor line
     prev_ident = None           # identifier just before the current position (blanks skipped)
-    pending: list = []          # pieces of the literal being joined: [line, value, wide]
+    pending: list = []          # pieces of the literal being joined: [line, value, wide, start, end]
     pending_ctx = ""
 
     def flush():
         nonlocal pending
         if pending:
+            ctx = pending_ctx
+            if not ctx and re.match(r"\s*[!=]=", s[pending[-1][4]:pending[-1][4] + 64]):
+                ctx = "compare"
             out.append(Literal(pending[0][0], pending[-1][0], b"".join(p[1] for p in pending),
-                               any(p[2] for p in pending), pending_ctx))
+                               any(p[2] for p in pending), ctx, pending[0][3], pending[-1][4]))
             pending = []
 
-    def context():
+    def context(at):
         if pp is not None and pp != "define":
             return "pp"
         if attr:
@@ -99,8 +106,12 @@ def literals(text: str) -> list[Literal]:
         for name, commas in reversed(stack):
             if name in EXEMPT_CALLS:
                 return name
-        if stack and stack[-1][0] in FORMAT_CALLS and stack[-1][1] == 0:
+        if stack and stack[-1][0] in FORMAT_CALLS and stack[-1][1] == FORMAT_CALLS[stack[-1][0]]:
             return stack[-1][0]
+        if stack and stack[-1][0] in COMPARE_CALLS:   # compared to or copied as bytes: packing would change them
+            return "compare"
+        if re.search(r"[!=]=\s*$", s[max(0, at - 64):at]):
+            return "compare"
         return ""
 
     i = 0
@@ -131,8 +142,8 @@ def literals(text: str) -> list[Literal]:
             end = n if end == -1 else end
             body = s[m.end():end].encode("utf-8")
             if not pending:
-                pending_ctx = context()
-            pending.append([line, body, m.group(1) in ("u", "U", "L")])
+                pending_ctx = context(i)
+            pending.append([line, body, m.group(1) in ("u", "U", "L"), i, end + len(close)])
             line += s.count("\n", i, end)
             i = end + len(close)
             prev_ident = None
@@ -144,8 +155,8 @@ def literals(text: str) -> list[Literal]:
                 j += 2 if s[j] == "\\" else 1
             body = unescape(s[m.end():j].encode("utf-8"))
             if not pending:
-                pending_ctx = context()
-            pending.append([line, body, m.group(1) in ("u", "U", "L")])
+                pending_ctx = context(i)
+            pending.append([line, body, m.group(1) in ("u", "U", "L"), i, j + 1])
             i = j + 1
             prev_ident = None
             continue
@@ -193,8 +204,8 @@ def literals(text: str) -> list[Literal]:
 
 
 def wrapped_literals(text: str) -> list[bytes]:
-    """Values of the K2_P(...) literals of a source, in order (the pair table's training corpus)."""
-    return [lit.value for lit in literals(text) if lit.context == "K2_P"]
+    """Values of the K2_P(...) literals (and K2_TPUT formats) of a source, in order (the pair table's training corpus)."""
+    return [lit.value for lit in literals(text) if lit.context in ("K2_P", "K2_TPUT")]
 
 
 def _marks(raw_lines: list[str]) -> tuple[dict[int, str | None], set[int]]:
