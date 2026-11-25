@@ -6,6 +6,7 @@
 
 #include "k2/drivers/fusb302.hpp"
 #include "k2/drivers/usb.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::emk_spoof {
 namespace {
@@ -73,7 +74,7 @@ void on_sop_prime(std::uint8_t sop, std::uint16_t header, std::span<const std::u
     if (is_soft_reset(header)) {   // the cable resets its MessageID counter and Accepts with id 0
         g_msg_id = 0;
         const bool ok = fusb302::send_sop_prime_frame(build_accept(g_rec, g_msg_id));
-        K2LOG("[SPOOF] Soft_Reset on SOP': Accept %s\n", ok ? "sent" : "FAILED");
+        K2LOG("[SPOOF] Soft_Reset on SOP': Accept %s\n", ok ? "sent" : K2_P("FAILED"));
         if (ok) g_msg_id = 1;
         return;
     }
@@ -89,7 +90,7 @@ void on_sop_prime(std::uint8_t sop, std::uint16_t header, std::span<const std::u
         K2LOG("[EMK] Mi cable-auth req=%08X key=%u trail=%08X half=%u reply=%u payload=%u %s\n",
               static_cast<unsigned>(req_vdm), static_cast<unsigned>(g_mi_auth.key),
               static_cast<unsigned>(g_mi_auth.trailing), static_cast<unsigned>(g_mi_auth.half), static_cast<unsigned>(g_mi_auth.reply),
-              static_cast<unsigned>(g_mi_auth.payload), ok ? "sent" : "FAILED");
+              static_cast<unsigned>(g_mi_auth.payload), ok ? "sent" : K2_P("FAILED"));
         if (!ok) return;
         g_msg_id = (g_msg_id + 1) & 7;
         g_replies++;
@@ -104,8 +105,8 @@ void on_sop_prime(std::uint8_t sop, std::uint16_t header, std::span<const std::u
     }
     if (o.how == Match::None) return;
     const bool ok = fusb302::send_sop_prime_frame(o.frame.tokens());
-    K2LOG("[EMK] SOP' %s reply (row %u) msg_id=%u %s\n", o.how == Match::Identity ? "identity" : o.how == Match::Row ? "row" : "policy",
-          static_cast<unsigned>(o.row), static_cast<unsigned>((o.frame.t[6] >> 1) & 7), ok ? "sent" : "FAILED");
+    K2LOG("[EMK] SOP' %s reply (row %u) msg_id=%u %s\n", o.how == Match::Identity ? K2_P("identity") : o.how == Match::Row ? "row" : K2_P("policy"),
+          static_cast<unsigned>(o.row), static_cast<unsigned>((o.frame.t[6] >> 1) & 7), ok ? "sent" : K2_P("FAILED"));
     if (!ok) return;
     if (o.counter) g_msg_id = (g_msg_id + 1) & 7;
     g_replies++;
@@ -127,7 +128,7 @@ Err arm_checked(const emrec::Record& rec, const emk_quirk::Quirks& quirks, bool 
     g_active = true;
     ++g_generation;
     fusb302::set_sop_prime_hook(&on_sop_prime);
-    K2LOG("[SPOOF] armed%s: Discover Identity from the saved record, %u extra response rows\n", run_scoped ? " for the run" : "",
+    K2LOG("[SPOOF] armed%s: Discover Identity from the saved record, %u extra response rows\n", run_scoped ? K2_P(" for the run") : "",
           static_cast<unsigned>(quirks.count));
     return Err::Ok;
 }

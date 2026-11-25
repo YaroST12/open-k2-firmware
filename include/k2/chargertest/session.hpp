@@ -16,6 +16,7 @@
 #include <optional>
 
 #include "k2/core/ringlog.hpp"
+#include "k2/core/strpack.hpp"
 #include "k2/pd/pd_identify.hpp"
 
 namespace k2::session {
@@ -93,7 +94,7 @@ inline std::size_t summarize(const Record& r, char* out, std::size_t n) {
     if (n == 0) return 0;
     std::size_t len = 0;
     auto put = [&](char c) { if (len + 1 < n) out[len++] = c; };
-    auto str = [&](const char* s) { while (*s) put(*s++); };
+    auto str = [&](const char* s) { strpack::for_chars(s, put); };   // id_step_short is packed
     auto num = [&](unsigned v) {
         char t[10];
         int k = 0;

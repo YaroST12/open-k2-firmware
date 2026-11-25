@@ -9,6 +9,7 @@
 #include "k2/core/hot.h"
 #include "k2/pd/vendor_pack.hpp"
 #include "k2/pd/vendor_table.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::pd {
 
@@ -60,13 +61,14 @@ VendorName vendor_find(std::uint16_t vid, bool* weak) {
 
 VendorName vendor_name(std::uint16_t vid) {
     const VendorName n = vendor_find(vid);
-    return n ? n : VendorName("Unknown");
+    return n ? n : VendorName(K2_P("Unknown"));
 }
 
 namespace {
 
 // Cable VDO 1 bits 2:0, already held to the layout's highest valid code. Intel's 0x8087 cables with 10G or more are
 // Thunderbolt (a label only).
+// k2-plain-begin: speed_short slices it, ui_emarker strncmps it
 const char* speed_name(std::uint8_t bits, std::uint16_t vid) {
     if (vid == 0x8087 && bits >= 2) return "Thunderbolt (40G)";
     switch (bits) {
@@ -77,8 +79,10 @@ const char* speed_name(std::uint8_t bits, std::uint16_t vid) {
         default: return "USB 2.0 (480M)";  // 0 and the reserved values
     }
 }
+// k2-plain-end
 
 // Cable VDO 1 bits 16:13. 1000b is "> 70 ns" on a passive cable; an active cable goes on to 1000 / 2000 / 3000 ns.
+// k2-plain-begin: latency_short walks it byte by byte
 const char* latency_name(std::uint8_t code, bool active) {
     if (active) {
         switch (code) {
@@ -101,12 +105,13 @@ const char* latency_name(std::uint8_t code, bool active) {
     }
 }
 
+// k2-plain-end
 const char* termination_name(std::uint8_t t) {
     switch (t) {
-        case 1: return "Passive, VCONN required";
-        case 2: return "Active, one end";
-        case 3: return "Active, both ends";
-        default: return "Passive";
+        case 1: return K2_P("Passive, VCONN required");
+        case 2: return K2_P("Active, one end");
+        case 3: return K2_P("Active, both ends");
+        default: return K2_P("Passive");
     }
 }
 
@@ -176,8 +181,8 @@ K2_HOT std::uint16_t current_limit_ma(const Pdo& p, std::uint16_t mv) {
 }
 
 const char* wire_revision_name(std::uint8_t rev) {
-    constexpr const char* names[] = {"unknown", "PD2.0", "PD3.x", "reserved"};
-    return rev < 4 ? names[rev] : "unknown";
+    constexpr const char* names[] = {"unknown", "PD2.0", "PD3.x", "reserved"};   // k2-plain: tests compare the view
+    return rev < 4 ? names[rev] : "unknown";   // k2-plain: tests compare the view
 }
 
 K2_HOT CableLimits cable_limits(const Emarker& e) {
@@ -215,7 +220,7 @@ K2_HOT Emarker parse_emarker(std::span<const std::uint8_t> body, unsigned num_do
     e.max_voltage_v = 20;
     e.max_power_w = 60;
     e.usb_lanes = 1;
-    e.vendor_str = "Unknown";
+    e.vendor_str = "Unknown";   // k2-plain: hot path
     e.speed_str = speed_name(0, 0);
     e.latency_str = latency_name(0, false);
     e.termination_str = termination_name(0);
@@ -286,6 +291,7 @@ K2_HOT Emarker parse_emarker(std::span<const std::uint8_t> body, unsigned num_do
     return e;
 }
 
+// k2-plain-begin: logged per message from the PD hot path
 const char* control_name(std::uint8_t msg_type) {
     switch (msg_type) {
         case 0x01: return "GoodCRC";
@@ -301,5 +307,6 @@ const char* control_name(std::uint8_t msg_type) {
         default: return "OTHER";
     }
 }
+// k2-plain-end
 
 }  // namespace k2::pd

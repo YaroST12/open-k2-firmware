@@ -109,13 +109,13 @@ const char* vdm_answer(std::uint32_t a) {
     case 1: return "ACK";
     case 2: return "NAK";
     case 3: return "BUSY";
-    case 4: return "Not_Supported";
-    default: return "no answer";
+    case 4: return "Not_Supported";   // k2-plain: strlen measured (VdmLoop note)
+    default: return "no answer";   // k2-plain: strlen measured
     }
 }
 
 // The count: "3 times" (the tail shows the first time, so the note does not repeat it).
-void times(Out& o, const Finding& f) { o.u(un(f.a)); o.s(f.a == 1 ? " time" : K2_P(" times")); }
+void times(Out& o, const Finding& f) { o.u(un(f.a)); o.s(f.a == 1 ? K2_P(" time") : K2_P(" times")); }
 
 void note(const Report& r, const Finding& f, Out& o) {
     switch (f.code) {
@@ -125,16 +125,16 @@ void note(const Report& r, const Finding& f, Out& o) {
         o.s(K2_P(", gets ")); o.watts(f.b);
         break;
     case Code::MismatchFlag: o.s(K2_P("set in its Request")); break;
-    case Code::NoMismatchFlag: o.s("took "); o.volts(f.a); o.amps(f.b); o.s(K2_P(", bit not set")); break;
+    case Code::NoMismatchFlag: o.s(K2_P("took ")); o.volts(f.a); o.amps(f.b); o.s(K2_P(", bit not set")); break;
     case Code::OverDraw: {   // "6.05A on 3.25A, 48 bursts" / "for 7.9s" / ", 40% of time"
         o.amps(f.a); o.s(" on "); o.amps(f.b);
         const unsigned bursts = un(f.c) >> 8 & 0xFF, hi = un(f.d) >> 12 & 0x3FF;
         if (bursts > 1) { o.s(", "); o.u(bursts); o.s(K2_P(" bursts")); }
-        else if (bursts) { o.s(" for "); o.u(hi / 10); o.c('.'); o.u(hi % 10); o.c('s'); }
+        else if (bursts) { o.s(K2_P(" for ")); o.u(hi / 10); o.c('.'); o.u(hi % 10); o.c('s'); }
         else { o.s(", "); o.u(un(f.c) & 0xFF); o.s(K2_P("% of time")); }
         break;
     }
-    case Code::Pinned: o.amps(f.a); o.s(K2_P(" pinned, ")); o.u(un(f.b)); o.s("% of "); o.dur(un(f.c)); break;
+    case Code::Pinned: o.amps(f.a); o.s(K2_P(" pinned, ")); o.u(un(f.b)); o.s(K2_P("% of ")); o.dur(un(f.c)); break;
     case Code::Draw:
         if (f.a) { o.s("on "); o.volts(f.a); o.amps(f.b); }
         else { o.s("at "); o.volts(r.vbus_mv); }
@@ -147,10 +147,10 @@ void note(const Report& r, const Finding& f, Out& o) {
         break;
     case Code::FiveVoltOnly: o.s(K2_P("offer ")); o.volts(f.a); o.s(K2_P(", device ")); o.volts(f.b); break;
     case Code::ContractUnseen:
-        if (f.b) { o.s("VBUS "); o.volts(f.a); o.s(K2_P(" when the K2 saw it")); }
+        if (f.b) { o.s(K2_P("VBUS ")); o.volts(f.a); o.s(K2_P(" when the K2 saw it")); }
         else o.s(K2_P("no VBUS reading"));
         break;
-    case Code::NoContract: o.s("VBUS "); o.volts(f.a); o.s(K2_P(", no Accept/PS_RDY")); break;
+    case Code::NoContract: o.s(K2_P("VBUS ")); o.volts(f.a); o.s(K2_P(", no Accept/PS_RDY")); break;
     case Code::ActiveSink:
         if (f.a) { o.volts(f.a); o.amps(f.b); }
         else { o.s("PDO "); o.u(un(f.c)); }
@@ -182,7 +182,7 @@ void note(const Report& r, const Finding& f, Out& o) {
         break;
     case Code::InputCuts: o.s(K2_P("0mA in ")); o.u(un(f.a)); o.s(" of "); o.u(un(f.b)); o.s(K2_P(" windows")); break;
     case Code::OverSustained:   // "3.89A on 3.25A, 83% of 20s"
-        o.amps(f.a); o.s(" on "); o.amps(f.b); o.s(", "); o.u(un(f.c) >> 16); o.s(o.n + 10 <= kNoteChars ? "% of " : "% "); o.dur(un(f.d));
+        o.amps(f.a); o.s(" on "); o.amps(f.b); o.s(", "); o.u(un(f.c) >> 16); o.s(o.n + 10 <= kNoteChars ? K2_P("% of ") : "% "); o.dur(un(f.d));
         break;
     case Code::NoGoodCrc: o.u(un(f.a)); o.s(K2_P(" SOP frames unacknowledged")); break;
     case Code::Retries: o.u(un(f.a)); o.s(K2_P(" frames sent again")); break;
@@ -259,7 +259,7 @@ bool row(const Report& r, unsigned idx, Row& out) {
     if (idx < r.n) {
         const Finding& f = r.f[idx];
         out.sev = f.sev;
-        if (f.code == Code::Draw) { lb.s("Draw "); lb.watts(f.c); }
+        if (f.code == Code::Draw) { lb.s(K2_P("Draw ")); lb.watts(f.c); }
         else lb.s(label(f));
         note(r, f, nt);
         if (timed(f.code) && f.t_ms) { Out t{out.tail}; tail_clock(t, f.t_ms); }

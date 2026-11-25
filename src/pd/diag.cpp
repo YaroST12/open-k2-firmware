@@ -1495,13 +1495,14 @@ namespace detail {
         return;
     }
     if (t < 60) { u(t); s(" s"); return; }
-    if (t < 3600) { u(t / 60); s(" min "); u(t % 60); s(" s"); return; }
+    if (t < 3600) { u(t / 60); s(K2_P(" min ")); u(t % 60); s(" s"); return; }
     u(t / 3600); s(" h "); u(t / 60 % 60); s(" min");
 }
 
 }  // namespace detail
 
 const char* code_name(Code c) {
+    // k2-plain-begin: wire tokens the tools parse
     static constexpr const char* const kCodeNames[] = {
         "power_short", "mismatch_flag", "no_mismatch_flag", "over_draw", "draw_pinned", "draw", "draw_reduced",
         "five_volt_only", "contract_unseen", "no_contract", "active_sink",
@@ -1512,6 +1513,7 @@ const char* code_name(Code c) {
         "swap_refused", "mode_nak", "enter_usb_refused", "epr_failed", "cable_cap", "vdm_loop", "cable_silent",
         "capture_gap",
     };
+    // k2-plain-end
     static_assert(sizeof(kCodeNames) / sizeof(kCodeNames[0]) == static_cast<unsigned>(Code::CaptureGap) + 1);
     const unsigned i = static_cast<unsigned>(c);
     return i < (sizeof(kCodeNames) / sizeof(kCodeNames[0])) ? kCodeNames[i] : "?";

@@ -23,6 +23,7 @@
 #pragma once
 #include <cstdint>
 #include "k2/pd/ra_probe.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::raclass {
 
@@ -39,8 +40,8 @@ constexpr const char *name(PullDown p) {
     case PullDown::None:    return "none";
     case PullDown::Cc1:     return "cc1";
     case PullDown::Cc2:     return "cc2";
-    case PullDown::Unclear: return "unclear";
-    default:                return "not-probed";
+    case PullDown::Unclear: return K2_P("unclear");
+    default:                return K2_P("not-probed");
     }
 }
 

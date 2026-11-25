@@ -21,8 +21,8 @@ bool due(std::uint32_t now, std::uint32_t t) { return std::int32_t(now - t) >= 0
 const char* iq_phase_name(IqPhase p) {
     switch (p) {
         case IqPhase::Idle: return "idle";
-        case IqPhase::Reset1: return "reset";
-        case IqPhase::Sniff1: return "sniff";
+        case IqPhase::Reset1: return K2_P("reset");
+        case IqPhase::Sniff1: return K2_P("sniff");
         case IqPhase::Settle: return K2_P("settle");
         case IqPhase::Ask: return "ask";
         case IqPhase::Reset2: return K2_P("reset back");
@@ -35,19 +35,19 @@ const char* iq_phase_name(IqPhase p) {
 
 const char* iq_step_name(IqStep s) {
     switch (s) {
-        case IqStep::Identity: return "Discover Identity";
-        case IqStep::SinkCap: return "Get_Sink_Cap";
-        case IqStep::SinkCapExt: return "Get_Sink_Cap_Extended";
-        case IqStep::Revision: return "Get_Revision";
-        case IqStep::Svids: return "Discover SVIDs";
-        case IqStep::Modes: return "Discover Modes";
+        case IqStep::Identity: return K2_P("Discover Identity");
+        case IqStep::SinkCap: return K2_P("Get_Sink_Cap");
+        case IqStep::SinkCapExt: return K2_P("Get_Sink_Cap_Extended");
+        case IqStep::Revision: return K2_P("Get_Revision");
+        case IqStep::Svids: return K2_P("Discover SVIDs");
+        case IqStep::Modes: return K2_P("Discover Modes");
         case IqStep::Done: return "done";
-        case IqStep::EprSinkCap: return "EPR_Get_Sink_Cap";
-        case IqStep::BatteryCap: return "Get_Battery_Cap";
-        case IqStep::BatteryStatus: return "Get_Battery_Status";
-        case IqStep::MfrInfo: return "Get_Manufacturer_Info";
-        case IqStep::Status: return "Get_Status";
-        case IqStep::BattMfrInfo: return "Get_Manufacturer_Info (batt)";
+        case IqStep::EprSinkCap: return K2_P("EPR_Get_Sink_Cap");
+        case IqStep::BatteryCap: return K2_P("Get_Battery_Cap");
+        case IqStep::BatteryStatus: return K2_P("Get_Battery_Status");
+        case IqStep::MfrInfo: return K2_P("Get_Manufacturer_Info");
+        case IqStep::Status: return K2_P("Get_Status");
+        case IqStep::BattMfrInfo: return K2_P("Get_Manufacturer_Info (batt)");
     }
     return "?";
 }

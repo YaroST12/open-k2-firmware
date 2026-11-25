@@ -142,7 +142,7 @@ std::uint32_t session_ms() {
 void verdict_text(std::span<char> out) {
     if (out.empty()) return;
     if (state() == State::None) {
-        constexpr char kNone[] = "No PD session yet";
+        constexpr char kNone[] = "No PD session yet";   // k2-plain: memcpy copy
         const std::size_t n = std::min(out.size() - 1, sizeof kNone - 1);
         std::memcpy(out.data(), kNone, n);
         out[n] = 0;

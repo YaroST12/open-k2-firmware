@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Yaraslau Furman
 // PD Spec Check engine state machine (out-of-line in src/pdspec/ so COLD_SIZE_FLAGS applies).
 #include "k2/pdspec/engine.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::pdspec {
 
@@ -127,7 +128,7 @@ bool Engine::settled(const Snapshot& s) const {
 
 // A setup level the source would not give (Reject / Wait / refused by the sink): the family ends here, back to 5 V.
 void Engine::refused(std::uint32_t now) {
-    env_->on_note("level refused");
+    env_->on_note(K2_P("level refused"));
     env_->capture_stop();
     if (after_ == After::Family && ph_ == Ph::Goto) { finish(Stop::Stuck, now); return; }   // even 5 V refused: nothing to restore to
     if (fam_ == Family::Transitions) {   // that level is left out, the walk goes on with the pairs that do not touch it
@@ -147,7 +148,7 @@ void Engine::refused(std::uint32_t now) {
 
 // The contract went (the K2's own Hard Reset after a missing answer, a detach): wait for a 5 V contract, then the next family.
 void Engine::lost(const Snapshot& s, std::uint32_t now) {
-    env_->on_note("contract lost");
+    env_->on_note(K2_P("contract lost"));
     // The K2 Hard Reset the source after an Accept with no PS_RDY in time (tPSTransition): that is the measurement.
     if ((ph_ == Ph::Measure || ph_ == Ph::Frozen) && s.hard_resets != hard0_ && s.accept_at != accept0_) {
         const bool epr = (cur_.flags & kTrEpr) != 0;
@@ -468,7 +469,7 @@ void Engine::live_band(const Snapshot& s, std::uint32_t now) {
         meas(tc, {kNever, 0, 0, lim, cur_.from, cur_.to});
         cur_.flags |= kTrLiveBand;
         push_tr(cur_);
-        env_->on_note("level not reached");
+        env_->on_note(K2_P("level not reached"));
         next_item(now);
     }
 }
@@ -628,7 +629,7 @@ void Engine::status_poll(const Snapshot& s, std::uint32_t now) {
     if (!st_sent_) {
         const pd::Err e = env_->ask_pps_status();
         if (e == pd::Err::Ok) { st_sent_ = true; st_seq0_ = s.pps_seq; return; }
-        if (now - phase_t_ > kBusyMs) { env_->on_note("PPS status not asked"); prog_next(now); }   // our own guards held it: no verdict
+        if (now - phase_t_ > kBusyMs) { env_->on_note(K2_P("PPS status not asked")); prog_next(now); }   // our own guards held it: no verdict
         return;
     }
     const bool done = s.pps_seq != st_seq0_ && s.pps_ask != pd::PpsAsk::Pending;
@@ -706,7 +707,7 @@ void Engine::ka_wait(const Snapshot& s, std::uint32_t now) {
         meas(c, {kNever, 0, lo, hi, tgt_pos_, 0});   // no reset at all: the source never timed out
         env_->keepalive_silence(Silence::Off);
         silenced_ = false;
-        env_->on_note("no keep-alive timeout");
+        env_->on_note(K2_P("no keep-alive timeout"));
         restore(now);
     }
 }
@@ -905,7 +906,7 @@ void Engine::poll(std::uint32_t now) {
                 return;
             }
             band_since_ = 0;
-            if (now - phase_t_ > kSettleMaxMs) { env_->on_note("level not settled"); after(s, now); }
+            if (now - phase_t_ > kSettleMaxMs) { env_->on_note(K2_P("level not settled")); after(s, now); }
             return;
         case Ph::Measure: {
             if (!sent_) { (void)send(now); return; }

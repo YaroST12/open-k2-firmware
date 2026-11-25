@@ -20,6 +20,7 @@
 #include <span>
 
 #include "k2/core/math_opt.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::transcap {
 
@@ -66,30 +67,30 @@ enum class State : std::uint8_t { Off, Armed, Post, Frozen };
 
 constexpr const char* reason_name(Reason r) {
     switch (r) {
-    case Reason::Manual: return "manual";
-    case Reason::ShutOff: return "shutoff";
-    case Reason::NoPsRdy: return "no-psrdy";
-    case Reason::HardReset: return "hardreset";
-    case Reason::Detach: return "detach";
-    case Reason::Timeout: return "timeout";
-    case Reason::Voltage: return "voltage";
-    case Reason::Other: return "other";
+    case Reason::Manual: return K2_P("manual");
+    case Reason::ShutOff: return K2_P("shutoff");
+    case Reason::NoPsRdy: return K2_P("no-psrdy");
+    case Reason::HardReset: return K2_P("hardreset");
+    case Reason::Detach: return K2_P("detach");
+    case Reason::Timeout: return K2_P("timeout");
+    case Reason::Voltage: return K2_P("voltage");
+    case Reason::Other: return K2_P("other");
     default: return "none";
     }
 }
 constexpr const char* mark_name(Mark m) {
     switch (m) {
     case Mark::Arm: return "arm";
-    case Mark::TxRequest: return "request";
-    case Mark::Accept: return "accept";
-    case Mark::PsRdy: return "ps_rdy";
-    case Mark::Reject: return "reject";
+    case Mark::TxRequest: return K2_P("request");
+    case Mark::Accept: return K2_P("accept");
+    case Mark::PsRdy: return K2_P("ps_rdy");
+    case Mark::Reject: return K2_P("reject");
     case Mark::Wait: return "wait";
-    case Mark::SoftReset: return "soft_reset";
-    case Mark::HardReset: return "hard_reset";
-    case Mark::Attach: return "attach";
-    case Mark::Detach: return "detach";
-    case Mark::Trigger: return "trigger";
+    case Mark::SoftReset: return K2_P("soft_reset");
+    case Mark::HardReset: return K2_P("hard_reset");
+    case Mark::Attach: return K2_P("attach");
+    case Mark::Detach: return K2_P("detach");
+    case Mark::Trigger: return K2_P("trigger");
     case Mark::Rx: return "rx";
     case Mark::Tx: return "tx";
     case Mark::Cc: return "cc";

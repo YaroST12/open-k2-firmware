@@ -12,6 +12,7 @@
 #include <cstdint>
 
 #include "k2/pd/pd_ccmode.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::emkra {
 
@@ -51,11 +52,11 @@ constexpr Refuse check(const Ctx& c) {
 constexpr const char* refuse_name(Refuse r) {
     switch (r) {
         case Refuse::None: return "ok";
-        case Refuse::Inline: return "inline";
-        case Refuse::Contract: return "contract";
+        case Refuse::Inline: return K2_P("inline");
+        case Refuse::Contract: return K2_P("contract");
         case Refuse::Busy: return "busy";
-        case Refuse::PinnedRd: return "pinned-rd";
-        case Refuse::Vconn: return "vconn";
+        case Refuse::PinnedRd: return K2_P("pinned-rd");
+        case Refuse::Vconn: return K2_P("vconn");
     }
     return "?";
 }
@@ -64,11 +65,11 @@ constexpr const char* refuse_name(Refuse r) {
 constexpr const char* refuse_footer(Refuse r) {
     switch (r) {
         case Refuse::None: return "";
-        case Refuse::Inline: return "Live sink: unplug load";
-        case Refuse::Contract: return "Ra refused: contract live";
-        case Refuse::Busy: return "Ra refused: tool running";
-        case Refuse::PinnedRd: return "Ra refused: Rd on CC1";
-        case Refuse::Vconn: return "Ra refused: VCONN role";
+        case Refuse::Inline: return K2_P("Live sink: unplug load");
+        case Refuse::Contract: return K2_P("Ra refused: contract live");
+        case Refuse::Busy: return K2_P("Ra refused: tool running");
+        case Refuse::PinnedRd: return K2_P("Ra refused: Rd on CC1");
+        case Refuse::Vconn: return K2_P("Ra refused: VCONN role");
     }
     return "";
 }

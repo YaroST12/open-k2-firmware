@@ -9,18 +9,19 @@
 
 #include "k2/core/log.hpp"
 #include "k2/pd/apple_readout.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::pd {
 
 const char* apple_why_name(AppleWhy w) {
     switch (w) {
-        case AppleWhy::Running: return "running";
+        case AppleWhy::Running: return K2_P("running");
         case AppleWhy::Done: return "done";
         case AppleWhy::Nak: return "nak";
-        case AppleWhy::Timeout: return "timeout";
-        case AppleWhy::Range: return "range";
+        case AppleWhy::Timeout: return K2_P("timeout");
+        case AppleWhy::Range: return K2_P("range");
         case AppleWhy::Cap: return "cap";
-        case AppleWhy::NoMode: return "nomode";
+        case AppleWhy::NoMode: return K2_P("nomode");
     }
     return "?";
 }
@@ -28,9 +29,9 @@ const char* apple_why_name(AppleWhy w) {
 const char* apple_refusal_name(AppleRefusal r) {
     switch (r) {
         case AppleRefusal::None: return "none";
-        case AppleRefusal::Inline: return "inline";
-        case AppleRefusal::NoContract: return "no contract";
-        case AppleRefusal::NotPartner: return "not partner";
+        case AppleRefusal::Inline: return K2_P("inline");
+        case AppleRefusal::NoContract: return K2_P("no contract");
+        case AppleRefusal::NotPartner: return K2_P("not partner");
         case AppleRefusal::Busy: return "busy";
     }
     return "?";

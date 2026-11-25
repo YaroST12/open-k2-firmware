@@ -22,6 +22,7 @@ struct Out {
     }
 };
 
+// k2-plain-begin: the view is measured (tail)
 std::string_view version(std::uint32_t cab) {
     const unsigned bits = cab & 7;
     switch (bits) {
@@ -32,6 +33,7 @@ std::string_view version(std::uint32_t cab) {
         default: return "USB2";
     }
 }
+// k2-plain-end
 
 }  // namespace
 
@@ -47,7 +49,7 @@ std::array<char, kMaxLen + 1> make(const emrec::Record& rec, unsigned ordinal) {
     const bool known = !brand.empty();
     char mfg[16];
     if (!known) {   // unlisted: hex VID, and the speed in the name so two unknown makers still differ
-        const char hex[] = "0123456789ABCDEF";
+        const char hex[] = "0123456789ABCDEF";   // k2-plain: indexed digits
         mfg[0] = '0'; mfg[1] = 'x';
         for (int k = 0; k < 4; k++) mfg[2 + k] = hex[(vid >> (12 - 4 * k)) & 0xF];
         mfg[6] = 0;

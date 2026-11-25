@@ -51,6 +51,7 @@ constexpr std::uint32_t kGenericCableVdo = 2u | (2u << 5) | (1u << 13) | (2u << 
 
 // Four rows for the five ids 0..4: id 3 (kRetiredMagId) has no row of its own, canonical_builtin_id() sends it to id 4.
 constexpr std::size_t kBuiltinRows = kBuiltinCount - 1;
+// k2-plain-begin: string_view fields, sizes checked and copied
 constexpr std::array<BuiltinInfo, kBuiltinRows> kBuiltins{{
     {"[generic 5A 20V]", "generic 20V 5A", "Generic passive 20V 5A",
      {0xFF00A041u, (3u << 27) | 0x1209u, 0, 0x00010001u, kGenericCableVdo}, 2},
@@ -65,6 +66,7 @@ constexpr std::array<BuiltinInfo, kBuiltinRows> kBuiltins{{
     {"[OnePlus 100W]", "OnePlus 100W", "OnePlus/OPPO 30V 5A",
      {0xFF00A041u, 0x180022D9u, 0x00000000u, 0x61160000u, 0x80082A40u}, 2},
 }};
+// k2-plain-end
 }  // namespace
 
 unsigned canonical_builtin_id(unsigned id) {
@@ -102,22 +104,22 @@ std::size_t describe(const Record& rec, std::span<char> out) {
     for (char& c : name) if (c != 0 && (c < 0x20 || c > 0x7E)) c = '?';
     const std::uint32_t id = vdo(rec, 1), prod = vdo(rec, 3), cable = vdo(rec, 4);
     const unsigned ptype = (id >> 27) & 7;
-    const char* kind = ptype == 3 ? "passive cable" : ptype == 4 ? "active cable" : "other";
+    const char* kind = ptype == 3 ? K2_P("passive cable") : ptype == 4 ? K2_P("active cable") : K2_P("other");
     static const char* const kCur[4] = {"?", "3 A", "5 A", "?"};
     static const char* const kVolt[4] = {"20 V", "30 V", "40 V", "50 V"};
-    t.put("name: %s\n", name);
-    t.put("pd spec rev: %u\n", static_cast<unsigned>(rec[kRevAt]));
-    t.put("vdm header: %08X\n", static_cast<unsigned>(vdo(rec, 0)));
-    t.put("id header: %08X\n", static_cast<unsigned>(id));
-    t.put("cert stat: %08X\n", static_cast<unsigned>(vdo(rec, 2)));
-    t.put("product: %08X\n", static_cast<unsigned>(prod));
-    t.put("cable vdo: %08X\n", static_cast<unsigned>(cable));
-    t.put("type: %s\n", kind);
-    t.put("vid: %04X\n", static_cast<unsigned>(id & 0xFFFF));
-    t.put("pid: %04X\n", static_cast<unsigned>(prod >> 16));
-    t.put("current: %s\n", kCur[(cable >> 5) & 3]);
-    t.put("voltage: %s\n", kVolt[(cable >> 9) & 3]);
-    t.put("checksum: %02X %s\n", static_cast<unsigned>(rec[kChecksumAt]),
+    K2_TPUT(t, "name: %s\n", name);
+    K2_TPUT(t, "pd spec rev: %u\n", static_cast<unsigned>(rec[kRevAt]));
+    K2_TPUT(t, "vdm header: %08X\n", static_cast<unsigned>(vdo(rec, 0)));
+    K2_TPUT(t, "id header: %08X\n", static_cast<unsigned>(id));
+    K2_TPUT(t, "cert stat: %08X\n", static_cast<unsigned>(vdo(rec, 2)));
+    K2_TPUT(t, "product: %08X\n", static_cast<unsigned>(prod));
+    K2_TPUT(t, "cable vdo: %08X\n", static_cast<unsigned>(cable));
+    K2_TPUT(t, "type: %s\n", kind);
+    K2_TPUT(t, "vid: %04X\n", static_cast<unsigned>(id & 0xFFFF));
+    K2_TPUT(t, "pid: %04X\n", static_cast<unsigned>(prod >> 16));
+    K2_TPUT(t, "current: %s\n", kCur[(cable >> 5) & 3]);
+    K2_TPUT(t, "voltage: %s\n", kVolt[(cable >> 9) & 3]);
+    K2_TPUT(t, "checksum: %02X %s\n", static_cast<unsigned>(rec[kChecksumAt]),
           rec[kChecksumAt] == checksum(rec) ? "ok" : "BAD");
     return t.size();
 }
@@ -188,17 +190,17 @@ bool parse_native_library(std::span<const std::uint8_t> raw, NativeLibrary& out)
 
 std::size_t describe_native_library(const NativeLibrary& lib, std::span<char> out) {
     TextBuf t(out);
-    t.put("header: %02X %02X %02X %02X\n", static_cast<unsigned>(lib.header[0]), static_cast<unsigned>(lib.header[1]),
+    K2_TPUT(t, "header: %02X %02X %02X %02X\n", static_cast<unsigned>(lib.header[0]), static_cast<unsigned>(lib.header[1]),
           static_cast<unsigned>(lib.header[2]), static_cast<unsigned>(lib.header[3]));
-    t.put("default slot: %u\n", static_cast<unsigned>(lib.default_slot));
-    t.put("records: %u\n", static_cast<unsigned>(lib.count));
-    t.put("table checksum: %02X %s\n", static_cast<unsigned>(lib.checksum), lib.checksum_ok ? "ok" : "BAD");
+    K2_TPUT(t, "default slot: %u\n", static_cast<unsigned>(lib.default_slot));
+    K2_TPUT(t, "records: %u\n", static_cast<unsigned>(lib.count));
+    K2_TPUT(t, "table checksum: %02X %s\n", static_cast<unsigned>(lib.checksum), lib.checksum_ok ? "ok" : "BAD");
     for (unsigned i = 0; i < lib.count; i++) {
         char name[kNameLen + 1];
         std::memcpy(name, lib.rec[i].data(), kNameLen);
         name[kNameLen] = 0;
         for (char& c : name) if (c != 0 && (c < 0x20 || c > 0x7E)) c = '?';
-        t.put("%u: %s id=%08X cable=%08X %s\n", i, name, static_cast<unsigned>(vdo(lib.rec[i], 1)),
+        K2_TPUT(t, "%u: %s id=%08X cable=%08X %s\n", i, name, static_cast<unsigned>(vdo(lib.rec[i], 1)),
               static_cast<unsigned>(vdo(lib.rec[i], 4)), (lib.valid_mask >> i) & 1 ? "ok" : "BAD");
     }
     return t.size();
@@ -209,11 +211,11 @@ std::size_t describe_native_page(std::span<const std::uint8_t> raw, std::span<ch
     if (!n) return 0;
     const std::size_t len = kLibraryHeader + n * kRecordSize + 1;
     TextBuf t(out);
-    t.put("header: %02X %02X %02X %02X\n", static_cast<unsigned>(raw[0]), static_cast<unsigned>(raw[1]),
+    K2_TPUT(t, "header: %02X %02X %02X %02X\n", static_cast<unsigned>(raw[0]), static_cast<unsigned>(raw[1]),
           static_cast<unsigned>(raw[2]), static_cast<unsigned>(raw[3]));
-    t.put("default slot: %u\n", static_cast<unsigned>(raw[4]));
-    t.put("records: %u\n", n);
-    t.put("table checksum: %02X %s\n", static_cast<unsigned>(raw[len - 1]),
+    K2_TPUT(t, "default slot: %u\n", static_cast<unsigned>(raw[4]));
+    K2_TPUT(t, "records: %u\n", n);
+    K2_TPUT(t, "table checksum: %02X %s\n", static_cast<unsigned>(raw[len - 1]),
           raw[len - 1] == sum_bias(raw.data(), len - 1) ? "ok" : "BAD");
     for (unsigned i = 0; i < n; i++) {
         Record rec;
@@ -222,7 +224,7 @@ std::size_t describe_native_page(std::span<const std::uint8_t> raw, std::span<ch
         std::memcpy(name, rec.data(), kNameLen);
         name[kNameLen] = 0;
         for (char& c : name) if (c != 0 && (c < 0x20 || c > 0x7E)) c = '?';
-        t.put("%u: %s id=%08X cable=%08X %s\n", i, name, static_cast<unsigned>(vdo(rec, 1)),
+        K2_TPUT(t, "%u: %s id=%08X cable=%08X %s\n", i, name, static_cast<unsigned>(vdo(rec, 1)),
               static_cast<unsigned>(vdo(rec, 4)), valid(rec) ? "ok" : "BAD");
     }
     return t.size();

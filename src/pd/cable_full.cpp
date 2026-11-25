@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
 #include "k2/pd/cable_full.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::cable_full {
 namespace {
@@ -72,7 +73,7 @@ bool read(emk_learn::ExchangeFn fn, void* ctx, emk_variant::Variant var, bool ac
 }
 
 const char* u3_power_text(std::uint8_t code) {
-    static constexpr const char* kText[] = {">10mW", "5-10mW", "1-5mW", "0.5-1mW", "0.2-0.5mW", "50-200uW", "<50uW"};
+    static constexpr const char* kText[] = {K2_P(">10mW"), K2_P("5-10mW"), K2_P("1-5mW"), K2_P("0.5-1mW"), K2_P("0.2-0.5mW"), K2_P("50-200uW"), K2_P("<50uW")};
     return code < 7 ? kText[code] : "?";
 }
 
@@ -104,7 +105,7 @@ const char* tbt_speed_text(std::uint8_t speed) {
     switch (speed) {
         case 1: return "USB3";
         case 2: return "10G";
-        case 3: return "10/20G";
+        case 3: return K2_P("10/20G");
         default: return "?";
     }
 }
@@ -121,14 +122,14 @@ Dp decode_dp(std::uint32_t v) {
 const char* dp_rate_text(const Dp& d) {
     switch (d.rate) {
         case 1: return "HBR3";
-        case 2: return d.uhbr13_5 ? "UHBR13.5" : "UHBR10";
-        case 3: return "UHBR20";
+        case 2: return d.uhbr13_5 ? K2_P("UHBR13.5") : K2_P("UHBR10");
+        case 3: return K2_P("UHBR20");
         default: return "";
     }
 }
 
 const char* dp_cable_text(std::uint8_t cable) {
-    static constexpr const char* kText[] = {"passive", "retimer", "redriver", "optical"};
+    static constexpr const char* kText[] = {K2_P("passive"), K2_P("retimer"), K2_P("redriver"), K2_P("optical")};
     return kText[cable & 3];
 }
 
