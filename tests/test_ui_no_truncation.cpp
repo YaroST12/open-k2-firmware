@@ -542,6 +542,7 @@ void walk_ring(Ui &ui, int rot, const Scenario &sc) {
         std::snprintf(nm, sizeof nm, "ring-%d-browse", i);
         draw_for_a_while(ui, nm, rot, sc.name);
         CHECK_EQ(ui.ring_view(), true);
+        CHECK_EQ(int(ui.ring_position()), i);   // a refused page would be skipped unwalked
         if (ring::can_enter(static_cast<ring::Pos>(i))) {
             std::snprintf(nm, sizeof nm, "ring-%d-entered", i);
             enter(nm, rot, sc.name);
