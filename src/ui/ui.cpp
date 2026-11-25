@@ -1306,7 +1306,7 @@ bool Ui::ring_show(ring::Pos pos, uint32_t now_ms) {
     bool ok = true;
     if (t.menu != Menu::Count) {
         if (t.menu == Menu::Connection) {
-            if (conn_lock_ < 0) conn_lock_ = static_cast<int8_t>(t.tab);
+            if (conn_lock_ < 0) conn_lock_ = static_cast<int8_t>(ctx_.keep.link_tab);   // the card it was left on
             conn_overview_next_ = !conn_actions_next_;
         }
         place_next_ = t.menu == Menu::Diagnosis;   // the PD diagnosis opens as the Log place

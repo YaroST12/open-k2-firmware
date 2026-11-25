@@ -36,6 +36,7 @@ static Ui &fresh_ui() {
     // start from a new Link (the rest of the Ui carries over between cases as before).
     const_cast<pd::Link &>(ui.link()) = pd::Link{};
     ui.context().keep.place_sel = {};
+    ui.context().keep.link_tab = 0;
     held::reset();
     g_stub.ms = 10000;
     ui.init(g_stub.ms);
@@ -223,6 +224,36 @@ static void test_ring_flag_and_busy_skip() {
     CHECK_EQ(ui.ports_busy(), false);
     key(Button::Plus);
     CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Link));             // free again: the menu shows
+    ui.goto_page(uint8_t(Page::Home), t += 100);
+}
+
+// The Link keeps its card through the ring as the other ring pages keep their row: leave it on Cable (Overview or Cable
+// Actions), walk to Tools and back, and OK opens the Cable card again.
+static void test_ring_link_keeps_card() {
+    Ui &ui = fresh_ui();
+    uint32_t t = 30000;
+    const auto key = [&](Button b, ButtonEvent e = ButtonEvent::Short) { ui.on_button(b, e, t += 50); t = settle(ui, t); };
+    ui.goto_page(static_cast<uint8_t>(Page::Lines), t);
+    for (int i = 0; i < 4; i++) key(Button::Plus);
+    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Link));
+    key(Button::Ok);
+    key(Button::Plus);                                   // Overview: the Cable card
+    CHECK_EQ(int(ui.connection_page().tab()), int(conn::Tab::Cable));
+    for (int pass = 0; pass < 2; pass++) {               // 0: left from the Overview, 1: from Cable Actions
+        if (pass == 1) {
+            key(Button::Ok);
+            CHECK_EQ(ui.connection_page().actions_mode(), true);
+        }
+        key(Button::Back, ButtonEvent::Long);
+        CHECK_EQ(ui.ring_view(), true);
+        key(Button::Plus);
+        CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Tools));
+        key(Button::Minus);
+        CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Link));
+        key(Button::Ok);
+        CHECK_EQ(ui.connection_page().overview_mode(), true);
+        CHECK_EQ(int(ui.connection_page().tab()), int(conn::Tab::Cable));
+    }
     ui.goto_page(uint8_t(Page::Home), t += 100);
 }
 
@@ -3007,6 +3038,7 @@ int main() {
     test_label_sets();
     test_ring_navigation();
     test_ring_flag_and_busy_skip();
+    test_ring_link_keeps_card();
     test_short_presses_do_not_page();
     test_back_goes_home();
     test_press_flash();

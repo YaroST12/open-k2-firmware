@@ -242,6 +242,7 @@ void ConnectionPage::exit_actions() {
 }
 
 void ConnectionPage::leave() {
+    ctx_.keep.link_tab = static_cast<uint8_t>(tab_);
     if (view_ == View::Actions) ctx_.rows.detach();
     op_ = StrBuf<24>();
     op_until_ = 0;
