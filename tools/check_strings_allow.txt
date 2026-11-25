@@ -1,0 +1,204 @@
+# check_strings.py allowlist: <relpath>  <reason>. A file listed here may keep plain text literals.
+# Opt-in lab builds (off in the shipping image) and the K2_P sweep backlog; an entry that no longer needs it fails as stale.
+include/k2/loopprobe/host_report_hw.hpp  header only opt-in builds include (absent from the default build deps)
+include/k2/loopprobe/loop_probe_hw.hpp  header only opt-in builds include (absent from the default build deps)
+include/k2/net/http_api.hpp  header only opt-in builds include (absent from the default build deps)
+include/k2/pdstress/engine.hpp  header only opt-in builds include (absent from the default build deps)
+include/k2/pdstress/journal_hw.hpp  header only opt-in builds include (absent from the default build deps)
+include/k2/pdstress/pdstress_store.hpp  header only opt-in builds include (absent from the default build deps)
+include/k2/twin/present.hpp  header only opt-in builds include (absent from the default build deps)
+include/k2/ui/pd_stress_session.hpp  header only opt-in builds include (absent from the default build deps)
+src/core/math_selftest.cpp  opt-in lab build (Makefile filter-out): not in the shipping image
+src/loopprobe/host_report.cpp  opt-in lab build (Makefile filter-out): not in the shipping image
+src/loopprobe/host_report_hw.cpp  opt-in lab build (Makefile filter-out): not in the shipping image
+src/loopprobe/loop_probe.cpp  opt-in lab build (Makefile filter-out): not in the shipping image
+src/loopprobe/usb_fp.cpp  opt-in lab build (Makefile filter-out): not in the shipping image
+src/net/http_server.cpp  opt-in lab build (Makefile filter-out): not in the shipping image
+src/pd/oppo_probe.cpp  opt-in lab build (Makefile filter-out): not in the shipping image
+src/pdstress/engine.cpp  opt-in lab build (Makefile filter-out): not in the shipping image
+src/twin/twin_hw.cpp  opt-in lab build (Makefile filter-out): not in the shipping image
+src/ui/ui_loop_probe.cpp  opt-in lab build (Makefile filter-out): not in the shipping image
+src/ui/ui_pdstress.cpp  opt-in lab build (Makefile filter-out): not in the shipping image
+src/ui/ui_pdstress_page.cpp  opt-in lab build (Makefile filter-out): not in the shipping image
+src/ui/ui_twin.cpp  opt-in lab build (Makefile filter-out): not in the shipping image
+include/k2/chargertest/cablepref.hpp  backlog: K2_P sweep pending
+include/k2/chargertest/charger_journal.hpp  backlog: K2_P sweep pending
+include/k2/chargertest/charger_test.hpp  backlog: K2_P sweep pending
+include/k2/chargertest/oem_watts.hpp  backlog: K2_P sweep pending
+include/k2/chargertest/prog_check.hpp  backlog: K2_P sweep pending
+include/k2/chargertest/report_card.hpp  backlog: K2_P sweep pending
+include/k2/chargertest/report_card_delta.hpp  backlog: K2_P sweep pending
+include/k2/chargertest/resume_text.hpp  backlog: K2_P sweep pending
+include/k2/chargertest/session.hpp  backlog: K2_P sweep pending
+include/k2/chargertest/spec_section.hpp  backlog: K2_P sweep pending
+include/k2/chargertest/svooc_ceiling.hpp  backlog: K2_P sweep pending
+include/k2/chargertest/sweep.hpp  backlog: K2_P sweep pending
+include/k2/core/bbpersist.hpp  backlog: K2_P sweep pending
+include/k2/core/bootmode.hpp  backlog: K2_P sweep pending
+include/k2/core/boottrace.hpp  backlog: K2_P sweep pending
+include/k2/core/fault_calc.hpp  backlog: K2_P sweep pending
+include/k2/core/fs_grow.hpp  backlog: K2_P sweep pending
+include/k2/core/fs_migrate.hpp  backlog: K2_P sweep pending
+include/k2/core/idle_cfg.hpp  backlog: K2_P sweep pending
+include/k2/core/lim_comeback.hpp  backlog: K2_P sweep pending
+include/k2/core/loop_guard.hpp  backlog: K2_P sweep pending
+include/k2/core/pc_link.hpp  backlog: K2_P sweep pending
+include/k2/core/rd_intent.hpp  backlog: K2_P sweep pending
+include/k2/core/ripple.hpp  backlog: K2_P sweep pending
+include/k2/core/shell.hpp  backlog: K2_P sweep pending
+include/k2/core/stage_meter.hpp  backlog: K2_P sweep pending
+include/k2/drivers/dfu.hpp  backlog: K2_P sweep pending
+include/k2/drivers/flash_map.hpp  backlog: K2_P sweep pending
+include/k2/drivers/usb_webusb.hpp  backlog: K2_P sweep pending
+include/k2/drivers/usbcfg.hpp  backlog: K2_P sweep pending
+include/k2/drivers/vfat.hpp  backlog: K2_P sweep pending
+include/k2/fastcharge/ai_recog.hpp  backlog: K2_P sweep pending
+include/k2/fastcharge/svooc_run.hpp  backlog: K2_P sweep pending
+include/k2/fastcharge/svooc_script.hpp  backlog: K2_P sweep pending
+include/k2/fastcharge/ufcs.hpp  backlog: K2_P sweep pending
+include/k2/fastcharge/ufcs_diag.hpp  backlog: K2_P sweep pending
+include/k2/fastcharge/ufcs_probe.hpp  backlog: K2_P sweep pending
+include/k2/fastcharge/ufcs_tune.hpp  backlog: K2_P sweep pending
+include/k2/pd/boot_ra.hpp  backlog: K2_P sweep pending
+include/k2/pd/cable_fact.hpp  backlog: K2_P sweep pending
+include/k2/pd/cable_r.hpp  backlog: K2_P sweep pending
+include/k2/pd/diag.hpp  backlog: K2_P sweep pending
+include/k2/pd/emk_attached.hpp  backlog: K2_P sweep pending
+include/k2/pd/emk_ra.hpp  backlog: K2_P sweep pending
+include/k2/pd/emk_variant.hpp  backlog: K2_P sweep pending
+include/k2/pd/emlib.hpp  backlog: K2_P sweep pending
+include/k2/pd/emrec.hpp  backlog: K2_P sweep pending
+include/k2/pd/inline_cause.hpp  backlog: K2_P sweep pending
+include/k2/pd/link_guard.hpp  backlog: K2_P sweep pending
+include/k2/pd/pd_listen.hpp  backlog: K2_P sweep pending
+include/k2/pd/pd_passive.hpp  backlog: K2_P sweep pending
+include/k2/pd/pd_tabs.hpp  backlog: K2_P sweep pending
+include/k2/pd/pd_verdict.hpp  backlog: K2_P sweep pending
+include/k2/pd/ra_class.hpp  backlog: K2_P sweep pending
+include/k2/pd/ra_guard.hpp  backlog: K2_P sweep pending
+include/k2/pd/store.hpp  backlog: K2_P sweep pending
+include/k2/pd/transcap_calc.hpp  backlog: K2_P sweep pending
+include/k2/pd/transcap_store.hpp  backlog: K2_P sweep pending
+include/k2/pdstress/dist.hpp  backlog: K2_P sweep pending
+include/k2/pdstress/plan.hpp  backlog: K2_P sweep pending
+include/k2/pdstress/score.hpp  backlog: K2_P sweep pending
+include/k2/twin/learn.hpp  backlog: K2_P sweep pending
+include/k2/twin/library.hpp  backlog: K2_P sweep pending
+include/k2/twin/live.hpp  backlog: K2_P sweep pending
+include/k2/twin/twin_hw.hpp  backlog: K2_P sweep pending
+include/k2/twin/usbdata.hpp  backlog: K2_P sweep pending
+include/k2/ui/pd_spec_session.hpp  backlog: K2_P sweep pending
+include/k2/ui/qrshare_link.hpp  backlog: K2_P sweep pending
+include/k2/ui/run_layout.hpp  backlog: K2_P sweep pending
+include/k2/ui/smoothing.hpp  backlog: K2_P sweep pending
+include/k2/ui/spec_text.hpp  backlog: K2_P sweep pending
+include/k2/ui/text/tools.hpp  backlog: K2_P sweep pending
+include/k2/ui/ui.hpp  backlog: K2_P sweep pending
+include/k2/ui/ui_display.hpp  backlog: K2_P sweep pending
+include/k2/ui/ui_labels.hpp  backlog: K2_P sweep pending
+include/k2/ui/ui_qrtest.hpp  backlog: K2_P sweep pending
+include/k2/ui/ui_ring.hpp  backlog: K2_P sweep pending
+include/k2/ui/ui_share.hpp  backlog: K2_P sweep pending
+include/k2/ui/ui_tools.hpp  backlog: K2_P sweep pending
+include/k2/ui/ui_trigger.hpp  backlog: K2_P sweep pending
+include/k2/ui/ui_widgets.hpp  backlog: K2_P sweep pending
+include/k2/ui/uiprefs.hpp  backlog: K2_P sweep pending
+include/k2/ui/wait_plus.hpp  backlog: K2_P sweep pending
+src/battery/battery_hw.cpp  backlog: K2_P sweep pending
+src/chargertest/cablepref.cpp  backlog: K2_P sweep pending
+src/chargertest/charger_journal.cpp  backlog: K2_P sweep pending
+src/chargertest/charger_journal_core.cpp  backlog: K2_P sweep pending
+src/chargertest/mi_unlock.cpp  backlog: K2_P sweep pending
+src/chargertest/report_card.cpp  backlog: K2_P sweep pending
+src/chargertest/report_card_hw.cpp  backlog: K2_P sweep pending
+src/chargertest/step_label.cpp  backlog: K2_P sweep pending
+src/chargertest/sweep.cpp  backlog: K2_P sweep pending
+src/core/boot_pd.cpp  backlog: K2_P sweep pending
+src/core/bootinfo.cpp  backlog: K2_P sweep pending
+src/core/eekeep.cpp  backlog: K2_P sweep pending
+src/core/fault.cpp  backlog: K2_P sweep pending
+src/core/fmt.cpp  backlog: K2_P sweep pending
+src/core/fs.cpp  backlog: K2_P sweep pending
+src/core/idle_hw.cpp  backlog: K2_P sweep pending
+src/core/logfmt.cpp  backlog: K2_P sweep pending
+src/core/main.cpp  backlog: K2_P sweep pending
+src/core/main_loop.cpp  backlog: K2_P sweep pending
+src/core/main_loop_cold.cpp  backlog: K2_P sweep pending
+src/core/memstat.cpp  backlog: K2_P sweep pending
+src/core/rd_comeback.cpp  backlog: K2_P sweep pending
+src/core/remote.cpp  backlog: K2_P sweep pending
+src/core/ripple.cpp  backlog: K2_P sweep pending
+src/core/scratch.cpp  backlog: K2_P sweep pending
+src/core/shell.cpp  backlog: K2_P sweep pending
+src/core/shell_hw_hot.cpp  backlog: K2_P sweep pending
+src/core/storage.cpp  backlog: K2_P sweep pending
+src/core/strpack.cpp  backlog: K2_P sweep pending
+src/core/survey.cpp  backlog: K2_P sweep pending
+src/core/version.cpp  backlog: K2_P sweep pending
+src/drivers/adc.cpp  backlog: K2_P sweep pending
+src/drivers/dpdm.cpp  backlog: K2_P sweep pending
+src/drivers/drive.cpp  backlog: K2_P sweep pending
+src/drivers/fs_flash.cpp  backlog: K2_P sweep pending
+src/drivers/fusb302.cpp  backlog: K2_P sweep pending
+src/drivers/msc.cpp  backlog: K2_P sweep pending
+src/drivers/power_calc.cpp  backlog: K2_P sweep pending
+src/drivers/usb_descriptors.cpp  backlog: K2_P sweep pending
+src/drivers/usbcfg.cpp  backlog: K2_P sweep pending
+src/fastcharge/fastcharge_classify.cpp  backlog: K2_P sweep pending
+src/fastcharge/fc_engine.cpp  backlog: K2_P sweep pending
+src/fastcharge/fc_scan.cpp  backlog: K2_P sweep pending
+src/fastcharge/fctrig.cpp  backlog: K2_P sweep pending
+src/fastcharge/svooc_trig.cpp  backlog: K2_P sweep pending
+src/pd/apple_readout.cpp  backlog: K2_P sweep pending
+src/pd/cable_full.cpp  backlog: K2_P sweep pending
+src/pd/diag.cpp  backlog: K2_P sweep pending
+src/pd/diag_live.cpp  backlog: K2_P sweep pending
+src/pd/diag_screen.cpp  backlog: K2_P sweep pending
+src/pd/emjson.cpp  backlog: K2_P sweep pending
+src/pd/emk_spoof.cpp  backlog: K2_P sweep pending
+src/pd/emname.cpp  backlog: K2_P sweep pending
+src/pd/emrec.cpp  backlog: K2_P sweep pending
+src/pd/pd.cpp  backlog: K2_P sweep pending
+src/pd/pd_identify.cpp  backlog: K2_P sweep pending
+src/pd/pd_interrogate.cpp  backlog: K2_P sweep pending
+src/pd/pd_limiter.cpp  backlog: K2_P sweep pending
+src/pd/pdtrace_link.cpp  backlog: K2_P sweep pending
+src/pd/pdtrace_view.cpp  backlog: K2_P sweep pending
+src/pd/power_source.cpp  backlog: K2_P sweep pending
+src/pd/transcap.cpp  backlog: K2_P sweep pending
+src/pd/usb_link.cpp  backlog: K2_P sweep pending
+src/pdspec/engine.cpp  backlog: K2_P sweep pending
+src/ui/battery_view.cpp  backlog: K2_P sweep pending
+src/ui/bootscreen.cpp  backlog: K2_P sweep pending
+src/ui/capture.cpp  backlog: K2_P sweep pending
+src/ui/gfx.cpp  backlog: K2_P sweep pending
+src/ui/home_cards.cpp  backlog: K2_P sweep pending
+src/ui/home_model.cpp  backlog: K2_P sweep pending
+src/ui/qrshare.cpp  backlog: K2_P sweep pending
+src/ui/qrshare_link.cpp  backlog: K2_P sweep pending
+src/ui/ui.cpp  backlog: K2_P sweep pending
+src/ui/ui_battery.cpp  backlog: K2_P sweep pending
+src/ui/ui_blackbox.cpp  backlog: K2_P sweep pending
+src/ui/ui_cable_list.cpp  backlog: K2_P sweep pending
+src/ui/ui_cabler.cpp  backlog: K2_P sweep pending
+src/ui/ui_calc.cpp  backlog: K2_P sweep pending
+src/ui/ui_cards.cpp  backlog: K2_P sweep pending
+src/ui/ui_charger_test.cpp  backlog: K2_P sweep pending
+src/ui/ui_connection_page.cpp  backlog: K2_P sweep pending
+src/ui/ui_detail.cpp  backlog: K2_P sweep pending
+src/ui/ui_diagnosis.cpp  backlog: K2_P sweep pending
+src/ui/ui_emarker.cpp  backlog: K2_P sweep pending
+src/ui/ui_graphs.cpp  backlog: K2_P sweep pending
+src/ui/ui_home.cpp  backlog: K2_P sweep pending
+src/ui/ui_hot.cpp  backlog: K2_P sweep pending
+src/ui/ui_labels.cpp  backlog: K2_P sweep pending
+src/ui/ui_lines.cpp  backlog: K2_P sweep pending
+src/ui/ui_match.cpp  backlog: K2_P sweep pending
+src/ui/ui_pages.cpp  backlog: K2_P sweep pending
+src/ui/ui_pdtrig.cpp  backlog: K2_P sweep pending
+src/ui/ui_ripple.cpp  backlog: K2_P sweep pending
+src/ui/ui_share.cpp  backlog: K2_P sweep pending
+src/ui/ui_spoof.cpp  backlog: K2_P sweep pending
+src/ui/ui_tools.cpp  backlog: K2_P sweep pending
+src/ui/ui_wizard.cpp  backlog: K2_P sweep pending
+src/ui/uiprefs.cpp  backlog: K2_P sweep pending
