@@ -1435,9 +1435,60 @@ void test_service_continue_then_cold_boot() {
     CHECK_COND(s.rec().phase(0).uj_in + 5ull * (kSaveMs + 1000) * 1000 >= in);
 }
 
+// A run the end rule closed stays closed at every boot (the 2026-11-25 run 6 reopened unasked): cold, warm with its own
+// checkpoint, and warm with a checkpoint taken before the end (an older firmware's SRAM): only Continue reopens it.
+void test_service_done_stays_done_at_boot() {
+    Vol v;
+    Service::Checkpoint ck{}, stale{};
+    {
+        Service s;
+        s.boot(&v.fs, &ck, false);
+        s.start(Mode::Charge, Wiring::SamePort, true);
+        std::uint32_t t = serve(s, 0, 300'000, 5000, 1000);
+        std::memcpy(static_cast<void *>(&stale), &ck, sizeof ck);   // measuring, written to flash at its last save
+        CHECK_COND(stale.rec.active() && !stale.rec.dirty());
+        t = serve(s, t, 62'000, 5000, 0);
+        CHECK_EQ(int(s.rec().state()), int(State::Done));
+        serve(s, t, 1000, 5000, 0);
+    }
+    Record r;
+    CHECK_EQ(store::load(v.fs, 1, r), true);
+    CHECK_EQ(int(r.state), int(RunState::Done));
+    for (int warm = 0; warm < 2; warm++) {
+        Service s;
+        CHECK_EQ(int(s.boot(&v.fs, &ck, warm != 0)), int(Service::Boot::Nothing));
+        CHECK_EQ(int(s.rec().state()), int(State::Idle));
+    }
+    Service s;
+    CHECK_EQ(int(s.boot(&v.fs, &stale, true)), int(Service::Boot::Nothing));
+    CHECK_EQ(int(s.rec().state()), int(State::Idle));
+    serve(s, 1000, 30'000, 20'000, 2500);
+    CHECK_EQ(store::load(v.fs, 1, r), true);
+    CHECK_EQ(int(r.state), int(RunState::Done));
+    CHECK_EQ(r.resumes, 0);
+}
+
+// The version 1 column fix never touches a version 2 record: a charge whose out column carried more stays as written.
+void test_v2_columns_as_written() {
+    Record d = done_record(6);
+    d.ph[0].uwh_in = 13'144'000;
+    d.ph[0].uwh_out = 19'726'000;
+    d.ph[0].uah_in = 650'000;
+    d.ph[0].uah_out = 997'000;
+    std::uint8_t buf[kRecordBytes];
+    CHECK_EQ(encode(d, buf), kRecordBytes);
+    Record r;
+    CHECK_COND(decode(buf, r));
+    CHECK_EQ(r.ph[0].uwh_in, 13'144'000u);
+    CHECK_EQ(r.ph[0].uwh_out, 19'726'000u);
+    CHECK_EQ(r.ph[0].uah_out, 997'000u);
+}
+
 }  // namespace
 
 int main() {
+    test_service_done_stays_done_at_boot();
+    test_v2_columns_as_written();
     test_negative_sign_all_wirings();
     test_negative_sign_round_trips();
     test_integrate_forward_hour();
