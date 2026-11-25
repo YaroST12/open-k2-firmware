@@ -3,12 +3,14 @@
 #include "k2/pd/pdtrace_view.hpp"
 
 #include <algorithm>
+#include <cstring>
 #include <string_view>
 #include "k2/core/math_opt.hpp"
 #include "k2/pd/pdtrace.hpp"
 #include "k2/pd/pdtrace_link.hpp"
 #include "k2/pd/pd.hpp"
 #include "k2/pd/pd_vdm.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::pdtrace::view {
 
@@ -22,25 +24,25 @@ const char* msg_name(std::uint16_t h) {
     const unsigned type = h & 0x1F, nobj = h >> 12 & 7;
     if (h >> 15 & 1) return "Ext";
     if (nobj == 0) {
-        static constexpr const char* kCtl[] = {"?", "GoodCRC", "GotoMin", "Accept", "Reject", "Ping", "PS_RDY", "GetSrcCap",
-                                               "GetSnkCap", "DR_Swap", "PR_Swap", "VCONN_Swap", "Wait", "SoftRst", "DataRst",
-                                               "DataRstDone", "NotSupp", "GetSrcExt", "GetStatus", "FR_Swap", "GetPPSSt"};
+        static constexpr const char* kCtl[] = {"?", K2_P("GoodCRC"), K2_P("GotoMin"), K2_P("Accept"), K2_P("Reject"), "Ping", K2_P("PS_RDY"), K2_P("GetSrcCap"),
+                                               K2_P("GetSnkCap"), K2_P("DR_Swap"), K2_P("PR_Swap"), K2_P("VCONN_Swap"), "Wait", K2_P("SoftRst"), K2_P("DataRst"),
+                                               K2_P("DataRstDone"), K2_P("NotSupp"), K2_P("GetSrcExt"), K2_P("GetStatus"), K2_P("FR_Swap"), K2_P("GetPPSSt")};
         return type < sizeof kCtl / sizeof kCtl[0] ? kCtl[type] : "Ctl?";
     }
     switch (type) {
-    case 1: return "SrcCap";
-    case 2: return "Request";
+    case 1: return K2_P("SrcCap");
+    case 2: return K2_P("Request");
     case 3: return "BIST";
-    case 4: return "SnkCap";
-    case 5: return "BattStat";
-    case 6: return "Alert";
-    case 8: return "EnterUSB";
-    case 9: return "EPRReq";
-    case 10: return "EPRMode";
-    case 11: return "SrcInfo";
-    case 12: return "Revision";
+    case 4: return K2_P("SnkCap");
+    case 5: return K2_P("BattStat");
+    case 6: return K2_P("Alert");
+    case 8: return K2_P("EnterUSB");
+    case 9: return K2_P("EPRReq");
+    case 10: return K2_P("EPRMode");
+    case 11: return K2_P("SrcInfo");
+    case 12: return K2_P("Revision");
     case 15: return "VDM";
-    default: return "Data?";
+    default: return K2_P("Data?");
     }
 }
 
@@ -63,25 +65,26 @@ bool row_of(const std::uint8_t* r, Row& out) {
         break;
     case Type::TxResult:
         if (len < kHeader + 1 || p[0] == std::uint8_t(TxResult::TxSent) || p[0] == std::uint8_t(TxResult::RxGoodCrc)) return false;
-        name = p[0] == std::uint8_t(TxResult::RetryFail) ? "TX nocrc" : "TX timeout";
+        name = p[0] == std::uint8_t(TxResult::RetryFail) ? K2_P("TX nocrc") : K2_P("TX timeout");
         break;
     case Type::Reset:
         if (len < kHeader + 1) return false;
-        if (p[0] == std::uint8_t(ResetKind::HardRx)) name = "HardRst rx";
-        else if (p[0] == std::uint8_t(ResetKind::HardTx)) name = "HardRst tx";
+        if (p[0] == std::uint8_t(ResetKind::HardRx)) name = K2_P("HardRst rx");
+        else if (p[0] == std::uint8_t(ResetKind::HardTx)) name = K2_P("HardRst tx");
         else return false;
         break;
     case Type::Cc:
         if (len < kHeader + 1) return false;
-        name = p[0] ? "ATTACH" : "DETACH";
+        name = p[0] ? K2_P("ATTACH") : K2_P("DETACH");
         break;
     default:
         return false;
     }
-    if (dir != '!' && name[0] == 'G' && name[4] == 'C') return false;   // GoodCRC
+    char nm[sizeof out.name] = {};   // the names are packed: decode before the GoodCRC test and the copy
     std::size_t n = 0;
-    for (; name[n] && n < sizeof out.name - 1; n++) out.name[n] = name[n];
-    out.name[n] = '\0';
+    strpack::for_chars(name, [&](char c) { if (n < sizeof nm - 1) nm[n++] = c; });
+    if (dir != '!' && nm[0] == 'G' && nm[4] == 'C') return false;   // GoodCRC
+    std::memcpy(out.name, nm, sizeof nm);
     out.dir = dir;
     out.t_us = rd32(r + 2);
     return true;
@@ -238,7 +241,7 @@ std::size_t format_key(const Identity& id, std::span<char> out) {
     if (id.has_dev || id.has_src) {
         const std::uint16_t vid = id.has_dev ? id.dev_vid : id.src_vid, pid = id.has_dev ? id.dev_pid : id.src_pid;
         for (const std::uint16_t w : {vid, pid}) {
-            for (int s = 12; s >= 0; s -= 4) put(out, n, "0123456789ABCDEF"[w >> s & 15]);
+            for (int s = 12; s >= 0; s -= 4) put(out, n, "0123456789ABCDEF"[w >> s & 15]);   // k2-plain: indexed digits
             if (w == vid) put(out, n, ':');
         }
     } else if (id.fp[0]) {
@@ -319,7 +322,7 @@ std::size_t format_capture_long(std::span<const std::uint8_t> records, std::uint
     for (std::size_t i = 0; i < dn; i++) put(out, n, d[i]);
     put(out, n, ' '); put(out, n, ' ');
     put_num(out, n, static_cast<std::uint32_t>(count_rows(records)));
-    for (const char c : std::string_view(" msgs")) put(out, n, c);
+    strpack::for_chars(K2_P(" msgs"), [&](char c) { put(out, n, c); });
     return n;
 }
 
@@ -399,6 +402,7 @@ void json_row(std::span<const std::uint8_t> records, std::size_t index, std::spa
                 do { t[k++] = static_cast<char>('0' + v % 10); v /= 10; } while (v);
                 while (k && p < end) *p++ = t[--k];
             };
+            // k2-plain-begin: JSON line writer copies raw
             put("{\"t\":");
             num(rd32(&records[off + 2]));
             put(",\"y\":");
@@ -409,6 +413,7 @@ void json_row(std::span<const std::uint8_t> records, std::size_t index, std::spa
                 *p++ = "0123456789abcdef"[records[off + i] & 15];
             }
             put("\"}");
+            // k2-plain-end
             return;
         }
         off += len;
@@ -423,6 +428,7 @@ void json_meta(std::span<const std::uint8_t> records, std::span<char, kJsonLine>
     char* p = out.data();
     char* const end = p + kJsonLine - 1;
     auto put = [&](const char* s) { while (*s && p < end) *p++ = *s++; };
+    // k2-plain-begin: JSON line writer copies raw
     auto hex4 = [&](std::uint16_t w) { for (int s = 12; s >= 0 && p < end; s -= 4) *p++ = "0123456789ABCDEF"[w >> s & 15]; };
     auto vp = [&](const char* name, std::uint16_t vid, std::uint16_t pid) {
         put(",\""); put(name); put("\":\"");
@@ -437,6 +443,7 @@ void json_meta(std::span<const std::uint8_t> records, std::span<char, kJsonLine>
     if (id.has_src) vp("src", id.src_vid, id.src_pid);
     if (id.fp[0]) { put(",\"fp\":\""); put(id.fp); put("\""); }
     put("}}");
+    // k2-plain-end
 }
 
 void json_line(std::span<const std::uint8_t> records, std::size_t index, std::span<char, kJsonLine> out) {

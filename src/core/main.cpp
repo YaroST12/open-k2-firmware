@@ -63,6 +63,7 @@
 #include "k2/ui/ui.hpp"
 #if K2_NET
 #include "k2/net/net.hpp"
+#include "k2/core/strpack.hpp"
 #endif
 
 namespace {
@@ -228,7 +229,7 @@ k2::mainloop::Context g_loop{g_ui, g_remote, g_bootscreen, g_accelerometer, rebo
     const bool accel_online = g_accelerometer.init(k2::systick::millis());
     k2::hw_revision::init(g_accelerometer.identity(), k2::power::chip());
     K2LOG("[ACCEL] compatible gravity sensor %s at INA bus 0x18\n",
-                    accel_online ? "online" : "unavailable");
+                    accel_online ? K2_P("online") : K2_P("unavailable"));
 
     k2::mainloop::install_hooks();   // the delay_ms() wait hook and the LCD idle hook (PD served during long draws)
     // USB connects LAST. TinyUSB answers control requests only from tud_task(), so the D+ pull-up

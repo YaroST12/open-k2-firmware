@@ -7,6 +7,7 @@
 #include "k2/drivers/fs_flash.hpp"
 #include "k2/drivers/systick.hpp"
 #include "k2/drivers/usb.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::charger_journal::hw {
 namespace {
@@ -115,7 +116,7 @@ void pump(std::uint32_t run_id, const charger_test::Options& o, const charger_te
     if (!g_j.pending()) return;
     const std::uint32_t t0 = systick::millis();
     if (!g_job.active) g_job = {true, false, t0, 0, 0, 0};
-    const char* what = g_job.arm ? "begin" : "replan";
+    const char* what = g_job.arm ? K2_P("begin") : K2_P("replan");
 #if K2_SPECROWS
     const Err r = g_j.pump(run_id, o, e, steps, rows);
 #else
@@ -125,7 +126,7 @@ void pump(std::uint32_t run_id, const charger_test::Options& o, const charger_te
     const std::uint32_t ms = t1 - t0;
     ++g_job.pumps; g_job.busy_ms += ms;
     if (ms > g_job.worst_ms) g_job.worst_ms = ms;
-    slow(g_job.arm ? "begin pump" : "section pump", ms);
+    slow(g_job.arm ? K2_P("begin pump") : K2_P("section pump"), ms);
     if (r != Err::Ok) { g_job.active = false; report(what, r, ms); return; }
     if (!g_j.pending()) {
         K2LOG("[CJRN] %s ok rows=%u pumps=%u busy=%ums worst=%ums elapsed=%ums used=%u/%u\n", what, static_cast<unsigned>(steps.size()),
@@ -136,11 +137,11 @@ void pump(std::uint32_t run_id, const charger_test::Options& o, const charger_te
 }
 
 void phase(Phase p, std::span<const charger_test::Step> steps, std::size_t index) {
-    timed("phase", [&] { return g_j.phase(p, steps, index); });
+    timed(K2_P("phase"), [&] { return g_j.phase(p, steps, index); });
 }
-void resumed(std::uint8_t count) { timed("resumed", [&] { return g_j.resumed(count); }); }
+void resumed(std::uint8_t count) { timed(K2_P("resumed"), [&] { return g_j.resumed(count); }); }
 void meta(const RunMeta& m) { timed("meta", [&] { return g_j.meta(m); }); }
-void attempt(std::size_t index, std::uint8_t count) { timed("attempt", [&] { return g_j.attempt(index, count); }); }
-void finish(std::uint8_t state, std::uint8_t reason) { timed("finish", [&] { return g_j.finish(state, reason); }); }
+void attempt(std::size_t index, std::uint8_t count) { timed(K2_P("attempt"), [&] { return g_j.attempt(index, count); }); }
+void finish(std::uint8_t state, std::uint8_t reason) { timed(K2_P("finish"), [&] { return g_j.finish(state, reason); }); }
 
 }  // namespace k2::charger_journal::hw

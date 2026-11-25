@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Yaraslau Furman
 #include "k2/chargertest/sweep.hpp"
 #include <string_view>
+#include "k2/core/strpack.hpp"
 
 namespace k2::ctsweep {
 
@@ -144,7 +145,7 @@ size_t format_point(unsigned set_mv, int measured_mv, std::span<char> out) {
     const unsigned got = measured_mv > 0 ? unsigned(measured_mv) : 0u;
     const int err = std::clamp(int(got) - int(set_mv), -9999, 9999);
     size_t n = 0;
-    auto put = [&](std::string_view t) { for (char c : t) if (n + 1 < out.size()) out[n++] = c; };
+    auto put = [&](std::string_view t) { strpack::for_chars(t, [&](char c) { if (n + 1 < out.size()) out[n++] = c; }); };
     auto num = [&](unsigned v, unsigned min_digits) {
         char t[10]; unsigned k = 0;
         do { t[k++] = char('0' + v % 10); v /= 10; } while ((v || k < min_digits) && k < sizeof t);
@@ -155,8 +156,8 @@ size_t format_point(unsigned set_mv, int measured_mv, std::span<char> out) {
         num(r / 100, 1); put("."); num(r % 100, 2); put("V");
     };
     put("req "); volts(set_mv);
-    put("  got "); volts(got);
-    put("  err"); put(err < 0 ? "-" : "+"); num(unsigned(err < 0 ? -err : err), 1); put("mV");
+    put(K2_P("  got ")); volts(got);
+    put(K2_P("  err")); put(err < 0 ? "-" : "+"); num(unsigned(err < 0 ? -err : err), 1); put("mV");
     if (n < out.size()) out[n] = 0;
     return n;
 }
@@ -184,12 +185,12 @@ size_t format_mv(unsigned mv, std::span<char> out) {
 size_t format_summary(const Summary& s, std::span<char> out) {
     if (out.empty()) return 0;
     size_t n = 0;
-    auto put = [&](std::string_view t) { for (char c : t) if (n + 1 < out.size()) out[n++] = c; };
+    auto put = [&](std::string_view t) { strpack::for_chars(t, [&](char c) { if (n + 1 < out.size()) out[n++] = c; }); };
     auto mv = [&](unsigned v) { char b[12]; const size_t k = format_mv(v, {b, sizeof b}); put({b, k}); };
-    if (!s.points) { put("no points"); }
+    if (!s.points) { put(K2_P("no points")); }
     else {
-        put("peak "); mv(s.peak_mv); put(" V at "); mv(s.peak_at_mv); put(" V");
-        if (s.fold_mv) { put(", folds back to "); mv(s.fold_mv); put(" V from "); mv(s.fold_from_mv); put(" V"); }
+        put(K2_P("peak ")); mv(s.peak_mv); put(K2_P(" V at ")); mv(s.peak_at_mv); put(" V");
+        if (s.fold_mv) { put(K2_P(", folds back to ")); mv(s.fold_mv); put(K2_P(" V from ")); mv(s.fold_from_mv); put(" V"); }
     }
     if (n < out.size()) out[n] = 0;
     return n;
@@ -200,7 +201,7 @@ size_t format_fold(const Summary& s, std::span<char> out) {
     if (out.empty()) return 0;
     if (!s.fold_mv) { out[0] = 0; return 0; }
     size_t n = 0;
-    auto put = [&](std::string_view t) { for (char c : t) if (n + 1 < out.size()) out[n++] = c; };
+    auto put = [&](std::string_view t) { strpack::for_chars(t, [&](char c) { if (n + 1 < out.size()) out[n++] = c; }); };
     auto tenths = [&](unsigned mv) {
         const unsigned t = (mv + 50) / 100;
         char d[8]; unsigned k = 0, w = t / 10;
@@ -209,8 +210,8 @@ size_t format_fold(const Summary& s, std::span<char> out) {
         if (t % 10) { const char f[2] = {'.', char('0' + t % 10)}; put({f, 2}); }   // "19.4V", "20V" (the card's put_volts reads the same)
         put("V");
     };
-    put("folds to "); tenths(s.fold_mv);
-    put(" above "); tenths(s.fold_ok_mv ? s.fold_ok_mv : s.fold_from_mv > kStepMv ? s.fold_from_mv - kStepMv : 0u);
+    put(K2_P("folds to ")); tenths(s.fold_mv);
+    put(K2_P(" above ")); tenths(s.fold_ok_mv ? s.fold_ok_mv : s.fold_from_mv > kStepMv ? s.fold_from_mv - kStepMv : 0u);
     if (n < out.size()) out[n] = 0;
     return n;
 }

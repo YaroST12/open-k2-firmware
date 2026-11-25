@@ -4,6 +4,7 @@
 #include "k2/pd/pd_ext.hpp"
 
 #include <algorithm>
+#include "k2/core/strpack.hpp"
 
 namespace k2::pd {
 
@@ -26,16 +27,16 @@ std::uint16_t id_modes_svid(std::span<const std::uint16_t> svids, unsigned idx) 
 
 const char* id_step_short(IdStep s) {
     switch (s) {
-        case IdStep::Identity: return "Identity";
-        case IdStep::Svids: return "SVIDs";
-        case IdStep::Modes: return "Modes";
-        case IdStep::SinkCap: return "Sink caps";
-        case IdStep::Status: return "Status";
-        case IdStep::Revision: return "Revision";
-        case IdStep::BatCap: return "Battery cap";
-        case IdStep::BatStatus: return "Battery";
-        case IdStep::MfrInfo: return "Mfr info";
-        case IdStep::BattMfrInfo: return "Batt mfr";
+        case IdStep::Identity: return K2_P("Identity");
+        case IdStep::Svids: return K2_P("SVIDs");
+        case IdStep::Modes: return K2_P("Modes");
+        case IdStep::SinkCap: return K2_P("Sink caps");
+        case IdStep::Status: return K2_P("Status");
+        case IdStep::Revision: return K2_P("Revision");
+        case IdStep::BatCap: return K2_P("Battery cap");
+        case IdStep::BatStatus: return K2_P("Battery");
+        case IdStep::MfrInfo: return K2_P("Mfr info");
+        case IdStep::BattMfrInfo: return K2_P("Batt mfr");
         case IdStep::Done: return "done";
     }
     return "?";
@@ -43,16 +44,16 @@ const char* id_step_short(IdStep s) {
 
 const char* id_step_name(IdStep s) {
     switch (s) {
-        case IdStep::Identity: return "Discover Identity";
-        case IdStep::Svids: return "Discover SVIDs";
-        case IdStep::Modes: return "Discover Modes";
-        case IdStep::SinkCap: return "Get_Sink_Cap";
-        case IdStep::Status: return "Get_Status";
-        case IdStep::Revision: return "Get_Revision";
-        case IdStep::BatCap: return "Get_Battery_Cap";
-        case IdStep::BatStatus: return "Get_Battery_Status";
-        case IdStep::MfrInfo: return "Get_Manufacturer_Info";
-        case IdStep::BattMfrInfo: return "Get_Manufacturer_Info (batt)";
+        case IdStep::Identity: return K2_P("Discover Identity");
+        case IdStep::Svids: return K2_P("Discover SVIDs");
+        case IdStep::Modes: return K2_P("Discover Modes");
+        case IdStep::SinkCap: return K2_P("Get_Sink_Cap");
+        case IdStep::Status: return K2_P("Get_Status");
+        case IdStep::Revision: return K2_P("Get_Revision");
+        case IdStep::BatCap: return K2_P("Get_Battery_Cap");
+        case IdStep::BatStatus: return K2_P("Get_Battery_Status");
+        case IdStep::MfrInfo: return K2_P("Get_Manufacturer_Info");
+        case IdStep::BattMfrInfo: return K2_P("Get_Manufacturer_Info (batt)");
         case IdStep::Done: return "done";
     }
     return "?";

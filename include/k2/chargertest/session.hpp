@@ -16,6 +16,7 @@
 #include <optional>
 
 #include "k2/core/ringlog.hpp"
+#include "k2/core/strpack.hpp"
 #include "k2/pd/pd_identify.hpp"
 
 namespace k2::session {
@@ -93,7 +94,7 @@ inline std::size_t summarize(const Record& r, char* out, std::size_t n) {
     if (n == 0) return 0;
     std::size_t len = 0;
     auto put = [&](char c) { if (len + 1 < n) out[len++] = c; };
-    auto str = [&](const char* s) { while (*s) put(*s++); };
+    auto str = [&](const char* s) { strpack::for_chars(s, put); };   // id_step_short is packed
     auto num = [&](unsigned v) {
         char t[10];
         int k = 0;
@@ -101,14 +102,14 @@ inline std::size_t summarize(const Record& r, char* out, std::size_t n) {
         while (k) put(t[--k]);
     };
     str("cc="); num(r.cc);
-    str(" caps="); num(r.caps_valid ? r.num_pdos : 0);
+    str(K2_P(" caps=")); num(r.caps_valid ? r.num_pdos : 0);
     if (r.contract_valid) {
-        str(" pos="); num(r.pos);
+        str(K2_P(" pos=")); num(r.pos);
         put(' '); num(r.mv); str("mV ");
         num(r.op_ma); str("mA");
-        if (r.contract_ready) str(" ready");
+        if (r.contract_ready) str(K2_P(" ready"));
     } else {
-        str(" no-contract");
+        str(K2_P(" no-contract"));
     }
     str(" id=");
     switch (static_cast<pd::IdState>(r.id_state)) {
@@ -117,11 +118,11 @@ inline std::size_t summarize(const Record& r, char* out, std::size_t n) {
             str(pd::id_step_short(static_cast<pd::IdStep>(r.id_step)));
             break;
         case pd::IdState::Done: str("done"); break;
-        case pd::IdState::Aborted: str("aborted"); break;
+        case pd::IdState::Aborted: str(K2_P("aborted")); break;
         default: str("idle"); break;
     }
     if (r.id_state != 0 && r.id_ok_mask) {
-        const char* hex = "0123456789ABCDEF";
+        const char* hex = "0123456789ABCDEF"; // k2-plain: indexed digit table
         str(" ok="); put(hex[r.id_ok_mask >> 4 & 15]); put(hex[r.id_ok_mask & 15]);
     }
     out[len] = '\0';

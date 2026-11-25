@@ -279,7 +279,7 @@ int fmt_u32_compact(std::span<char> out, uint32_t value) {
 }
 
 int fmt_count_capped(std::span<char> out, uint32_t value) {
-    if (count_overflowed(value)) return emit(out, ">999M", 5);
+    if (count_overflowed(value)) return emit(out, ">999M", 5);   // k2-plain: copied by length
     return fmt_u32_compact(out, value);
 }
 

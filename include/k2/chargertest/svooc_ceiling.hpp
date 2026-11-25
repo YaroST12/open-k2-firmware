@@ -15,6 +15,7 @@
 
 #include "k2/fastcharge/svooc_run.hpp"
 #include "k2/fastcharge/svooc_script.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::svooc_ceiling {
 
@@ -43,17 +44,17 @@ inline constexpr std::uint32_t kQuietMs = 500;
 // 120 W: 7.98 V -> 0.74 V in 60 ms, 80 ms after the release) and the run brings it back with an Rd cycle.
 inline constexpr std::uint32_t kDropMs = 200;
 
-constexpr const char* name(Mode m) { return m == Mode::On ? "on" : m == Mode::UsbA ? "usb-a" : "off"; }
+constexpr const char* name(Mode m) { return m == Mode::On ? "on" : m == Mode::UsbA ? K2_P("usb-a") : "off"; }
 constexpr const char* name(End e) {
     switch (e) {
     case End::None: return "none";
-    case End::Refused: return "refused";
-    case End::NoAdapter: return "no adapter";
-    case End::Aborted: return "aborted";
+    case End::Refused: return K2_P("refused");
+    case End::NoAdapter: return K2_P("no adapter");
+    case End::Aborted: return K2_P("aborted");
     case End::Cap: return "cap";
-    case End::Judged: return "judged";
-    case End::Cancelled: return "cancelled";
-    case End::Stopped: return "stopped";
+    case End::Judged: return K2_P("judged");
+    case End::Cancelled: return K2_P("cancelled");
+    case End::Stopped: return K2_P("stopped");
     }
     return "?";
 }
@@ -108,19 +109,19 @@ struct Outcome {
 constexpr const char* abort_word(std::uint8_t why) {
     switch (static_cast<svooc::Abort>(why)) {
     case svooc::Abort::None: return "";
-    case svooc::Abort::Overvoltage: return "over 12V";
-    case svooc::Abort::Current: return "current";
-    case svooc::Abort::OffScript: return "off-script";
-    case svooc::Abort::HostGone: return "host gone";
-    case svooc::Abort::NoMonitor: return "no monitor";
+    case svooc::Abort::Overvoltage: return K2_P("over 12V");
+    case svooc::Abort::Current: return K2_P("current");
+    case svooc::Abort::OffScript: return K2_P("off-script");
+    case svooc::Abort::HostGone: return K2_P("host gone");
+    case svooc::Abort::NoMonitor: return K2_P("no monitor");
     case svooc::Abort::Sink: return "sink";
     case svooc::Abort::PdContract: return "PD";
-    case svooc::Abort::Storm: return "edge storm";
-    case svooc::Abort::NoAdapter: return "no adapter";
-    case svooc::Abort::TimeCap: return "time cap";
-    case svooc::Abort::Stopped: return "stopped";
-    case svooc::Abort::ContractLost: return "PD lost";
-    case svooc::Abort::ContractChanged: return "PD changed";
+    case svooc::Abort::Storm: return K2_P("edge storm");
+    case svooc::Abort::NoAdapter: return K2_P("no adapter");
+    case svooc::Abort::TimeCap: return K2_P("time cap");
+    case svooc::Abort::Stopped: return K2_P("stopped");
+    case svooc::Abort::ContractLost: return K2_P("PD lost");
+    case svooc::Abort::ContractChanged: return K2_P("PD changed");
     }
     return "?";
 }
@@ -146,7 +147,7 @@ inline std::size_t format_cap(const Outcome& c, std::span<char> out) {
     if (out.empty()) return 0;
     char tmp[kCapChars] = {};
     std::size_t n = 0;
-    const auto put = [&](const char* s) { while (*s && n + 1 < sizeof tmp) tmp[n++] = *s++; };
+    const auto put = [&](const char* s) { strpack::for_chars(s, [&](char ch) { if (n + 1 < sizeof tmp) tmp[n++] = ch; }); };
     const auto tenths = [&](std::uint32_t t) {   // "12.5"
         char d[8];
         std::size_t k = 0;
@@ -155,14 +156,14 @@ inline std::size_t format_cap(const Outcome& c, std::span<char> out) {
         while (k && n + 1 < sizeof tmp) tmp[n++] = d[--k];
         if (n + 3 < sizeof tmp) { tmp[n++] = '.'; tmp[n++] = char('0' + t % 10u); }
     };
-    if (c.end == End::Refused) put("refused");
-    else if (c.end == End::NoAdapter) put("no adapter");
+    if (c.end == End::Refused) put(K2_P("refused"));
+    else if (c.end == End::NoAdapter) put(K2_P("no adapter"));
     else if (c.end == End::None) put("-");
     else {
-        if (c.end == End::Stopped) { put("stopped at "); tenths((std::uint32_t(c.stop_ms) + 50u) / 100u); put("s, "); }
+        if (c.end == End::Stopped) { put(K2_P("stopped at ")); tenths((std::uint32_t(c.stop_ms) + 50u) / 100u); put("s, "); }
         if (c.end == End::Aborted) {
             const char* w = abort_word(c.why);
-            if (*w) { put("aborted: "); put(w); put(", "); } else put("aborted, ");
+            if (*w) { put(K2_P("aborted: ")); put(w); put(", "); } else put(K2_P("aborted, "));
         }
         if (c.vmax_mv) { put("<="); tenths((std::uint32_t(c.vmax_mv) + 50u) / 100u); put("V, "); }
         if (c.word) {
@@ -176,9 +177,9 @@ inline std::size_t format_cap(const Outcome& c, std::span<char> out) {
                 while (k && n + 1 < sizeof tmp) tmp[n++] = d[--k];
                 put("W ");
             }
-            put("claimed");
+            put(K2_P("claimed"));
         }
-        else put("none claimed");
+        else put(K2_P("none claimed"));
     }
     n = n < out.size() - 1 ? n : out.size() - 1;
     for (std::size_t i = 0; i < n; ++i) out[i] = tmp[i];
@@ -192,7 +193,7 @@ inline std::size_t format_ident(std::uint8_t ident, std::span<char> out) {
     if (out.empty()) return 0;
     out[0] = '\0';
     if (!ident || out.size() < 5) return 0;
-    constexpr char hex[] = "0123456789ABCDEF";
+    constexpr char hex[] = "0123456789ABCDEF"; // k2-plain: char array
     out[0] = '0'; out[1] = 'x'; out[2] = hex[ident >> 4]; out[3] = hex[ident & 0xF]; out[4] = '\0';
     return 4;
 }

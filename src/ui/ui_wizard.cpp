@@ -146,8 +146,8 @@ void Wizard::title(const pd::SourceCaps &caps, StrBuf<24> &out) const {
         out.put("LIVE");
         return;
     }
-    static constexpr const char *kNames[] = {"OFFER", K2_P("VOLTAGE"), K2_P("CURRENT"), K2_P("CONFIRM")};
-    out.put("Step ").put_u32(uint32_t(number(caps))).put_char('/').put_u32(uint32_t(total(caps)));
+    static constexpr const char *kNames[] = {K2_P("OFFER"), K2_P("VOLTAGE"), K2_P("CURRENT"), K2_P("CONFIRM")};
+    out.put(K2_P("Step ")).put_u32(uint32_t(number(caps))).put_char('/').put_u32(uint32_t(total(caps)));
     out.put(": ").put(kNames[uint8_t(step)]);
 }
 

@@ -10,6 +10,7 @@
 #include "k2/fastcharge/vooc.hpp"
 #include "k2/drivers/regs.hpp"
 #include "k2/drivers/systick.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::dpdm {
 
@@ -110,8 +111,8 @@ const char* name(Drive d) {
     case Drive::V2p0:       return "2.0";
     case Drive::V3p3:       return "3.3";
     case Drive::RxPulldown: return "rx";
-    case Drive::Listen:     return "listen";
-    case Drive::Sniff:      return "sniff";
+    case Drive::Listen:     return K2_P("listen");
+    case Drive::Sniff:      return K2_P("sniff");
     }
     return "?";
 }

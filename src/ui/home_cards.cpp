@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Yaraslau Furman
 #include "k2/ui/home_cards.hpp"
 #include "k2/core/math_opt.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::home {
 namespace {
@@ -270,7 +271,7 @@ Card Attention::update(uint32_t now_ms, bool live, int32_t vbus_mv, int32_t cc1_
 // ---- BoxCycler ---------------------------------------------------------------------------------
 const char *box_short_name(BoxKind b) {
     static constexpr const char *kNames[static_cast<unsigned>(BoxKind::Count)] = {
-        "Rotating", "PD Req", "Energy", "Drop", "E-Marker", "CC1/2", "D+/D-", "Battery", "Load R", "Off"
+        K2_P("Rotating"), K2_P("PD Req"), K2_P("Energy"), "Drop", K2_P("E-Marker"), K2_P("CC1/2"), K2_P("D+/D-"), K2_P("Battery"), K2_P("Load R"), "Off"
     };
     const unsigned i = static_cast<unsigned>(b);
     return kNames[i < static_cast<unsigned>(BoxKind::Count) ? i : 0];
@@ -278,9 +279,9 @@ const char *box_short_name(BoxKind b) {
 
 const char *box_note(BoxKind b) {
     static constexpr const char *kNotes[static_cast<unsigned>(BoxKind::Count)] = {
-        "Cycles unpinned + active", "PD charger max & sink req", "Session Wh and Ah", "Cable drop & VBUS sag %",
-        "E-Marker rating & speed", "CC1 and CC2 voltages", "D+ and D- voltages", "PD battery state of charge",
-        "Apparent load resistance", "Leave box blank"
+        K2_P("Cycles unpinned + active"), K2_P("PD charger max & sink req"), K2_P("Session Wh and Ah"), K2_P("Cable drop & VBUS sag %"),
+        K2_P("E-Marker rating & speed"), K2_P("CC1 and CC2 voltages"), K2_P("D+ and D- voltages"), K2_P("PD battery state of charge"),
+        K2_P("Apparent load resistance"), K2_P("Leave box blank")
     };
     const unsigned i = static_cast<unsigned>(b);
     return kNotes[i < static_cast<unsigned>(BoxKind::Count) ? i : 0];

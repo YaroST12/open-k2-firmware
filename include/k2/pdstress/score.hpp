@@ -51,18 +51,18 @@ inline constexpr std::array<std::uint16_t, kEventCount> kWeights = {
 
 constexpr const char* event_name(Event e) {
     switch (e) {
-        case Event::AcceptLate: return "accept_late";
-        case Event::PsRdyLate: return "psrdy_late";
-        case Event::PsRdyOutOfBand: return "psrdy_oob";
+        case Event::AcceptLate: return "accept_late"; // k2-plain: token parsed by pdstress_blob.py
+        case Event::PsRdyLate: return "psrdy_late"; // k2-plain: token parsed by pdstress_blob.py
+        case Event::PsRdyOutOfBand: return "psrdy_oob"; // k2-plain: token parsed by pdstress_blob.py
         case Event::WaitRx: return "wait";
-        case Event::RejectRx: return "reject";
-        case Event::CapsReannounce: return "caps_unsol";
-        case Event::VbusBand: return "vbus_band";
-        case Event::SoftResetRx: return "soft_reset";
-        case Event::HardResetRx: return "hard_reset";
-        case Event::VbusDropout: return "dropout";
-        case Event::ContractLost: return "contract_lost";
-        case Event::NoRecovery: return "no_recovery";
+        case Event::RejectRx: return "reject"; // k2-plain: token parsed by pdstress_blob.py
+        case Event::CapsReannounce: return "caps_unsol"; // k2-plain: token parsed by pdstress_blob.py
+        case Event::VbusBand: return "vbus_band"; // k2-plain: token parsed by pdstress_blob.py
+        case Event::SoftResetRx: return "soft_reset"; // k2-plain: token parsed by pdstress_blob.py
+        case Event::HardResetRx: return "hard_reset"; // k2-plain: token parsed by pdstress_blob.py
+        case Event::VbusDropout: return "dropout"; // k2-plain: token parsed by pdstress_blob.py
+        case Event::ContractLost: return "contract_lost"; // k2-plain: token parsed by pdstress_blob.py
+        case Event::NoRecovery: return "no_recovery"; // k2-plain: token parsed by pdstress_blob.py
         case Event::Count: break;
     }
     return "?";

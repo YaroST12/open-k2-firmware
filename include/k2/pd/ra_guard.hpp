@@ -24,6 +24,7 @@
 #include <cstddef>
 #include "k2/core/bss_zero.hpp"
 #include <cstdint>
+#include "k2/core/strpack.hpp"
 
 namespace k2::raguard {
 
@@ -60,10 +61,10 @@ constexpr bool spoof_allowed(Topology t) { return t == Topology::DirectReceptacl
 
 constexpr const char* name(Topology t) {
     switch (t) {
-        case Topology::Unknown: return "unknown";
+        case Topology::Unknown: return K2_P("unknown");
         case Topology::NoSource: return "none";
-        case Topology::CableSingleCc: return "cable";
-        case Topology::DirectReceptacle: return "direct";
+        case Topology::CableSingleCc: return K2_P("cable");
+        case Topology::DirectReceptacle: return K2_P("direct");
     }
     return "?";
 }
@@ -208,6 +209,7 @@ private:
 };
 
 // The refusal the dialog shows, one row per line (no wrapping inside a row).
+// k2-plain-begin: tests slice these and parse the source
 inline constexpr std::array<const char*, 4> kRefusalLines = {
     "Spoof needs the charger",
     "plugged in the K2 directly",
@@ -217,5 +219,6 @@ inline constexpr std::array<const char*, 4> kRefusalLines = {
 // The same message for the remote START (ct_start.py prints it as an error).
 inline constexpr const char* kRefusalText =
     "spoof needs the charger plugged into the K2 directly (top plug); through a cable the cable itself answers";
+// k2-plain-end
 
 }  // namespace k2::raguard

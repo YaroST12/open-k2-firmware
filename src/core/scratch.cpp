@@ -5,6 +5,7 @@
 
 #include "k2/core/log.hpp"
 #include "k2/drivers/regs.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::scratch {
 namespace {
@@ -26,7 +27,7 @@ void violate(const char* want, bool isr) {
         g_handler(v);
         return;
     }
-    K2LOG("[SCRATCH] %s refused: %s\n", want, isr ? "taken from an exception handler" : g_owner != nullptr ? g_owner : "?");
+    K2LOG("[SCRATCH] %s refused: %s\n", want, isr ? K2_P("taken from an exception handler") : g_owner != nullptr ? g_owner : "?");
     __builtin_trap();      // UsageFault -> HardFault -> the [FAULT] report
 }
 }  // namespace
@@ -44,7 +45,7 @@ bool held() { return g_owner != nullptr; }
 const char* owner() { return g_owner; }
 
 std::uint8_t* arena() {
-    if (g_owner == nullptr) violate("(no lease)", false);
+    if (g_owner == nullptr) violate(K2_P("(no lease)"), false);
     return g_arena;
 }
 

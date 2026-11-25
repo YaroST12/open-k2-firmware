@@ -9,6 +9,7 @@
 #include <span>
 
 #include "k2/ui/ui_calc.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::ripple {
 
@@ -41,13 +42,13 @@ struct Timebase {
 
 inline constexpr std::uint8_t kTimebaseCount = 7;
 inline constexpr Timebase kTimebases[kTimebaseCount] = {
-    {25,   0, "25us",  "25 us/div"},
-    {50,   0, "50us",  "50 us/div"},
-    {100,  0, "100us", "100 us/div"},
-    {200,  2, "200us", "200 us/div"},
-    {500,  5, "500us", "500 us/div"},
-    {1000, 7, "1ms",   "1 ms/div"},
-    {2000, 7, "2ms",   "2 ms/div"},
+    {25,   0, "25us",  K2_P("25 us/div")},
+    {50,   0, "50us",  K2_P("50 us/div")},
+    {100,  0, K2_P("100us"), K2_P("100 us/div")},
+    {200,  2, K2_P("200us"), K2_P("200 us/div")},
+    {500,  5, K2_P("500us"), K2_P("500 us/div")},
+    {1000, 7, "1ms",   K2_P("1 ms/div")},
+    {2000, 7, "2ms",   K2_P("2 ms/div")},
 };
 inline constexpr std::uint8_t kDefaultTimebase = 1;   // 50 us/div (200 us span, 1.07 MS/s)
 inline constexpr std::uint8_t kTimebaseSettingCount = kTimebaseCount + 1;   // 0 = Auto, 1..7 = fixed kTimebases[setting - 1]
@@ -55,8 +56,8 @@ inline constexpr std::uint8_t kTimebaseSettingCount = kTimebaseCount + 1;   // 0
 // Vertical scales: 0 = Auto, 1..6 = fixed mV/div (+-2 divs = +-2*mv_per_div full scale).
 inline constexpr std::uint8_t kScaleCount = 7;
 inline constexpr std::uint16_t kScaleMv[kScaleCount] = {0, 10, 20, 50, 100, 200, 500};
-inline constexpr const char *kScaleLabel[kScaleCount] = {"AUTO", "10mV", "20mV", "50mV", "100mV", "200mV", "500mV"};
-inline constexpr const char *kScaleMenu[kScaleCount] = {"Auto", "10 mV/div", "20 mV/div", "50 mV/div", "100 mV/div", "200 mV/div", "500 mV/div"};
+inline constexpr const char *kScaleLabel[kScaleCount] = {"AUTO", "10mV", "20mV", "50mV", K2_P("100mV"), K2_P("200mV"), K2_P("500mV")};
+inline constexpr const char *kScaleMenu[kScaleCount] = {"Auto", K2_P("10 mV/div"), K2_P("20 mV/div"), K2_P("50 mV/div"), K2_P("100 mV/div"), K2_P("200 mV/div"), K2_P("500 mV/div")};
 
 enum class Trigger : std::uint8_t { Auto = 0, Free = 1 };
 

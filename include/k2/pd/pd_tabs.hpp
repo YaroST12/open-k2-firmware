@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <span>
 #include <string_view>
+#include "k2/core/strpack.hpp"
 
 namespace k2::pdtabs {
 
@@ -108,7 +109,13 @@ struct Cat {   // a bounded append into a caller's buffer, NUL-terminated by end
     std::span<char> out;
     std::size_t n = 0;
     constexpr void p(char ch) { if (n + 1 < out.size()) out[n++] = ch; }
-    constexpr void s(std::string_view v) { for (char ch : v) p(ch); }
+    constexpr void s(std::string_view v) {
+        if !consteval {
+            strpack::for_chars(v, [this](char ch) { p(ch); });
+            return;
+        }
+        for (char ch : v) p(ch);
+    }
     constexpr void w(std::int32_t x) { n += fmt_watts(out.subspan(n), x); }
     constexpr void r(std::int32_t x) { n += fmt_rate(out.subspan(n), x); }
     constexpr std::size_t end() { if (!out.empty()) out[n] = '\0'; return n; }
@@ -123,7 +130,7 @@ constexpr std::size_t power_line(std::span<char> out, const Terms &t, bool cable
     if (lim.value < 0) { c.s("?"); return c.end(); }
     c.w(lim.value);
     if (lim.limit == Who::Cable) {
-        c.s(" by cable");
+        c.s(K2_P(" by cable"));
         if (cable_assumed) c.s("?");
         else warn = true;
     } else if (lim.limit == Who::Sink) {
@@ -142,7 +149,7 @@ constexpr std::size_t budget_line(std::span<char> out, std::uint32_t typec_ma) {
     Cat c{out};
     const std::uint32_t mw = 5u * typec_ma;
     if (mw == 0) { c.s("?"); return c.end(); }
-    c.s("up to ");
+    c.s(K2_P("up to "));
     auto digits = [&](std::uint32_t v) {
         char t[10]; int k = 0;
         do { t[k++] = static_cast<char>('0' + v % 10); v /= 10; } while (v);
@@ -171,9 +178,9 @@ constexpr std::size_t data_line(std::span<char> out, const Terms &t, bool dp, bo
     const Limited lim = limit(d);
     if (lim.value < 0) { c.s("?"); return c.end(); }
     c.r(lim.value);
-    if (lim.limit == Who::Cable) { c.s(" by cable"); warn = true; }
+    if (lim.limit == Who::Cable) { c.s(K2_P(" by cable")); warn = true; }
     else if (lim.limit == Who::Sink) { c.s(" of "); c.r(d.cable); }
-    else if (d.sink < 0) c.s(" cable");
+    else if (d.sink < 0) c.s(K2_P(" cable"));
     if (dp) c.s(" +DP");
     return c.end();
 }
@@ -184,7 +191,7 @@ constexpr std::size_t data_line(std::span<char> out, const Terms &t, bool dp, bo
 constexpr std::size_t speed_short(std::span<char> out, std::string_view s) {
     Cat c{out};
     auto starts = [&](std::string_view p) { return s.substr(0, p.size()) == p; };
-    if (starts("Thunderbolt")) { c.s("TB"); s.remove_prefix(11); }
+    if (starts("Thunderbolt")) { c.s("TB"); s.remove_prefix(11); }   // k2-plain: compared
     else if (starts("USB ")) s.remove_prefix(4);
     const bool usb4 = starts("USB4");
     if (usb4) { c.s("USB4"); s.remove_prefix(4); }

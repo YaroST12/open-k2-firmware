@@ -9,6 +9,7 @@
 // The guarded SuperVOOC trigger (k2/fastcharge/svooc_trig.hpp) resets it at each wake and reports the worst stage.
 #pragma once
 #include <cstdint>
+#include "k2/core/strpack.hpp"
 
 namespace k2::stage {
 
@@ -24,36 +25,36 @@ constexpr const char* name(Id id) {
     case Id::None: return "none";
     case Id::Idle: return "idle";
     case Id::Usb: return "usb";
-    case Id::Shell: return "shell";
+    case Id::Shell: return K2_P("shell");
     case Id::Msc: return "msc";
-    case Id::Remote: return "remote";
-    case Id::Capture: return "capture";
-    case Id::Fctrig: return "fctrig";
-    case Id::Transcap: return "transcap";
-    case Id::Service: return "service";
-    case Id::Buttons: return "buttons";
-    case Id::Fusb302: return "fusb302";
-    case Id::Power: return "power";
-    case Id::PowerSource: return "psource";
-    case Id::Dpsniff: return "dpsniff";
-    case Id::Pdtrace: return "pdtrace";
-    case Id::DiagLive: return "diaglive";
+    case Id::Remote: return K2_P("remote");
+    case Id::Capture: return K2_P("capture");
+    case Id::Fctrig: return K2_P("fctrig");
+    case Id::Transcap: return K2_P("transcap");
+    case Id::Service: return K2_P("service");
+    case Id::Buttons: return K2_P("buttons");
+    case Id::Fusb302: return K2_P("fusb302");
+    case Id::Power: return K2_P("power");
+    case Id::PowerSource: return K2_P("psource");
+    case Id::Dpsniff: return K2_P("dpsniff");
+    case Id::Pdtrace: return K2_P("pdtrace");
+    case Id::DiagLive: return K2_P("diaglive");
     case Id::Adc: return "adc";
-    case Id::LoopGuard: return "loopguard";
-    case Id::Accel: return "accel";
-    case Id::Fastcharge: return "fastcharge";
-    case Id::Boottrace: return "boottrace";
-    case Id::Session: return "session";
-    case Id::RdComeback: return "rdcomeback";
-    case Id::Handback: return "handback";
-    case Id::Rescan: return "rescan";
-    case Id::Survey: return "survey";
-    case Id::Bbpersist: return "bbpersist";
-    case Id::ReportCard: return "reportcard";
-    case Id::BootScreen: return "bootscreen";
+    case Id::LoopGuard: return K2_P("loopguard");
+    case Id::Accel: return K2_P("accel");
+    case Id::Fastcharge: return K2_P("fastcharge");
+    case Id::Boottrace: return K2_P("boottrace");
+    case Id::Session: return K2_P("session");
+    case Id::RdComeback: return K2_P("rdcomeback");
+    case Id::Handback: return K2_P("handback");
+    case Id::Rescan: return K2_P("rescan");
+    case Id::Survey: return K2_P("survey");
+    case Id::Bbpersist: return K2_P("bbpersist");
+    case Id::ReportCard: return K2_P("reportcard");
+    case Id::BootScreen: return K2_P("bootscreen");
     case Id::UiTick: return "ui";
-    case Id::Stack: return "stack";
-    case Id::Heartbeat: return "heartbeat";
+    case Id::Stack: return K2_P("stack");
+    case Id::Heartbeat: return K2_P("heartbeat");
     case Id::Count_: break;
     }
     return "?";

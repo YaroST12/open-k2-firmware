@@ -17,6 +17,7 @@
 
 #include "k2/pd/emk_attached.hpp"
 #include "k2/pd/ra_class.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::cablefact {
 
@@ -36,9 +37,9 @@ constexpr Fact classify(bool read, emk_attached::ReadInfo info, raclass::PullDow
 constexpr const char *name(Fact f) {
     switch (f) {
     case Fact::Read: return "Read";
-    case Fact::ChipSilent: return "Chip silent";
-    case Fact::NoChip: return "No chip";
-    default: return "Not read";
+    case Fact::ChipSilent: return K2_P("Chip silent");
+    case Fact::NoChip: return K2_P("No chip");
+    default: return K2_P("Not read");
     }
 }
 

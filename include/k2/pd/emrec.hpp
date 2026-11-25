@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <span>
 #include <string_view>
+#include "k2/core/strpack.hpp"
 
 namespace k2::emrec {
 
@@ -23,7 +24,7 @@ inline constexpr std::size_t kLibrarySlots = 10;
 inline constexpr std::size_t kLibraryHeader = 6;                       // magic(4), default, num_records
 inline constexpr std::size_t kLibraryMaxSize = kLibraryHeader + kLibrarySlots * kRecordSize + 1;
 inline constexpr std::array<std::uint8_t, 4> kLibraryMagic{'K', '2', 'E', 'M'};
-inline constexpr std::string_view kCopiedName = "[copied emark]";
+inline constexpr std::string_view kCopiedName = K2_P("[copied emark]");
 
 using Record = std::array<std::uint8_t, kRecordSize>;
 

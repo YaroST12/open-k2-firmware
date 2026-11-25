@@ -62,20 +62,20 @@ struct FieldDef {
 // capped because it blocks the main loop.
 inline constexpr FieldDef kFields[kFieldCount] = {
     {"addr", 0, 7, 1},
-    {"version", 0, 63, 1},
+    {"version", 0, 63, 1}, // k2-plain: typed lab field name
     {"ctl", 0, 7, 0},
     {"data", 0, 7, 1},
-    {"opener", 0, 255, 0},
-    {"keepalive", 0, 255, 0},
-    {"retry", 1, 1000, 20},
-    {"listen", 50, 5000, 500},
-    {"crcsync", 0, 1, 0},
-    {"crcinit", 0, 255, 0},
-    {"crcpoly", 1, 255, 0x29},
-    {"crclsb", 0, 1, 0},
+    {"opener", 0, 255, 0}, // k2-plain: typed lab field name
+    {"keepalive", 0, 255, 0}, // k2-plain: typed lab field name
+    {"retry", 1, 1000, 20}, // k2-plain: typed lab field name
+    {"listen", 50, 5000, 500}, // k2-plain: typed lab field name
+    {"crcsync", 0, 1, 0}, // k2-plain: typed lab field name
+    {"crcinit", 0, 255, 0}, // k2-plain: typed lab field name
+    {"crcpoly", 1, 255, 0x29}, // k2-plain: typed lab field name
+    {"crclsb", 0, 1, 0}, // k2-plain: typed lab field name
     {"stop", 1, 2, 1},
     {"baud", 1200, 230400, 115200},
-    {"delay", 0, 200, 10},
+    {"delay", 0, 200, 10}, // k2-plain: typed lab field name
     {"dm", 0, 2, 0},
     {"dp", 0, 1, 0},
 };

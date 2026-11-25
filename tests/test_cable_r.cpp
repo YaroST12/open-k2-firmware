@@ -4,6 +4,7 @@
 // 8-wire Kelvin formulas.
 // Expected values are worked by hand from R = dV / dI, not recomputed with the code's formula.
 #include "test_util.h"
+#include "k2/core/strpack.hpp"
 #include "k2/pd/cable_r.hpp"
 
 using namespace k2::cable_r;
@@ -179,7 +180,7 @@ static void test_kelvin_guards_and_notes() {
     CHECK_STR(note(Mode::Kelvin, 0), "Sense wires: K2's own");
     CHECK_STR(note(Mode::Kelvin, 1), "path not included.");
     for (Mode m : {Mode::Passive, Mode::Kelvin})
-        for (int l = 0; l < 2; l++) CHECK_EQ(__builtin_strlen(note(m, l)) <= 21, 1);
+        for (int l = 0; l < 2; l++) CHECK_EQ(k2::strpack::cells_rt(note(m, l)) <= 21, 1);
 }
 
 static const char *fm(char *b, unsigned v) { fmt_mohm(std::span<char>(b, 16), v); return b; }

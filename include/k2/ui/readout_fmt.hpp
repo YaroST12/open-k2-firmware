@@ -12,6 +12,7 @@
 #include <string_view>
 
 #include "k2/core/hot.h"
+#include "k2/core/strpack.hpp"
 #include "k2/core/math_opt.hpp"
 
 namespace k2::readout {
@@ -21,7 +22,10 @@ struct Out {
     std::span<char> s;
     std::size_t n = 0;
     constexpr void put(char c) { if (n + 1 < s.size()) s[n++] = c; }
-    constexpr void put(std::string_view v) { for (char c : v) put(c); }
+    constexpr void put(std::string_view v) {
+        if !consteval { K2_EXPECT_PLAIN(v); }   // hot: readout text stays plain
+        for (char c : v) put(c);
+    }
     K2_HOT constexpr void digits(uint32_t v, int width) {   // zero padded to `width`
         char t[10];
         int k = 0;

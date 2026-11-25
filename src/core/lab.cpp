@@ -40,6 +40,7 @@ struct Entry {
     Raise raise;
 };
 
+// k2-plain-begin: lab command, option and VDM words are matched against typed tokens
 constexpr Row kRows[] = {
     {"accp", "ping", "accp.ping", Id::AccpPing, "", Raise::Never},
     {"accp", "read", "accp.read", Id::AccpRead, "bB", Raise::Never},
@@ -139,6 +140,7 @@ constexpr OptDef kOpts[] = {
 };
 
 constexpr std::string_view kVdmWords[] = {"discover-identity", "svids", "modes"};
+// k2-plain-end
 
 bool number(std::string_view s, std::uint32_t& out) {
     std::uint32_t v = 0;
@@ -221,7 +223,7 @@ std::string_view name(Id id) {
 
 [[gnu::noinline]] const char* parse(const std::string_view* t, std::size_t n, Cmd& out) {
     out = Cmd{};
-    if (n == 0) return "empty";
+    if (n == 0) return K2_P("empty");
     bool verbless;
     const Entry* e = find(t[0], n > 1 ? t[1] : std::string_view{}, verbless);
     if (!e) return K2_P("unknown verb (help lab)");

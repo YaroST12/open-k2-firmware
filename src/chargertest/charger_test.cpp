@@ -35,7 +35,7 @@ const char* name(Algorithm a) {
     return a < Algorithm::Count ? names[unsigned(a)] : "?";
 }
 const char* name(Group g) {
-    static constexpr const char* names[] = {"PD", "QC2", "QC3", "QC3+", "AFC", "FCP", "SCP", "VOOC", "SVOOC", "SVOOC65", "UFCS", "VIVO"};
+    static constexpr const char* names[] = {"PD", "QC2", "QC3", "QC3+", "AFC", "FCP", "SCP", "VOOC", K2_P("SVOOC"), K2_P("SVOOC65"), "UFCS", "VIVO"};
     return g < Group::Count ? names[static_cast<unsigned>(g)] : "?";
 }
 const char* name(Verdict v) {
@@ -43,24 +43,24 @@ const char* name(Verdict v) {
     return names[static_cast<unsigned>(v)];
 }
 const char* name(Level l) {
-    static constexpr const char* names[] = {"Medium", "Light", "Deep", "Old"};   // Old: the retired byte 3 on an old card
+    static constexpr const char* names[] = {K2_P("Medium"), K2_P("Light"), "Deep", "Old"};   // Old: the retired byte 3 on an old card
     static_assert(std::size(names) == unsigned(Level::Retired) + 1);
     return unsigned(l) <= unsigned(Level::Retired) ? names[unsigned(l)] : "?";
 }
 const char* name(Reason r) {
     static constexpr const char* names[] = {
         "", K2_P("disabled"), K2_P("not advertised"), K2_P("over voltage cap"), K2_P("not implemented"), K2_P("confirm no load"),
-        "no power monitor", K2_P("no source"), K2_P("load attached"), K2_P("tool busy"), K2_P("fake offers"),
-        K2_P("request failed"), "timeout", K2_P("voltage outside band"), "hard reset", "source lost",
-        K2_P("cancelled"), K2_P("5V release failed"), K2_P("offers changed"), "PD active: use QC port",
-        "revision cannot be forced", "select at least one test", K2_P("physical cable limit"), "unsupported PDO layout",
-        K2_P("charger stayed in PD"), "rebooted during request", "rebooted during handover", K2_P("EPR entry refused"),
-        K2_P("no contract"), "source shut off (needs replug)", "no PD after re-attach", "VBUS cut, source recovered",
-        K2_P("blocked by PD"), K2_P("no QC3+ response"), K2_P("rebooted 3x"), K2_P("needs external power"), "PD gave up before START",
-        "Class A only (12 V max)", K2_P("not unlocked"), K2_P("20 V via QC3 only"), K2_P("PD only (output off)"), K2_P("capped below target"),
-        K2_P("withdrawn by source"), "wrong voltage on 5V contract", K2_P("needs load"), K2_P("floored above target"), K2_P("step resolution"),
-        "HID-cable loop: 5V lock", K2_P("advertised"), K2_P("light run: not asked"), "port cuts without load",
-        K2_P("output folds back"), K2_P("Xiaomi chain"), K2_P("transition check"), "D+/D- open: flip or data cable"   // flipping fixes a one-sided plug, a data cable fixes a charge-only one; 30 = the toast pill's cells
+        K2_P("no power monitor"), K2_P("no source"), K2_P("load attached"), K2_P("tool busy"), K2_P("fake offers"),
+        K2_P("request failed"), K2_P("timeout"), K2_P("voltage outside band"), K2_P("hard reset"), K2_P("source lost"),
+        K2_P("cancelled"), K2_P("5V release failed"), K2_P("offers changed"), K2_P("PD active: use QC port"),
+        K2_P("revision cannot be forced"), K2_P("select at least one test"), K2_P("physical cable limit"), K2_P("unsupported PDO layout"),
+        K2_P("charger stayed in PD"), K2_P("rebooted during request"), K2_P("rebooted during handover"), K2_P("EPR entry refused"),
+        K2_P("no contract"), K2_P("source shut off (needs replug)"), K2_P("no PD after re-attach"), K2_P("VBUS cut, source recovered"),
+        K2_P("blocked by PD"), K2_P("no QC3+ response"), K2_P("rebooted 3x"), K2_P("needs external power"), K2_P("PD gave up before START"),
+        K2_P("Class A only (12 V max)"), K2_P("not unlocked"), K2_P("20 V via QC3 only"), K2_P("PD only (output off)"), K2_P("capped below target"),
+        K2_P("withdrawn by source"), K2_P("wrong voltage on 5V contract"), K2_P("needs load"), K2_P("floored above target"), K2_P("step resolution"),
+        K2_P("HID-cable loop: 5V lock"), K2_P("advertised"), K2_P("light run: not asked"), K2_P("port cuts without load"),
+        K2_P("output folds back"), K2_P("Xiaomi chain"), K2_P("transition check"), K2_P("D+/D- open: flip or data cable")   // flipping fixes a one-sided plug, a data cable fixes a charge-only one; 30 = the toast pill's cells
     };
     static_assert(std::size(names) == unsigned(Reason::LinesOpen) + 1);
     return names[static_cast<unsigned>(r)];
@@ -103,15 +103,15 @@ void Runner::note_preflight_refusal(Reason r, int vbus_mv, const char* detail) {
     }
 }
 const char* name(State s) {
-    static constexpr const char* names[] = {"Setup", K2_P("Verify 5V"), K2_P("Negotiating"), "Hold", K2_P("Return to 5V"), K2_P("Complete"), K2_P("Stopped"), K2_P("UNSAFE: unplug source"), K2_P("Detach charger"), K2_P("Initializing..."), K2_P("SVOOC ceiling"), K2_P("PD spec")};
+    static constexpr const char* names[] = {K2_P("Setup"), K2_P("Verify 5V"), K2_P("Negotiating"), "Hold", K2_P("Return to 5V"), K2_P("Complete"), K2_P("Stopped"), K2_P("UNSAFE: unplug source"), K2_P("Detach charger"), K2_P("Initializing..."), K2_P("SVOOC ceiling"), K2_P("PD spec")};
     return names[static_cast<unsigned>(s)];
 }
 const char* name(Unit u) {
-    static constexpr const char* names[] = {"PD", "QC2", "QC3", "QC3+", "AFC", "FCP", "SCP", "VOOC", "SVOOC", "SVOOC65", "UFCS", "VIVO", "PD low"};
+    static constexpr const char* names[] = {"PD", "QC2", "QC3", "QC3+", "AFC", "FCP", "SCP", "VOOC", K2_P("SVOOC"), K2_P("SVOOC65"), "UFCS", "VIVO", K2_P("PD low")};
     static_assert(std::size(names) == unsigned(Unit::Count));
     return u < Unit::Count ? names[static_cast<unsigned>(u)] : "?";
 }
-const char* name(Mode m) { return m == Mode::Pd ? "PD" : "legacy"; }
+const char* name(Mode m) { return m == Mode::Pd ? "PD" : K2_P("legacy"); }
 namespace {
 // The low edge of a programmable range (below 5 V): some sources stop regulating there and latch their output off until
 // the mains is replugged (pattern latch-off-low-pps, Lenovo C135). Those rows are the PdLow unit and run last.
@@ -144,28 +144,28 @@ Verdict unit_outcome(std::span<const Step> steps, Unit u) {
 }
 const char* epr_detail_name(uint8_t d) {
     switch (d) {
-    case kDetailEprFail + 1: return "EPR: source rejects cable";
-    case kDetailEprFail + 2: return "EPR: source has no VCONN";
-    case kDetailEprFail + 3: return "EPR: refused (RDO)";
-    case kDetailEprFail + 4: return "EPR: source unable now";
-    case kDetailEprFail + 5: return "EPR: 5V PDO lacks EPR bit";
-    case kDetailEprFail: return "EPR: entry refused";
-    case kDetailMonitor36: return "EPR: above K2's 36V monitor";
-    case kDetailMonitor48: return "EPR: above K2's 48V monitor";
-    case kDetailMonitorOther: return "EPR: above the K2's monitor";
-    case kDetailEprOffered: return "EPR offered: needs EPR cable";
-    case kDetailEprWithheld: return "EPR list withheld: cable-gated";
-    case kDetailEprOfferedRefused: return "EPR offered; entry: refused";
-    case kDetailEprOfferedRefused + 1: return "EPR offered; entry: cable rejected";
-    case kDetailEprOfferedRefused + 2: return "EPR offered; entry: no VCONN";
-    case kDetailEprOfferedRefused + 3: return "EPR offered; entry: refused (RDO)";
-    case kDetailEprOfferedRefused + 4: return "EPR offered; entry: unable now";
-    case kDetailEprOfferedRefused + 5: return "EPR offered; entry: 5V PDO lacks EPR bit";
-    case kDetailNoChain: return "not unlocked (no OEM chain)";
-    case kDetailChainUnfinished: return "not unlocked (chain unfinished)";
-    case kDetailCableCap: return "not unlocked (3 A cable)";
-    case kDetailVendorRefused: return "not unlocked (vendor not accepted)";
-    case kDetailSourceReset: return "not unlocked (source reset)";
+    case kDetailEprFail + 1: return K2_P("EPR: source rejects cable");
+    case kDetailEprFail + 2: return K2_P("EPR: source has no VCONN");
+    case kDetailEprFail + 3: return K2_P("EPR: refused (RDO)");
+    case kDetailEprFail + 4: return K2_P("EPR: source unable now");
+    case kDetailEprFail + 5: return K2_P("EPR: 5V PDO lacks EPR bit");
+    case kDetailEprFail: return K2_P("EPR: entry refused");
+    case kDetailMonitor36: return K2_P("EPR: above K2's 36V monitor");
+    case kDetailMonitor48: return K2_P("EPR: above K2's 48V monitor");
+    case kDetailMonitorOther: return K2_P("EPR: above the K2's monitor");
+    case kDetailEprOffered: return K2_P("EPR offered: needs EPR cable");
+    case kDetailEprWithheld: return K2_P("EPR list withheld: cable-gated");
+    case kDetailEprOfferedRefused: return K2_P("EPR offered; entry: refused");
+    case kDetailEprOfferedRefused + 1: return K2_P("EPR offered; entry: cable rejected");
+    case kDetailEprOfferedRefused + 2: return K2_P("EPR offered; entry: no VCONN");
+    case kDetailEprOfferedRefused + 3: return K2_P("EPR offered; entry: refused (RDO)");
+    case kDetailEprOfferedRefused + 4: return K2_P("EPR offered; entry: unable now");
+    case kDetailEprOfferedRefused + 5: return K2_P("EPR offered; entry: 5V PDO lacks EPR bit");
+    case kDetailNoChain: return K2_P("not unlocked (no OEM chain)");
+    case kDetailChainUnfinished: return K2_P("not unlocked (chain unfinished)");
+    case kDetailCableCap: return K2_P("not unlocked (3 A cable)");
+    case kDetailVendorRefused: return K2_P("not unlocked (vendor not accepted)");
+    case kDetailSourceReset: return K2_P("not unlocked (source reset)");
     default: return nullptr;
     }
 }
@@ -215,16 +215,16 @@ size_t caution_text(const Step& s, std::span<char> out) {
     if (out.empty()) return 0;
     size_t n = 0;
     const auto put = [&](char c) { if (n + 1 < out.size()) out[n++] = c; };
-    const auto word = [&](const char* t) { while (*t) put(*t++); };
+    const auto word = [&](const char* t) { strpack::for_chars(t, put); };
     if (s.reason == Reason::StepResolution) {
-        if (!s.detail) word("steps ignored");
+        if (!s.detail) word(K2_P("steps ignored"));
         else {
             const unsigned mv = s.detail >= 50 ? (s.detail + 5u) / 10u * 10u : s.detail;
             char d[4]; unsigned k = 0, v = mv;
-            word("steps ");
+            word(K2_P("steps "));
             do { d[k++] = char('0' + v % 10); v /= 10; } while (v);
             while (k) put(d[--k]);
-            word("mV, not ");
+            word(K2_P("mV, not "));
             v = walk_step_mv(s.algorithm);
             do { d[k++] = char('0' + v % 10); v /= 10; } while (v);
             while (k) put(d[--k]);
@@ -241,16 +241,16 @@ size_t caution_text(const Step& s, std::span<char> out) {
 const char* name(HuntCause c) {
     switch (c) {
     case HuntCause::None: return "none";
-    case HuntCause::NoChain: return "no-chain";
-    case HuntCause::ChainStalled: return "chain-stalled";
-    case HuntCause::InsideChain: return "inside-chain";
-    case HuntCause::RequestHeld: return "request-held";
-    case HuntCause::FixedPdo: return "fixed-pdo";
-    case HuntCause::CableCap: return "cable-cap";
-    case HuntCause::ApdoStale: return "apdo-stale";
-    case HuntCause::CableCapped5A: return "capped-5a";
-    case HuntCause::RefusedDespiteOffer: return "refused-offer";
-    case HuntCause::Unexplained: return "unexplained";
+    case HuntCause::NoChain: return K2_P("no-chain");
+    case HuntCause::ChainStalled: return K2_P("chain-stalled");
+    case HuntCause::InsideChain: return K2_P("inside-chain");
+    case HuntCause::RequestHeld: return K2_P("request-held");
+    case HuntCause::FixedPdo: return K2_P("fixed-pdo");
+    case HuntCause::CableCap: return K2_P("cable-cap");
+    case HuntCause::ApdoStale: return K2_P("apdo-stale");
+    case HuntCause::CableCapped5A: return K2_P("capped-5a");
+    case HuntCause::RefusedDespiteOffer: return K2_P("refused-offer");
+    case HuntCause::Unexplained: return K2_P("unexplained");
     case HuntCause::Count: break;
     }
     return "?";

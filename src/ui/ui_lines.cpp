@@ -32,11 +32,11 @@ void mcu_text(StrBuf<24> &s, bool valid, int32_t d) {
 namespace {
 // Indexed by fastcharge::Protocol.
 constexpr const char *kDpDmWords[] = {
-    "--", "--", "none", "DCP short", "QC3.0", "QC2.0 5V", "QC2.0 9V", "QC2.0 12V", "QC2.0 20V", "AFC/FCP", "SCP",
-    "Apple 2.4A", "Apple 2.1A", "Apple 1.0A", "USB2.0", "USB1.1", "Samsung 2A", "VOOC", "SVOOC",
-    "none", "none", "none", "USB data", "none"};
+    "--", "--", "none", K2_P("DCP short"), K2_P("QC3.0"), K2_P("QC2.0 5V"), K2_P("QC2.0 9V"), K2_P("QC2.0 12V"), K2_P("QC2.0 20V"), K2_P("AFC/FCP"), "SCP",
+    K2_P("Apple 2.4A"), K2_P("Apple 2.1A"), K2_P("Apple 1.0A"), K2_P("USB2.0"), K2_P("USB1.1"), K2_P("Samsung 2A"), "VOOC", K2_P("SVOOC"),
+    "none", "none", "none", K2_P("USB data"), "none"};
 static_assert(std::size(kDpDmWords) == static_cast<std::size_t>(fastcharge::Protocol::PdLikely) + 1);
-static_assert(all_fit(kDpDmWords, 8, 12 * 8), "the Lines value cell holds 12 cells of the 16 px font");
+static_assert(all_fit_p(kDpDmWords, 8, 12 * 8), "the Lines value cell holds 12 cells of the 16 px font");
 }  // namespace
 
 DpDmWord dpdm_word(fastcharge::Protocol p) {
@@ -65,11 +65,11 @@ LinesVerdict lines_verdict(fastcharge::Protocol p, bool pd_decoded) {
     case Protocol::NoInput:  set(K2_P("No VBUS"), "", Tone::Caution, K2_P("Plug in a source")); break;
     case Protocol::NoQuick:  set(K2_P("5V only"), "", Tone::Dim, K2_P("No handshake on D+ / D-")); break;
     case Protocol::Dcp5V:    set(K2_P("DCP short"), "", Tone::Ok, K2_P("D+ = D-: dedicated charger")); break;
-    case Protocol::Qc3:      set("QC3.0", "", Tone::Info, K2_P("D+ 0.6 V, D- steps: QC3.0")); break;
-    case Protocol::Qc2_5V:   set("QC2.0", "5V", Tone::Info, K2_P("D+ 0.6 V, D- 0 V: QC 5 V")); break;
-    case Protocol::Qc2_9V:   set("QC2.0", "9V", Tone::Info, K2_P("D+ 3.3 V, D- 0.6 V: 9 V")); break;
-    case Protocol::Qc2_12V:  set("QC2.0", "12V", Tone::Info, K2_P("D+ 0.6 V, D- 0.6 V: 12 V")); break;
-    case Protocol::Qc2_20V:  set("QC2.0", "20V", Tone::Info, K2_P("D+ 3.3 V, D- 3.3 V: 20 V")); break;
+    case Protocol::Qc3:      set(K2_P("QC3.0"), "", Tone::Info, K2_P("D+ 0.6 V, D- steps: QC3.0")); break;
+    case Protocol::Qc2_5V:   set(K2_P("QC2.0"), "5V", Tone::Info, K2_P("D+ 0.6 V, D- 0 V: QC 5 V")); break;
+    case Protocol::Qc2_9V:   set(K2_P("QC2.0"), "9V", Tone::Info, K2_P("D+ 3.3 V, D- 0.6 V: 9 V")); break;
+    case Protocol::Qc2_12V:  set(K2_P("QC2.0"), "12V", Tone::Info, K2_P("D+ 0.6 V, D- 0.6 V: 12 V")); break;
+    case Protocol::Qc2_20V:  set(K2_P("QC2.0"), "20V", Tone::Info, K2_P("D+ 3.3 V, D- 3.3 V: 20 V")); break;
     case Protocol::AfcFcp:   set(K2_P("AFC/FCP"), "", Tone::Info, K2_P("Samsung/Huawei handshake")); break;
     case Protocol::Scp:      set("SCP", "", Tone::Info, K2_P("Huawei super charge")); break;
     case Protocol::Apple24:  set(K2_P("Divider"), K2_P("Apple 2.4A"), Tone::Info, K2_P("D+/D- dividers: Apple 2.4A")); break;
@@ -79,8 +79,8 @@ LinesVerdict lines_verdict(fastcharge::Protocol p, bool pd_decoded) {
     case Protocol::Usb11Low: set(K2_P("USB1.1"), "", Tone::Dim, K2_P("USB 1.1 low-speed data")); break;
     case Protocol::Sam20:    set(K2_P("Divider"), K2_P("Samsung 2A"), Tone::Info, K2_P("D+/D- dividers: Samsung")); break;
     case Protocol::VoocWarp: set("VOOC", "", Tone::Info, K2_P("VOOC or Warp handshake")); break;
-    case Protocol::Svooc:    set("SVOOC", "", Tone::Info, K2_P("Super VOOC handshake")); break;
-    case Protocol::PdPe:     set("PD PE", "", Tone::Ok, K2_P("PD on CC, PE on D+/D-")); break;
+    case Protocol::Svooc:    set(K2_P("SVOOC"), "", Tone::Info, K2_P("Super VOOC handshake")); break;
+    case Protocol::PdPe:     set(K2_P("PD PE"), "", Tone::Ok, K2_P("PD on CC, PE on D+/D-")); break;
     case Protocol::PdMtk:    set(K2_P("PD MTK"), "", Tone::Ok, K2_P("PD on CC, MTK on D+/D-")); break;
     case Protocol::Pd:       set("PD", "", Tone::Ok, K2_P("PD: see Bench > Charger")); break;
     case Protocol::UsbData:  set(K2_P("USB data"), "", Tone::Dim, K2_P("A data device idles here")); break;

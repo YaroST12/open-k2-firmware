@@ -6,6 +6,7 @@
 #include <string>
 
 #include "k2/core/memstat.hpp"
+#include "k2/core/strpack.hpp"
 #include "test_util.h"
 
 using namespace k2::memstat;
@@ -56,8 +57,8 @@ static void test_rows() {
     CHECK(text(Row::Image, s) == "678.7 KB");
     CHECK(text(Row::ImageFree, s) == "23.3 KB");
     CHECK(text(Row::Heap, s) == "none");
-    CHECK(std::strcmp(row_label(Row::StackLow), "Stack low") == 0);
-    CHECK(std::strcmp(row_label(Row::ImageFree), "Image free") == 0);
+    { char d[16]; CHECK(k2::strpack::unpack(row_label(Row::StackLow), d) == "Stack low"); }
+    { char d[16]; CHECK(k2::strpack::unpack(row_label(Row::ImageFree), d) == "Image free"); }
 }
 
 static void test_unknown() {

@@ -29,7 +29,15 @@ DUMP_CPP = r"""
 #include <cstdio>
 #include "k2/chargertest/spec_section.hpp"
 #include "k2/chargertest/spec_rows.hpp"
+#include "k2/core/strpack.hpp"
 using namespace k2; using namespace k2::specsec;
+static const char* d(const char* s) {   // the keys are K2_P-packed: print them as the device sends them
+    static char b[8][48];
+    static unsigned n = 0;
+    char* o = b[n++ % 8];
+    k2::strpack::decode(s, o, sizeof b[0]);
+    return o;
+}
 int main() {
     Result r;
     r.end = End::Done; r.unconfirmed = true;
@@ -80,7 +88,7 @@ int main() {
     std::printf("\ndetail ");
     for (auto b : dw) std::printf("%02x", b);
     std::printf("\ndetailsize %zu\nsize %zu\norder", kDetailBytes, kWireBytes);
-    for (std::size_t i = 0; i < kCells; ++i) std::printf(" %s", sc::kDefs[static_cast<std::size_t>(kOrder[i])].key);
+    for (std::size_t i = 0; i < kCells; ++i) std::printf(" %s", d(sc::kDefs[static_cast<std::size_t>(kOrder[i])].key));
     std::printf("\nsteps %d %d %d\nunseen %d\n", int(unit_step(sc::Unit::Us)), int(unit_step(sc::Unit::Mv)),
                 int(unit_step(sc::Unit::Ms)), int(kUnseen));
 }
@@ -92,7 +100,7 @@ def build_and_run(src, tag):
         cpp = Path(d) / f"{tag}.cpp"
         exe = Path(d) / tag
         cpp.write_text(src)
-        subprocess.run(["g++", "-std=c++23", "-DK2_PDSPEC=1", "-DK2_SPECROWS=1", "-I", str(ROOT / "include"), str(cpp), "-o", str(exe)], check=True,
+        subprocess.run(["g++", "-std=c++23", "-DK2_PDSPEC=1", "-DK2_SPECROWS=1", "-I", str(ROOT / "include"), str(cpp), str(ROOT / "src/core/strpack.cpp"), "-o", str(exe)], check=True,
                        capture_output=True)
         return subprocess.run([str(exe)], check=True, capture_output=True, text=True).stdout
 

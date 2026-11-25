@@ -259,7 +259,7 @@ def _switch_strings(path, marker):
         src = f.read()
     body = src[src.index(marker):]
     body = body[:body.index("\n}\n")]
-    return re.findall(r'case [\w:]+: return "([^"]*)";', body)
+    return re.findall(r'case [\w:]+: return (?:K2_P\()?"([^"]*)"\)?;', body)
 
 
 def _blob(bits):

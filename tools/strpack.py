@@ -18,10 +18,13 @@ Each rule expands to two bytes (left, right) which may themselves be rules (max 
 """
 import argparse
 import collections
-import os
 import re
 import struct
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import check_strings  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 TABLE = ROOT / "include/k2/core/strpack_table.hpp"
@@ -30,39 +33,16 @@ MAX_DEPTH = 14
 # Ordered code IDs: 0x7F..0xFF first (indices 0..128), then 0x01..0x1F skipping \t \n \r (indices 129..159).
 CODE_IDS = list(range(0x7F, 0x100)) + [b for b in range(0x01, 0x20) if b not in (0x09, 0x0A, 0x0D)]
 
-LIT_RE = re.compile(r'\bK2_P\(\s*((?:"(?:[^"\\\n]|\\.)*"\s*)+)\)')
-PIECE_RE = re.compile(r'"((?:[^"\\\n]|\\.)*)"')
-ESC_RE = re.compile(rb'\\(x[0-9A-Fa-f]+|[0-7]{1,3}|.)')
-SIMPLE = {b'n': 10, b't': 9, b'r': 13, b'0': 0, b'\\': 92, b'"': 34, b"'": 39, b'?': 63, b'a': 7}
-
-
 def code_to_idx(b: int) -> int:
     return (b - 0x7F) if b >= 0x7F else (129 + b - 1)
 
 
-def unescape(body: bytes) -> bytes:
-    def rep(m):
-        e = m.group(1)
-        if e[:1] == b'x':
-            return bytes([int(e[1:], 16) & 0xFF])
-        if e[:1].isdigit() and e != b'0' or len(e) > 1:
-            return bytes([int(e, 8) & 0xFF])
-        return bytes([SIMPLE[e]])
-    return ESC_RE.sub(rep, body)
-
-
 def corpus_from_source():
+    """Every K2_P literal of src/ and include/k2/ (the scanner tools/check_strings.py checks the tree with)."""
     out = []
-    for top in ("src", "include/k2"):
-        for dp, _, fs in os.walk(ROOT / top):
-            for f in sorted(fs):
-                if not f.endswith((".cpp", ".hpp", ".h")):
-                    continue
-                text = (Path(dp) / f).read_bytes().decode("utf-8", "replace")
-                for m in LIT_RE.finditer(text):
-                    s = b"".join(unescape(p.encode("utf-8")) for p in PIECE_RE.findall(m.group(1)))
-                    if all(0x20 <= b < 0x7F or b in (9, 10, 13) for b in s):
-                        out.append(s)
+    for p in check_strings.iter_source_files(ROOT):
+        text = p.read_bytes().decode("utf-8", "replace")
+        out += [s for s in check_strings.wrapped_literals(text) if check_strings.packable(s)]
     return sorted(set(out))
 
 

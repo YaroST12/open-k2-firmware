@@ -6,6 +6,7 @@
 
 #include "fc_fake.hpp"
 #include "k2/chargertest/charger_test.hpp"   // kCutStepBudgetMs
+#include "k2/core/strpack.hpp"
 
 using namespace k2::fc;
 using W = std::pair<std::uint8_t, std::uint8_t>;
@@ -52,7 +53,7 @@ static void inline_guard() {
     e.stop();
     c.inline_now = Reason::None;
     CHECK(e.start(Proto::Qc2, 9000, true) == Fail::None);
-    CHECK(std::string_view(name(Fail::Inline)) == "PD or load active");
+    { char d[24]; CHECK(k2::strpack::unpack(name(Fail::Inline), d) == "PD or load active"); }
 }
 
 // The HID-cable loop 5 V lock: no level above 5 V starts or is retargeted to; a running session above 5 V is aborted (both
@@ -1765,7 +1766,7 @@ static void service_hs_serves_only_the_qc_handshake() {
 // The [FC] state line (fctrig::poll): the detection pass reads "VOOC detected vbus=...", not "failed ... reason=detected",
 // because the row passes; a real failure keeps "failed" and its reason.
 static void state_log_words() {
-    const auto is = [](const char* a, const char* b) { return std::strcmp(a, b) == 0; };
+    const auto is = [](const char* a, const char* b) { char d[24]; return k2::strpack::unpack(a, d) == b; };
     CHECK(is(log_name(State::Failed, Fail::Detected), "detected"));
     CHECK(!log_is_failure(State::Failed, Fail::Detected));
     CHECK(is(log_name(State::Failed, Fail::NoResponse), "failed"));

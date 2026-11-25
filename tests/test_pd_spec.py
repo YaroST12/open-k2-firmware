@@ -79,17 +79,25 @@ int main() {
 
 NAMES_CPP = r"""
 #include <cstdio>
+#include "k2/core/strpack.hpp"
 #include "k2/pdspec/engine.hpp"
 using namespace k2::pdspec;
+static const char* d(const char* s) {   // the names are K2_P-packed: print them as the device shows them
+    static char b[4][96];
+    static unsigned i;
+    char* o = b[i++ & 3];
+    k2::strpack::decode(s, o, sizeof b[0]);
+    return o;
+}
 int main() {
-    for (std::size_t i = 0; i < kChecks; i++) std::printf("check %s|%s|%u|%d\n", kDefs[i].key, kDefs[i].label, unsigned(kDefs[i].weight), int(kDefs[i].inferred));
-    for (int i = 0; i <= int(Skip::NoAvs); i++) std::printf("skip %s\n", skip_name(Skip(i)));
-    for (int i = 0; i <= int(CapsNote::AvsOnly); i++) std::printf("note %s\n", caps_note_name(CapsNote(i)));
+    for (std::size_t i = 0; i < kChecks; i++) std::printf("check %s|%s|%u|%d\n", d(kDefs[i].key), d(kDefs[i].label), unsigned(kDefs[i].weight), int(kDefs[i].inferred));
+    for (int i = 0; i <= int(Skip::NoAvs); i++) std::printf("skip %s\n", d(skip_name(Skip(i))));
+    for (int i = 0; i <= int(CapsNote::AvsOnly); i++) std::printf("note %s\n", d(caps_note_name(CapsNote(i))));
     for (int k = 0; k < 2; k++)
         for (int c = 0; c < 3; c++) std::printf("step %d\n", int(step_mv(k ? ProgKind::Avs : ProgKind::Pps, std::uint8_t(c))));
-    for (int i = 0; i <= int(Stop::Timeout); i++) std::printf("stop %s\n", stop_name(Stop(i)));
-    for (int i = 0; i <= int(StartResult::Running); i++) std::printf("start %s\n", start_name(StartResult(i)));
-    for (int i = 0; i < int(Family::Count); i++) std::printf("family %s\n", family_name(Family(i)));
+    for (int i = 0; i <= int(Stop::Timeout); i++) std::printf("stop %s\n", d(stop_name(Stop(i))));
+    for (int i = 0; i <= int(StartResult::Running); i++) std::printf("start %s\n", d(start_name(StartResult(i))));
+    for (int i = 0; i < int(Family::Count); i++) std::printf("family %s\n", d(family_name(Family(i))));
     std::printf("const %ld %ld %u\n", long(kNever), long(kOpenLimit), unsigned(kBlobHeader));
 }
 """
@@ -100,8 +108,8 @@ def build_and_run(src, tag):
         cpp = Path(d) / f"{tag}.cpp"
         exe = Path(d) / tag
         cpp.write_text(src)
-        subprocess.run(["g++", "-std=c++23", "-I", str(ROOT / "include"), str(cpp), "-o", str(exe)], check=True,
-                       capture_output=True)
+        subprocess.run(["g++", "-std=c++23", "-I", str(ROOT / "include"), str(cpp), str(ROOT / "src/core/strpack.cpp"), "-o",
+                        str(exe)], check=True, capture_output=True)
         return subprocess.run([str(exe)], check=True, capture_output=True, text=True).stdout
 
 

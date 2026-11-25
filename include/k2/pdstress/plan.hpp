@@ -14,6 +14,7 @@
 #include "k2/pd/pd.hpp"
 #include "k2/pd/pd_sink.hpp"
 #include "k2/pdstress/dist.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::pdstress {
 
@@ -55,18 +56,18 @@ struct SeqInfo {
 };
 
 inline constexpr std::array<SeqInfo, kSeqCount> kSeqs = {{
-    {"ladder", "fixed levels up then down", 10, Pace::Settled, false, false},
-    {"slam", "5 V <-> top level, settled then ready", 40, Pace::Settled, false, false},
-    {"same", "same Request repeated at 9 V and top", 50, Pace::Ready, false, false},
-    {"reannounce", "Get_Source_Cap every 500 ms", 20, Pace::Spaced, false, false},
-    {"fixpps", "fixed <-> PPS at one voltage", 10, Pace::Settled, false, true},
-    {"ppssteps", "PPS steps 20/100/500/2000 mV", 50, Pace::Ready, false, true},
-    {"avssteps", "AVS steps 100/1000/2000 mV", 30, Pace::Ready, false, false},
-    {"current", "half current <-> full, same voltage", 10, Pace::Settled, false, false},
-    {"epr", "EPR 5/20 V <-> 28 V", 5, Pace::Settled, true, false},
-    {"softreset", "repeated Soft_Reset", 10, Pace::Settled, false, false},
-    {"ppslow", "PPS below 5 V", 10, Pace::Ready, false, true},
-    {"mismatch", "mismatch bit set, no mismatch", 10, Pace::Settled, false, false},
+    {"ladder", K2_P("fixed levels up then down"), 10, Pace::Settled, false, false}, // k2-plain: name parsed by pdstress_blob.py
+    {"slam", K2_P("5 V <-> top level, settled then ready"), 40, Pace::Settled, false, false},
+    {"same", K2_P("same Request repeated at 9 V and top"), 50, Pace::Ready, false, false},
+    {"reannounce", K2_P("Get_Source_Cap every 500 ms"), 20, Pace::Spaced, false, false}, // k2-plain: name parsed by pdstress_blob.py
+    {"fixpps", K2_P("fixed <-> PPS at one voltage"), 10, Pace::Settled, false, true}, // k2-plain: name parsed by pdstress_blob.py
+    {"ppssteps", K2_P("PPS steps 20/100/500/2000 mV"), 50, Pace::Ready, false, true}, // k2-plain: name parsed by pdstress_blob.py
+    {"avssteps", K2_P("AVS steps 100/1000/2000 mV"), 30, Pace::Ready, false, false}, // k2-plain: name parsed by pdstress_blob.py
+    {"current", K2_P("half current <-> full, same voltage"), 10, Pace::Settled, false, false}, // k2-plain: name parsed by pdstress_blob.py
+    {"epr", K2_P("EPR 5/20 V <-> 28 V"), 5, Pace::Settled, true, false},
+    {"softreset", K2_P("repeated Soft_Reset"), 10, Pace::Settled, false, false}, // k2-plain: name parsed by pdstress_blob.py
+    {"ppslow", K2_P("PPS below 5 V"), 10, Pace::Ready, false, true}, // k2-plain: name parsed by pdstress_blob.py
+    {"mismatch", K2_P("mismatch bit set, no mismatch"), 10, Pace::Settled, false, false}, // k2-plain: name parsed by pdstress_blob.py
 }};
 
 constexpr std::uint16_t seq_bit(Seq s) { return std::uint16_t(1u << static_cast<unsigned>(s)); }
@@ -121,15 +122,15 @@ enum class Na : std::uint8_t { None, NoLevels, NoPps, NoAvs, PpsAbove5V, NoHeadr
 constexpr const char* na_name(Na n) {
     switch (n) {
         case Na::None: return "ok";
-        case Na::NoLevels: return "fewer than 2 fixed levels";
-        case Na::NoPps: return "no PPS";
-        case Na::NoAvs: return "no SPR AVS";
-        case Na::PpsAbove5V: return "PPS starts at 5 V or more";
-        case Na::NoHeadroom: return "under 1 A advertised";
-        case Na::NoEpr: return "no EPR 28 V";
-        case Na::NoEprProof: return "no EPR proof";
-        case Na::SelfPowered: return "K2 would brown out";
-        case Na::NotSelected: return "not selected";
+        case Na::NoLevels: return "fewer than 2 fixed levels"; // k2-plain: parsed by pdstress_blob.py
+        case Na::NoPps: return "no PPS"; // k2-plain: parsed by pdstress_blob.py
+        case Na::NoAvs: return "no SPR AVS"; // k2-plain: parsed by pdstress_blob.py
+        case Na::PpsAbove5V: return "PPS starts at 5 V or more"; // k2-plain: parsed by pdstress_blob.py
+        case Na::NoHeadroom: return "under 1 A advertised"; // k2-plain: parsed by pdstress_blob.py
+        case Na::NoEpr: return "no EPR 28 V"; // k2-plain: parsed by pdstress_blob.py
+        case Na::NoEprProof: return "no EPR proof"; // k2-plain: parsed by pdstress_blob.py
+        case Na::SelfPowered: return "K2 would brown out"; // k2-plain: parsed by pdstress_blob.py
+        case Na::NotSelected: return "not selected"; // k2-plain: parsed by pdstress_blob.py
     }
     return "?";
 }

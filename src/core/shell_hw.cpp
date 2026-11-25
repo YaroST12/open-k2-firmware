@@ -162,7 +162,7 @@ using detail::silent_end;
 void sniff_stop() {
     dpsniff::cancel();
     const dpsniff::StreamStats st = dpsniff::stream_stats();
-    tput("sniff stats edges=%u overruns=%u bytes=%u\r\n", static_cast<unsigned>(st.edges),
+    tput(K2_P("sniff stats edges=%u overruns=%u bytes=%u\r\n"), static_cast<unsigned>(st.edges),
          static_cast<unsigned>(st.overruns), static_cast<unsigned>(st.bytes));
 }
 
@@ -172,10 +172,10 @@ void stream_stop() {
     const std::uint8_t mask = dbg_hw::stream_mask();
     const dbg::Stats s = dbg_hw::stop();
     if (mask & dbg::kTrace) {
-        tput("trace stats records=%u lost=%u\r\n", static_cast<unsigned>(s.trace_records),
+        tput(K2_P("trace stats records=%u lost=%u\r\n"), static_cast<unsigned>(s.trace_records),
              static_cast<unsigned>(s.trace_lost));
     }
-    tput("stream stats frames=%u trace=%u/%u log=%u/%u run=%u/%u power=%u folded=%u same=%u stalls=%u\r\n",
+    tput(K2_P("stream stats frames=%u trace=%u/%u log=%u/%u run=%u/%u power=%u folded=%u same=%u stalls=%u\r\n"),
          static_cast<unsigned>(s.frames), static_cast<unsigned>(s.trace_records), static_cast<unsigned>(s.trace_lost),
          static_cast<unsigned>(s.log_entries), static_cast<unsigned>(s.log_lost), static_cast<unsigned>(s.run_events),
          static_cast<unsigned>(s.run_lost), static_cast<unsigned>(s.power_frames), static_cast<unsigned>(s.power_folded),
@@ -202,7 +202,7 @@ struct Line {
         n = 0;
         json = c.o.json;
         if (json) {
-            append("{\"cmd\":\"");
+            append(K2_P("{\"cmd\":\""));
             append(name);
             append("\"");
         } else {
@@ -233,22 +233,22 @@ struct Line {
     }
     [[gnu::noinline]] void u(const char* k, std::uint32_t v) { key(k); add("%u", static_cast<unsigned>(v)); }
     [[gnu::noinline]] void i(const char* k, int v) { key(k); add("%d", v); }
-    [[gnu::noinline]] void x(const char* k, unsigned v) { key(k); add(json ? "%u" : "0x%02X", v); }
+    [[gnu::noinline]] void x(const char* k, unsigned v) { key(k); add(json ? "%u" : K2_P("0x%02X"), v); }
     [[gnu::noinline]] void t(const char* k, bool v) {
         key(k);
-        append(json ? (v ? "true" : "false") : (v ? "1" : "0"));
+        append(json ? (v ? "true" : K2_P("false")) : (v ? "1" : "0"));
     }
     [[gnu::noinline]] void s(const char* k, const char* v) {
         key(k);
         if (json) append("\"");
-        append(v ? v : "(null)");
+        append(v ? v : K2_P("(null)"));
         if (json) append("\"");
     }
     [[gnu::noinline]] void hex(const char* k, std::span<const std::uint8_t> d) {
         key(k);
         if (json) append("\"");
         for (std::uint8_t v : d) {
-            const char h[2] = {"0123456789ABCDEF"[v >> 4], "0123456789ABCDEF"[v & 15]};
+            const char h[2] = {"0123456789ABCDEF"[v >> 4], "0123456789ABCDEF"[v & 15]};  // k2-plain: indexed per digit
             append({h, 2});
         }
         if (json) append("\"");
@@ -355,7 +355,7 @@ void accp_line(const lab::Cmd& c, lab::Id id, int reg, bool is_write, std::span<
     }
     l.t("ack", ack);
     l.hex("rx", rx);
-    l.u("tries", r.tries);
+    l.u(K2_P("tries"), r.tries);
     l.u("us", r.us);
     l.send();
 }
@@ -369,7 +369,7 @@ const char* lab_accp(const lab::Cmd& c) {
         const fctrig::LabXfer r = fctrig::lab_ping(retries);
         Line l(c, lab::name(c.id));
         l.t("ack", r.ok);
-        l.u("tries", r.tries);
+        l.u(K2_P("tries"), r.tries);
         l.u("us", r.us);
         l.send();
     } else {
@@ -432,11 +432,11 @@ const char* lab_qc_pulse(const lab::Cmd& c) {
     const auto after = power::read();
     Line l(c, lab::name(c.id));
     l.u("n", n);
-    l.u("pulse_us", hold);
-    l.u("gap_us", gap);
+    l.u(K2_P("pulse_us"), hold);
+    l.u(K2_P("gap_us"), gap);
     l.u("us", us);
-    l.i("mv_before", before ? int(before->vbus_mv) : -1);
-    l.i("mv_after", after ? int(after->vbus_mv) : -1);
+    l.i(K2_P("mv_before"), before ? int(before->vbus_mv) : -1);
+    l.i(K2_P("mv_after"), after ? int(after->vbus_mv) : -1);
     l.send();
     if (c.o.release) raw_to_hiz();
     return nullptr;
@@ -472,9 +472,9 @@ const char* lab_engine(const lab::Cmd& c) {
     if (s == remote::Status::Ok) g_fc_started = true;
     if (const char* why = fc_reason(s)) return why;
     Line l(c, lab::name(c.id));
-    l.u("target_mv", static_cast<unsigned>(mv));
+    l.u(K2_P("target_mv"), static_cast<unsigned>(mv));
     if (c.id == I::Scp) l.u("ma", c.a[1]);
-    else if (c.na > 1) l.u("ma_applied", 0);   // the engine has a fixed current for this protocol
+    else if (c.na > 1) l.u(K2_P("ma_applied"), 0);   // the engine has a fixed current for this protocol
     l.send();
     return nullptr;
 }
@@ -489,13 +489,13 @@ const char* lab_vooc_frames(const lab::Cmd& c) {
     const std::uint32_t t0 = dpdm::cycles();
     const int f = dpdm::rx_command(to_ms * 1000u);
     Line l(c, lab::name(c.id));
-    l.t("frame", f >= 0);
+    l.t(K2_P("frame"), f >= 0);
     if (f >= 0) {
-        l.x("frame_raw", static_cast<unsigned>(f));
+        l.x(K2_P("frame_raw"), static_cast<unsigned>(f));
         l.x("cmd", vooc::frame_cmd(static_cast<std::uint16_t>(f)));
         if (c.id == lab::Id::VoocAnswer) {
             const bool match = vooc::frame_cmd(static_cast<std::uint16_t>(f)) == c.a[0];
-            l.t("match", match);
+            l.t(K2_P("match"), match);
             if (match) l.t("sent", dpdm::tx_reply(static_cast<std::uint16_t>(c.a[1])));
         }
     }
@@ -545,16 +545,16 @@ const char* lab_vbus(const lab::Cmd& c) {
 [[gnu::noinline]] const char* lab_pd_caps(const lab::Cmd& c) {
     const pd::SourceCaps& caps = fusb302::caps();
     Line l(c, lab::name(c.id));
-    l.t("valid", caps.valid);
+    l.t(K2_P("valid"), caps.valid);
     l.u("pdos", caps.valid ? caps.num_pdos : 0);
     l.send();
     for (unsigned i = 0; caps.valid && i < caps.num_pdos && i < pd::kMaxPdos; i++) {
-        l.reset(c, "pd.pdo");
+        l.reset(c, K2_P("pd.pdo"));
         l.u("pos", i + 1);
         l.u("raw", caps.pdos[i].raw);
-        l.u("min_mv", caps.pdos[i].min_mv);
-        l.u("max_mv", caps.pdos[i].max_mv);
-        l.u("max_ma", caps.pdos[i].max_ma);
+        l.u(K2_P("min_mv"), caps.pdos[i].min_mv);
+        l.u(K2_P("max_mv"), caps.pdos[i].max_mv);
+        l.u(K2_P("max_ma"), caps.pdos[i].max_ma);
         l.send();
     }
     return nullptr;
@@ -564,11 +564,11 @@ const char* lab_vbus(const lab::Cmd& c) {
     std::array<ufcs::Cap, ufcs::kMaxCaps> caps{};
     const std::size_t k = ufcs::decode_caps(payload, caps);
     for (std::size_t i = 0; i < k; i++) {
-        l.reset(c, "ufcs.cap");
+        l.reset(c, K2_P("ufcs.cap"));
         l.u("pos", static_cast<std::uint32_t>(caps[i].pos));
-        l.u("min_mv", static_cast<std::uint32_t>(caps[i].min_mv));
-        l.u("max_mv", static_cast<std::uint32_t>(caps[i].max_mv));
-        l.u("max_ma", static_cast<std::uint32_t>(caps[i].max_ma));
+        l.u(K2_P("min_mv"), static_cast<std::uint32_t>(caps[i].min_mv));
+        l.u(K2_P("max_mv"), static_cast<std::uint32_t>(caps[i].max_mv));
+        l.u(K2_P("max_ma"), static_cast<std::uint32_t>(caps[i].max_ma));
         l.send();
     }
 }
@@ -603,12 +603,12 @@ const char* lab_vbus(const lab::Cmd& c) {
     Line l(c, lab::name(c.id));
     l.t("sent", sent);
     l.hex("tx", std::span<const std::uint8_t>(tx.data(), n));
-    l.u("rx_len", static_cast<std::uint32_t>(got));
+    l.u(K2_P("rx_len"), static_cast<std::uint32_t>(got));
     l.hex("rx", std::span<const std::uint8_t>(rx.data(), std::min<std::size_t>(got, lab::kMaxBytes)));
     ufcs::Frame f;
     std::size_t used = 0;
     const bool frame = ufcs::decode(std::span<const std::uint8_t>(rx.data(), got), f, used) == ufcs::Parse::Ok;
-    l.t("frame", frame);
+    l.t(K2_P("frame"), frame);
     if (frame) {
         l.u("cmd", f.cmd);
         l.t("data", f.data);
@@ -623,8 +623,8 @@ const char* lab_vbus(const lab::Cmd& c) {
 // (or the [UFCS] probe done log line) tells when it ended. It never leaves 5 V and never sends a Request.
 [[gnu::noinline]] void ufcs_tune_line(const lab::Cmd& c, ufcs::Field f) {
     const ufcs::FieldDef& d = ufcs::kFields[static_cast<std::size_t>(f)];
-    Line l(c, "ufcs.tune");
-    l.s("field", d.name);
+    Line l(c, K2_P("ufcs.tune"));
+    l.s(K2_P("field"), d.name);
     l.u("val", ufcs::get(fctrig::ufcs_tuner(), f));
     l.u("def", d.def);
     l.u("lo", d.lo);
@@ -634,28 +634,28 @@ const char* lab_vbus(const lab::Cmd& c) {
 
 [[gnu::noinline]] void ufcs_result_lines(const lab::Cmd& c) {
     const ufcs::ProbeResult& r = fctrig::ufcs_probe_result();
-    Line l(c, "ufcs.result");
-    l.s("state", fctrig::ufcs_probe_running() ? "running" : fctrig::ufcs_probe_done() ? "done" : "idle");
-    l.s("verdict", ufcs::name(r.verdict));
-    l.s("class", ufcs::name(r.hs_class));
+    Line l(c, K2_P("ufcs.result"));
+    l.s(K2_P("state"), fctrig::ufcs_probe_running() ? K2_P("running") : fctrig::ufcs_probe_done() ? "done" : "idle");
+    l.s(K2_P("verdict"), ufcs::name(r.verdict));
+    l.s(K2_P("class"), ufcs::name(r.hs_class));
     struct UField { const char* k; std::uint32_t v; };
     const UField res_u[] = {
         {"tx", static_cast<std::uint32_t>(r.tx_frames)},
         {"rx", static_cast<std::uint32_t>(r.rx_frames)},
-        {"bytes", static_cast<std::uint32_t>(r.rx_bytes)},
-        {"framing", r.err.framing}, {"noise", r.err.noise}, {"overrun", r.err.overrun},
-        {"parity", r.err.parity}, {"ms", static_cast<std::uint32_t>(r.total_ms)},
+        {K2_P("bytes"), static_cast<std::uint32_t>(r.rx_bytes)},
+        {K2_P("framing"), r.err.framing}, {K2_P("noise"), r.err.noise}, {K2_P("overrun"), r.err.overrun},
+        {K2_P("parity"), r.err.parity}, {"ms", static_cast<std::uint32_t>(r.total_ms)},
     };
     for (const UField& f : res_u) l.u(f.k, f.v);
-    l.t("truncated", r.truncated);
+    l.t(K2_P("truncated"), r.truncated);
     l.send();
-    l.reset(c, "ufcs.hs");
+    l.reset(c, K2_P("ufcs.hs"));
     struct IField { const char* k; int v; };
     const IField hs_i[] = {
-        {"rise1_us", r.hs.rise_us[0]}, {"fall1_us", r.hs.fall_us[0]},
-        {"rise2_us", r.hs.rise_us[1]}, {"fall2_us", r.hs.fall_us[1]},
-        {"final_us", r.hs.final_us}, {"vbus_start", r.vbus_start},
-        {"vbus_min", r.vbus_min}, {"vbus_max", r.vbus_max},
+        {K2_P("rise1_us"), r.hs.rise_us[0]}, {K2_P("fall1_us"), r.hs.fall_us[0]},
+        {K2_P("rise2_us"), r.hs.rise_us[1]}, {K2_P("fall2_us"), r.hs.fall_us[1]},
+        {K2_P("final_us"), r.hs.final_us}, {K2_P("vbus_start"), r.vbus_start},
+        {K2_P("vbus_min"), r.vbus_min}, {K2_P("vbus_max"), r.vbus_max},
     };
     for (const IField& f : hs_i) l.i(f.k, f.v);
     l.send();
@@ -668,7 +668,7 @@ const char* lab_vbus(const lab::Cmd& c) {
         const std::size_t len = b[off + 3];
         if (off + 4 + len > b.size()) break;
         for (std::size_t k = 0; k < len || (len == 0 && k == 0); k += lab::kMaxBytes) {
-            l.reset(c, "ufcs.ev");
+            l.reset(c, K2_P("ufcs.ev"));
             l.u("ms", ms);
             l.s("dir", tx ? "tx" : "rx");
             l.hex("hex", b.subspan(off + 4 + k, std::min<std::size_t>(len - k, lab::kMaxBytes)));
@@ -699,13 +699,13 @@ const char* lab_ufcs_tune(const lab::Cmd& c) {
         ufcs_tune_line(c, f);
     } else if (c.id == I::UfcsReset) {
         if (!fctrig::ufcs_tuner_reset()) return K2_P("busy (probe running)");
-        Line l(c, "ufcs.reset");
+        Line l(c, K2_P("ufcs.reset"));
         l.t("ok", true);
         l.send();
     } else {   // UfcsProbe
         const ufcs::ProbeStart s = fctrig::ufcs_probe_start();
-        Line l(c, "ufcs.probe");
-        l.t("started", s == ufcs::ProbeStart::Ok);
+        Line l(c, K2_P("ufcs.probe"));
+        l.t(K2_P("started"), s == ufcs::ProbeStart::Ok);
         l.s("err", ufcs::name(s));
         l.send();
         return s == ufcs::ProbeStart::Ok ? nullptr : K2_P("probe refused (busy, inline, not 5 V, no monitor or bus resetting)");
@@ -735,7 +735,7 @@ const char* lab_pd(const lab::Cmd& c) {
     pd::Err e = pd::Err::Ok;
     bool ok = true;
     if (c.id == I::PdGet) {
-        if (c.word != "source-cap") return K2_P("pd get: only source-cap");
+        if (c.word != "source-cap") return K2_P("pd get: only source-cap");  // k2-plain: compared to the typed word
         ok = fusb302::get_source_caps(c.o.confirm);
     } else if (c.id == I::PdReread) {
         ok = fusb302::reread_start(c.na ? static_cast<std::uint8_t>(c.a[0]) : pd::kRereadDefault);   // PD mode only; the result is a [REREAD] line and a Black Box mark
@@ -745,7 +745,7 @@ const char* lab_pd(const lab::Cmd& c) {
         e = fusb302::sink_request(ch, c.o.confirm);   // pd epr: pos 0 = enter EPR and read the list
     }
     Line l(c, lab::name(c.id));
-    l.t("started", ok && e == pd::Err::Ok);
+    l.t(K2_P("started"), ok && e == pd::Err::Ok);
     l.s("err", pd::err_name(e));
     l.send();
     return ok ? nullptr : K2_P("refused (no CC, or inline: an inline K2 never transmits)");
@@ -766,14 +766,14 @@ const char* lab_lcd(const lab::Cmd& c) {
     Line l(c, lab::name(c.id));
     l.u("div", div);
     l.u("mhz", lcd::kApb1Hz / 1'000'000u / div);
-    l.u("service_us", lcd::kServiceUs);
-    l.s("dma", !d.enabled ? "disabled" : d.ok ? "ok" : "stalled");
-    l.u("transfers", d.transfers);
-    l.u("stalls", d.stalls);
-    l.u("paint_px", t.px);
-    l.u("paint_ms", t.paint_ms);
-    l.u("fs_ms", t.fs_ms);
-    l.u("blocked_ms", gap::blocked.run_peak(systick::millis()));   // the run's longest blocked-paint window
+    l.u(K2_P("service_us"), lcd::kServiceUs);
+    l.s("dma", !d.enabled ? K2_P("disabled") : d.ok ? "ok" : K2_P("stalled"));
+    l.u(K2_P("transfers"), d.transfers);
+    l.u(K2_P("stalls"), d.stalls);
+    l.u(K2_P("paint_px"), t.px);
+    l.u(K2_P("paint_ms"), t.paint_ms);
+    l.u(K2_P("fs_ms"), t.fs_ms);
+    l.u(K2_P("blocked_ms"), gap::blocked.run_peak(systick::millis()));   // the run's longest blocked-paint window
     l.send();
     return nullptr;
 }
@@ -798,27 +798,27 @@ const char* lab_pdstress(const lab::Cmd& c) {
         const std::uint32_t off = c.na ? c.a[0] : 0;
         const remote::PdStressInfo i = g_remote->pdstress_info();
         const std::size_t n = off < i.blob_len ? g_remote->pdstress_read(static_cast<std::uint16_t>(off), std::span<std::uint8_t>(buf)) : 0;
-        Line l(c, "pdstress.result");
+        Line l(c, K2_P("pdstress.result"));
         l.u("off", off);
-        l.u("total", i.blob_len);
+        l.u(K2_P("total"), i.blob_len);
         l.u("n", static_cast<std::uint32_t>(n));
         l.hex("data", std::span<const std::uint8_t>(buf, n));
         l.send();
         return nullptr;
     }
-    static constexpr const char* kStates[] = {"idle", "resuming", "running", "finished"};
+    static constexpr const char* kStates[] = {"idle", K2_P("resuming"), K2_P("running"), K2_P("finished")};
     const remote::PdStressInfo i = g_remote->pdstress_info();
     Line l(c, lab::name(c.id));
-    l.s("state", i.state < 4 ? kStates[i.state] : "?");
+    l.s(K2_P("state"), i.state < 4 ? kStates[i.state] : "?");
     l.u("stop", i.stop);
-    l.u("start", i.start);
+    l.u(K2_P("start"), i.start);
     l.u("seq", i.seq_idx);
     l.u("of", i.seq_total);
     l.u("id", i.seq_cur);
-    l.u("reboots", i.reboots);
-    l.u("transitions", i.transitions);
-    l.u("elapsed_ms", i.elapsed_ms);
-    l.u("score_cp", i.score_cp);
+    l.u(K2_P("reboots"), i.reboots);
+    l.u(K2_P("transitions"), i.transitions);
+    l.u(K2_P("elapsed_ms"), i.elapsed_ms);
+    l.u(K2_P("score_cp"), i.score_cp);
     l.u("blob", i.blob_len);
     l.send();
     return nullptr;
@@ -865,31 +865,31 @@ unsigned twin_numbers(std::array<std::uint8_t, twin::kCapacity>& seqs) { return 
 // `#2 Pixel 9  27W PPS  full  pos 6 9000mV 3000mA`, or the plain identity when `predict_it` is off.
 [[gnu::noinline]] void twin_print(std::uint8_t seq, const twin::Twin& t, bool predict_it) {
     if (!predict_it) {
-        tput("#%u %s  vid=%04X pid=%04X pdos=%u\r\n", unsigned(seq), t.name.data(), unsigned(t.vid), unsigned(t.pid),
+        tput(K2_P("#%u %s  vid=%04X pid=%04X pdos=%u\r\n"), unsigned(seq), t.name.data(), unsigned(t.vid), unsigned(t.pid),
              unsigned(t.num_pdos));
         return;
     }
     twin::Outcome o;
     if (!twin_hw::predict(t, o)) {
-        tput("#%u %s  no charger list\r\n", unsigned(seq), t.name.data());
+        tput(K2_P("#%u %s  no charger list\r\n"), unsigned(seq), t.name.data());
         return;
     }
     twin_hw::log_predict(seq, o);
     char s[24];
     twin::present::summary(o, s);
     if (o.kind == twin::Kind::None) {
-        tput("#%u %s  %s\r\n", unsigned(seq), t.name.data(), s);
+        tput(K2_P("#%u %s  %s\r\n"), unsigned(seq), t.name.data(), s);
         return;
     }
-    tput("#%u %s  %s  %s  pos %u %umV %umA%s\r\n", unsigned(seq), t.name.data(), s, twin::present::note(o.limiter), unsigned(o.pos),
-         unsigned(o.mv), unsigned(o.ma), o.mismatch ? " mismatch" : "");
+    tput(K2_P("#%u %s  %s  %s  pos %u %umV %umA%s\r\n"), unsigned(seq), t.name.data(), s, twin::present::note(o.limiter), unsigned(o.pos),
+         unsigned(o.mv), unsigned(o.ma), o.mismatch ? K2_P(" mismatch") : "");
 }
 
 [[gnu::noinline]] const char* twin_status() {
     const twin::live::Runner& r = twin_hw::live();
-    tput("twin %s %u/%u current=%u reason=%s%s%s\r\n", twin_hw::live_running() ? "running" : "idle", unsigned(r.done_count()),
-         unsigned(r.count()), unsigned(r.current()), twin::live::name(r.reason()), r.restoring() ? " restoring" : "",
-         r.waking() ? " waking" : "");
+    tput(K2_P("twin %s %u/%u current=%u reason=%s%s%s\r\n"), twin_hw::live_running() ? K2_P("running") : "idle", unsigned(r.done_count()),
+         unsigned(r.count()), unsigned(r.current()), twin::live::name(r.reason()), r.restoring() ? K2_P(" restoring") : "",
+         r.waking() ? K2_P(" waking") : "");
     for (std::uint8_t seq = 1; seq <= twin::kCapacity; seq++) {
         const twin::live::Slot& s = r.slot(seq);
         twin::Twin t;
@@ -898,32 +898,32 @@ unsigned twin_numbers(std::array<std::uint8_t, twin::kCapacity>& seqs) { return 
         if (!twin_hw::predict(t, o)) o = twin::Outcome{};
         char p[24];
         twin::present::proof(s.verdict, s.measured_mv, o, p);
-        tput("#%u %s  %s%s%s\r\n", unsigned(seq), t.name.data(), p, s.skip != twin::live::Skip::None ? "  " : "",
+        tput(K2_P("#%u %s  %s%s%s\r\n"), unsigned(seq), t.name.data(), p, s.skip != twin::live::Skip::None ? "  " : "",
              twin::live::name(s.skip));
     }
     // The inline interrogation, once one ran: its phase, what it asked and what came back (bit n = pd::IqStep n), and the learn.
     const pd::IqStatus& q = twin_hw::inline_status();
     if (q.phase != pd::IqPhase::Idle) {
         const twin_hw::InlineLearn& l = twin_hw::inline_learn();
-        tput("inline %s why=%s %s vid=%04X pdos=%u\r\n", pd::iq_phase_name(q.phase), pd::iq_why_name(q.why),
+        tput(K2_P("inline %s why=%s %s vid=%04X pdos=%u\r\n"), pd::iq_phase_name(q.phase), pd::iq_why_name(q.why),
              pd::iq_match_name(q.match), unsigned(q.id.valid ? q.id.vid : 0), unsigned(q.num_sink_pdos));
-        tput("inline asked=%02x answered=%02x refused=%02x silent=%02x sent=%u resets=%u/%u\r\n", unsigned(q.asked_mask),
+        tput(K2_P("inline asked=%02x answered=%02x refused=%02x silent=%02x sent=%u resets=%u/%u\r\n"), unsigned(q.asked_mask),
              unsigned(q.ok_mask), unsigned(q.refused_mask), unsigned(q.silent_mask), unsigned(q.sent), unsigned(q.resets_sent),
              unsigned(q.resets_seen));
         // late: bit n = answered only after the step was given up; EPR sink PDOs (the SPR ones first) and the cable spoof's counts.
         if (q.late_mask != 0 || q.num_epr_pdos != 0)
-            tput("inline late=%02x epr_pdos=%u%s\r\n", unsigned(q.late_mask), unsigned(q.num_epr_pdos), q.epr_partial ? " partial" : "");
-        for (unsigned i = 0; i < q.num_epr_pdos; i++) tput("inline epr pdo%u %08X\r\n", i + 1, unsigned(q.epr_pdos[i]));
+            tput(K2_P("inline late=%02x epr_pdos=%u%s\r\n"), unsigned(q.late_mask), unsigned(q.num_epr_pdos), q.epr_partial ? K2_P(" partial") : "");
+        for (unsigned i = 0; i < q.num_epr_pdos; i++) tput(K2_P("inline epr pdo%u %08X\r\n"), i + 1, unsigned(q.epr_pdos[i]));
         if (q.spoof)
-            tput("inline spoof: SOP' cable queried %u times (charger or device), %u replies%s\r\n", unsigned(q.sopp_queries), unsigned(q.sopp_replies),
-                 q.sopp_real ? "; a real e-marked cable answered, the spoof cannot reach it (use a cable without a chip)" : "");
+            tput(K2_P("inline spoof: SOP' cable queried %u times (charger or device), %u replies%s\r\n"), unsigned(q.sopp_queries), unsigned(q.sopp_replies),
+                 q.sopp_real ? K2_P("; a real e-marked cable answered, the spoof cannot reach it (use a cable without a chip)") : "");
         if (q.first.ready || q.second.ready)
-            tput("inline contract before pos=%u rdo=%08X after pos=%u rdo=%08X %s\r\n", unsigned(q.first.pos),
+            tput(K2_P("inline contract before pos=%u rdo=%08X after pos=%u rdo=%08X %s\r\n"), unsigned(q.first.pos),
                  unsigned(q.first.rdo), unsigned(q.second.pos), unsigned(q.second.rdo),
-                 pd::same_contract(q.first, q.second) ? "same" : "changed");
+                 pd::same_contract(q.first, q.second) ? "same" : K2_P("changed"));
         if (l.done)
-            tput("inline learn %s #%u%s%s\r\n", twin_hw::name(l.result.how), unsigned(l.result.store.seq),
-                 l.result.store.existed ? " updated" : "", l.save ? "" : " (dry, not saved)");
+            tput(K2_P("inline learn %s #%u%s%s\r\n"), twin_hw::name(l.result.how), unsigned(l.result.store.seq),
+                 l.result.store.existed ? K2_P(" updated") : "", l.save ? "" : K2_P(" (dry, not saved)"));
     }
     return nullptr;
 }
@@ -948,9 +948,9 @@ unsigned twin_numbers(std::array<std::uint8_t, twin::kCapacity>& seqs) { return 
                                                             : twin_hw::learn_from_sniff(c.name, !c.dry);
     if (l.how == twin_hw::Learn::Store) return twin::err_name(l.store.err);
     if (l.how != twin_hw::Learn::Ok) return twin_hw::name(l.how);
-    tput("twin %s #%u %s vid=%04X pid=%04X pdos=%u%s%s\r\n", c.dry ? "learned (dry, not saved)" : "saved",
+    tput(K2_P("twin %s #%u %s vid=%04X pid=%04X pdos=%u%s%s\r\n"), c.dry ? K2_P("learned (dry, not saved)") : K2_P("saved"),
          unsigned(l.store.seq), l.twin.name.data(), unsigned(l.twin.vid), unsigned(l.twin.pid), unsigned(l.twin.num_pdos),
-         l.store.existed ? " updated" : "", l.store.unchanged ? " unchanged" : "");
+         l.store.existed ? K2_P(" updated") : "", l.store.unchanged ? K2_P(" unchanged") : "");
     return nullptr;
 }
 
@@ -963,7 +963,7 @@ unsigned twin_numbers(std::array<std::uint8_t, twin::kCapacity>& seqs) { return 
     case TwinOp::Cancel: {
         const bool was = twin_hw::live_running() || twin_hw::inline_running();
         g_ui->cancel_twin();
-        tput("twin cancelled was_running=%u\r\n", was ? 1u : 0u);
+        tput(K2_P("twin cancelled was_running=%u\r\n"), was ? 1u : 0u);
         return nullptr;
     }
     case TwinOp::Run: {
@@ -979,7 +979,7 @@ unsigned twin_numbers(std::array<std::uint8_t, twin::kCapacity>& seqs) { return 
             twin_hw::live_start(std::span<const std::uint8_t>(seqs.data(), n), c.confirm, g_ui->twin_ctx(systick::millis()));
         if (r != twin::live::Refusal::None) return twin::live::name(r);
         g_twin_started = true;
-        tput("twin run started n=%u (twin status for the verdicts)\r\n", n);
+        tput(K2_P("twin run started n=%u (twin status for the verdicts)\r\n"), n);
         return nullptr;
     }
     case TwinOp::Learn:
@@ -989,8 +989,8 @@ unsigned twin_numbers(std::array<std::uint8_t, twin::kCapacity>& seqs) { return 
         const pd::IqRefusal r = c.spoof ? twin_hw::inline_start_cable(c.name, !c.dry, c.confirm, ctx, c.spoof_kind == 1, c.spoof_id)
                                         : twin_hw::inline_start(c.name, !c.dry, c.confirm, ctx);
         if (r != pd::IqRefusal::None) return pd::iq_refusal_name(r);
-        tput("twin inline started%s%s (twin status follows it, twin cancel stops it)\r\n", c.dry ? " dry" : "",
-             c.spoof ? " with a cable spoof" : "");
+        tput(K2_P("twin inline started%s%s (twin status follows it, twin cancel stops it)\r\n"), c.dry ? " dry" : "",
+             c.spoof ? K2_P(" with a cable spoof") : "");
         return nullptr;
     }
     case TwinOp::Rename:
@@ -1012,14 +1012,14 @@ const char* diag_print() {
     namespace dg = pd::diag;
     if (dg::live::state() == dg::live::State::None) { put(K2_P("no PD session yet\r\n")); return nullptr; }
     const dg::Report& r = dg::live::report();
-    tput("session %s, %u.%u s, %u finished\r\n", dg::live::state() == dg::live::State::Open ? "open" : "last",
+    tput(K2_P("session %s, %u.%u s, %u finished\r\n"), dg::live::state() == dg::live::State::Open ? "open" : "last",
          unsigned(r.dur_ms / 1000), unsigned(r.dur_ms % 1000 / 100), unsigned(dg::live::sessions()));
     const unsigned n = dg::line_count(r);
     for (unsigned i = 0; i < n; i++) {
         dg::Line l;
         if (!dg::line(r, i, l)) continue;
-        const char* tag = l.kind != dg::LineKind::Title ? "" : l.sev == dg::Sev::Fail ? "FAIL " : l.sev == dg::Sev::Warn ? "WARN " : "     ";
-        tput("%s%s%s\r\n", l.kind == dg::LineKind::Note ? "      " : "  ", tag, l.text.data());
+        const char* tag = l.kind != dg::LineKind::Title ? "" : l.sev == dg::Sev::Fail ? K2_P("FAIL ") : l.sev == dg::Sev::Warn ? K2_P("WARN ") : K2_P("     ");
+        tput(K2_P("%s%s%s\r\n"), l.kind == dg::LineKind::Note ? K2_P("      ") : "  ", tag, l.text.data());
     }
     return nullptr;
 }
@@ -1055,20 +1055,20 @@ struct Hw final : shell::Backend {
         auto add = [&](const char* f, auto... a) {
             n += fmt::format(std::span<char>(b + n, sizeof b - n), f, a...);
         };
-        if (const auto pm = power::read()) add("V=%dmV I=%dmA", int(pm->vbus_mv), int(pm->current_ma));
-        else add("V=n/a I=n/a");
+        if (const auto pm = power::read()) add(K2_P("V=%dmV I=%dmA"), int(pm->vbus_mv), int(pm->current_ma));
+        else add(K2_P("V=n/a I=n/a"));
         if (const auto r = adc::read()) {
-            add(" dp=%d dm=%d cc1=%d cc2=%d", int(r->dp_mv), int(r->dm_mv), int(r->cc1_mv), int(r->cc2_mv));
+            add(K2_P(" dp=%d dm=%d cc1=%d cc2=%d"), int(r->dp_mv), int(r->dm_mv), int(r->cc1_mv), int(r->cc2_mv));
         } else {
-            add(" dp=n/a dm=n/a cc1=n/a cc2=n/a");
+            add(K2_P(" dp=n/a dm=n/a cc1=n/a cc2=n/a"));
         }
-        add(" fc=%s", fastcharge::name(fastcharge::label()));   // SVOOC while a proven session is live, like Home
+        add(K2_P(" fc=%s"), fastcharge::name(fastcharge::label()));   // SVOOC while a proven session is live, like Home
         const fctrig::Status t = fctrig::status();
-        add(" trig=%s", fc::name(t.state));
+        add(K2_P(" trig=%s"), fc::name(t.state));
         const pd::SourceCaps& c = fusb302::caps();
         const pd::Contract& k = fusb302::contract();
-        add(" pd=%dpdo", c.valid ? int(c.num_pdos) : 0);
-        if (k.valid) add(" %dmV/%dmA", int(k.mv), int(k.op_ma));
+        add(K2_P(" pd=%dpdo"), c.valid ? int(c.num_pdos) : 0);
+        if (k.valid) add(K2_P(" %dmV/%dmA"), int(k.mv), int(k.op_ma));
         add("\r\n");
         put({b, n});
     }
@@ -1134,7 +1134,7 @@ struct Hw final : shell::Backend {
         g_fc_started = false;
         const bool raw = g_raw_dp || g_raw_dm;
         if (raw) raw_to_hiz();
-        tput("stop active=%u vbus=%d fc_release_busy=%u raw=%u\r\n", static_cast<unsigned>(s.active),
+        tput(K2_P("stop active=%u vbus=%d fc_release_busy=%u raw=%u\r\n"), static_cast<unsigned>(s.active),
              static_cast<int>(s.vbus_mv), s.fc_release_busy ? 1u : 0u, raw ? 1u : 0u);
         return nullptr;
     }
@@ -1176,24 +1176,24 @@ struct Hw final : shell::Backend {
         if (mode == 0 || mode == 1) dpsniff::monitor_enable(mode == 1);
         const dpsniff::MonitorInfo m = dpsniff::monitor_info();
         const vooc::Summary& s = m.s;
-        tput("vooc %s %s sessions=%u active=%u wakes=%u partials=%u edges=%u frames=%u\r\n",
-             m.enabled ? "on" : "off", m.running ? "running" : "idle", unsigned(s.sessions),
+        tput(K2_P("vooc %s %s sessions=%u active=%u wakes=%u partials=%u edges=%u frames=%u\r\n"),
+             m.enabled ? "on" : "off", m.running ? K2_P("running") : "idle", unsigned(s.sessions),
              unsigned(s.active), unsigned(s.wakes), unsigned(s.partials), unsigned(s.edges),
              unsigned(s.frames));
-        tput("vooc hs=%u/%u ident=0x%02X/0x%03X pairs=%u r82=0x%03X min=0x%03X max=0x%03X n=%u p82_us=%u/%u n=%u\r\n",
+        tput(K2_P("vooc hs=%u/%u ident=0x%02X/0x%03X pairs=%u r82=0x%03X min=0x%03X max=0x%03X n=%u p82_us=%u/%u n=%u\r\n"),
              unsigned(s.handshake), unsigned(s.hs_pairs), unsigned(s.ident), unsigned(s.ident_reply),
              unsigned(s.pairs), unsigned(s.r82_last), unsigned(s.r82_min), unsigned(s.r82_max),
              unsigned(s.r82_n), unsigned(s.p82_last_us), unsigned(s.p82_mean_us()), unsigned(s.p82_n));
         // The edge-storm guard: paused = data traffic on D+/D-, the lines stay floating until the probe.
-        tput("vooc guard %s storms=%u last=%u/%ums retry_ms=%u\r\n",
-             m.guard.paused ? "paused" : "ok", unsigned(m.guard.storms), unsigned(m.guard.edges),
+        tput(K2_P("vooc guard %s storms=%u last=%u/%ums retry_ms=%u\r\n"),
+             m.guard.paused ? K2_P("paused") : "ok", unsigned(m.guard.storms), unsigned(m.guard.edges),
              unsigned(m.guard.ms), unsigned(m.guard.retry_ms));
         for (std::size_t i = 0; i < s.ncmds && i < s.cmds.size(); i++) {
-            tput("vooc cmd 0x%02X n=%u last=0x%03X\r\n", unsigned(s.cmds[i].cmd),
+            tput(K2_P("vooc cmd 0x%02X n=%u last=0x%03X\r\n"), unsigned(s.cmds[i].cmd),
                  unsigned(s.cmds[i].count), unsigned(s.cmds[i].last));
         }
-        if (s.other) tput("vooc other=%u (table full)\r\n", unsigned(s.other));
-        if (s.stalled()) tput("vooc stalled on 0x%02X, %u silent replies\r\n", unsigned(s.stall_cmd), unsigned(s.stall_n));
+        if (s.other) tput(K2_P("vooc other=%u (table full)\r\n"), unsigned(s.other));
+        if (s.stalled()) tput(K2_P("vooc stalled on 0x%02X, %u silent replies\r\n"), unsigned(s.stall_cmd), unsigned(s.stall_n));
         return nullptr;
     }
 };

@@ -43,6 +43,7 @@
 #endif
 #if K2_HOST_REPORT
 #include "k2/loopprobe/host_report_hw.hpp"
+#include "k2/core/strpack.hpp"
 #endif
 
 extern "C" std::uint32_t k2_stack_free_bytes();
@@ -100,7 +101,7 @@ void end_boot_screen(uint32_t now) {
         const int mcu = a->mcu.deci_c;
         K2LOG("[ADC] mcu=%s%d.%dC%s board=n/a vref=%d vdd=%dmV\n",
                          mcu < 0 ? "-" : "", (mcu < 0 ? -mcu : mcu) / 10, (mcu < 0 ? -mcu : mcu) % 10,
-                         a->mcu.valid ? " uncal" : " INVALID",
+                         a->mcu.valid ? K2_P(" uncal") : K2_P(" INVALID"),
                          int(a->vref_raw), int(a->vdd_mv));
         K2LOG("[FC] %s\n", k2::fastcharge::name(k2::fastcharge::label()));
     }

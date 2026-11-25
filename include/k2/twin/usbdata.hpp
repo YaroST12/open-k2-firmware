@@ -23,6 +23,7 @@
 
 #include "k2/pd/usb_link.hpp"
 #include "k2/twin/twin.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::twin {
 
@@ -236,7 +237,7 @@ inline void observed_text(const Observed& o, std::span<char> out) {
     usblink::format(observed_link(o), b);
     detail::strip_conf(b);
     const std::size_t n = std::strlen(b);
-    const char* tail = (o.flags & kObsDp4) ? " 4-lane" : (o.flags & kObsDp2) ? " 2-lane" : "";
+    const char* tail = (o.flags & kObsDp4) ? " 4-lane" : (o.flags & kObsDp2) ? " 2-lane" : ""; // k2-plain: memcpy tail
     if (n + std::strlen(tail) + 1 <= sizeof b) std::memcpy(b + n, tail, std::strlen(tail) + 1);
     detail::put_text(out, b);
 }
@@ -269,8 +270,8 @@ inline void declared_text(std::uint16_t id_hi, const Declared& d, std::span<char
 // What the K2 may say about the Thunderbolt level. "TB4" and "TB5" are certification levels it cannot prove: it infers
 // "TB4 class" from USB4 at 40G or more with the 0x8087 mode listed (or entered), "TB5 class" from USB4 Gen4 80G.
 inline const char* tb_class(const usblink::Link& l) {
-    if (l.family == usblink::Family::Usb4v2) return "TB5 class";
-    if (l.family == usblink::Family::Usb4 && l.mbps >= 40000 && (l.tbt_adv || l.tbt != usblink::Tbt::None)) return "TB4 class";
+    if (l.family == usblink::Family::Usb4v2) return "TB5 class"; // k2-plain: consumer memcpy (wire.hpp)
+    if (l.family == usblink::Family::Usb4 && l.mbps >= 40000 && (l.tbt_adv || l.tbt != usblink::Tbt::None)) return "TB4 class"; // k2-plain: consumer memcpy (wire.hpp)
     return "";
 }
 
@@ -278,10 +279,10 @@ inline const char* tb_class(const usblink::Link& l) {
 inline void dp_caps_text(const DpCaps& c, std::span<char> out) {
     char b[40];
     std::size_t n = 0;
-    auto put = [&](const char* s) { for (; *s != 0 && n + 1 < sizeof b; ++s) b[n++] = *s; };
-    put(c.port == 3 ? "DP source+sink" : c.port == 2 ? "DP source" : c.port == 1 ? "DP sink" : "DP");
+    auto put = [&](const char* s) { strpack::for_chars(s, [&](char ch) { if (n + 1 < sizeof b) b[n++] = ch; }); };
+    put(c.port == 3 ? K2_P("DP source+sink") : c.port == 2 ? K2_P("DP source") : c.port == 1 ? K2_P("DP sink") : "DP");
     if (c.pins() != 0) {
-        put(", pins");
+        put(K2_P(", pins"));
         for (unsigned i = 0; i < 6; ++i)
             if (c.pins() & (1u << i)) { put(" "); char l[2] = {char('A' + i), 0}; put(l); }
     }

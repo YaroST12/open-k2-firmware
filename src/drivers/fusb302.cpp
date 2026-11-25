@@ -56,6 +56,7 @@
 #include "k2/drivers/regs.hpp"
 #include "k2/drivers/systick.hpp"
 #include "k2/drivers/usb.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::fusb302 {
 
@@ -438,7 +439,7 @@ K2_HOT bool transmit_inline(const pd::TxMsg& m) {
     g_tx_timed_out = res == pdtrace::TxResult::Timeout;
     pdtrace::tx_result(res, (std::uint32_t(systick::micros() - g_tx_start_us) + 500u) / 1000u, last_ia);
     K2LOG("[IQ] t=%u TX type %u id %u rev %u: %s (%u us)\n", unsigned(systick::millis()), unsigned(m.header & 0x1F),
-          unsigned((m.header >> 9) & 7), unsigned((m.header >> 6) & 3), ok ? "sent" : "no TXSENT",
+          unsigned((m.header >> 9) & 7), unsigned((m.header >> 6) & 3), ok ? "sent" : "no TXSENT",   // k2-plain: hot path
           unsigned(systick::micros() - g_tx_start_us));
     return ok;
 }
@@ -448,7 +449,7 @@ K2_HOT bool transmit(const pd::TxMsg& m) {
     if (!g_tx_allowed) {
         // Passive mode: no frame ever goes on CC - no GoodCRC, no Reject/Accept/Soft_Reset answer, not even a Hard
         // Reset - until an active user feature demands the wire (see the CrcDemand in active_tick()).
-        K2LOG("[FUSB302] TX refused (passive): type %d%s\n", m.header & 0x1F, m.hard_reset ? " (hard reset)" : "");
+        K2LOG("[FUSB302] TX refused (passive): type %d%s\n", m.header & 0x1F, m.hard_reset ? " (hard reset)" : "");   // k2-plain: hot path
         return false;
     }
     if (m.hard_reset) {
@@ -506,9 +507,9 @@ K2_HOT bool transmit(const pd::TxMsg& m) {
     // retransmission (GoodCRC, no Accept), so only a RETRYFAIL keeps the id.
     if (ok || res == pdtrace::TxResult::Timeout) g_msg_id = (g_msg_id + 1) & 7;
     K2LOG("[TX] type %d header 0x%04X len %d: %s\n", m.header & 0x1F, header, m.len,
-                ok ? "GoodCRC" : "no GoodCRC");
+                ok ? "GoodCRC" : "no GoodCRC");   // k2-plain: hot path
     K2LOG("[PD] t=%u TX type %d id %d specrev-field %d: %s (%d ms)\n", unsigned(systick::millis()), m.header & 0x1F,
-                (header >> 9) & 7, (header >> 6) & 3, ok ? "GoodCRC" : "no GoodCRC", waited);
+                (header >> 9) & 7, (header >> 6) & 3, ok ? "GoodCRC" : "no GoodCRC", waited);   // k2-plain: hot path
     return ok;
 }
 
@@ -676,7 +677,7 @@ void apply_cc_choice(const pd::CcChoice& c, bool pinned, std::uint8_t rd_both, b
     clear_irqs();
     g_hr_latched = false;   // the previous partner's Hard Reset is not this one's
     K2LOG("[FUSB302] Active CC detected: CC%d (switches 0x%X: PC14 %s, PC15 %s)\n", c.line, c.mask,
-                 (c.mask & 1) ? "closed" : "open", (c.mask & 2) ? "closed" : "open");
+                 (c.mask & 1) ? K2_P("closed") : "open", (c.mask & 2) ? K2_P("closed") : "open");
     pdtrace::cc(pdtrace::CcEvent::Attach, std::uint8_t(c.line), status0);
 }
 
@@ -976,8 +977,8 @@ K2_HOT void handle_frame(pd::Sop sop, std::uint16_t header, std::span<const std:
             // Role swap asked by the partner (the sink answered it; see Sink::swaps_rx)
             const pd::SwapKind k = msg_type == pd::kCtlDrSwap ? pd::SwapKind::Dr : msg_type == pd::kCtlPrSwap ? pd::SwapKind::Pr : pd::SwapKind::Fr;
             const std::uint8_t reply = pd::Sink::swap_reply(k, sink().rev());
-            K2LOG("[PD] swap rx %s -> %s\n", k == pd::SwapKind::Dr ? "DR_Swap" : k == pd::SwapKind::Pr ? "PR_Swap" : "FR_Swap",
-                  reply == pd::kCtlReject ? "Reject" : reply == pd::kCtlNotSupported ? "Not_Supported" : "none");
+            K2LOG("[PD] swap rx %s -> %s\n", k == pd::SwapKind::Dr ? "DR_Swap" : k == pd::SwapKind::Pr ? "PR_Swap" : "FR_Swap",   // k2-plain: hot path
+                  reply == pd::kCtlReject ? "Reject" : reply == pd::kCtlNotSupported ? "Not_Supported" : "none");   // k2-plain: hot path
         }
         if (sink().status().epr_info != info_before) detail::log_epr_info(sink().status().epr_info);
         // VCONN_Swap and its answers are the sole sink's business: inline the message is the device's talk with the charger and
@@ -1053,8 +1054,8 @@ K2_HOT void handle_frame(pd::Sop sop, std::uint16_t header, std::span<const std:
     const bool info_chunk = g_engine.epr_info_only && sop == pd::Sop::Sop && ext && msg_type == pd::kExtEprSourceCaps;
     const pd::SourceCaps& c = info_chunk ? g_engine.epr_info : g_engine.caps;
     if (sop == pd::Sop::Sop && ext && msg_type == pd::kExtEprSourceCaps) {
-        K2LOG("[PD] EPR_Source_Capabilities%s chunk: %d PDOs so far%s, rev=%d (CC%d)\n", info_chunk ? " (info)" : "", c.num_pdos,
-                    c.epr_partial ? " (partial)" : "", c.spec_rev, c.active_cc);
+        K2LOG("[PD] EPR_Source_Capabilities%s chunk: %d PDOs so far%s, rev=%d (CC%d)\n", info_chunk ? " (info)" : "", c.num_pdos,   // k2-plain: hot path
+                    c.epr_partial ? " (partial)" : "", c.spec_rev, c.active_cc);   // k2-plain: hot path
         for (int i = 0; i < c.num_pdos; i++) log_pdo(i + 1, c.pdos[i]);
     } else if (sop == pd::Sop::Sop && !ext && msg_type == 0x01 && num_do > 0) {
         // A source that repeats its caps floods the HID log ring: the first block of a source, a change and one block per
@@ -1104,7 +1105,7 @@ bool set_rd_for_run(bool on, bool keep_scan) {
     if (on) g_start_requested = false;
     else if (g_start_requested) { g_start_requested = false; sink().release(systick::millis()); }   // back to the 5 V we asked for
     apply_rd();
-    usb::log(on ? "[PD] Run start: Rd presented\n" : keep_scan ? "[PD] Run start: Rd paused\n" : "[PD] Run start over: Rd off\n");
+    usb::log(on ? K2_P("[PD] Run start: Rd presented\n") : keep_scan ? K2_P("[PD] Run start: Rd paused\n") : K2_P("[PD] Run start over: Rd off\n"));
     return true;
 }
 }  // namespace detail
@@ -1303,7 +1304,7 @@ K2_HOT void active_tick() {
     } else if (g_vconn.take_tx(m, sink().rev())) {
         // A frame queued before the K2 knew it sat inline is dropped, never sent: inline only the run transmits.
         const bool ok = sole_sink() && transmit(m);
-        K2LOG("[VCONN] TX type %u: %s\n", unsigned(m.header & 0x1F), !sole_sink() ? "dropped inline" : ok ? "GoodCRC" : "no GoodCRC");
+        K2LOG("[VCONN] TX type %u: %s\n", unsigned(m.header & 0x1F), !sole_sink() ? "dropped inline" : ok ? "GoodCRC" : "no GoodCRC");   // k2-plain: hot path
         vconn_mark();
         sent = sole_sink();
     }

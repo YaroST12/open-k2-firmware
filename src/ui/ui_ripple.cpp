@@ -61,7 +61,7 @@ void RipplePage::build_row(void *ctx, int index, bool focused, kit::RowSpec &out
         if (focused) out.note = K2_P("Auto or fixed span (4 divs)");
         break;
     case 2:
-        out.text = "Scale";
+        out.text = K2_P("Scale");
         out.tail = ripple::kScaleMenu[sc];
         out.tail_color = kAccent;
         if (focused) out.note = K2_P("Vertical scale (+-2 divs)");
@@ -189,7 +189,7 @@ void RipplePage::take_sample(uint32_t now_ms) {
     const auto trig = static_cast<ripple::Trigger>(cfg.trigger & 1u);
 
     using Buf = std::array<uint16_t, adc::kRippleSamples>;
-    scratch::acquire("ripple_ui");
+    scratch::acquire("ripple_ui");   // k2-plain: scratch owner tag
     Buf &buf = scratch::as<Buf>();
     const uint32_t period_ns = adc::capture_ripple(buf, ripple::kTimebases[tb].sample_code);
     if (period_ns == 0) {

@@ -15,6 +15,7 @@
 #include <span>
 
 #include "k2/core/build_config.h"
+#include "k2/core/strpack.hpp"
 #include "k2/pd/pd_spec_timing.hpp"
 
 namespace k2::pdspec {
@@ -89,42 +90,42 @@ struct CheckDef {
 };
 
 inline constexpr std::array<CheckDef, kChecks> kDefs{{
-    {"accept_time", "Accept", Kind::Max, Unit::Us, 1},
-    {"ps_rdy_time", "PS_RDY time", Kind::Max, Unit::Us, 2},
-    {"src_start", "VBUS start", Kind::Min, Unit::Us, 1},
-    {"ps_rdy_early", "PS_RDY early", Kind::Max, Unit::Mv, 3},
-    {"ps_rdy_low", "PS_RDY low", Kind::Min, Unit::Mv, 3},
-    {"rise_time", "Rise time", Kind::Max, Unit::Us, 2},
-    {"fall_time", "Fall time", Kind::Max, Unit::Us, 2},
-    {"overshoot", "Overshoot", Kind::Range, Unit::Mv, 3},
-    {"accuracy", "Accuracy", Kind::Range, Unit::Mv, 3},
-    {"pps_monotonic", "PPS monotonic", Kind::Min, Unit::Mv, 3},
-    {"pps_accuracy", "PPS accuracy", Kind::Range, Unit::Mv, 2},
-    {"pps_settle", "PPS settle", Kind::Max, Unit::Us, 1, true},          // 20 mV steps: under the meter's resolution, unverified
-    {"pps_keepalive", "PPS timeout", Kind::Range, Unit::Ms, 5},
-    {"epr_keepalive", "EPR timeout", Kind::Range, Unit::Ms, 5},
-    {"hr_safe0v", "HR to 0 V", Kind::Max, Unit::Ms, 5},
-    {"hr_recover", "HR off time", Kind::Range, Unit::Ms, 3},
-    {"hr_turn_on", "HR turn-on", Kind::Max, Unit::Ms, 3},
-    {"hr_caps", "HR caps", Kind::Max, Unit::Ms, 2},
-    {"detach_safe0v", "Detach to 0 V", Kind::Max, Unit::Ms, 5},         // tSRCDisconnect + tVBUSOFF
-    {"reattach", "Re-attach", Kind::Max, Unit::Ms, 10},                 // Rd back -> vSafe5V: tCCDebounce + tBulkDischarge + tVBUSON
-    {"source_reset", "Source reset", Kind::Max, Unit::Count, 20},
-    {"pps_band", "PPS in band", Kind::Max, Unit::Us, 2},
-    {"pps_ps_rdy", "PPS PS_RDY", Kind::Max, Unit::Us, 2},
-    {"pps_overshoot", "PPS overshoot", Kind::Range, Unit::Mv, 3},
-    {"pps_transient", "PPS transient", Kind::Max, Unit::Us, 2},
-    {"pps_status", "PPS_Status", Kind::Max, Unit::Count, 3},
-    {"pps_status_time", "PPS_Status t", Kind::Max, Unit::Us, 1},
-    {"avs_monotonic", "AVS monotonic", Kind::Min, Unit::Mv, 3},
-    {"avs_accuracy", "AVS accuracy", Kind::Range, Unit::Mv, 2},
-    {"avs_band", "AVS in band", Kind::Max, Unit::Us, 2},
-    {"avs_ps_rdy", "AVS PS_RDY", Kind::Max, Unit::Us, 2},
-    {"avs_overshoot", "AVS overshoot", Kind::Range, Unit::Mv, 3},
-    {"avs_transient", "AVS transient", Kind::Max, Unit::Us, 2},
-    {"reattach_caps", "Reattach caps", Kind::Max, Unit::Ms, 2},
-    {"pps_track", "PPS tracking", Kind::Max, Unit::Mv, 2},   // value = how far the offset grew over the step, limit min(step + 50, 150) mV
-    {"avs_track", "AVS tracking", Kind::Max, Unit::Mv, 2},
+    {K2_P("accept_time"), K2_P("Accept"), Kind::Max, Unit::Us, 1},
+    {K2_P("ps_rdy_time"), K2_P("PS_RDY time"), Kind::Max, Unit::Us, 2},
+    {K2_P("src_start"), K2_P("VBUS start"), Kind::Min, Unit::Us, 1},
+    {K2_P("ps_rdy_early"), K2_P("PS_RDY early"), Kind::Max, Unit::Mv, 3},
+    {K2_P("ps_rdy_low"), K2_P("PS_RDY low"), Kind::Min, Unit::Mv, 3},
+    {K2_P("rise_time"), K2_P("Rise time"), Kind::Max, Unit::Us, 2},
+    {K2_P("fall_time"), K2_P("Fall time"), Kind::Max, Unit::Us, 2},
+    {K2_P("overshoot"), K2_P("Overshoot"), Kind::Range, Unit::Mv, 3},
+    {K2_P("accuracy"), K2_P("Accuracy"), Kind::Range, Unit::Mv, 3},
+    {K2_P("pps_monotonic"), K2_P("PPS monotonic"), Kind::Min, Unit::Mv, 3},
+    {K2_P("pps_accuracy"), K2_P("PPS accuracy"), Kind::Range, Unit::Mv, 2},
+    {K2_P("pps_settle"), K2_P("PPS settle"), Kind::Max, Unit::Us, 1, true},          // 20 mV steps: under the meter's resolution, unverified
+    {K2_P("pps_keepalive"), K2_P("PPS timeout"), Kind::Range, Unit::Ms, 5},
+    {K2_P("epr_keepalive"), K2_P("EPR timeout"), Kind::Range, Unit::Ms, 5},
+    {K2_P("hr_safe0v"), K2_P("HR to 0 V"), Kind::Max, Unit::Ms, 5},
+    {K2_P("hr_recover"), K2_P("HR off time"), Kind::Range, Unit::Ms, 3},
+    {K2_P("hr_turn_on"), K2_P("HR turn-on"), Kind::Max, Unit::Ms, 3},
+    {K2_P("hr_caps"), K2_P("HR caps"), Kind::Max, Unit::Ms, 2},
+    {K2_P("detach_safe0v"), K2_P("Detach to 0 V"), Kind::Max, Unit::Ms, 5},         // tSRCDisconnect + tVBUSOFF
+    {K2_P("reattach"), K2_P("Re-attach"), Kind::Max, Unit::Ms, 10},                 // Rd back -> vSafe5V: tCCDebounce + tBulkDischarge + tVBUSON
+    {K2_P("source_reset"), K2_P("Source reset"), Kind::Max, Unit::Count, 20},
+    {K2_P("pps_band"), K2_P("PPS in band"), Kind::Max, Unit::Us, 2},
+    {K2_P("pps_ps_rdy"), K2_P("PPS PS_RDY"), Kind::Max, Unit::Us, 2},
+    {K2_P("pps_overshoot"), K2_P("PPS overshoot"), Kind::Range, Unit::Mv, 3},
+    {K2_P("pps_transient"), K2_P("PPS transient"), Kind::Max, Unit::Us, 2},
+    {K2_P("pps_status"), K2_P("PPS_Status"), Kind::Max, Unit::Count, 3},
+    {K2_P("pps_status_time"), K2_P("PPS_Status t"), Kind::Max, Unit::Us, 1},
+    {K2_P("avs_monotonic"), K2_P("AVS monotonic"), Kind::Min, Unit::Mv, 3},
+    {K2_P("avs_accuracy"), K2_P("AVS accuracy"), Kind::Range, Unit::Mv, 2},
+    {K2_P("avs_band"), K2_P("AVS in band"), Kind::Max, Unit::Us, 2},
+    {K2_P("avs_ps_rdy"), K2_P("AVS PS_RDY"), Kind::Max, Unit::Us, 2},
+    {K2_P("avs_overshoot"), K2_P("AVS overshoot"), Kind::Range, Unit::Mv, 3},
+    {K2_P("avs_transient"), K2_P("AVS transient"), Kind::Max, Unit::Us, 2},
+    {K2_P("reattach_caps"), K2_P("Reattach caps"), Kind::Max, Unit::Ms, 2},
+    {K2_P("pps_track"), K2_P("PPS tracking"), Kind::Max, Unit::Mv, 2},   // value = how far the offset grew over the step, limit min(step + 50, 150) mV
+    {K2_P("avs_track"), K2_P("AVS tracking"), Kind::Max, Unit::Mv, 2},
 }};
 
 // PpsStatus fault bits (the check's value; 0 = a clean answer). No-load expectations of the PD CTS (SRC3.7#2).
@@ -139,10 +140,10 @@ inline constexpr std::int32_t kPsFlags = 32;         // reserved flag bits (bit 
 enum class CapsNote : std::uint8_t { None, PpsNoAvs, PpsAvs, AvsOnly };
 constexpr const char* caps_note_name(CapsNote n) {
     switch (n) {
-        case CapsNote::None: return "no PPS, no AVS";
-        case CapsNote::PpsNoAvs: return "PPS without AVS: allowed before PD R3.3";
-        case CapsNote::PpsAvs: return "PPS + AVS present";
-        case CapsNote::AvsOnly: return "AVS without PPS";
+        case CapsNote::None: return K2_P("no PPS, no AVS");
+        case CapsNote::PpsNoAvs: return K2_P("PPS without AVS: allowed before PD R3.3");
+        case CapsNote::PpsAvs: return K2_P("PPS + AVS present");
+        case CapsNote::AvsOnly: return K2_P("AVS without PPS");
     }
     return "?";
 }
@@ -160,19 +161,19 @@ enum class Skip : std::uint8_t {
 constexpr const char* skip_name(Skip s) {
     switch (s) {
         case Skip::None: return "-";
-        case Skip::NotOffered: return "not offered";
-        case Skip::OneLevel: return "one fixed level";
-        case Skip::NoPps: return "no PPS";
-        case Skip::NoEpr: return "no EPR";
-        case Skip::NoEprProof: return "no EPR proof";
-        case Skip::NoCapture: return "capture busy";
-        case Skip::Refused: return "level refused";
-        case Skip::Stopped: return "run stopped";
-        case Skip::NotReached: return "not reached";
-        case Skip::SelfPowered: return "K2 on the charger";
-        case Skip::NoData: return "no data";
-        case Skip::NotSelected: return "not selected";
-        case Skip::NoAvs: return "no AVS";
+        case Skip::NotOffered: return K2_P("not offered");
+        case Skip::OneLevel: return K2_P("one fixed level");
+        case Skip::NoPps: return K2_P("no PPS");
+        case Skip::NoEpr: return K2_P("no EPR");
+        case Skip::NoEprProof: return K2_P("no EPR proof");
+        case Skip::NoCapture: return K2_P("capture busy");
+        case Skip::Refused: return K2_P("level refused");
+        case Skip::Stopped: return K2_P("run stopped");
+        case Skip::NotReached: return K2_P("not reached");
+        case Skip::SelfPowered: return K2_P("K2 on the charger");
+        case Skip::NoData: return K2_P("no data");
+        case Skip::NotSelected: return K2_P("not selected");
+        case Skip::NoAvs: return K2_P("no AVS");
     }
     return "?";
 }
@@ -180,11 +181,11 @@ constexpr const char* skip_name(Skip s) {
 enum class Verdict : std::uint8_t { Pending, Pass, Fail, Skip, Unverified };
 constexpr const char* verdict_name(Verdict v) {
     switch (v) {
-        case Verdict::Pending: return "pending";
+        case Verdict::Pending: return K2_P("pending");
         case Verdict::Pass: return "pass";
         case Verdict::Fail: return "fail";
         case Verdict::Skip: return "skip";
-        case Verdict::Unverified: return "unverified";
+        case Verdict::Unverified: return K2_P("unverified");
     }
     return "?";
 }

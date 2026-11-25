@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include "k2/core/strpack.hpp"
 
 namespace k2::ufcs {
 
@@ -19,7 +20,7 @@ constexpr std::size_t chunk_count(std::size_t bytes) { return (bytes + kHexChunk
 // bytes that fit with the terminator are written; returns the characters written (no NUL).
 constexpr std::size_t hex(std::span<const std::uint8_t> bytes, std::span<char> out) {
     if (out.empty()) return 0;
-    constexpr char kDigits[] = "0123456789ABCDEF";
+    constexpr char kDigits[] = "0123456789ABCDEF"; // k2-plain: char array
     std::size_t n = 0;
     for (const std::uint8_t b : bytes) {
         if (n + 3 > out.size()) break;
@@ -65,8 +66,8 @@ constexpr HsClass classify(const Handshake& h) {
 
 constexpr const char* name(HsClass c) {
     switch (c) {
-    case HsClass::Mirror: return "mirror";
-    case HsClass::Delayed: return "delayed";
+    case HsClass::Mirror: return K2_P("mirror");
+    case HsClass::Delayed: return K2_P("delayed");
     case HsClass::NoAnswer: break;
     }
     return "none";

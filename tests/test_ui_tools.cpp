@@ -4,6 +4,7 @@
 #include <string>
 #include <cstring>
 #include "test_util.h"
+#include "k2/core/strpack.hpp"
 #include "k2/ui/ui_connection.hpp"
 #include "k2/ui/ui_tools.hpp"
 #include "k2/ui/text/tools.hpp"
@@ -18,12 +19,12 @@ static SetupState st(bool attached, bool inl, bool caps, bool vbus = false, int 
 
 static void test_every_tool_has_text() {
     for (int t = 0; t < kToolCount; t++) {
-        CHECK_EQ(std::strlen(tool_hint(t)) <= 24, 1);
+        CHECK_EQ(k2::strpack::cells_rt(tool_hint(t)) <= 24, 1);
         CHECK_EQ(std::strlen(tool_hint(t)) > 0, 1);
         for (int mask = 0; mask < 32; mask++) {
             const Readiness r = tool_readiness(t, st(mask & 1, mask & 2, mask & 4, mask & 8, mask & 16 ? 5000 : 0), mask & 8);
             CHECK_EQ(std::strlen(r.tag) <= 6, 1);
-            CHECK_EQ(std::strlen(r.reason) <= 27, 1);
+            CHECK_EQ(k2::strpack::cells_rt(r.reason) <= 27, 1);
             CHECK_EQ(std::strlen(r.reason) > 0, r.level != ToolLevel::Ready);   // a ready tool's footer is the hub's fact
         }
     }
@@ -164,9 +165,10 @@ static void test_bench_places_cover_every_tool() {
         CHECK_EQ(a.n > 0, true);
         CHECK_EQ(a.n <= 6, true);   // a place's action list fits under its identity without a long scroll
         for (int i = 0; i < a.n; i++) {
-            CHECK_EQ(std::strlen(a.a[i].name) <= 22, true);   // font 16 from x28 to the chevron
-            CHECK_EQ(std::strlen(act_hint(a.a[i])) > 0, true);
-            CHECK_EQ(std::strlen(act_hint(a.a[i])) <= 27, true);
+            char nb[40], hb[40];   // names and hints are packed
+            CHECK_EQ(strpack::unpack(a.a[i].name, nb).size() <= 22, true);   // font 16 from x28 to the chevron
+            CHECK_EQ(strpack::unpack(act_hint(a.a[i]), hb).size() > 0, true);
+            CHECK_EQ(strpack::unpack(act_hint(a.a[i]), hb).size() <= 27, true);
             if (a.a[i].kind == ActKind::Tool) seen[a.a[i].arg]++;
         }
     }
@@ -176,14 +178,14 @@ static void test_bench_places_cover_every_tool() {
         CHECK_EQ(seen[t], t == 0 || t == 1 || t == kToolSpoof || (t >= kToolChargerId && t <= kToolDeviceId) || t == 7 || t == 8 || t == 10 ? 0 : 1);
     const Acts tl = tools();
     CHECK_EQ(tl.n >= 6, true);
-    CHECK_EQ(std::strcmp(tl.a[0].name, "Request voltage"), 0);
+    CHECK_STR(tl.a[0].name, "Request voltage");
     CHECK_EQ(tl.a[0].kind == ActKind::Tool && tl.a[0].arg == 1, true);
-    CHECK_EQ(std::strcmp(tl.a[1].name, "Fast charge"), 0);
+    CHECK_STR(tl.a[1].name, "Fast charge");
     CHECK_EQ(tl.a[1].kind == ActKind::Tool && tl.a[1].arg == 0, true);
     for (int i = 0; i < tl.n; i++) {
         CHECK_EQ(std::strlen(tl.a[i].name) <= 16, true);
         CHECK_EQ(std::strlen(act_hint(tl.a[i])) > 0, true);
-        CHECK_EQ(std::strlen(act_hint(tl.a[i])) <= 27, true);
+        CHECK_EQ(k2::strpack::cells_rt(act_hint(tl.a[i])) <= 27, true);
     }
     CHECK_EQ(std::strcmp(place_name(Place::Battery), "Battery"), 0);
     CHECK_EQ(std::strcmp(place_name(Place::K2), "K2"), 0);

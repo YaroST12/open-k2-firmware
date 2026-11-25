@@ -291,7 +291,7 @@ void Ui::configure_rotation(bool automatic, uint8_t rotation) {
     notice_ = nullptr;
     rotation_notice_drawn_ = false;
     requested_rotation_ = automatic ? gravity_.rotation() : static_cast<uint8_t>(rotation & 3);
-    K2LOG("[ROT] settings=%s degrees=%u\n", automatic ? "auto" : "manual", unsigned(requested_rotation_) * 90);
+    K2LOG("[ROT] settings=%s degrees=%u\n", automatic ? "auto" : K2_P("manual"), unsigned(requested_rotation_) * 90);
     store_orientation(requested_rotation_);
 }
 
@@ -590,22 +590,22 @@ BusyWhy Ui::busy_why() const {
 
 const char *Ui::busy_reason() const {
     switch (busy_why()) {
-    case BusyWhy::TestRunning: return "Test running: stop it";
-    case BusyWhy::FcRelease: return "5V release: wait";
-    case BusyWhy::QcTrigger: return "QC trigger: stop it";
-    case BusyWhy::PdHold: return "PD hold: release it";
-    case BusyWhy::Epr: return "EPR contract: exit it";
-    case BusyWhy::PdRequest: return "PD request: wait";
-    case BusyWhy::EmScan: return "E-marker scan: wait";
-    case BusyWhy::Identify: return "Identify: wait";
-    case BusyWhy::TwinRun: return "Twin proof: stop it";
+    case BusyWhy::TestRunning: return K2_P("Test running: stop it");
+    case BusyWhy::FcRelease: return K2_P("5V release: wait");
+    case BusyWhy::QcTrigger: return K2_P("QC trigger: stop it");
+    case BusyWhy::PdHold: return K2_P("PD hold: release it");
+    case BusyWhy::Epr: return K2_P("EPR contract: exit it");
+    case BusyWhy::PdRequest: return K2_P("PD request: wait");
+    case BusyWhy::EmScan: return K2_P("E-marker scan: wait");
+    case BusyWhy::Identify: return K2_P("Identify: wait");
+    case BusyWhy::TwinRun: return K2_P("Twin proof: stop it");
 #if K2_PDSTRESS
     case BusyWhy::PdStress: return pdstress_.busy_reason();   // "PD Stress: stop it" / "PD Stress: resuming"
 #else
-    case BusyWhy::PdStress: return "PD Stress: stop it";   // unreachable: pdstress_active() is false
+    case BusyWhy::PdStress: return K2_P("PD Stress: stop it");   // unreachable: pdstress_active() is false
 #endif
-    case BusyWhy::LoopProbe: return "Loop probe: stop it";
-    case BusyWhy::PdSpec: return "PD Spec: stop it";
+    case BusyWhy::LoopProbe: return K2_P("Loop probe: stop it");
+    case BusyWhy::PdSpec: return K2_P("PD Spec: stop it");
     case BusyWhy::None: break;
     }
     return nullptr;
@@ -668,22 +668,22 @@ Ui::Session Ui::session() {
 }
 
 // The loop lock's footer line (8 px a character in the 220 px footer band).
-static_assert(fits_px(8, loopguard::kLockText, 220), "the loop lock line is wider than the footer band");
+static_assert(fits_px_p(8, loopguard::kLockText, 220), "the loop lock line is wider than the footer band");
 
 // PD Stress asks this one: the same owners as busy_reason() minus the ones a run causes itself (a held contract, the sink state, an
 // EPR contract). Its own run is not "foreign".
 const char *Ui::foreign_busy() const {
     const auto fs = fctrig::status();
     if (loopguard::locked()) return loopguard::kLockText;   // a run starts nothing above 5 V, a restore waits (k2/core/loop_guard.hpp)
-    if (charger_test_busy()) return "Test running: stop it";
-    if (pdspec_active()) return "PD Spec: stop it";   // PD Stress and the charger test ask this; a remote-started spec run asks nothing while it goes on
-    if (loop_probe_busy()) return "Loop probe: stop it";
-    if (fc_release_.busy()) return "5V release: wait";
+    if (charger_test_busy()) return K2_P("Test running: stop it");
+    if (pdspec_active()) return K2_P("PD Spec: stop it");   // PD Stress and the charger test ask this; a remote-started spec run asks nothing while it goes on
+    if (loop_probe_busy()) return K2_P("Loop probe: stop it");
+    if (fc_release_.busy()) return K2_P("5V release: wait");
     if (fctrig::scan_running() || fs.state == fc::State::Negotiating || fs.state == fc::State::Active ||
         fctrig::svooc_running())
-        return "QC trigger: stop it";
-    if (ctx_.em_scanning) return "E-marker scan: wait";
-    if (fusb302::identify_status().state == pd::IdState::Running) return "Identify: wait";
+        return K2_P("QC trigger: stop it");
+    if (ctx_.em_scanning) return K2_P("E-marker scan: wait");
+    if (fusb302::identify_status().state == pd::IdState::Running) return K2_P("Identify: wait");
     return nullptr;
 }
 
@@ -833,14 +833,14 @@ bool Ui::push_menu(Menu m, uint32_t now_ms) {
     }
     if (m >= Menu::Count) return false;
     if (depth_ >= kMaxMenuDepth) {
-        refuse_menu(m, "depth", now_ms);
+        refuse_menu(m, K2_P("depth"), now_ms);
         return false;
     }
     const uint32_t t0 = now_us();
     PageIf *const outgoing = &current();   // stays alive under the new menu
     PageIf *const page = build_menu(m);
     if (!page) {                           // the arena is full (the static_asserts in ui.hpp keep this unreachable)
-        refuse_menu(m, "arena", now_ms);
+        refuse_menu(m, K2_P("arena"), now_ms);
         return false;
     }
     stack_[depth_++] = m;
@@ -898,25 +898,25 @@ struct OppCells {
 };
 
 void fmt_opp_v(StrBuf<12> &out, bool ok, int32_t mv) {
-    if (!ok) { out.put("--.-V"); return; }
+    if (!ok) { out.put(K2_P("--.-V")); return; }
     char buf[12];
     const std::size_t n = readout::fmt3(buf, mv < 0 ? 0 : mv, 'V');
     out.put({buf, n});
 }
 void fmt_opp_a(StrBuf<12> &out, bool ok, int32_t ma) {
-    if (!ok) { out.put("-.--A"); return; }
+    if (!ok) { out.put(K2_P("-.--A")); return; }
     char buf[12];
     const std::size_t n = readout::fmt3(buf, power::magnitude(ma), 'A');
     out.put({buf, n});
 }
 void fmt_opp_w(StrBuf<12> &out, bool ok, int32_t mw) {
-    if (!ok) { out.put("--.-W"); return; }
+    if (!ok) { out.put(K2_P("--.-W")); return; }
     char buf[12];
     const std::size_t n = readout::fmt3(buf, power::magnitude(mw), 'W');
     out.put({buf, n});
 }
 void fmt_opp_adc_v(StrBuf<12> &out, const std::optional<adc::Reading> &r, int32_t mv) {
-    if (!r || mv < 0) { out.put("-.--V"); return; }
+    if (!r || mv < 0) { out.put(K2_P("-.--V")); return; }
     out.put_fixed(mv, 2).put_char('V');
 }
 
@@ -1164,7 +1164,7 @@ void Ui::draw_hold_card(uint32_t ms) {
     }
     if (left != hold_left_) {
         hold_left_ = left;
-        char t[12] = "Reboot in ";
+        char t[12] = "Reboot in ";   // k2-plain: char array
         t[10] = static_cast<char>('0' + left);
         t[11] = 0;
         gfx_text(c, kMid, kCountX, 84, t, kSpotInk, kCaution);
@@ -1225,7 +1225,7 @@ UiAction Ui::dispatch_button(Event event, uint32_t now_ms) {
     ContentViewport viewport(active_dest(), ctx_.content.w, ctx_.content.h);
     static const char *const names[4] = {"BACK", "-", "OK", "+"};
     K2LOG("[KEY] [%s] %s page=%d\n", names[static_cast<int>(event.button)],
-                event.press == Press::Long ? "long" : event.press == Press::Hold ? "hold" : "short", static_cast<int>(page_index()));
+                event.press == Press::Long ? "long" : event.press == Press::Hold ? "hold" : K2_P("short"), static_cast<int>(page_index()));
 
     ctx_.now = now_ms;
     if (event.button == Button::Back && event.press == Press::Hold && menu() == Menu::Trigger)
@@ -1430,7 +1430,7 @@ bool Ui::run_action(Action a, uint32_t now_ms, bool confirm) {
         // method is refused inline by the driver - there is no confirm for it any more.
         const pd::EmarkerMode mode = pd::emarker_mode(link_.attached(), ctx_.pm_online, ctx_.vbus_fast_mv);
         K2LOG("[EMK] mode=%s attached=%d inline=%d stale=%d pm_online=%d vbus=%dmV cable_seq=%u seen=%u\n",
-                    mode == pd::EmarkerMode::Sniff ? "sniff" : "vconn", int(link_.attached()), int(link_.inline_mode()),
+                    mode == pd::EmarkerMode::Sniff ? K2_P("sniff") : K2_P("vconn"), int(link_.attached()), int(link_.inline_mode()),
                     int(link_.cable_stale()), int(ctx_.pm_online), int(ctx_.vbus_fast_mv),
                     unsigned(fusb302::cable_seq()), unsigned(cable_seq_seen_));
         ctx_.em_scanning = true;
@@ -1575,7 +1575,7 @@ bool Ui::trigger_hard_reset(uint32_t now_ms, bool lab_inline) {
     cancel_twin();
     const bool ok = fusb302::sink_hard_reset(lab_inline);
     ctx_.trig_armed = false;
-    K2LOG("[UI] trigger hard reset%s: %s\n", lab_inline ? " (lab inline)" : "", ok ? "sent" : "refused");
+    K2LOG("[UI] trigger hard reset%s: %s\n", lab_inline ? K2_P(" (lab inline)") : "", ok ? "sent" : K2_P("refused"));
     current().update(now_ms);
     return ok;
 }
@@ -1606,7 +1606,7 @@ Ui::LinkResetResult Ui::link_reset(bool confirmed, uint32_t now_ms, bool allow_b
         if (!confirmed) return LinkResetResult::NeedConfirm;
         held::clear_for_reset();
         const bool sent = fusb302::sink_hard_reset(true);
-        K2LOG("[UI] link reset (inline Hard Reset): %s\n", sent ? "sent" : "refused");
+        K2LOG("[UI] link reset (inline Hard Reset): %s\n", sent ? "sent" : K2_P("refused"));
         return sent ? LinkResetResult::HardReset : LinkResetResult::NoLink;
     }
     const pd::SinkStatus &sk = fusb302::sink_status();
@@ -1689,7 +1689,7 @@ void Ui::debug_link(bool attached, uint32_t now_ms) {
         const bool cc = fusb302::cc_detach();
         K2LOG("[UI] debug detach: CC level %d\n", int(cc));
     }
-    K2LOG("[UI] debug link: %s\n", attached ? "attach" : "detach");
+    K2LOG("[UI] debug link: %s\n", attached ? K2_P("attach") : K2_P("detach"));
     current().update(now_ms);
 }
 

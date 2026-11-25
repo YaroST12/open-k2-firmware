@@ -320,7 +320,7 @@ void test_own_contract_runs_and_aborts() {
     CHECK_EQ(c.report().abort, Abort::ContractChanged);
     CHECK_EQ(c.report().contract_start, Contract::Own5V);
     CHECK_EQ(c.report().contract_end, Contract::Other);
-    CHECK(std::string_view(svooc::name(Abort::ContractChanged)) == "PD contract changed");
+    CHECK_STR(svooc::name(Abort::ContractChanged), "PD contract changed");
 
     // lost (hard reset, detach)
     svooc::Run l = own_run(t);
@@ -330,7 +330,7 @@ void test_own_contract_runs_and_aborts() {
     CHECK_EQ(l.poll(s), Next::Release);
     CHECK_EQ(l.report().abort, Abort::ContractLost);
     CHECK_EQ(l.report().contract_end, Contract::None);
-    CHECK(std::string_view(svooc::name(Abort::ContractLost)) == "PD contract lost");
+    CHECK_STR(svooc::name(Abort::ContractLost), "PD contract lost");
     s.now_ms = 320;
     CHECK_EQ(l.poll(s), Next::None);                      // one Release only
 
@@ -474,7 +474,7 @@ void test_lines_off_idle() {
 void test_names() {
     for (int i = 0; i <= int(Refusal::NoRam); ++i) CHECK(svooc::name(Refusal(i))[0] != '?');
     for (int i = 0; i <= int(Abort::ContractChanged); ++i) CHECK(svooc::name(Abort(i))[0] != '?');
-    CHECK(std::string_view(svooc::name(Refusal::NoRam)) == "no RAM: USB drive enabled");
+    CHECK_STR(svooc::name(Refusal::NoRam), "no RAM: USB drive enabled");
 }
 
 // A second run on the same objects (hardware 2026-11-12: the start after a run that ended by its time cap ended at once,
@@ -559,9 +559,9 @@ void test_poll_gap() {
 // The exit line says what the watch saw: a dark output is no "back at 5 V" (hardware 2026-11-15 logged it at 2089 mV).
 static void test_exit_word() {
     svooc::Report r;
-    r.exit_ok = true; r.vbus_exit_mv = 5050; CHECK(std::strcmp(svooc::exit_word(r), "back at 5 V") == 0);
-    r.vbus_exit_mv = 2089;                   CHECK(std::strcmp(svooc::exit_word(r), "VBUS gone") == 0);
-    r.exit_ok = false; r.vbus_exit_mv = 9000; CHECK(std::strcmp(svooc::exit_word(r), "STILL HIGH") == 0);
+    r.exit_ok = true; r.vbus_exit_mv = 5050; CHECK_STR(svooc::exit_word(r), "back at 5 V");
+    r.vbus_exit_mv = 2089;                   CHECK_STR(svooc::exit_word(r), "VBUS gone");
+    r.exit_ok = false; r.vbus_exit_mv = 9000; CHECK_STR(svooc::exit_word(r), "STILL HIGH");
 }
 
 int main() {

@@ -53,6 +53,7 @@
 #include "k2/pd/usb_link.hpp"
 #include "k2/twin/learn.hpp"
 #include "k2/twin/twin.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::twin {
 
@@ -76,7 +77,7 @@ inline constexpr std::size_t kMaxV2Bytes = kMaxV1Bytes + kMaxDeclBytes + kObsByt
 // (tests/test_volume_budget.cpp; one more byte each spills the directory into a third metadata pair). The version 3 blocks go in
 // only while they fit under it.
 inline constexpr std::size_t kMaxFileBytes = kMaxV2Bytes;                                                                   // 129
-inline constexpr const char* kDir = "/twin";
+inline constexpr const char* kDir = "/twin"; // k2-plain: fs path
 
 enum class Dec : std::uint8_t { Ok, Short, Magic, Version, Invalid, Crc };
 
@@ -258,11 +259,11 @@ enum class Err : std::uint8_t { Ok, Full, Invalid, NotFound, Flash, Exists };
 constexpr const char* err_name(Err e) {
     switch (e) {
     case Err::Ok: return "ok";
-    case Err::Full: return "library full";
-    case Err::Invalid: return "invalid twin";
-    case Err::NotFound: return "no such twin";
-    case Err::Flash: return "flash error";
-    case Err::Exists: return "name in use";
+    case Err::Full: return K2_P("library full");
+    case Err::Invalid: return K2_P("invalid twin");
+    case Err::NotFound: return K2_P("no such twin");
+    case Err::Flash: return K2_P("flash error");
+    case Err::Exists: return K2_P("name in use");
     }
     return "?";
 }

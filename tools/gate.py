@@ -13,13 +13,15 @@
             that landed past the window (pins and K2_HOT do not carry over to lambdas); SKIPPED with K2_HOT_BLOCK=0
   6 ids     remote command ids unique across remote_proto.hpp, k2_remote.py, k2proto.js
   7 64bit   no unallowlisted 64-bit integer types in src/ or include/k2/ (tools/check_64bit.py)
-  8 tests   make test (C++, Python; node only with K2_WEB=1), then make test-specrows (the K2_SPECROWS=1 host pass: the
+  8 strings no plain text literal in src/ or include/k2/ outside K2_P(...), a `// k2-plain: <reason>` mark or
+            tools/check_strings_allow.txt (tools/check_strings.py)
+  9 tests   make test (C++, Python; node only with K2_WEB=1), then make test-specrows (the K2_SPECROWS=1 host pass: the
             per-transition row tests that the default pass compiles out)
-  9 sanitizers  tools/static_check.sh sanitize: every host test under ASan + UBSan in the builder image, once with
+ 10 sanitizers  tools/static_check.sh sanitize: every host test under ASan + UBSan in the builder image, once with
             g++ and once with clang (extras: float casts, local bounds, sign change); any report from our code or any
             failed test fails; incremental in build/san-gcc and build/san-clang
- 10 size    report against tools/size_baseline.txt; over +5 % text is a WARNING, not a failure
- 11 perf    the on-device `selftest` (3 runs, per-check minimum cycles) against tools/perf_baseline.json, on the build
+ 11 size    report against tools/size_baseline.txt; over +5 % text is a WARNING, not a failure
+ 12 perf    the on-device `selftest` (3 runs, per-check minimum cycles) against tools/perf_baseline.json, on the build
             that is ON the K2 now (the gate runs before a flash and never flashes): fails on a FAIL line, a zw 1 -> 0,
             or a check slower than baseline + tolerance; SKIPPED (never failed, repeated after "GATE PASSED") when no
             K2 answers, the K2 runs another build than the one just built, the baseline is unseeded, or the image has no
@@ -27,15 +29,15 @@
             `make perf-check` (`gate.py --perf-only`) runs just this step after a flash; `make perf-baseline`
             (`gate.py --perf-baseline`) re-takes the baseline (5 runs); see tools/perf_gate.py, docs/MATH_SELFTEST.md
 
-  Only with K2_WEB=1 (env or `make K2_WEB=1 gate`), which also puts the node tests back into step 8:
- 12 net     the K2_NET=1 variant (off by default) in build-net/: -Werror build, layout invariants, stack budget, map
- 13 specrows the K2_PDSPEC=1 K2_SPECROWS=1 variant (off by default: the per-transition list does not fit the shipping
+  Only with K2_WEB=1 (env or `make K2_WEB=1 gate`), which also puts the node tests back into step 9:
+ 13 net     the K2_NET=1 variant (off by default) in build-net/: -Werror build, layout invariants, stack budget, map
+ 14 specrows the K2_PDSPEC=1 K2_SPECROWS=1 variant (off by default: the per-transition list does not fit the shipping
             image) in build-specrows/: the same checks
 
   --static  (opt-in, appended as the last step) tools/static_check.sh all: clang-tidy, ARM g++ -fanalyzer and
             cppcheck, counts printed (report only, never a failure)
 
-The printed `== gate i/N` lines are the numbering above (N = 11 by default).
+The printed `== gate i/N` lines are the numbering above (N = 12 by default).
 
 `python3 tools/gate.py --update-baseline` rewrites the baseline from the current build."""
 import os
@@ -409,6 +411,13 @@ def step_64bit():
         raise GateError("unallowlisted 64-bit integer types:\n  " + (r.stderr or r.stdout).strip().replace("\n", "\n  "))
 
 
+def step_strings():
+    r = run([sys.executable, "tools/check_strings.py"])
+    if r.returncode:
+        raise GateError("plain text literals (wrap in K2_P or mark k2-plain: <reason>):\n  " +
+                        (r.stderr or r.stdout).strip().replace("\n", "\n  "))
+
+
 QUICK = "--quick" in sys.argv   # make gate-quick: no sanitizers, no K2_SPECROWS host pass, no perf (prototyping only)
 
 
@@ -537,6 +546,7 @@ WEB = os.environ.get("K2_WEB") == "1"   # the web parts (Makefile K2_WEB): off b
 STEPS = [("build (-Werror, docker as host uid)", step_build), ("bootloader invariants", step_invariants),
          ("stack budget", step_stack), ("map: no malloc / operator new / __cxa_ / 64-bit divmod", step_map),
          ("hot block inside the zero-wait flash window", step_hot), ("remote command ids", step_ids), ("64-bit integer guard", step_64bit),
+         ("plain string literal guard", step_strings),
          ("tests (C++, Python" + (", node)" if WEB else "; web off)"), step_tests),
          ("sanitizers: host tests under ASan/UBSan, g++ and clang (docker)", step_sanitize), ("size report", step_size),
          ("perf (device selftest vs tools/perf_baseline.json; skipped without a matching device)", step_perf)] + (

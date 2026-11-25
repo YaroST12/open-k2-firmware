@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
+#include "k2/core/strpack.hpp"
 #include "k2/ui/kit.hpp"
 #include "kit_internal.hpp"
 #include "k2/core/math_opt.hpp"
@@ -165,7 +166,7 @@ void draw_top_bar(const Surface &s, std::string_view title, int step, std::strin
         buf[n++] = static_cast<char>('0' + segs);
         buf[n++] = ' ';
     }
-    for (size_t i = 0; i < title.size() && n < sizeof(buf); i++) buf[n++] = title[i];
+    strpack::for_chars(title, [&](char c) { if (n < sizeof(buf)) buf[n++] = c; });
     draw_status_left(s, false, Icon::Bolt, std::string_view(buf, n), 132, badge, readout_follows);
     if (step > 0) draw_progress_rule(s, step, segs);
     else gfx_fill(s, 0, kProgY + 1, s.w, kProgH - 1, kBg);

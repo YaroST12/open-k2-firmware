@@ -26,7 +26,7 @@
 namespace k2::transcap {
 
 inline constexpr unsigned kMaxStored = 4;
-inline constexpr const char* kDir = "/tcap";
+inline constexpr const char* kDir = "/tcap";   // k2-plain: littlefs path
 inline constexpr std::size_t kMetaBytes = 20 + 2 * kThumbCols;
 inline constexpr std::size_t kWriteChunk = 512;
 inline constexpr std::array<std::uint8_t, 4> kMetaMagic{'K', '2', 'T', 'I'};
@@ -76,7 +76,7 @@ public:
         char tmp[fs::kPathMax], dat[fs::kPathMax], inf[fs::kPathMax];
         path(dat, seq, ".tcd");
         path(inf, seq, ".tci");
-        path(tmp, seq, ".tcd.tmp");
+        path(tmp, seq, ".tcd.tmp");   // k2-plain: littlefs path
         fs_.remove(tmp);
         // The write buffer, the info record and its thumbnail are ~1 KB: leased from the scratch arena, not stacked.
         struct Work {
@@ -84,7 +84,7 @@ public:
             std::array<std::uint8_t, kMetaBytes> mb;
             Meta m;
         };
-        const scratch::Lease lease("transcap.save");
+        const scratch::Lease lease("transcap.save");   // k2-plain: scratch owner tag
         Work& w = scratch::make<Work>();
         Encoder<Rec> enc(r);
         while (!enc.done()) {
@@ -169,7 +169,7 @@ private:
         std::size_t o = 0;
         for (const char* d = kDir; *d; ) out[o++] = *d++;
         out[o++] = '/';
-        for (int i = 7; i >= 0; i--) out[o++] = "0123456789ABCDEF"[(seq >> (4 * i)) & 15];
+        for (int i = 7; i >= 0; i--) out[o++] = "0123456789ABCDEF"[(seq >> (4 * i)) & 15];   // k2-plain: indexed digits
         for (const char* d = ext; *d; ) out[o++] = *d++;
         out[o] = 0;
     }

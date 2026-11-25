@@ -9,6 +9,7 @@
 #include "k2/drivers/systick.hpp"
 #include "k2/drivers/usb.hpp"
 #include "k2/core/version.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::report_card::hw {
 namespace {
@@ -19,7 +20,7 @@ bool g_erased = false;
 constexpr std::uint32_t kEraseGapMs = 1000;   // between two maintenance erases (each stops the main loop ~35 ms)
 Err written(Err e) {
     if (e == Err::Ok) ++g_gen;
-    else if (e == Err::Full || e == Err::Flash) K2LOG("[CARD] write refused: %s (blank=%u dirty=%u)\n", e == Err::Full ? "ring full, waits for maintenance" : "no ring",
+    else if (e == Err::Full || e == Err::Flash) K2LOG("[CARD] write refused: %s (blank=%u dirty=%u)\n", e == Err::Full ? K2_P("ring full, waits for maintenance") : K2_P("no ring"),
                fs::card_ring().blank(), fs::card_ring().dirty());
     return e;
 }
@@ -32,7 +33,7 @@ void poll(bool may_erase) {
     g_erase_ms = now;
     g_erased = true;
     const bool ok = g_store.maintain(true);
-    K2LOG("[CARD] ring maintenance: %s blank=%u dirty=%u live=%u\n", ok ? "erased" : "nothing erased", fs::card_ring().blank(),
+    K2LOG("[CARD] ring maintenance: %s blank=%u dirty=%u live=%u\n", ok ? K2_P("erased") : K2_P("nothing erased"), fs::card_ring().blank(),
           fs::card_ring().dirty(), fs::card_ring().live());
 }
 

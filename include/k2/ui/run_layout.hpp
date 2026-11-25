@@ -49,7 +49,9 @@ inline constexpr int16_t kLeftW = kPlainHeroLeft - kLeftGap - kLeftX;   // 80 px
 inline constexpr int kNameCells = kLeftW / kAdv16, kNameCellsSmall = kLeftW / kAdv12, kFamCells = kLeftW / kAdv12, kTargetCells = kLeftW / kAdv12;
 constexpr bool name_small(int cells) { return cells > kNameCells; }
 // The families by company, in the run order (the Custom rows, the Steps title and the Running header's label).
+// k2-plain-begin: text_cells() measures them (tests)
 inline constexpr const char *kFamilyNames[] = {"Huawei/Honor", "Samsung", "OPPO/vivo", "Xiaomi/Redmi", "USB PD", "QC/UFCS"};
+// k2-plain-end
 
 // Sweep: the error hero (left), the act / set block (right).
 inline constexpr int16_t kSweepFamX = 110;
@@ -74,6 +76,7 @@ struct Box {
 
 // A sweep row's boxes in plan order, but for the error hero's digit cells and its sign, which depend on the digit count
 // (digits_box / sign_box). Row labels sit on the value's baseline.
+// k2-plain-begin: box tags named in layout test messages
 inline constexpr Box kSweepBoxes[] = {
     {"progress", 6, 24, 196, 3, false},
     {"name", 6, kSweepRun.name_y, kSweepNameCells * kAdv16, kH16, true},
@@ -100,6 +103,7 @@ constexpr Box sign_box(int n) {
 constexpr Box digits_box(int n) {
     return {"digits", int16_t(kHeroDigitsRight - 3 * kAdv48), kSweepRun.hero_y, int16_t(n * kAdv48), kH48, true, int16_t((3 - n) * kAdv48)};
 }
+// k2-plain-end
 
 // What a box really covers on the panel when the 208 x 240 content is drawn into ext_w x ext_h (the same arithmetic as
 // ContentViewport: mapped(c) = c * extent / logical). A fill is stretched, a text cell keeps its native size and moves only its origin.

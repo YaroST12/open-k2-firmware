@@ -12,7 +12,7 @@ constexpr std::size_t kMaxTokens = 12;
 
 #if K2_PDSTRESS
 #define K2_SHELL_HELP_PDSTRESS \
-    "pdstress start [--mask m --cycles pct --pace 0..2 --max-s s --max-trans n] confirm | status | result [off] | stop   PD Stress, docs/PD_SPEC_CHECK.md\r\n"
+    "pdstress start [--mask m --cycles pct --pace 0..2 --max-s s --max-trans n] confirm | status | result [off] | stop   PD Stress, docs/PD_SPEC_CHECK.md\r\n" // k2-plain: concatenated into the packed kHelp
 #else
 #define K2_SHELL_HELP_PDSTRESS ""
 #endif
@@ -44,7 +44,7 @@ constexpr const char* kHelp = K2_P(
 #undef K2_SHELL_HELP_PDSTRESS
 
 constexpr std::array<const char*, static_cast<std::size_t>(fc::Proto::Count)> kProtos = {
-    "qc2", "qc3", "qc3+", "afc", "fcp", "scp", "vooc", "svooc", "svooc65", "ufcs", "vivo"};
+    "qc2", "qc3", "qc3+", "afc", "fcp", "scp", "vooc", "svooc", "svooc65", "ufcs", "vivo"}; // k2-plain: typed protocol words
 
 bool is_space(char c) { return c == ' ' || c == '\t'; }
 
@@ -105,7 +105,7 @@ struct Tokens {
 }
 
 [[gnu::noinline]] void err(Backend& b, const char* why) {
-    b.write("err: ");
+    b.write("err: "); // k2-plain: raw write before err text
     emit(b, why);
     b.write("\r\n");
 }
@@ -210,7 +210,7 @@ struct Tokens {
     if (k.n == 2 && same(k.t[1], "off")) return done(b, b.stream(0, 0, false));
     if (k.n < 2 || !same(k.t[1], "on")) return err(b, kUsage);
     struct Kind { const char* name; unsigned bit; };
-    static constexpr Kind kKinds[] = {{"log", 1}, {"trace", 2}, {"run", 8}, {"all", 15}, {"power", 4}};
+    static constexpr Kind kKinds[] = {{"log", 1}, {"trace", 2}, {"run", 8}, {"all", 15}, {"power", 4}}; // k2-plain: typed words
     unsigned mask = 0, named = 0, hz = 0;
     bool history = false;
     for (std::size_t i = 2; i < k.n; i++) {
@@ -265,7 +265,7 @@ bool twin_name(const Tokens& k, std::size_t first, std::string_view& name) {
     const std::string_view s = k.t[1];
     TwinCmd c;
     struct Simple { const char* word; TwinOp op; };
-    static constexpr Simple kSimple[] = {{"list", TwinOp::List}, {"status", TwinOp::Status}, {"cancel", TwinOp::Cancel}};
+    static constexpr Simple kSimple[] = {{"list", TwinOp::List}, {"status", TwinOp::Status}, {"cancel", TwinOp::Cancel}}; // k2-plain: typed words
     for (const Simple& sp : kSimple) {
         if (same(s, sp.word) && k.n == 2) { c.op = sp.op; return done(b, b.twin(c)); }
     }
@@ -365,14 +365,14 @@ void Shell::execute(std::string_view line) {
     }
     struct CmdEntry { const char* name; void (*fn)(Backend&, const Tokens&); };
     static constexpr CmdEntry kCmds[] = {
-        {"fc", cmd_fc}, {"sniff", cmd_sniff}, {"trace", cmd_trace}, {"stream", cmd_stream}, {"twin", cmd_twin},
+        {"fc", cmd_fc}, {"sniff", cmd_sniff}, {"trace", cmd_trace}, {"stream", cmd_stream}, {"twin", cmd_twin}, // k2-plain: typed command words
     };
     for (const CmdEntry& ce : kCmds) if (same(c, ce.name)) return ce.fn(b_, k);
     struct NoArg { const char* name; const char* usage; const char* (Backend::*fn)(); };
     static constexpr NoArg kNoArg[] = {
         {"diag", K2_P("usage: diag"), &Backend::diag},
         {"mem", K2_P("usage: mem"), &Backend::memory},
-        {"selftest", K2_P("usage: selftest"), &Backend::selftest},
+        {"selftest", K2_P("usage: selftest"), &Backend::selftest},   // k2-plain: typed command word
     };
     for (const NoArg& na : kNoArg) {
         if (same(c, na.name)) {

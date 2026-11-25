@@ -66,14 +66,14 @@ K2_HOT void with_role(TxMsg& m, bool dfp) {
 
 const char* epr_fail_name(std::uint8_t code) {
     switch (code) {
-        case 0: return "unknown cause";
-        case 1: return "cable not EPR capable";
-        case 2: return "source not VCONN source";
-        case 3: return "EPR bit not set in RDO";
-        case 4: return "source unable now";
-        case 5: return "EPR bit not set in 5 V PDO";
+        case 0: return K2_P("unknown cause");
+        case 1: return K2_P("cable not EPR capable");
+        case 2: return K2_P("source not VCONN source");
+        case 3: return K2_P("EPR bit not set in RDO");
+        case 4: return K2_P("source unable now");
+        case 5: return K2_P("EPR bit not set in 5 V PDO");
     }
-    return "invalid reason";
+    return K2_P("invalid reason");
 }
 
 K2_HOT std::uint32_t rdo_fixed(std::uint8_t pos, std::uint16_t op_ma, std::uint16_t max_ma, bool epr) {
@@ -95,13 +95,13 @@ K2_HOT std::uint32_t rdo_avs(std::uint8_t pos, std::uint16_t mv, std::uint16_t m
 const char* err_name(Err e) {
     switch (e) {
         case Err::Ok: return "ok";
-        case Err::NoCaps: return "no source capabilities";
-        case Err::BadPos: return "bad PDO position";
-        case Err::OverCap: return "above the voltage cap";
-        case Err::BadVoltage: return "bad voltage";
-        case Err::Inline: return "live sink attached";
+        case Err::NoCaps: return K2_P("no source capabilities");
+        case Err::BadPos: return K2_P("bad PDO position");
+        case Err::OverCap: return K2_P("above the voltage cap");
+        case Err::BadVoltage: return K2_P("bad voltage");
+        case Err::Inline: return K2_P("live sink attached");
         case Err::Busy: return "busy";
-        case Err::BadChoice: return "PDO advertises no current";
+        case Err::BadChoice: return K2_P("PDO advertises no current");
     }
     return "?";
 }
@@ -109,12 +109,12 @@ const char* err_name(Err e) {
 const char* busy_why_name(BusyWhy w) {
     switch (w) {
         case BusyWhy::None: return "";
-        case BusyWhy::Test: return "a charger test or tool owns the port";
-        case BusyWhy::Legacy: return "legacy unit running (PD-silent)";
-        case BusyWhy::Identify: return "identify running";
-        case BusyWhy::Probe: return "probe running";
-        case BusyWhy::Prepare: return "re-announcing the source caps first";
-        case BusyWhy::Negotiating: return "negotiation in flight (previous request not settled)";
+        case BusyWhy::Test: return K2_P("a charger test or tool owns the port");
+        case BusyWhy::Legacy: return K2_P("legacy unit running (PD-silent)");
+        case BusyWhy::Identify: return K2_P("identify running");
+        case BusyWhy::Probe: return K2_P("probe running");
+        case BusyWhy::Prepare: return K2_P("re-announcing the source caps first");
+        case BusyWhy::Negotiating: return K2_P("negotiation in flight (previous request not settled)");
     }
     return "?";
 }
@@ -126,7 +126,7 @@ const char* state_name(SinkState s) {
         case SinkState::EprWaitCaps: return K2_P("reading EPR caps");
         case SinkState::Requesting: return K2_P("requesting");
         case SinkState::Transition: return K2_P("transition");
-        case SinkState::Ready: return "ready";
+        case SinkState::Ready: return K2_P("ready");
         case SinkState::Aborting: return K2_P("back to 5V");
         case SinkState::Failed: return K2_P("failed");
     }
@@ -137,16 +137,16 @@ const char* result_name(SinkResult r) {
     switch (r) {
         case SinkResult::None: return "none";
         case SinkResult::Ok: return "ok";
-        case SinkResult::Rejected: return "rejected";
-        case SinkResult::WaitExhausted: return "source busy";
-        case SinkResult::Timeout: return "timeout";
-        case SinkResult::TxFailed: return "no GoodCRC";
-        case SinkResult::HardReset: return "hard reset";
-        case SinkResult::SoftReset: return "soft reset";
-        case SinkResult::Aborted: return "dropped to 5V";
-        case SinkResult::OverCap: return "over the cap";
-        case SinkResult::EprFailed: return "EPR refused";
-        case SinkResult::BadChoice: return "bad choice";
+        case SinkResult::Rejected: return K2_P("rejected");
+        case SinkResult::WaitExhausted: return K2_P("source busy");
+        case SinkResult::Timeout: return K2_P("timeout");
+        case SinkResult::TxFailed: return K2_P("no GoodCRC");
+        case SinkResult::HardReset: return K2_P("hard reset");
+        case SinkResult::SoftReset: return K2_P("soft reset");
+        case SinkResult::Aborted: return K2_P("dropped to 5V");
+        case SinkResult::OverCap: return K2_P("over the cap");
+        case SinkResult::EprFailed: return K2_P("EPR refused");
+        case SinkResult::BadChoice: return K2_P("bad choice");
     }
     return "?";
 }
@@ -1661,7 +1661,7 @@ K2_HOT void Sink::on_vdm(std::uint16_t header, std::span<const std::uint8_t> pay
             }
             if (!matched) mi::auth_digest(mi::kActiveKeyIndex, mi::kChallenge, primary, digest);
             xiaomi_adapter_id_ = chosen;
-            K2LOG("[MI] 0205 %s adapter=0x%04X rx=%08X %08X %08X %08X\n", matched ? "match" : "no-match",
+            K2LOG("[MI] 0205 %s adapter=0x%04X rx=%08X %08X %08X %08X\n", matched ? K2_P("match") : K2_P("no-match"),
                   unsigned(chosen), unsigned(rx[0]), unsigned(rx[1]), unsigned(rx[2]), unsigned(rx[3]));
             // VERIFIED is 1: the observed chargers gate the unlock on the 0x27170108 half, not on
             // this word, and the known-good flow always sent 1.

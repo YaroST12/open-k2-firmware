@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include "k2/core/hot.h"
+#include "k2/core/strpack.hpp"
 #include "k2/core/log.hpp"
 #include "k2/core/remote_proto.hpp"
 #include "k2/core/scratch.hpp"
@@ -154,7 +155,7 @@ K2_HOT bool run_strips(Ui &ui, PixelSink &sink, uint16_t *strip_buf, uint8_t *wo
 }
 
 K2_HOT bool capture_screen_scratch(Ui &ui, PixelSink &sink, uint8_t seq, uint32_t now_ms, uint8_t transport, uint32_t &total) {
-    scratch::Lease lease("capture");
+    scratch::Lease lease("capture");   // k2-plain: scratch owner tag
     auto *const strip_buf = reinterpret_cast<uint16_t *>(scratch::arena());
     uint8_t *const work = scratch::arena() + kStripBytes;
     return run_strips(ui, sink, strip_buf, work, scratch::kSize - kStripBytes, kStripRows, seq, now_ms, transport, total);
@@ -219,7 +220,7 @@ bool capture_screen(Ui &ui, uint8_t seq, uint32_t now_ms, uint8_t transport) {
     ui.resync(now_ms);
     ui.capture_state_end();
     g_sink_ptr = nullptr;
-    K2LOG("[RMT] screenshot %s: %d bytes in %d ms\n", ok ? "done" : "aborted",
+    K2LOG("[RMT] screenshot %s: %d bytes in %d ms\n", ok ? "done" : K2_P("aborted"),
                 static_cast<int>(total), static_cast<int>(systick::millis() - t0));
     return ok;
 }

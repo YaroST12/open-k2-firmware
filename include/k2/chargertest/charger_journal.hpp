@@ -70,9 +70,9 @@ namespace k2::charger_journal {
 
 inline constexpr std::uint8_t kMagic = 0xA5;
 inline constexpr const char* kDir = "/jr";
-inline constexpr const char* kHeaderPath = "/jr/h.rec";
+inline constexpr const char* kHeaderPath = "/jr/h.rec"; // k2-plain: fs path
 #if K2_SPECROWS
-inline constexpr const char* kSpecRowsPath = "/jr/spt.rec";
+inline constexpr const char* kSpecRowsPath = "/jr/spt.rec"; // k2-plain: fs path
 inline constexpr std::size_t kSpecRowsMax = 4096;   // the rows file's ceiling (specsec::kRowsMaxFile is 4010; ui_charger_test.cpp static_asserts it fits)
 #endif
 inline constexpr std::uint8_t kFormat = 6;       // 6: each range's spec cells in /jr/sa<n>.rec (5: per-transition rows in /jr/spt.rec, 4: cell limit, count, place in /jr/spd.rec)

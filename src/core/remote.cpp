@@ -71,6 +71,7 @@
 #include "k2/pd/diag_wire.hpp"
 #include "k2/core/trace_hid_hw.hpp"
 #include "k2/core/scratch.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2 {
 
@@ -235,7 +236,7 @@ remote::ChargerTestStartReply Remote::charger_test_start(uint8_t flags) {
     r.result = s.result == R::Refused ? remote::kCtStartRefused : remote::kCtStartAccepted;
     r.reason = static_cast<uint8_t>(s.reason); r.refusal_mv = s.refusal_mv;
     K2LOG("[RMT] charger-test start all=%d -> %s\n", int((flags & remote::kCtStartAllTests) != 0),
-          s.result == R::Refused ? "refused" : "confirming");
+          s.result == R::Refused ? K2_P("refused") : K2_P("confirming"));
     return r;
 }
 
@@ -873,8 +874,8 @@ remote::PdAttachResult Remote::pd_attach(uint16_t target_mv, uint16_t target_ma,
     const pd::AttachVerdict v = pd::attach_verdict(facts, target_mv, confirm);
     if (v != pd::AttachVerdict::Allowed) {
         K2LOG("[RMT] pd attach refused: %s (target_mv=%d busy=%d inline=%d trigger=%d confirm=%d)\n",
-              v == pd::AttachVerdict::RefusedBusy ? "ports busy" : v == pd::AttachVerdict::RefusedInline ? "inline"
-              : "confirm needed", static_cast<int>(target_mv), int(facts.ports_busy), int(facts.inline_mode),
+              v == pd::AttachVerdict::RefusedBusy ? K2_P("ports busy") : v == pd::AttachVerdict::RefusedInline ? K2_P("inline")
+              : K2_P("confirm needed"), static_cast<int>(target_mv), int(facts.ports_busy), int(facts.inline_mode),
               int(facts.trigger_refusal), int(confirm));
         if (v == pd::AttachVerdict::NeedConfirm) return {remote::Status::NeedConfirm, 0, {}};
         const remote::PdOpResult r = pd_result(v == pd::AttachVerdict::RefusedBusy ? pd::Err::Busy : pd::Err::Inline);
@@ -1310,7 +1311,7 @@ remote::AdcRawSnapshot Remote::adc_raw() {
 // releases it then (ripple_pending_). Nothing holds the arena inside a remote poll, so held() is only a guard.
 remote::Status Remote::ripple(uint8_t sample_code) {
     if (scratch::held()) return remote::Status::Busy;
-    scratch::acquire("ripple");
+    scratch::acquire(K2_P("ripple"));
     RippleBuf &buf = ripple_buf();
     const uint32_t period = adc::capture_ripple(buf, sample_code);
     if (period == 0) {
@@ -1379,7 +1380,7 @@ void Remote::cable_r_reset() {
 
 void Remote::cable_r_mode(bool kelvin) {
     ui_.set_cable_mode(kelvin ? cable_r::Mode::Kelvin : cable_r::Mode::Passive);
-    K2LOG("[RMT] cable resistance mode %s\n", kelvin ? "kelvin" : "passive");
+    K2LOG("[RMT] cable resistance mode %s\n", kelvin ? K2_P("kelvin") : K2_P("passive"));
 }
 
 // PA8 load probe (k2/drivers/load.hpp). Refused while a trigger, scan or test owns the ports.

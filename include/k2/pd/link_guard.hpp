@@ -19,6 +19,7 @@
 #include "k2/drivers/power_calc.hpp"
 
 #include "k2/pd/pd_link.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::link {
 
@@ -80,8 +81,8 @@ constexpr bool pd_likely(const Probe& p) {
 constexpr const char* name(Reason r) {
     switch (r) {
         case Reason::None: return "none";
-        case Reason::PdContract: return "PD contract";
-        case Reason::DataDevice: return "load attached";
+        case Reason::PdContract: return K2_P("PD contract");
+        case Reason::DataDevice: return K2_P("load attached");
     }
     return "?";
 }

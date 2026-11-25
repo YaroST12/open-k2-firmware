@@ -17,6 +17,7 @@
 
 #include "k2/pd/emrec.hpp"
 #include "k2/drivers/flash.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::store {
 
@@ -58,18 +59,18 @@ constexpr Err err_from(flash::Status s) {
 constexpr const char* err_name(Err e) {
     switch (e) {
     case Err::Ok: return "ok";
-    case Err::Full: return "library full";
-    case Err::BadSlot: return "bad slot";
-    case Err::Empty: return "slot empty";
-    case Err::Invalid: return "invalid record";
-    case Err::TooBig: return "too big";
-    case Err::Foreign: return "library page not written by this firmware";
-    case Err::FlashRefused: return "flash refused";
-    case Err::FlashBusy: return "flash busy";
-    case Err::FlashKey: return "flash unlock failed";
-    case Err::FlashProgram: return "flash program error";
-    case Err::FlashWriteProtect: return "flash write protected";
-    case Err::FlashVerify: return "flash verify failed";
+    case Err::Full: return K2_P("library full");
+    case Err::BadSlot: return K2_P("bad slot");
+    case Err::Empty: return K2_P("slot empty");
+    case Err::Invalid: return K2_P("invalid record");
+    case Err::TooBig: return K2_P("too big");
+    case Err::Foreign: return K2_P("library page not written by this firmware");
+    case Err::FlashRefused: return K2_P("flash refused");
+    case Err::FlashBusy: return K2_P("flash busy");
+    case Err::FlashKey: return K2_P("flash unlock failed");
+    case Err::FlashProgram: return K2_P("flash program error");
+    case Err::FlashWriteProtect: return K2_P("flash write protected");
+    case Err::FlashVerify: return K2_P("flash verify failed");
     }
     return "?";
 }

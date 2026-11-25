@@ -29,11 +29,11 @@ inline constexpr std::uint8_t kLandingIndex = 1;   // iLandingPage: GET_URL's wV
 // The page a browser suggests when the K2 is plugged in (Chrome shows a notification on Android and desktop): the
 // dashboard (tools/web/k2.html) on the project's GitHub Pages site, published by `make site` as k2.html at the site root.
 // The URL descriptor's scheme byte is 1 (https), so the string carries no scheme.
-inline constexpr std::string_view kLandingUrl = "yarost12.github.io/open-k2-firmware/k2.html";
+inline constexpr std::string_view kLandingUrl = "yarost12.github.io/open-k2-firmware/k2.html";   // k2-plain: USB descriptor bytes
 
 // DeviceInterfaceGUIDs of the vendor function (registry property of the OS 2.0 set); a random (version 4) GUID generated
 // once for this project, it only has to be unique to this device class.
-inline constexpr std::string_view kInterfaceGuid = "{81bdae64-520b-4114-aba4-de8eedd252bf}";
+inline constexpr std::string_view kInterfaceGuid = "{81bdae64-520b-4114-aba4-de8eedd252bf}";   // k2-plain: USB descriptor bytes
 
 inline constexpr std::uint8_t kBosHeaderLen = 5;
 inline constexpr std::uint8_t kWebusbCapLen = 24;
@@ -46,7 +46,7 @@ inline constexpr std::uint16_t kUrlDescLen = 3 + kLandingUrl.size();
 
 // Microsoft OS 2.0 descriptor set layout: header 10, configuration subset 8, function subset 8, compatible ID 20,
 // registry property (4 + 2 + 2 + name + 2 + data).
-inline constexpr std::string_view kGuidPropName = "DeviceInterfaceGUIDs";
+inline constexpr std::string_view kGuidPropName = "DeviceInterfaceGUIDs";   // k2-plain: USB descriptor bytes
 inline constexpr std::uint16_t kPropNameBytes = (kGuidPropName.size() + 1) * 2;          // UTF-16 with NUL
 inline constexpr std::uint16_t kPropDataBytes = (kInterfaceGuid.size() + 1) * 2 + 2;     // REG_MULTI_SZ: one string + list NUL
 inline constexpr std::uint16_t kPropLen = 4 + 2 + 2 + kPropNameBytes + 2 + kPropDataBytes;
@@ -107,7 +107,7 @@ constexpr std::array<std::uint8_t, kMsosSetLen> make_msos(std::uint8_t itf) {
     detail::put16(p, 8); detail::put16(p + 2, 2); p[4] = itf; p[5] = 0; detail::put16(p + 6, kFunctionSubsetLen);   // function subset
     p += 8;
     detail::put16(p, 20); detail::put16(p + 2, 3);                                                                 // compatible ID
-    const std::string_view id = "WINUSB";
+    const std::string_view id = "WINUSB";   // k2-plain: USB descriptor bytes
     for (std::size_t i = 0; i < id.size(); i++) p[4 + i] = static_cast<std::uint8_t>(id[i]);                       // 8 bytes, NUL padded; sub ID zero
     p += 20;
     detail::put16(p, kPropLen); detail::put16(p + 2, 4); detail::put16(p + 4, 7);                                  // registry property, REG_MULTI_SZ

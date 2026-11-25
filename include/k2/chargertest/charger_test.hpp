@@ -14,6 +14,7 @@
 #include "k2/pdspec/prog_judge.hpp"
 #include "k2/pd/pd_ccmode.hpp"
 #include "k2/pd/pd_sink.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::charger_test {
 
@@ -571,7 +572,7 @@ pd::SourceCaps nominal_caps();
 unsigned planned_tests(const pd::SourceCaps&, Options, Input);
 const char* explanation(const Step&);
 // The short word for a LinesOpen row in a 16-cell value column (explanation, the card's Why); name(Reason::LinesOpen) is the full cause.
-inline constexpr const char* kLinesOpenCell = "lines open";
+inline constexpr const char* kLinesOpenCell = K2_P("lines open");
 // The step-walk caution's note, "steps 100mV, not 20mV" (the mean move, rounded to 10 mV from 50 up, then the nominal step) or
 // "steps ignored"; or a transition check's finding, "overshoot +1" (the first flag, then how many more); 0 characters for any other reason.
 // NUL-terminated within `out`, 24 characters at most.

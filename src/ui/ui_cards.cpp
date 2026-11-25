@@ -138,11 +138,11 @@ uint16_t tone_color(tone::Tone t) { return tone_meta(t).color; }
 // PD source advertises (its PD group, a range with nothing measured): "Advertised", not "Pass".
 const char *verdict_word(tone::Tone t, bool skipped, bool range, bool listed = false) {
     switch (t) {
-    case tone::Tone::Pass: return listed ? "Advertised" : "Pass";
-    case tone::Tone::Partial: return "Partial";
+    case tone::Tone::Pass: return listed ? K2_P("Advertised") : "Pass";
+    case tone::Tone::Partial: return K2_P("Partial");
     case tone::Tone::Fail: return "Fail";
-    case tone::Tone::Noted: return range ? "Advertised" : "Detected";   // a Light card: listed or answered at 5 V, not measured
-    default: return skipped ? "Skipped" : range ? "Not run" : "No reply";
+    case tone::Tone::Noted: return range ? K2_P("Advertised") : K2_P("Detected");   // a Light card: listed or answered at 5 V, not measured
+    default: return skipped ? K2_P("Skipped") : range ? K2_P("Not run") : K2_P("No reply");
     }
 }
 
@@ -164,7 +164,7 @@ void cards_mi_text(const rc::deep::MiSection &m, StrBuf<32> &out) {
             const auto v = static_cast<charger_test::Verdict>(m.mode[i].verdict);
             if (v == charger_test::Verdict::Pass) out.put_char(kMarkCheck);
             else if (v == charger_test::Verdict::Fail) out.put_char(kMarkCross);
-            else out.put(pass ? "-" : " skip");
+            else out.put(pass ? "-" : K2_P(" skip"));
         }
         if (marked_width(kLabelFont, out.view()) <= kBoxPx) return;
     }
@@ -180,7 +180,7 @@ void cards_mi_text(const rc::deep::MiSection &m, StrBuf<32> &out) {
         out.put_u32(m.n).put(form ? ":" : K2_P(" modes:"));
         if (pass) out.put_char(' ').put_u32(pass).put_char(kMarkCheck);
         if (fail) out.put_char(' ').put_u32(fail).put_char(kMarkCross);
-        if (m.n - pass - fail) out.put_char(' ').put_u32(m.n - pass - fail).put(" skip");
+        if (m.n - pass - fail) out.put_char(' ').put_u32(m.n - pass - fail).put(K2_P(" skip"));
         if (marked_width(kLabelFont, out.view()) <= kBoxPx) return;
     }
 }
@@ -260,7 +260,7 @@ void cards_range_status_text(const rc::Card &c, const rc::Range &r, StrBuf<16> &
     if (tone::deviates(c, r)) { out.put(K2_P("off >100mV")); return; }   // a sweep that tracked worse than the pass window: a caution
     if (r.fail_dv) {
         if (r.max_dv && tone::capped(c)) {
-            out.put("caps ");
+            out.put(K2_P("caps "));
             put_volts(out, r.max_dv);
         } else {
             out.put("at ");
@@ -274,7 +274,7 @@ void cards_range_status_text(const rc::Card &c, const rc::Range &r, StrBuf<16> &
 
 void cards_pd_why_text(const rc::GroupResult &r, StrBuf<24> &out) {
     const char *why = rc::group_why(0, r);
-    if (fits_px(kLabelFont.adv, why, kPdWhyPx)) out.put(why);
+    if (fits_px_p(kLabelFont.adv, why, kPdWhyPx)) out.put(why);
     else out.put(K2_P("see detail"));   // "source shut off (needs replug)" is 30 cells: the detail screen spells it out, nothing is cut
 }
 
@@ -326,7 +326,7 @@ void cards_handover_text(const rc::Card &c, StrBuf<32> &out) {
     case HO::NotTried: out.put(K2_P("not tried")); return;
     case HO::FellBack: out.put(K2_P("fell back")); break;
     case HO::StayedPd: out.put(K2_P("stayed in PD")); break;
-    case HO::Fault:    out.put("fault"); break;
+    case HO::Fault:    out.put(K2_P("fault")); break;
     case HO::Reboot:   out.put(K2_P("rebooted")); break;
     case HO::InContract: out.put(K2_P("in PD contract")); break;
     }
@@ -346,7 +346,7 @@ void cards_stats_text(const rc::Card &c, StrBuf<32> &out) {
     StrBuf<32> tail;
     for (int form = 0; form < 3; ++form) {   // 0 full words, 1 "self-pwr r2", 2 "self r16"
         tail.clear();
-        if (self) tail.put(form == 0 ? K2_P(" self-powered") : form == 1 ? K2_P(" self-pwr") : " self");
+        if (self) tail.put(form == 0 ? K2_P(" self-powered") : form == 1 ? K2_P(" self-pwr") : K2_P(" self"));
         if (c.resumed) tail.put(!self && form == 0 ? K2_P(" resumed ") : " r").put_u32(c.resumed);
         else if (c.cable.flags & rc::kCableReattach) tail.put(form == 0 ? K2_P(" re-attach") : form == 1 ? K2_P(" reatt") : " re");   // the planned re-attach, not a resume
         else if (!self && c.fw && form == 0) tail.put(" fw ").put_hex(c.fw, 8);
@@ -364,6 +364,7 @@ void cards_id_text(const rc::Card &c, StrBuf<32> &out) {
 // ---- the detail sheet ---------------------------------------------------------------------------
 
 unsigned cards_wrap(std::string_view text, unsigned cells, std::string_view *lines, unsigned max_lines) {
+    K2_EXPECT_PLAIN(text);
     unsigned n = 0;
     for (;;) {
         while (!text.empty() && text.front() == ' ') text.remove_prefix(1);
@@ -387,6 +388,17 @@ namespace {
 // Adds a row (undone by --n when the sheet would outgrow its screen: rows are added most important first, so the last ones go).
 SheetRow *sheet_add(CardSheet &s, const char *key, uint16_t color, std::string_view v) {
     if (s.n >= unsigned(kSheetRows)) return nullptr;
+    if (strpack::is_packed(v)) {   // a packed name decodes into the row's own box, or a sheet text slot when longer
+        char *dst = s.row[s.n].num;
+        std::size_t cap = sizeof s.row[s.n].num;
+        if (strpack::cells_rt(v.data()) > kSheetBox) {
+            if (s.texts == std::size(s.text)) return nullptr;
+            dst = s.text[s.texts++];
+            cap = sizeof s.text[0];
+        }
+        v = strpack::unpack_rt(v, dst, cap);
+    }
+    K2_EXPECT_PLAIN(v);
     SheetRow &r = s.row[s.n++];
     r.key = key;
     r.verdict = false;
@@ -411,12 +423,12 @@ SheetRow *sheet_add_num(CardSheet &s, const char *key, uint16_t color, std::stri
 }
 void sheet_verdict(CardSheet &s, tone::Tone t, const char *word) {
     SheetRow &r = s.row[s.n++];
-    r.key = "Verdict";
+    r.key = K2_P("Verdict");
     r.verdict = true;
     r.glyph = to_kit(t);
     r.color = tone_color(t);
     r.below = false;
-    r.line[0] = word;
+    r.line[0] = strpack::unpack_rt(word, r.num, sizeof r.num);   // the row owns the decoded word
     r.lines = 1;
 }
 
@@ -427,41 +439,41 @@ void sheet_verdict(CardSheet &s, tone::Tone t, const char *word) {
     if (range) {
         const rc::Range &r = c.range[idx];
         const tone::Tone rt = tone::range(c, r);
-        sheet_verdict(out, rt, tone::caution(c, r) ? "Caution" : verdict_word(rt, false, true, c.level == charger_test::Level::Light && !r.max_dv && !r.fail_dv));
+        sheet_verdict(out, rt, tone::caution(c, r) ? K2_P("Caution") : verdict_word(rt, false, true, c.level == charger_test::Level::Light && !r.max_dv && !r.fail_dv));
         StrBuf<32> rg;
         cards_range_text(r, rg);
-        sheet_add_num(out, "Offered", kVolt, rg.view());
+        sheet_add_num(out, K2_P("Offered"), kVolt, rg.view());
         StrBuf<16> v;
-        if (r.max_dv) { put_volts(v, r.max_dv); sheet_add_num(out, "Max reached", kVolt, v.view()); }
+        if (r.max_dv) { put_volts(v, r.max_dv); sheet_add_num(out, K2_P("Max reached"), kVolt, v.view()); }
         v.clear();
-        if (r.fail_dv) { put_volts(v, r.fail_dv); sheet_add_num(out, "Failed at", rt == tone::Tone::Fail ? kError : kCaution, v.view()); }
+        if (r.fail_dv) { put_volts(v, r.fail_dv); sheet_add_num(out, K2_P("Failed at"), rt == tone::Tone::Fail ? kError : kCaution, v.view()); }
         StrBuf<8> a;
         cards_amps_text(r.ma, a);
-        if (a.view().size()) sheet_add_num(out, "Max current", kAmp, a.view());
+        if (a.view().size()) sheet_add_num(out, K2_P("Max current"), kAmp, a.view());
         if (r.pos) { StrBuf<8> p; p.put_char('#').put_u32(r.pos); sheet_add_num(out, "PDO", kText, p.view()); }
         if (tone::folded(c, r)) {   // the caution's own words, kept in the sheet (the value is longer than the box: it sits under the key)
             StrBuf<32> fold;
             cards_fold_text(c, r, fold);
             sheet_add(out, "Note", kCaution, pg::stash_str(out.note, sizeof out.note, fold.view()));
         }
-        if (tone::deviates(c, r)) sheet_add(out, "Note", kCaution, "sweep off >100mV");   // 16 cells, the value column; a caution by tracking
+        if (tone::deviates(c, r)) sheet_add(out, "Note", kCaution, K2_P("sweep off >100mV"));   // 16 cells, the value column; a caution by tracking
         // A failing range of a card whose PD group failed only through a range: the group's cause is this range's cause too.
-        if (r.fail_dv && tone::fixed_ok_despite_group(c)) sheet_add(out, "Reason", kCaution, rc::group_why(0, c.group[0]));
+        if (r.fail_dv && tone::fixed_ok_despite_group(c)) sheet_add(out, K2_P("Reason"), kCaution, rc::group_why(0, c.group[0]));
         return;
     }
     const rc::GroupResult &r = c.group[idx];
     const tone::Tone gt = tone::group(c, idx);
     sheet_verdict(out, gt, verdict_word(gt, r.verdict == rc::GV::Skip, false, c.level == charger_test::Level::Light && idx == 0));
     StrBuf<16> v;
-    if (rc::group_handshake_ok(r)) sheet_add(out, "Max reached", kVolt, "handshake ok");
-    else if (rc::group_detected(r)) sheet_add(out, "Max reached", kVolt, "detected");
-    else if (r.max_mv) { put_volts(v, rc::detail::dv_round(r.max_mv)); sheet_add_num(out, "Max reached", kVolt, v.view()); }
+    if (rc::group_handshake_ok(r)) sheet_add(out, K2_P("Max reached"), kVolt, K2_P("handshake ok"));
+    else if (rc::group_detected(r)) sheet_add(out, K2_P("Max reached"), kVolt, K2_P("detected"));
+    else if (r.max_mv) { put_volts(v, rc::detail::dv_round(r.max_mv)); sheet_add_num(out, K2_P("Max reached"), kVolt, v.view()); }
     v.clear();
-    if (r.fail_mv) { put_volts(v, rc::detail::dv_round(r.fail_mv)); sheet_add_num(out, "Failed at", gt == tone::Tone::Fail ? kError : kCaution, v.view()); }
+    if (r.fail_mv) { put_volts(v, rc::detail::dv_round(r.fail_mv)); sheet_add_num(out, K2_P("Failed at"), gt == tone::Tone::Fail ? kError : kCaution, v.view()); }
     if (idx == 0) {
         StrBuf<8> a;
         cards_amps_text(c.pd_ma, a);
-        if (a.view().size()) sheet_add_num(out, "Max current", kAmp, a.view());
+        if (a.view().size()) sheet_add_num(out, K2_P("Max current"), kAmp, a.view());
     }
     // The cause, only for a fail or skip of the group's own levels: a pass has nothing to explain, and a PD group that failed
     // only through a range (the range's sheet says so) reads as passed. One row when the engine's detail and the reason repeat
@@ -474,22 +486,22 @@ void sheet_verdict(CardSheet &s, tone::Tone t, const char *word) {
         const char *reason = r.reason && !no_answer && r.reason != uint8_t(charger_test::Reason::NoQc3Plus) && r.reason != uint8_t(charger_test::Reason::LinesOpen) ? charger_test::name(charger_test::Reason(r.reason)) : nullptr;
         const uint16_t wc = gt == tone::Tone::Skip ? kDim : kCaution;
         if (!reason || std::strcmp(reason, why) == 0) {
-            sheet_add(out, "Reason", wc, why);
+            sheet_add(out, K2_P("Reason"), wc, why);
         } else {
             sheet_add(out, "Why", wc, why);
-            sheet_add(out, "Reason", kDim, reason);
+            sheet_add(out, K2_P("Reason"), kDim, reason);
         }
     }
     // The UFCS modes of a v6 card, one row each ("5-20V 3A"): what the charger advertises, shown for a pass as well. Older cards
     // hold none and show the volts alone. Rows past the screen's height drop, the last mode first.
     if (idx == unsigned(charger_test::Group::Ufcs)) {
-        static constexpr const char *kModeKey[rc::kMaxUfcs] = {"Mode 1", "Mode 2", "Mode 3", "Mode 4"};
+        static constexpr const char *kModeKey[rc::kMaxUfcs] = {K2_P("Mode 1"), K2_P("Mode 2"), K2_P("Mode 3"), K2_P("Mode 4")};
         for (unsigned i = 0, n = rc::ufcs_modes(c); i < n; ++i) {
             const rc::UfcsRange &m = c.ufcs[i];
             if (!sheet_add_num(out, kModeKey[i], kAmp, step_label::range(m.lo_dv * 100u, m.hi_dv * 100u, m.ma).view())) break;
         }
     }
-    if (own && r.detail) { StrBuf<8> d; d.put_u32(r.detail); sheet_add_num(out, "Detail code", kDim, d.view()); }
+    if (own && r.detail) { StrBuf<8> d; d.put_u32(r.detail); sheet_add_num(out, K2_P("Detail code"), kDim, d.view()); }
 }
 
 // ---- page ---------------------------------------------------------------------------------------
@@ -783,7 +795,7 @@ void CardsPage::paint_cell(int row, bool focused) {
         if (!s.empty() && s.back() == kMarkCross) s.remove_suffix(1);
         // Amber when part of the group passed: the handshake works, a higher level does not. A protocol that never answered is
         // grey and says so ("no reply", the Results grid's wording), never a red cross with a target it never reached.
-        if (gt == tone::Tone::Skip && r.verdict == rc::GV::Fail) s = "no reply";
+        if (gt == tone::Tone::Skip && r.verdict == rc::GV::Fail) s = K2_P("no reply");
         const uint16_t vc = gt == tone::Tone::Pass ? kVolt : gt == tone::Tone::Partial ? kCaution : kDim;
         // The name's box ends 2 px before the value starts; the value's right edge is 2 px inside the cell.
         const int16_t nx = int16_t(g.x + 17), vr = int16_t(g.x + g.w - 2);

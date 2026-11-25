@@ -6,6 +6,7 @@
 #include <algorithm>
 
 #include "k2/pd/pd.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::pd {
 
@@ -122,11 +123,11 @@ bool lim_unpack(std::span<const std::uint8_t, kLimPackBytes> in, LimConfig& c) {
 const char* lim_state_name(LimState s) {
     switch (s) {
         case LimState::Off: return "off";
-        case LimState::Armed: return "armed";
-        case LimState::Negotiating: return "negotiating";
-        case LimState::Pending: return "pending";
-        case LimState::Injected: return "injected";
-        case LimState::Limited: return "limited";
+        case LimState::Armed: return K2_P("armed");
+        case LimState::Negotiating: return K2_P("negotiating");
+        case LimState::Pending: return K2_P("pending");
+        case LimState::Injected: return K2_P("injected");
+        case LimState::Limited: return K2_P("limited");
     }
     return "?";
 }
@@ -134,15 +135,15 @@ const char* lim_state_name(LimState s) {
 const char* lim_why_name(LimWhy w) {
     switch (w) {
         case LimWhy::None: return "none";
-        case LimWhy::User: return "turned off";
-        case LimWhy::Detached: return "detached";
-        case LimWhy::Epr: return "EPR is not covered";
-        case LimWhy::Rate: return "too many lists";
-        case LimWhy::ChargerResets: return "the charger resets";
-        case LimWhy::SinkResets: return "the sink resets";
-        case LimWhy::SinkIgnores: return "the sink ignores it";
-        case LimWhy::NoFit: return "not on this charger";
-        case LimWhy::ChargerRefuses: return "the charger refuses re-offers";
+        case LimWhy::User: return K2_P("turned off");
+        case LimWhy::Detached: return K2_P("detached");
+        case LimWhy::Epr: return K2_P("EPR is not covered");
+        case LimWhy::Rate: return K2_P("too many lists");
+        case LimWhy::ChargerResets: return K2_P("the charger resets");
+        case LimWhy::SinkResets: return K2_P("the sink resets");
+        case LimWhy::SinkIgnores: return K2_P("the sink ignores it");
+        case LimWhy::NoFit: return K2_P("not on this charger");
+        case LimWhy::ChargerRefuses: return K2_P("the charger refuses re-offers");
     }
     return "?";
 }
@@ -150,8 +151,8 @@ const char* lim_why_name(LimWhy w) {
 const char* lim_refusal_name(LimRefusal r) {
     switch (r) {
         case LimRefusal::None: return "none";
-        case LimRefusal::BadLimit: return "limit outside 5..100 W";
-        case LimRefusal::Busy: return "another feature is running";
+        case LimRefusal::BadLimit: return K2_P("limit outside 5..100 W");
+        case LimRefusal::Busy: return K2_P("another feature is running");
     }
     return "?";
 }
@@ -201,9 +202,9 @@ std::size_t lim_label(const LimConfig& cfg, std::span<char> out) {
         o.u(lim_watts(cfg.limit_mw));
         o.ch('W');
     } else if (f.enabled) {
-        o.volt_or_amp(f, "LIMIT");
+        o.volt_or_amp(f, "LIMIT");   // k2-plain: Out::str copies raw
     } else {
-        o.str("LIMIT");
+        o.str("LIMIT");   // k2-plain: Out::str copies raw
     }
     return o.n;
 }

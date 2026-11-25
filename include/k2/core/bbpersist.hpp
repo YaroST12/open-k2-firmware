@@ -31,6 +31,7 @@
 #include "k2/pd/pdtrace.hpp"
 #include "k2/core/scratch.hpp"
 #include "k2/drivers/systick.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::bbpersist {
 
@@ -108,7 +109,7 @@ public:
         ring_.mount();
         // Every stored capture is visited (the entry is valid during the call); the slots keep the newest ones.
         {
-            const scratch::Lease lease("bbpersist.init");
+            const scratch::Lease lease(K2_P("bbpersist.init"));
             const std::span<std::uint8_t> buf = buffer();
             ring_.each([&](const bbstore::Entry& e) {
                 const std::size_t m = ring_.unpack(e, buf);
@@ -156,7 +157,7 @@ public:
             bbstore::Err e;
             const std::uint32_t t0 = systick::millis();
             {
-                const scratch::Lease lease("bbpersist.poll");
+                const scratch::Lease lease(K2_P("bbpersist.poll"));
                 e = ring_.append({static_cast<unsigned>(in.trigger), in.pre, at_ms / 1000}, data, buffer());
             }
             st_.last_ms = systick::millis() - t0;

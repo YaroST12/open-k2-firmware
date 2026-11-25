@@ -27,7 +27,7 @@ constexpr kit::KvLayout kLinkLayout = {44, kit::kRowH, 6, &kLabelFont, nullptr, 
 // A capture row is the trigger name (the tail is a time span of at most 7 cells and a gap) in the kit row's text box.
 constexpr const char *kTriggerNames[] = {K2_P("Contract"), K2_P("Hard reset"), K2_P("VBUS dip"), K2_P("Detach"), K2_P("D+/D- edges"), K2_P("6 A refused"), "-"};
 static_assert(all_fit_p(kTriggerNames, kSmallAdvPx, kit::kTailX - 8 - 7 * kSmallAdvPx - kit::kTextX), "a trigger name is wider than its row");
-constexpr const char *kLinkNames[] = {"USB", K2_P("Thunderbolt"), K2_P("DisplayPort"), "Cable", K2_P("Partner USB")};
+constexpr const char *kLinkNames[] = {"USB", K2_P("Thunderbolt"), K2_P("DisplayPort"), K2_P("Cable"), K2_P("Partner USB")};
 static_assert(all_fit_p(kLinkNames, 6, 92 - 6 - 6), "a link key is wider than its column");
 
 struct TrigMeta { const char *name; uint16_t color; Icon icon; };

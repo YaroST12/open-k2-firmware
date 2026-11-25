@@ -12,6 +12,7 @@
 #include "fake_lcd.h"
 #include "k2/chargertest/report_card_hw.hpp"
 #include "test_util.h"
+#include "k2/core/strpack.hpp"
 #include "k2/ui/ui.hpp"
 #include "ui_stubs.h"
 #include "k2/ui/ui_style.hpp"
@@ -318,7 +319,7 @@ static void test_tools_hub_lists_cards() {
     CHECK_STR(tool_name(11), "Device twins");
     CHECK_EQ(tool_menu(11) == Menu::Twin, 1);
     CHECK_EQ(int(tool_readiness(11, SetupState{}, false).level), int(ToolLevel::Ready));
-    CHECK_EQ(std::strlen(tool_hint(11)) <= 24 && std::strlen(tool_hint(11)) > 0, 1);
+    CHECK_EQ(k2::strpack::cells_rt(tool_hint(11)) <= 24 && std::strlen(tool_hint(11)) > 0, 1);
     CHECK_STR(tool_name(8), "PD diagnosis");
     CHECK_EQ(tool_menu(8) == Menu::Diagnosis, 1);
     CHECK_STR(tool_name(9), "Report cards");
@@ -327,7 +328,7 @@ static void test_tools_hub_lists_cards() {
     CHECK_EQ(tool_menu(10) == Menu::Diag, 1);
     CHECK_EQ(int(tool_readiness(8, SetupState{}, false).level), int(ToolLevel::Ready));
     CHECK_EQ(int(tool_readiness(9, SetupState{}, false).level), int(ToolLevel::Ready));
-    CHECK_EQ(std::strlen(tool_hint(9)) <= 24 && std::strlen(tool_hint(9)) > 0, 1);
+    CHECK_EQ(k2::strpack::cells_rt(tool_hint(9)) <= 24 && std::strlen(tool_hint(9)) > 0, 1);
 }
 
 // K2_DUMP=dir: the FH22 card (#18, from the golden fixtures) as the user sees it, 1:1 at rotation 3 (buttons at the bottom), into
@@ -396,7 +397,8 @@ static void test_sheet_ufcs_modes() {
     CardSheet s;
     cards_sheet(c, false, kUfcs, s);
     std::string rows;
-    for (unsigned i = 0; i < s.n; ++i) rows += std::string(s.row[i].key) + "=" + std::string(s.row[i].line[0]) + ";";
+    char kb[24];   // keys are packed
+    for (unsigned i = 0; i < s.n; ++i) rows += std::string(strpack::unpack(s.row[i].key, kb)) + "=" + std::string(s.row[i].line[0]) + ";";
     CHECK(rows.find("Mode 1=3.3-5.5V 5A;Mode 2=5-11V 3A;Mode 3=5-20V 3A;") != std::string::npos);
     CHECK(rows.find("Detail code") == std::string::npos);                         // a pass has no cause and no detail code
 
@@ -405,7 +407,7 @@ static void test_sheet_ufcs_modes() {
     for (auto &m : old.ufcs) m = {};
     CardSheet o;
     cards_sheet(old, false, kUfcs, o);
-    for (unsigned i = 0; i < o.n; ++i) CHECK(std::strncmp(o.row[i].key, "Mode", 4) != 0);
+    for (unsigned i = 0; i < o.n; ++i) CHECK(!strpack::unpack(o.row[i].key, kb).starts_with("Mode"));
 
     rc::Card wide = c;                                                             // the widest text each field can hold
     wide.ufcs[0] = {255, 511, 127};

@@ -18,6 +18,7 @@
 #include "k2/drivers/dpdm.hpp"
 #include "k2/fastcharge/fc_engine.hpp"
 #include "k2/core/lab.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::shell {
 
@@ -59,25 +60,25 @@ struct Backend {
     // Passive D+/D- edge stream (k2/fastcharge/dpsniff.hpp): 0 stop, 1 stream, 2 synthetic source at `rate` edges/s (no pins).
     virtual const char* sniff(int mode, std::uint32_t rate) = 0;
     // PD black box stream (k2/core/trace_stream.hpp): 0 stop, 1 stream from now, 2 stream from the oldest ring record.
-    virtual const char* trace(int mode) { (void)mode; return "trace not available"; }
+    virtual const char* trace(int mode) { (void)mode; return K2_P("trace not available"); }
     // Inline VOOC monitor (k2/fastcharge/dpsniff.hpp, passive): 0 off, 1 on (RAM switch), 2 keep; prints the summary itself.
-    virtual const char* vooc_monitor(int mode) { (void)mode; return "vooc monitor not available"; }
+    virtual const char* vooc_monitor(int mode) { (void)mode; return K2_P("vooc monitor not available"); }
     // Multiplexed live debug stream (k2/core/dbg_stream.hpp): `mask` 0 stops it, else the kinds to send as bits (1 log, 2 trace,
     // 4 power, 8 run); `power_hz` 0 = default; `history` starts from what the rings still hold instead of from now.
     virtual const char* stream(unsigned mask, unsigned power_hz, bool history) {
         (void)mask; (void)power_hz; (void)history;
-        return "stream not available";
+        return K2_P("stream not available");
     }
     // Protocol lab command (k2/core/lab.hpp), already parsed and confirm-checked; prints its own result lines.
-    virtual const char* lab(const lab::Cmd&) { return "lab not available"; }
+    virtual const char* lab(const lab::Cmd&) { return K2_P("lab not available"); }
     // Device twin command (k2/twin), already parsed and confirm-checked; prints its own result lines.
-    virtual const char* twin(const TwinCmd&) { return "twin not available"; }
+    virtual const char* twin(const TwinCmd&) { return K2_P("twin not available"); }
     // Black Box diagnosis (k2/pd/diag_live.hpp, read-only): prints the verdict, the findings and the healthy lines itself.
-    virtual const char* diag() { return "diag not available"; }
+    virtual const char* diag() { return K2_P("diag not available"); }
     // Memory readout (k2/core/memstat.hpp, read-only, cached figures): prints one "label value" line per row itself.
-    virtual const char* memory() { return "memory not available"; }
+    virtual const char* memory() { return K2_P("memory not available"); }
     // Math/FPU/architecture selftest and cycle benchmark (k2/core/math_selftest.hpp).
-    virtual const char* selftest() { return "selftest not available"; }
+    virtual const char* selftest() { return K2_P("selftest not available"); }
     // D+/D- are locked (the guarded SuperVOOC trigger, k2/fastcharge/svooc_trig.hpp, drives D-): the reason, else nullptr.
     // While locked the parser refuses every command that drives or claims D+/D- or the sniffer (dp, dm, fc trigger,
     // fc vooc on|off, sniff, the lab commands of lab::drives_lines) before the backend sees it; stop and fc reset still pass.

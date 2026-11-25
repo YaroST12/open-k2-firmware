@@ -880,7 +880,7 @@ static void test_busy_refusal_names_the_cause_and_the_way_out() {
         ui.tick(1400);
         CHECK_EQ(ui.charger_test_busy(), false);
         CHECK_EQ(footer_says(cause.text, kCaution), true);
-        CHECK_EQ(std::string_view(ui.busy_reason()) == std::string_view(cause.text), true);
+        CHECK_STR(ui.busy_reason(), cause.text);   // packed: compare decoded
         nothing_armed_stub();
     }
 }

@@ -17,6 +17,7 @@
 
 #include "k2/pd/emk_ra.hpp"
 #include "k2/pd/ra_guard.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::bootra {
 
@@ -55,11 +56,11 @@ constexpr const char* name(Verdict v) {
     switch (v) {
         case Verdict::NotRun: return "-";
         case Verdict::Arm: return "arm";
-        case Verdict::NotSelfPowered: return "plain";
+        case Verdict::NotSelfPowered: return K2_P("plain");
         case Verdict::NoIdentity: return "noid";
-        case Verdict::Refused: return "refused";
-        case Verdict::Cable: return "cable";
-        case Verdict::NoReading: return "noread";
+        case Verdict::Refused: return K2_P("refused");
+        case Verdict::Cable: return K2_P("cable");
+        case Verdict::NoReading: return K2_P("noread");
         case Verdict::Failed: return "fail";
     }
     return "?";
