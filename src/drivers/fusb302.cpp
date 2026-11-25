@@ -430,12 +430,13 @@ K2_HOT bool transmit_inline(const pd::TxMsg& m) {
         std::uint8_t ia = 0;
         if (!rd(kInterruptA, ia)) continue;
         last_ia |= ia;
-        if (ia & kIntHardRst) { g_hr_latched = true; break; }
+        if (ia & kIntHardRst) { g_hr_latched = true; res = pdtrace::TxResult::Timeout; break; }
         if (ia & kIntTxSent) { ok = true; res = pdtrace::TxResult::TxSent; break; }
         if (ia & kIntRetryFail) { res = pdtrace::TxResult::RetryFail; break; }
     }
     wr(kControl3, kRetries3Auto);
-    g_tx_timed_out = res == pdtrace::TxResult::Inline;
+    if (res == pdtrace::TxResult::Inline && last_ia == 0) res = pdtrace::TxResult::Timeout;   // no register read at all: unknown
+    g_tx_timed_out = res == pdtrace::TxResult::Inline || res == pdtrace::TxResult::Timeout;
     pdtrace::tx_result(res, (std::uint32_t(systick::micros() - g_tx_start_us) + 500u) / 1000u, last_ia);
     K2LOG("[IQ] t=%u TX type %u id %u rev %u: %s (%u us)\n", unsigned(systick::millis()), unsigned(m.header & 0x1F),
           unsigned((m.header >> 9) & 7), unsigned((m.header >> 6) & 3), ok ? "sent" : "no TXSENT",
