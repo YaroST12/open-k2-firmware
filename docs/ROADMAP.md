@@ -82,6 +82,8 @@ Everything is C++23; there are no C files left in `src/` (TinyUSB and lwIP under
 
 ## Current bugs
 
+- **Unexplained software reset on 1.2.0-438** (2026-11-25, K2 on USB only, no source; runs/qa-2026-11-25c, runs/reboot-2026-11-25). During a k2-qa remote walk the K2 reset (reset flags 0x14000000, warm, cause SW) around a `press ok` on Saved cables (one cable) to open View; the host saw the USB drop at once and the device back 3 s later. Repeating Cable > Saved cables > OK > OK (View) with the log recorded did not reset. SW reset comes from the reboot chord, `reboot`/DFU over the remote, or the [FAULT] handler; the fault lines only go out live, nothing was recording, and no fault record survives the reset. Open: keep a recording running during QA walks; consider a .noinit fault record printed at the next boot.
+
 - **A Done battery run was measuring again, unasked** (2026-11-25, run 6: ended by the end rule, read back done after;
   later it read resumed 2x, 2 gaps, manual end, +888 s with 13.144 Wh out, the inline laptop's draw; times inferred, local
   UTC+2). The counters fit one `reopen()` (Continue) plus one cold-boot resume (PIN POR at ~02:32:30; cause unlogged), or two
