@@ -1603,6 +1603,7 @@ test("black box records decode to messages, VBUS, resets and CC events", () => {
   assert.equal(ev[5].name, "TX no GoodCRC (retries)");
   assert.equal(P.formatBbDelta(9800), "9.8 ms"); assert.equal(P.formatBbDelta(500000), "500 ms"); assert.equal(P.formatBbDelta(2000000), "2.00 s");
   assert.equal(JSON.parse(P.bbJson({ slot: 1, trigger: "detach", age_ms: 5, bytes: 9 }, ev)).events.length, 6);
+  assert.equal(P.parseBbRecords(Uint8Array.from(bbRec(4, 0, 4, 4, 0)))[0].name, "TX sent inline (acks collide)");
 });
 
 test("black box JSON carries the device identity and the caps fingerprint", () => {

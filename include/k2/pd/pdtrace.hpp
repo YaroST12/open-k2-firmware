@@ -47,7 +47,8 @@ enum class Type : std::uint8_t {
     Rx = 1, RxBad, Tx, TxResult, Reset, Cc, Reg, Status0, Irq, Link, Sink, Vbus, Poll, Mark, Edges, RxRepeat,
 };
 // RxGoodCrc: no TXSENT, but the partner's GoodCRC with our MessageID came out of the RX FIFO (fusb302.cpp rx_ack_peek): sent.
-enum class TxResult : std::uint8_t { TxSent = 0, RetryFail = 1, Timeout = 2, RxGoodCrc = 3 };
+// Inline: an inline frame raised neither TXSENT nor RETRYFAIL; both partners GoodCRC it at once, so the acks collide.
+enum class TxResult : std::uint8_t { TxSent = 0, RetryFail = 1, Timeout = 2, RxGoodCrc = 3, Inline = 4 };
 enum class ResetKind : std::uint8_t { HardRx = 0, HardTx = 1, SoftRx = 2, SoftTx = 3 };
 enum class CcEvent : std::uint8_t { Detach = 0, Attach = 1 };
 // Mark codes

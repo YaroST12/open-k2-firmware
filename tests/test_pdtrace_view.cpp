@@ -63,6 +63,11 @@ int main() {
         t.resize(t.size() - 3);
         CHECK_EQ(v::count_rows(t), 4u);
     }
+    {   // an inline frame both partners acked at once (TxResult::Inline) was delivered: no row
+        Buf i;
+        add(i, Type::TxResult, 0, {4, 4, 0});
+        CHECK_EQ(v::count_rows(i), 0u);
+    }
     {   // unknown / extended messages
         Buf e;
         rx(e, 0, 0x8001);
