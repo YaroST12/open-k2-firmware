@@ -2365,6 +2365,37 @@ static uint32_t open_limit_row(Ui &ui, uint32_t t) {
     return settle(ui, t + 10);
 }
 
+// BACK from a voltage's Max A list keeps the voltage picked (its amps as the list showed them): the V list again with that
+// voltage, then the editor, and Apply arms it.
+static void test_pd_limit_back_keeps_voltage() {
+    Ui &ui = fresh_ui();
+    set_caps_65w();
+    uint32_t t = open_limit_row(ui, 20000);
+    const int arms = g_stub.lim_arms;
+    g_stub.lim_arm_cfg = {};
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);      // PickLimit
+    press(ui, Button::Plus, ButtonEvent::Short, t += 10);    // Fixed
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);      // EditFixed
+    press(ui, Button::Plus, ButtonEvent::Short, t += 10);    // Max V
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);      // PickMaxV (Max, 5V, 9V, 15V, 20V)
+    press(ui, Button::Plus, ButtonEvent::Short, t += 10);
+    press(ui, Button::Plus, ButtonEvent::Short, t += 10);    // 9V
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);      // 9V's Max A list
+    CHECK_EQ(ui.list_state().count, 10);
+    press(ui, Button::Back, ButtonEvent::Short, t += 10);    // the voltages again, 9V kept
+    CHECK_EQ(ui.list_state().count, 5);
+    CHECK_EQ(ui.context().rows.selected(), 2);
+    press(ui, Button::Back, ButtonEvent::Short, t += 10);    // EditFixed
+    CHECK_EQ(ui.list_state().count, 3);
+    press(ui, Button::Back, ButtonEvent::Short, t += 10);    // PickLimit
+    for (int i = 0; i < 3; i++) press(ui, Button::Plus, ButtonEvent::Short, t += 10);   // Apply (row 4)
+    press(ui, Button::Ok, ButtonEvent::Short, t += 10);
+    CHECK_EQ(g_stub.lim_arms, arms + 1);
+    CHECK_EQ(g_stub.lim_arm_cfg.fixed.max_mv, 9000u);
+    CHECK_EQ(g_stub.lim_arm_cfg.fixed.max_ma, 0u);
+    g_stub.caps = {};
+}
+
 static void test_pd_limit_picker() {
     Ui &ui = fresh_ui();
     set_caps_65w();
@@ -2505,7 +2536,7 @@ static void test_pd_limit_va_lists() {
     commit_row(17);                                           // 20V / 5A
     CHECK_EQ(amps_for(0), 18);                                // V = Max: the highest fixed current
     CHECK_EQ(ui.context().rows.selected(), 17);                   // the stored 5A is radio-selected
-    key(Button::Back);                                        // back to the voltages: nothing committed
+    key(Button::Back);                                        // back to the voltages: Max V / 5A kept
     key(Button::Back);                                        // EditFixed
     key(Button::Back);                                        // PickLimit
     key(Button::Plus);                                        // PPS
@@ -2530,7 +2561,7 @@ static void test_pd_limit_va_lists() {
     key(Button::Plus);                                        // Apply
     key(Button::Ok);
     CHECK_EQ(g_stub.lim_arms, 1);
-    CHECK_EQ(g_stub.lim_arm_cfg.fixed.max_mv, 20000u);
+    CHECK_EQ(g_stub.lim_arm_cfg.fixed.max_mv, 0u);            // the Back from Max V's A list kept Max
     CHECK_EQ(g_stub.lim_arm_cfg.fixed.max_ma, 5000u);
     CHECK_EQ(g_stub.lim_arm_cfg.pps.max_mv, 15000u);
     CHECK_EQ(g_stub.lim_arm_cfg.pps.max_ma, 3000u);
@@ -3061,6 +3092,7 @@ int main() {
     test_ai_rows_on_lines();
     test_tools_hub();
     test_pd_limit_picker();
+    test_pd_limit_back_keeps_voltage();
     test_pd_limit_va_lists();
     test_pd_limit_100w_levels();
     test_pd_limit_back_stays_on_tools();

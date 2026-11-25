@@ -3205,7 +3205,10 @@ bool ToolsPage::on_event(Event e) {
         return true;
     }
     if (e.button == Button::Back && view_ != View::List) {   // step back to tech view, PickLimit, or List, never out of Tools
-        if (view_ == View::PickMaxA && va_) {   // back to the voltages, nothing committed
+        if (view_ == View::PickMaxA && va_) {   // back to the voltages: the voltage stays picked, its amps as the A list showed them
+            cur_tech().max_mv = pend_mv_;
+            cur_tech().max_ma = amp_pick_ma_;
+            draft_.limit_mw = 0;
             show(View::PickMaxV);
             va_ = false;
             return true;
