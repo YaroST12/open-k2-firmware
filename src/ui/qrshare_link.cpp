@@ -71,7 +71,7 @@ bool fits(Type type, std::span<const std::uint8_t> record, bool packed) {
 bool fits(char kind, std::size_t len) { return supported(kind) && len != 0 && len <= kMaxRecord; }
 
 std::size_t base64url_encode(std::span<const std::uint8_t> in, std::span<char> out) {
-    static constexpr char kAlphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    static constexpr char kAlphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";   // k2-plain: lookup table
     if (out.size() < b64_len(in.size())) return 0;
     std::size_t o = 0;
     for (std::size_t i = 0; i < in.size(); i += 3) {

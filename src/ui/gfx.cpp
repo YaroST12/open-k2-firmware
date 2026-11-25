@@ -129,7 +129,7 @@ namespace {
 // One diff key per cell: ASCII as is, a wider glyph folded into 0x80..0xFF (the fonts' few, the arrows and the degree sign,
 // fold apart).
 K2_HOT char cell_key(uint32_t cp) { return static_cast<char>(cp < 0x80 ? cp : 0x80 | ((cp ^ (cp >> 7)) & 0x7F)); }
-constexpr char kBlanks[FieldBase::kMaxChars + 1] = "                                ";
+constexpr char kBlanks[FieldBase::kMaxChars + 1] = "                                ";   // k2-plain: char array
 static_assert(sizeof kBlanks == FieldBase::kMaxChars + 1);
 }  // namespace
 

@@ -16,7 +16,7 @@ namespace k2 {
 namespace {
 // Header: S12 keys at x28, S16 values at x112 (13 chars, to x216).
 constexpr kit::KvLayout kSpKv{kit::kBodyY, kit::kRowH, kit::kTextX, &kLabelFont, nullptr, 112, 13, Align::Left};
-constexpr const char *kSpKeys[SpoofPage::kHeaderRows] = {"State", K2_P("Asked/Replied")};
+constexpr const char *kSpKeys[SpoofPage::kHeaderRows] = {K2_P("State"), K2_P("Asked/Replied")};
 static_assert(all_fit_p(kSpKeys, kLabelAdv, 112 - kit::kTextX - 4), "a spoof key is wider than its column");
 }  // namespace
 
@@ -121,7 +121,7 @@ void SpoofPage::paint_header(bool armed, uint32_t req, uint32_t rep) {
     const Surface &c = ctx_.content;
     StrBuf<24> cnt;
     spoof_counts_text(req, rep, cnt);
-    kit::kv_row(c, kSpKv, kit::kv_row_y(kSpKv, 0), kSpKeys[0], armed ? "ARMED" : "OFF", armed ? kCaution : kDim);
+    kit::kv_row(c, kSpKv, kit::kv_row_y(kSpKv, 0), kSpKeys[0], armed ? K2_P("ARMED") : "OFF", armed ? kCaution : kDim);
     kit::kv_row(c, kSpKv, kit::kv_row_y(kSpKv, 1), kSpKeys[1], cnt.view(), req ? kText : kDim);
 }
 

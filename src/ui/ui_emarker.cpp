@@ -34,7 +34,7 @@ void emarker_volts_text(const pd::Emarker &e, StrBuf<8> &out) { out.put_u32(e.ma
 void emarker_watts_text(const pd::Emarker &e, StrBuf<8> &out) { out.put_u32(e.max_power_w).put_char('W'); }
 
 void emarker_speed_pill(const pd::Emarker &e, StrBuf<12> &out) {
-    const char *s = e.speed_str ? e.speed_str : "USB 2.0";
+    const char *s = e.speed_str ? e.speed_str : "USB 2.0";   // k2-plain: strncmp below
     if (!std::strncmp(s, "Thunderbolt", 11)) out.put("TBT");
     else if (!std::strncmp(s, "USB 3.2 Gen1", 12)) out.put(K2_P("USB3.2 G1"));
     else if (!std::strncmp(s, "USB 3.2 Gen2", 12)) out.put(K2_P("USB3.2 G2"));
@@ -56,7 +56,7 @@ void emarker_kv(const pd::Emarker &e, bool tbt, int i, StrBuf<12> &key, StrBuf<2
     case Vendor: key.put(K2_P("Vendor")); val.put(e.vendor_str.empty() ? K2_P("Unknown") : e.vendor_str.c_str()); break;
     case Vid: key.put("VID"); val.put_hex(e.vid, 4); break;
     case Pid: key.put("PID"); val.put_hex(e.pid, 4); break;
-    case HwFw: key.put("HW/FW"); val.put_u32(e.hw_rev).put(" / ").put_u32(e.fw_rev); break;
+    case HwFw: key.put(K2_P("HW/FW")); val.put_u32(e.hw_rev).put(" / ").put_u32(e.fw_rev); break;
     case Length:
         key.put(K2_P("Length"));
         if (e.latency_code >= 1 && e.latency_code <= 7) val.put("~").put_u32(e.latency_code).put(" m");

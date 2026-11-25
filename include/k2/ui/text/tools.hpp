@@ -73,7 +73,7 @@ inline constexpr const char *kLimToastSinkResets = K2_P("Limit off: sink resets"
 inline constexpr const char *kLimToastSinkIgnores = K2_P("Limit off: sink ignores it");
 inline constexpr const char *kLimToastEpr = K2_P("Limit off: EPR contract");
 // A live contract is reset before a new limit (or Off): the same two-press window as Reset & re-read on LINK.
-inline constexpr const char *kLimToastConfirm = "OK again: resets link";
+inline constexpr const char *kLimToastConfirm = "OK again: resets link";   // k2-plain: compared with the decoded toast
 inline constexpr const char *kLimToastResetting = K2_P("Resetting link...");
 inline constexpr const char *kLimToastRescan = K2_P("Rescanning...");
 inline constexpr const char *kLimToastNoReset = K2_P("No reset: replug to apply");
