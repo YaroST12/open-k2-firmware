@@ -3941,6 +3941,7 @@ Strip ChargerTestPage::labels() const {
         }
     }
     Strip l = setup::labels(base_labels(), tests_stage(s_.stage_) ? setup::Step::Tests : setup::Step::Cable, ok);
+    if (s_.stage_ != Stage::Running && s_.stage_ != Stage::Results) l = list_strip(l, s_.selection_, row_count());   // the cursor stops at the ends
     if (s_.stage_ == Stage::Review || s_.stage_ == Stage::Detail || (s_.stage_ == Stage::SpecDetail && !spec_list_on()) || s_.stage_ == Stage::Waiting) {   // nothing to move the cursor over
         l[Button::Minus] = sl::None;
         l[Button::Plus] = sl::None;

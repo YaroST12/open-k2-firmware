@@ -2635,6 +2635,27 @@ static void test_a_failed_sweep_footer_never_reads_as_reached() {
 // Every Steps row reads as a whole step label (step_label::label), never cut with dots: the ink of each visible row's text
 // cell is compared with the ink of every label of the run, and some label must match. The cut would end in "...". The same scan
 // found two repaint bugs in a list that scrolls under a fixed highlight or over a longer verdict (stale cells of the row before).
+// The setup lists stop at their ends, so Up dims on the first row and Dn on the last: Tests (Depth .. Custom...) and Custom
+// (the families .. Done).
+static void test_setup_lists_dim_at_ends() {
+    Ui ui;
+    open(ui);
+    const auto dim = [&](Button b) { return ui.labels().b[static_cast<int>(b)].dim; };
+    top(ui);
+    CHECK_EQ(dim(Button::Minus), true); CHECK_EQ(dim(Button::Plus), false);
+    move(ui, kCustomRow);
+    CHECK_EQ(ui.charger_test_cursor(), kCustomRow);
+    CHECK_EQ(dim(Button::Minus), false); CHECK_EQ(dim(Button::Plus), true);
+    press(ui, Button::Plus);                                  // dimmed: it moves nothing
+    CHECK_EQ(ui.charger_test_cursor(), kCustomRow);
+    custom(ui);
+    top(ui);
+    CHECK_EQ(dim(Button::Minus), true); CHECK_EQ(dim(Button::Plus), false);
+    move(ui, kFamDone);
+    CHECK_EQ(ui.charger_test_cursor(), kFamDone);
+    CHECK_EQ(dim(Button::Minus), false); CHECK_EQ(dim(Button::Plus), true);
+}
+
 static void test_steps_rows_show_whole_labels() {
     six_pdo_fixture(); Ui ui; uint32_t t;
     finished_results(ui, t);
@@ -7008,6 +7029,7 @@ int main() {
     test_a_pass_or_a_skip_reads_as_placeholders();
     test_toasts_time_out();
     test_steps_rows_show_whole_labels();
+    test_setup_lists_dim_at_ends();
     test_step_label_gallery();
     test_pd_block_scenes();
     test_readme_frames();
