@@ -82,16 +82,17 @@ Everything is C++23; there are no C files left in `src/` (TinyUSB and lwIP under
 
 ## Current bugs
 
-- **A Done battery run was measuring again, unasked** (2026-11-25, run 6: ended by the end rule ~01:01, read back done at
-  01:44; at 03:27 it read resumed 2x, 2 gaps, manual end, +888 s with 13.144 Wh out, the inline laptop's draw). The counters are
-  one `reopen()` (Continue) plus one resume: the K2 cold-booted at ~02:32:30 (PIN POR, a Hard Reset dropping VBUS) and resumed
-  it from flash. `reopen()` is reachable only through Continue (Battery page, second OK within 5 s; `battery continue`, wire
-  op 8; no op id collision found). Hazards found and fixed on k2/battbugs (host tests only, not verified on hardware): after
-  End the cursor landed on Continue and a row that turned into Continue under a parked cursor (end rule, re-entry, stored view)
-  took the next OK pair (25998a55); a clean running warm checkpoint of a run flash holds as Done resumed it and rewrote the
-  record (fdfa74db). The v1 column fix (f0175176) does not touch version 2 records (test). Open: which press or op reopened it;
-  the device log's `[BATT] boot` / `[BATT] run=6 measuring` lines from 01:45-02:32 would say.
-
+- **A Done battery run was measuring again, unasked** (2026-11-25, run 6: ended by the end rule, read back done after;
+  later it read resumed 2x, 2 gaps, manual end, +888 s with 13.144 Wh out, the inline laptop's draw; times inferred, local
+  UTC+2). The counters fit one `reopen()` (Continue) plus one cold-boot resume (PIN POR at ~02:32:30; cause unlogged), or two
+  reopens in one boot. `reopen()` is reachable only through Continue (Battery page, second OK within 5 s; `battery continue`,
+  wire op 8; no op id collision found). The manual end: after Continue the cursor sits on End charge, so one OK pair ends it.
+  Hazards found and fixed on k2/battbugs (host tests only, not verified on hardware): after End the cursor landed on Continue
+  and a row that turned into Continue under a parked cursor (end rule, re-entry, stored view) took the next OK pair
+  (25998a55); a clean running warm checkpoint of a run flash holds as Done resumed it and rewrote the record (fdfa74db). The
+  v1 column fix (f0175176) does not touch version 2 records (test). Open: which press or op reopened it; `battery read 6
+  --json` `gap_s` and the last curve points tell the readings apart (a same-boot reopen adds the whole stopped time to
+  `gap_s`, a cold resume about a second), as would the device log's `[BATT]` lines from 01:45-02:32.
 - **Home / state energy stayed 0 with negative current** (2026-11-25, charger on the top port, up to 57 W for ~40 min:
   `energy_mwh` 0, Home Wh/Ah 0, diagnose "Draws 0 W at 19.7 V, peak 0 mA"). Not a regression: EnergyMeter clamped negative
   power and current to 0 since the first release, and `pd::diag` took only positive windows. Fixed on k2/battbugs (c5887406,
