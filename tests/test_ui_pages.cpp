@@ -955,6 +955,32 @@ static void test_cable_kelvin_rows() {
     }
 }
 
+// Cable R: the step rows read volts in kVolt and amps in kAmp (LIVE, IDLE and LOAD alike), never amps in yellow.
+static void test_cable_r_amps_cyan() {
+    Ui &ui = fresh_ui();
+    ui.set_rotation(0, 20000);
+    ui.goto_page(static_cast<uint8_t>(Page::Lines), 20000);
+    ui.push_menu(Menu::CableR, 20100);
+    ui.set_cable_mode(cable_r::Mode::Kelvin);
+    g_stub.pm_online = true;
+    g_stub.pm = {};
+    g_stub.pm.vbus_mv = 19740; g_stub.pm.current_ma = 310; g_stub.pm.power_mw = 6120;
+    uint32_t t = 20200;
+    for (int i = 0; i < 6; i++) ui.tick(t += 100);
+    t = settle(ui, t);
+    auto ink = [&](uint16_t col) {   // the content between the strip (x 0..15) and the rail (x 224..239), the LIVE row
+        int n = 0;
+        for (int y = kit::kBodyY; y < kit::kBodyY + kit::kRowH; y++)
+            for (int x = 16; x < 224; x++) n += g_panel[y * 240 + x] == col;
+        return n;
+    };
+    CHECK_EQ(ink(kVolt) > 30, true);
+    CHECK_EQ(ink(kAmp) > 30, true);
+    ui.set_cable_mode(cable_r::Mode::Passive);
+    g_stub.pm = {};
+    ui.pop_menu(t += 100);
+}
+
 static void test_cable_mode_toggle() {
     Ui &ui = fresh_ui();
     ui.goto_page(static_cast<uint8_t>(Page::Lines), 20000);
@@ -3088,6 +3114,7 @@ int main() {
     test_cable_rows();
     test_cable_kelvin_rows();
     test_cable_mode_toggle();
+    test_cable_r_amps_cyan();
     test_every_label_fits_its_slot();
     test_ai_rows_on_lines();
     test_tools_hub();

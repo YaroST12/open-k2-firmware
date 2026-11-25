@@ -34,6 +34,13 @@ void put_mohm(StrBuf<16> &s, int32_t v) {
     cr_split_mohm(static_cast<uint32_t>(v < 0 ? 0 : v), n, u);
     s.put(n.view()).put_char(' ').put(u);
 }
+// "19.74V 0.31A": the volts and the amps, which the page paints in their own colours.
+void put_va(CrCard &c, int32_t mv, int32_t ma) {
+    c.value.put_fixed(mv, 2).put("V ");
+    c.amp_at = static_cast<uint8_t>(c.value.view().size());
+    c.value.put_abs_fixed(ma, 2).put("A");
+    c.tone = CrTone::Ok;
+}
 }  // namespace
 
 CrView cr_view(bool online, int32_t vbus_mv, int32_t ibus_ma, cable_r::Mode mode,
@@ -49,8 +56,7 @@ CrView cr_view(bool online, int32_t vbus_mv, int32_t ibus_ma, cable_r::Mode mode
     const int32_t amag = k2::power::abs_sat(ibus_ma);
     if (mode == cable_r::Mode::Kelvin) {
         v.step[0].label = "LIVE";
-        v.step[0].value.put_fixed(vbus_mv, 2).put("V ").put_abs_fixed(ibus_ma, 2).put("A");
-        v.step[0].tone = CrTone::Ok;
+        put_va(v.step[0], vbus_mv, ibus_ma);
         v.step[1].label = K2_P("SENSE");
         if (k) {
             v.step[1].value.put("+");
@@ -79,16 +85,14 @@ CrView cr_view(bool online, int32_t vbus_mv, int32_t ibus_ma, cable_r::Mode mode
     const auto est = m.estimate();
     v.step[0].label = "IDLE";
     if (m.has_idle()) {
-        v.step[0].value.put_fixed(m.idle_mv(), 2).put("V ").put_abs_fixed(m.idle_ma(), 2).put("A");
-        v.step[0].tone = CrTone::Ok;
+        put_va(v.step[0], m.idle_mv(), m.idle_ma());
     } else {
         v.step[0].value.put(vbus_mv < cable_r::kPresentMv ? K2_P("No VBUS") : K2_P("need < 0.2A"));
         v.step[0].tone = vbus_mv < cable_r::kPresentMv ? CrTone::Dim : CrTone::Caution;
     }
     v.step[1].label = "LOAD";
     if (est) {
-        v.step[1].value.put_fixed(est->load_mv, 2).put("V ").put_abs_fixed(est->load_ma, 2).put("A");
-        v.step[1].tone = CrTone::Ok;
+        put_va(v.step[1], est->load_mv, est->load_ma);
     } else if (m.has_idle()) {
         v.step[1].value.put(K2_P(">= 1.0A"));
         v.step[1].tone = CrTone::Caution;

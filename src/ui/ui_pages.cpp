@@ -1538,6 +1538,7 @@ void CableRPage::paint_table(const CrView &v) {
     if (!ctx_.blank) pg::clear_body(c);   // body between the bars (a blank screen is kBg)
     rsig_ = 0;
     pg::invalidate_fields(val_, 2);
+    vsig_[0] = vsig_[1] = 0;
     if (v.meter_missing) {
         kit::draw_alert_band(c, kit::kBodyY, true, K2_P("METER MISSING"));
         gfx_text(c, kSmall, kit::kMarkX, kit::kBodyY + kit::kAlertH + 10, K2_P("Cable R needs INA2xx"), kText, kBg);
@@ -1586,12 +1587,31 @@ void CableRPage::paint_result(const CrView &v) {
     gfx_text(c, kSmall, kCrNumX, kCrResY + 98, v.detail.view(), kText, kBg);
 }
 
+// A "V A" reading paints its volts kVolt and its amps kAmp over the field's box in one pass; anything else is the field's.
+void CableRPage::paint_value(int i, const CrCard &cd) {
+    const std::string_view s = cd.value.view();
+    if (!cd.amp_at || cd.amp_at >= s.size() || cd.tone != CrTone::Ok) {
+        if (vsig_[i]) val_[i].invalidate();   // the two-colour paint owned the box: the field repaints all of it
+        vsig_[i] = 0;
+        pg::put_field(val_[i], nullptr, s, cr_value_color(cd.tone));
+        return;
+    }
+    const uint32_t sig = pg::mix_str(0x5A, s) | 1u;
+    if (sig == vsig_[i]) return;
+    vsig_[i] = sig;
+    val_[i].invalidate();
+    const int16_t y = static_cast<int16_t>(kit::kv_row_y(kCrKv, i) + kit::row_text_y(kCrKv.pitch, kSmall.height));
+    const kit::TextRun runs[2] = {{kCrKv.value_x, y, &kSmall, s.substr(0, cd.amp_at), kVolt},
+                                  {kCrKv.value_x, y, &kSmall, s.substr(cd.amp_at), kAmp, static_cast<int16_t>(cd.amp_at * kSmall.adv)}};
+    kit::paint_texts(ctx_.content, {kCrKv.value_x, y, static_cast<int16_t>(kCrKv.value_chars * kSmall.adv), static_cast<int16_t>(kSmall.height)}, runs, 2, kBg);
+}
+
 void CableRPage::update(uint32_t) {
     title_badge(false);
     const CrView v = cr_view(ctx_.pm_online, ctx_.pm.vbus_mv, ctx_.pm.current_ma, ctx_.cable_mode, ctx_.cable, ctx_.kelvin);
     paint_table(v);
     if (!v.meter_missing) {
-        for (int i = 0; i < 2; i++) pg::put_field(val_[i], nullptr, v.step[i].value.view(), cr_value_color(v.step[i].tone));
+        for (int i = 0; i < 2; i++) paint_value(i, v.step[i]);
         paint_result(v);
     }
     if (cleared_until_ && static_cast<int32_t>(ctx_.now - cleared_until_) < 0 && !v.has_result) return;
@@ -1640,6 +1660,7 @@ Strip CableRPage::labels() const {
 
 void CableRPage::invalidate() {
     pg::invalidate_fields(val_, 2);
+    vsig_[0] = vsig_[1] = 0;
     csig_ = rsig_ = 0;
     foot_.invalidate();
 }

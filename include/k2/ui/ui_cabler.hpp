@@ -16,6 +16,7 @@ struct CrCard {
     const char *label = "";      // "IDLE", "LOAD", "LIVE", "SENSE"
     StrBuf<16> value;            // at most 14 characters (16 px font next to the step tile)
     CrTone tone = CrTone::Dim;
+    uint8_t amp_at = 0;          // a "V A" reading: where the amps start ("19.74V 0.31A": 7), painted kAmp; 0 = none
 };
 
 struct CrView {

@@ -1316,8 +1316,10 @@ public:
 private:
     [[gnu::noinline]] void paint_table(const CrView &v);
     [[gnu::noinline]] void paint_result(const CrView &v);
+    void paint_value(int i, const CrCard &cd);
 
     Field val_[2];                 // the two step values (key/value rows 1 and 2)
+    uint32_t vsig_[2] = {};        // a "V A" value painted in two colours (paint_texts); 0 = the field holds the row
     uint32_t csig_ = 0, rsig_ = 0;
     uint32_t cleared_until_ = 0;   // Reset pressed: the footer says "Cleared" until then
     Elem foot_;                    // footer element cache (draw_footer_cached)
