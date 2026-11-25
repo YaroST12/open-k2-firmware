@@ -254,7 +254,7 @@ def run(cmd, **kw):
     """subprocess.run in its own process group: when the gate is stopped (Ctrl-C, SIGTERM, SIGHUP) the whole group gets
     SIGTERM, then SIGKILL after 10 s, so no make, static_check.sh or docker client is left running behind it (the
     containers stop with their client: every docker run here uses --init)."""
-    with subprocess.Popen(cmd, cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    with subprocess.Popen(cmd, cwd=ROOT, text=True, errors="replace", stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                           start_new_session=True, **kw) as p:
         try:
             out, err = p.communicate()
