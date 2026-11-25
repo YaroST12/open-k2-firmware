@@ -155,7 +155,8 @@ round-trip efficiency of their own. The K2 pairs them over the kept runs (`view:
 - Efficiency = Wh out of the discharge stretch / Wh in of the charge stretch, in either order (discharged first, then
   recharged, or the other way).
 - A round trip ends the scan (it has its own efficiency); a `Cut short` run inside a stretch voids the pair (its energy is
-  short by what it lost); an empty run is skipped.
+  short by what it lost), so does a run still measuring (its progress save lists like a done run); an empty run is skipped.
+  Over 100 % the chip is outlined (only part of a phase was measured).
 - Only the 3 kept runs count: once a fourth run prunes the other kind's last run, there is no pair. Two charges in a row
   count as one split charge; use `Continue run` for a split phase and start a new run only for a new phase.
 
