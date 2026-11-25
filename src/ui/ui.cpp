@@ -386,6 +386,7 @@ void Ui::set_page(Page p, uint32_t now_ms) {
     if (changed) pages_.at(0)->leave();
     page_ = p;
     ring_view_ = ring_landing_;
+    kit::set_browse(ring_view_);
     if (p != Page::Home && notice_ == kCalibrationNotice && rotation_notice_until_ == 0)
         rotation_notice_until_ = now_ms + 5000;   // one boot warning, deferred until a page with a footer is visible
     const bool blank = clear_for_incoming(now_ms, *outgoing, page_opaque(p, true));   // the outgoing pages are still alive for a replay
@@ -844,6 +845,7 @@ bool Ui::push_menu(Menu m, uint32_t now_ms) {
     }
     stack_[depth_++] = m;
     ring_view_ = ring_landing_;
+    kit::set_browse(ring_view_);
     page->enter();
     const bool blank = clear_for_incoming(now_ms, *outgoing, menu_opaque(m));
     paint_incoming(now_ms, t0, blank);
@@ -1292,6 +1294,7 @@ kit::OppRailSpec Ui::opp_spec() const {
 // The view-only pages have nothing to enter, so they are always in the ring view.
 void Ui::ring_settle() {
     if (depth_ == 0 && (page_ == Page::Lines || page_ == Page::Detail)) ring_view_ = true;
+    kit::set_browse(ring_view_);
 }
 
 bool Ui::ring_show(ring::Pos pos, uint32_t now_ms) {
@@ -1327,7 +1330,7 @@ void Ui::ring_walk(ring::Pos to, int dir, uint32_t now_ms) {
 
 void Ui::ring_enter(uint32_t now_ms) {
     ring_view_ = false;
-    ctx_.rows.set_muted(false);
+    kit::set_browse(false);
     sync_panel();
     if (uses_opp_rail()) sync_opp_rail();
     if (!paint_pending_) {
@@ -1337,7 +1340,7 @@ void Ui::ring_enter(uint32_t now_ms) {
 }
 
 // Depth 1 and already the ring target's own menu, tab and base page, at rest: leaving then only flips the view and repaints
-// the strip, the rail and the muting. Every other chain (a tool page, a deeper menu, an Actions sub-page) is rebuilt at its top.
+// the strip, the rail and the list focus. Every other chain (a tool page, a deeper menu, an Actions sub-page) is rebuilt at its top.
 bool Ui::ring_page_rests() const {
     if (depth_ != 1) return false;
     const ring::Target t = ring::target(ring_position());
@@ -1363,7 +1366,7 @@ void Ui::ring_leave(uint32_t now_ms) {
         }
     }
     ring_view_ = true;
-    ctx_.rows.set_muted(true);
+    kit::set_browse(true);
     sync_panel();
     if (uses_opp_rail()) sync_opp_rail();
     if (!paint_pending_) {
@@ -1833,7 +1836,7 @@ void Ui::render_for_capture(uint32_t now_ms) {
     current().draw_static();
     draw_panel();
     draw_opp_rail();
-    ctx_.rows.set_muted(ring_view_);
+    kit::set_browse(ring_view_);
     current().update(now_ms);
     ctx_.blank = false;
     draw_release_notice();

@@ -84,6 +84,11 @@ Home > Lines > Numbers > Graph > Ripple > Link > Tools > Battery > Log > K2 > (H
   units from the charger test (presets, Custom list, plan, Results). Stored as bit 7 of the `/prefs.cfg` orientation byte (set =
   shown, so old files read hidden); remote view flag bit 15 (set = shown).
 - Long PLUS is not used. The OK + Back 3 s reboot chord and the Back-Hold cancel are unchanged.
+- Browsing shows no focus (user, 2026-11-25): a ring page that is not entered draws no focused row (no `kFocusT` fill, no
+  3 px bar, every row 26 px, no note) and no ActionCell outline. The kit owns it (`kit::set_browse`, set with the ring state):
+  `RowList` paints as if nothing were selected and keeps the selection and window; entering lights the remembered row again.
+  Entering or leaving repaints the focused row and the rows below it (they move by the 14 px the open row gives back), never
+  the rows above.
 - Ring vs entered is visible: the masthead (slot 0 of the opposite rail) shows the page's own 4-character rail name (`LINK`, `TOOL`)
   in the ring view, and the place's name (`LINK`, `CHRG`, `CABL`, `DEV`, `TOOL`) when entered. Session flag `RingView` (bit 6)
   is reported by GET_STATE (`ring_view`).

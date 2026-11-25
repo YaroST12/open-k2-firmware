@@ -520,14 +520,16 @@ static void test_results_grid_budgets() {
 }
 
 // Stepping out of an entered ring page that already is what the ring view shows (its top level, first sub-page, nothing
-// scrolled or in flight) repaints only what differs: the key strip, the rail's title and the muting. The body stays untouched.
+// scrolled or in flight) repaints only what differs: the key strip, the rail's title and the list focus (browse shows none).
 static void test_ring_leave_paint() {
     // Link's 3-slice Overview toggles only its single focused slice (~16,432 px body) when entering/leaving ring view,
-    // never rebuilding the other two slices. Battery and Log repaint their list rows, muted or lit again.
+    // never rebuilding the other two slices. A list repaints its focused row and the rows below it, which move by the
+    // 14 px the open focused row gives back (browse shows no focus); the rows above stay.
     struct { bench::Place place; ring::Pos pos; const char *name; unsigned px, body_px; } cases[] = {
         {bench::Place::Charger, ring::Pos::Link, "Link", 22500, 17000},
-        {bench::Place::Battery, ring::Pos::Battery, "Battery", 46800, 38400},
-        {bench::Place::Log, ring::Pos::Log, "Log", 22400, 17200}};
+        {bench::Place::Battery, ring::Pos::Battery, "Battery", 44600, 38900},
+        {bench::Place::Log, ring::Pos::Log, "Log", 48300, 41000},
+        {bench::Place::K2, ring::Pos::K2, "K2", 50300, 44800}};
     for (const auto &c : cases) {
         fixture();
         Ui ui;

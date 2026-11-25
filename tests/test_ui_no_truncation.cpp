@@ -531,6 +531,29 @@ void walk_limit(Ui &ui, int rot, const Scenario &sc) {
     ui.goto_page(static_cast<uint8_t>(Page::Home), g_t);
 }
 
+// The ring in both states: every page browsed (no focus, no open row) and entered (the focused row's note open).
+void walk_ring(Ui &ui, int rot, const Scenario &sc) {
+    auto key = [&](Button b, ButtonEvent e) { g_t += 150; ui.on_button(b, e, g_t); };
+    enter("ring", rot, sc.name);
+    ui.goto_page(static_cast<uint8_t>(Page::Home), g_t);
+    key(Button::Back, ButtonEvent::Short);   // entered Home -> the ring view on Home
+    for (int i = 0; i < ring::kCount; ++i) {
+        char nm[32];
+        std::snprintf(nm, sizeof nm, "ring-%d-browse", i);
+        draw_for_a_while(ui, nm, rot, sc.name);
+        CHECK_EQ(ui.ring_view(), true);
+        if (ring::can_enter(static_cast<ring::Pos>(i))) {
+            std::snprintf(nm, sizeof nm, "ring-%d-entered", i);
+            enter(nm, rot, sc.name);
+            key(Button::Ok, ButtonEvent::Short);
+            draw_for_a_while(ui, nm, rot, sc.name);
+            key(Button::Back, ButtonEvent::Long);   // out to the ring on the same page
+        }
+        enter("ring-step", rot, sc.name);
+        key(Button::Plus, ButtonEvent::Short);
+    }
+}
+
 void test_walk() {
     for (const Scenario &sc : kScenarios) {
         apply(sc);
@@ -545,6 +568,7 @@ void test_walk() {
             walk_survey(ui, rot, sc);
             walk_wizard(ui, rot, sc);
             walk_limit(ui, rot, sc);
+            walk_ring(ui, rot, sc);
         }
     }
     trunc::context("");

@@ -211,6 +211,11 @@ void draw_marker(const Surface &s, int16_t x, int16_t y, const RowSpec &r, uint1
 // A drill-in chevron (5 x 9) whose right edge is `right`, centred on `cy`.
 void draw_drill(const Surface &s, int16_t right, int16_t cy, uint16_t color);
 
+// Browse: the ring view shows a page that is not entered. Then no list row and no ActionCell shows focus (no tint, bar, note
+// or open row); the selection is kept and lights again on entering (docs/UI_SYSTEM.md 0.2). Ui sets it with the ring state.
+void set_browse(bool on);
+bool browsing();
+
 // A ListView whose rows share one look. One instance lives in the UiContext (only one page is visible at a time); a
 // page binds it with init(), keeps its own selection and re-applies count and selection on every update().
 class RowList {
@@ -221,13 +226,12 @@ public:
     // the last bind (another page) restarts the window at the top; the same one keeps count and offset (repaint passes).
     void init(const Surface &s, int16_t y, RowFn fn, void *ctx);
     void set_count(int n) { count_ = n < 0 ? 0 : n; list_.set_count(count_, false); }
-    void select(int index) { sel_ = index; list_.set_highlight(sel_); }
+    void select(int index) { sel_ = index; list_.set_highlight(lit()); }
     int selected() const { return sel_; }
     int count() const { return count_; }
     int visible() const { return list_.state().visible; }
     const ListState &state() const { return list_.state(); }
     void set_budget(PaintBudget *bg) { list_.set_budget(bg); }
-    void set_muted(bool on) { muted_ = on; }
     // Applies count and selection (the window follows the selection), repaints what changed. An idle call writes nothing.
     void draw(uint32_t now_ms, PaintBudget *bg = nullptr);
     void invalidate();   // after an erase, a capture pass or a page repaint
@@ -248,6 +252,7 @@ public:
 private:
     static void draw_row_cb(void *ctx, int index, const Rect &r, bool highlighted, Field &f);
     static uint32_t row_sig_cb(void *ctx, int index);
+    int lit() const { return browsing() ? -1 : sel_; }   // the row that shows focus (-1: none, browse)
 
     // The one firmware instance is UiContext::rows in the .bss global Ui (host tests build locals: zeroing kept there).
     ListView list_;
@@ -257,7 +262,6 @@ private:
     void *ctx_ K2_BSS_ZERO;
     int count_ K2_BSS_ZERO, sel_ K2_BSS_ZERO;
     int16_t extra_ = -1;          // the focus expansion last applied (-1 = unknown)
-    bool muted_ = false;
 };
 
 // ---- KvTable -------------------------------------------------------------------------------------------------------------

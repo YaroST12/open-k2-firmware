@@ -119,7 +119,7 @@ K2_HOT void Ui::pump_paint(uint32_t now_ms) {
     }
     const bool toast_was_drawn = ctx_.toast.drawn;
     const int toast_px0 = bg ? bg->spent : -1;
-    ctx_.rows.set_muted(ring_view_);
+    kit::set_browse(ring_view_);
     current().update(now_ms);
     // Covered: the body painted, and a panel window crossed the pill since it was last drawn (paint_meter.hpp overlay watch).
     const bool body_painted = (!bg || bg->spent != toast_px0) && paint::meter.watch_hit();

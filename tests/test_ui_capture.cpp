@@ -1904,22 +1904,35 @@ int main() {
     test_repaint_opaque();
     test_pc_link_icon();
     test_rail_reading_order();
-    // Entering and leaving the ring updates both rails and muted RowList pixel-accurately against render_for_capture.
+    // Entering and leaving the ring updates both rails and the RowList pixel-accurately against render_for_capture. Browsing
+    // shows no focus tint in the body; re-entering lights the remembered row again (the screen it left).
     {
+        auto focus_px = [] {   // the focus tint inside the body, clear of both rails in every rotation
+            int n = 0;
+            for (int y = 20; y < 220; y++)
+                for (int x = 20; x < 220; x++) n += g_panel[y * 240 + x] == kFocusT;
+            return n;
+        };
         Ui ring_ui;
         ring_ui.init(0);
         ring_ui.open_place(bench::Place::K2, 100);                   // Settings (RowList) entered
         while (ring_ui.painting()) ring_ui.tick(110);
+        ring_ui.on_button(Button::Plus, ButtonEvent::Short, 112);    // the cursor off row 0
+        while (ring_ui.painting()) ring_ui.tick(114);
         CHECK_EQ(ring_ui.ring_view(), false);
         test_screen(ring_ui, "ring_k2_entered", 120);
-        ring_ui.on_button(Button::Back, ButtonEvent::Short, 200);    // Leave back to ring view (muted RowList)
+        CHECK_EQ(focus_px() > 0, true);
+        const std::vector<uint16_t> entered(g_panel, g_panel + 240 * 240);
+        ring_ui.on_button(Button::Back, ButtonEvent::Short, 200);    // Leave back to the ring view: browse, no focus
         while (ring_ui.painting()) ring_ui.tick(210);
         CHECK_EQ(ring_ui.ring_view(), true);
         test_screen(ring_ui, "ring_k2_left", 220);
+        CHECK_EQ(focus_px(), 0);
         ring_ui.on_button(Button::Ok, ButtonEvent::Short, 300);      // Re-enter Settings (active rails + RowList)
         while (ring_ui.painting()) ring_ui.tick(310);
         CHECK_EQ(ring_ui.ring_view(), false);
         test_screen(ring_ui, "ring_k2_reentered", 320);
+        CHECK_EQ(std::equal(entered.begin(), entered.end(), g_panel), true);
     }
     return test_report("test_ui_capture");
 }
