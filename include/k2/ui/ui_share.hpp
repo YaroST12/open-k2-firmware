@@ -158,6 +158,11 @@ private:
     qrview::Plan plan_{};
     qrview::Look look_{};
     unsigned encodes_ = 0, paints_ = 0;
+    // The symbol the last paint left in the scratch arena: reused while no other lease came in between (scratch::epoch), so
+    // a screenshot's 240 one-row strips encode once. code_n_ 0: none.
+    std::uint32_t code_epoch_ = 0;
+    std::uint16_t code_key_ = 0;
+    std::uint8_t code_n_ = 0;
 };
 
 }  // namespace k2

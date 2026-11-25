@@ -51,6 +51,9 @@ void release();
 bool held();
 const char* owner();                                    // tag of the holder, null when free
 std::uint8_t* arena();                                  // the bytes of the current lease; a violation when none is held
+// Counts every acquire. The one exception to "contents undefined": a holder whose new lease is exactly one past the count
+// of its previous one finds the bytes it left (nobody leased in between), so a repaint can reuse costly work (a QR symbol).
+std::uint32_t epoch();
 
 class Lease {
 public:

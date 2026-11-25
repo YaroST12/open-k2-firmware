@@ -10,6 +10,7 @@ namespace k2::scratch {
 namespace {
 alignas(kAlign) std::uint8_t g_arena[kSize];
 const char* g_owner = nullptr;
+std::uint32_t g_epoch = 0;
 ViolationHandler g_handler = nullptr;
 
 bool in_exception() {
@@ -37,10 +38,12 @@ void acquire(const char* owner_tag) {
     const bool isr = in_exception();
     if (isr || g_owner != nullptr) violate(owner_tag, isr);
     g_owner = owner_tag;
+    g_epoch++;
 }
 
 void release() { g_owner = nullptr; }
 bool held() { return g_owner != nullptr; }
+std::uint32_t epoch() { return g_epoch; }
 const char* owner() { return g_owner; }
 
 std::uint8_t* arena() {
