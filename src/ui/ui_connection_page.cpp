@@ -2636,7 +2636,8 @@ void ConnectionPage::paint_status(uint32_t now_ms) {
     } else if (row && row->act == conn::Act::Bench && !before(now_ms, op_until_)) {   // the focused tool's note
         const bench::Acts b = bench::actions(conn::place_of(tab_));
         if (row->arg >= 0 && row->arg < b.n) {   // the note in footer voice: a sentence
-            const std::string_view hint = bench::act_hint(b.a[row->arg]);
+            char dec[64];   // decoded first: the first letter is capitalised, a packed string cannot be sliced
+            const std::string_view hint = strpack::unpack(bench::act_hint(b.a[row->arg]), dec);
             if (!hint.empty()) txt.put_char(hint[0] >= 'a' && hint[0] <= 'z' ? static_cast<char>(hint[0] - 'a' + 'A') : hint[0]).put(hint.substr(1));
         }
     } else if (tab_ == conn::Tab::Sink && fusb302::interrogate_running()) {

@@ -1765,7 +1765,8 @@ __attribute__((noinline)) void ChargerTestPage::compose_best() {
     best_none_ = n == 0;
     std::array<std::string_view, 3> items{};
     for (size_t i = 0; i < n; ++i) items[i] = best[i].text;
-    if (best_none_) { items[0] = K2_P("No passing mode"); }
+    char none[16];   // headline() copies bytes: decode first
+    if (best_none_) { items[0] = strpack::unpack(K2_P("No passing mode"), none); }
     static_assert(pd_version::kMaxLabel + 2 + 15 <= kBestChars, "the version and \"No passing mode\" fit one line");
     char line[40];
     pd_version::headline(line, sizeof line, pd_version::label(run_version(s_.runner_.evidence())).view(), items.data(),
