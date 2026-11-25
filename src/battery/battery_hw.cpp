@@ -9,6 +9,7 @@
 #include "k2/core/math_opt.hpp"
 #include "k2/drivers/fs_flash.hpp"
 #include "k2/drivers/power_monitor.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::battery::hw {
 
@@ -33,8 +34,8 @@ Service &service_obj() {
 const char *state_name(State s) {
     switch (s) {
     case State::Idle: return "idle";
-    case State::Measuring: return "measuring";
-    case State::Between: return "between";
+    case State::Measuring: return K2_P("measuring");
+    case State::Between: return K2_P("between");
     case State::Done: return "done";
     }
     return "?";
@@ -50,7 +51,7 @@ void init(bool warm_reset) {
     auto *ckpt = std::launder(reinterpret_cast<Service::Checkpoint *>(g_ckpt_raw));   // trivially copyable: bytes are the object
     Service &svc = service_obj();
     const Service::Boot b = svc.boot(&f, ckpt, warm_reset);
-    static constexpr const char *kBoot[] = {"nothing", "resumed", "waiting", "lost", "closed", "continued"};
+    static constexpr const char *kBoot[] = {K2_P("nothing"), K2_P("resumed"), K2_P("waiting"), "lost", K2_P("closed"), K2_P("continued")};
     const Recorder &r = svc.rec();
     K2LOG("[BATT] boot %s run=%u resumes=%u\n", kBoot[static_cast<int>(b)], static_cast<unsigned>(r.id()),
           static_cast<unsigned>(r.resumes()));
@@ -72,7 +73,7 @@ void poll(std::uint32_t now_ms, bool may_write) {
     }
     if (svc.write_failed() != g_failed_logged) {
         g_failed_logged = svc.write_failed();
-        K2LOG("[BATT] record write %s run=%u\n", g_failed_logged ? "failed" : "ok", static_cast<unsigned>(r.id()));
+        K2LOG("[BATT] record write %s run=%u\n", g_failed_logged ? K2_P("failed") : "ok", static_cast<unsigned>(r.id()));
     }
 }
 

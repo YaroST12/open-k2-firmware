@@ -237,11 +237,11 @@ constexpr bool has_shell(const k2::usbcfg::Setting& c) { return c.shell && (c.hi
 #if K2_NET
 // Indexed by STR_*; null entries are answered with a stall (STR_LANGID, STR_MAC are special).
 constexpr std::array<const char*, STR_NET + 1> kStrings{
-    nullptr, "WITRN", "Open-K2 Logger", "0001", "Open-K2 Network",
+    nullptr, "WITRN", "Open-K2 Logger", "0001", "Open-K2 Network",   // k2-plain: UTF-16 descriptor source
 };
 #else
 constexpr std::array<const char*, STR_SERIAL + 1> kStrings{
-    nullptr, "WITRN", "Open-K2 Logger", "0001",
+    nullptr, "WITRN", "Open-K2 Logger", "0001",   // k2-plain: UTF-16 descriptor source
 };
 #endif
 
@@ -307,7 +307,7 @@ const std::uint16_t* tud_descriptor_string_cb(std::uint8_t index, std::uint16_t)
 #if K2_NET
     } else if (index == STR_MAC && net) {
         // The NCM function wants the host-side MAC as 12 upper-case hex characters.
-        constexpr char hex[] = "0123456789ABCDEF";
+        constexpr char hex[] = "0123456789ABCDEF";   // k2-plain: indexed digits
         for (; n < 12; n++) {
             const std::uint8_t b = tud_network_mac_address[n / 2];
             desc[1 + n] = hex[(n & 1) ? (b & 0x0F) : (b >> 4)];

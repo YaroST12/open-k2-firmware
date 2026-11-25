@@ -10,6 +10,7 @@
 #include "k2/drivers/flash.hpp"
 #include "k2/drivers/fs_flash.hpp"
 #include "k2/drivers/usb.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::usbcfg {
 
@@ -77,7 +78,7 @@ bool set(Setting s) {
     const bool ok = save(fs::instance(), s);
     if (ok) g_stored = s;
     eekeep::usb_want(encode(s)[4]);
-    K2LOG("[USBCFG] next boot: %s (%s)\n", describe(s), ok ? "saved" : "FLASH ERROR");
+    K2LOG("[USBCFG] next boot: %s (%s)\n", describe(s), ok ? K2_P("saved") : K2_P("FLASH ERROR"));
     return ok;
 }
 

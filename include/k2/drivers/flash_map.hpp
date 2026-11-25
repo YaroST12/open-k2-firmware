@@ -39,6 +39,7 @@ inline constexpr std::uint32_t kUsbCfgEnd = usbcfg::kLegacyAddr + flash::kSector
 inline constexpr std::uint32_t kNativeSettings = 0x080E0000;   // the native user settings, up to the e-marker records
 
 // Ascending address order.
+// k2-plain-begin: names only for compile-time checks, never read at run time
 inline constexpr std::array<Region, 11> kRegions{{
     {"littlefs", flash::kFsBase, flash::kFsEnd, Access::Fs},
     {"native settings", kNativeSettings, store::kSingleAddr, Access::Native},
@@ -52,6 +53,7 @@ inline constexpr std::array<Region, 11> kRegions{{
     {"charger journal (legacy)", kJournalLegacyBase, kEmLegacyBase, Access::Legacy},
     {"e-marker library (legacy)", kEmLegacyBase, flash::kStoreEnd, Access::Legacy},
 }};
+// k2-plain-end
 
 constexpr bool regions_ok() {
     for (std::size_t i = 0; i < kRegions.size(); i++) {
@@ -85,9 +87,9 @@ static_assert(regions_ok(), "flash regions overlap, are misaligned or leave thei
 // run held our old raw stores, the legacy wipe empties it first, and the volume grows into it only once every page reads
 // blank (k2/core/fs_grow.hpp); on any other content the volume stays at 90 blocks. Not part of kRegions, which stays
 // disjoint.
-inline constexpr Region kFsRun{"littlefs grown run", flash::kFsRunBase, flash::kFsRunEnd, Access::Fs};
-inline constexpr Region kKeptRecordPage{"kept: old e-marker record page", flash::kKeptPages[0], flash::kKeptPages[0] + flash::kSectorSize, Access::Native};
-inline constexpr Region kKeptTopPage{"kept: top page, unknown owner", flash::kKeptPages[1], flash::kKeptPages[1] + flash::kSectorSize, Access::Native};
+inline constexpr Region kFsRun{"littlefs grown run", flash::kFsRunBase, flash::kFsRunEnd, Access::Fs};   // k2-plain: compile-time checks only
+inline constexpr Region kKeptRecordPage{"kept: old e-marker record page", flash::kKeptPages[0], flash::kKeptPages[0] + flash::kSectorSize, Access::Native};   // k2-plain: compile-time checks only
+inline constexpr Region kKeptTopPage{"kept: top page, unknown owner", flash::kKeptPages[1], flash::kKeptPages[1] + flash::kSectorSize, Access::Native};   // k2-plain: compile-time checks only
 static_assert(kFsRun.begin == kRegions[4].begin, "the run starts with the legacy candidate range");
 static_assert(kFsRun.end == kKeptTopPage.begin && kKeptTopPage.end == flash::kStoreEnd, "the run ends below the kept top page");
 static_assert(kKeptRecordPage.begin == store::kLibraryAddr, "the kept record page is the native e-marker library page");
@@ -98,8 +100,8 @@ static_assert(flash::fs_block_addr(flash::kFsBlocks - 1) + flash::kSectorSize ==
               "blocks 0..89 fill the littlefs row, blocks 90..144 the run");
 // The run in the ring layout: littlefs blocks 90..110, then the report-card ring and the Black Box ring (k2/core/ringlog.hpp)
 // up to the kept top page. All three are run sectors, writable only with the run open.
-inline constexpr Region kCardRing{"report-card ring", flash::kCardRingBase, flash::kBbRingBase, Access::Fs};
-inline constexpr Region kBbRing{"Black Box ring", flash::kBbRingBase, flash::kFsRunEnd, Access::Fs};
+inline constexpr Region kCardRing{"report-card ring", flash::kCardRingBase, flash::kBbRingBase, Access::Fs};   // k2-plain: compile-time checks only
+inline constexpr Region kBbRing{"Black Box ring", flash::kBbRingBase, flash::kFsRunEnd, Access::Fs};   // k2-plain: compile-time checks only
 static_assert(kCardRing.begin == flash::fs_block_addr(flash::kFsVolumeBlocks - 1) + flash::kSectorSize && kCardRing.begin > kFsRun.begin &&
                   kCardRing.end == kBbRing.begin && kBbRing.end == kFsRun.end,
               "the rings follow the volume's last block, back to back, up to the end of the run");

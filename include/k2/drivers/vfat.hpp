@@ -30,7 +30,7 @@ inline constexpr std::uint32_t kRootStart = kReserved + 2 * kFatSectors;
 inline constexpr std::uint32_t kDataStart = kRootStart + kRootSectors;
 inline constexpr std::uint32_t kClusters = (kTotalSectors - kDataStart) / kSectorsPerCluster;
 inline constexpr std::size_t kMaxEntries = 160;      // files plus directories in one volume
-inline constexpr std::string_view kVolumeLabel = "K2 DRIVE";
+inline constexpr std::string_view kVolumeLabel = "K2 DRIVE";   // k2-plain: FAT label bytes
 
 static_assert(kClusters >= 4085 && kClusters < 65525, "must stay FAT16");
 static_assert(kClusters + 2 <= kFatSectors * kSectorSize / 2, "FAT must cover every cluster");

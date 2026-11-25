@@ -10,6 +10,7 @@
 #include "k2/drivers/regs.hpp"
 #include "k2/drivers/systick.hpp"
 #include "k2/drivers/usb.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::adc {
 
@@ -137,7 +138,7 @@ bool init() {
 
     g_ready = calibrate();
     if (g_ready) start_scan();
-    K2LOG("[ADC] init %s adcclk=%dHz ring=%dx%d\n", g_ready ? "ok" : "CAL FAILED",
+    K2LOG("[ADC] init %s adcclk=%dHz ring=%dx%d\n", g_ready ? "ok" : K2_P("CAL FAILED"),
                  static_cast<int>(kAdcClockHz), static_cast<int>(kScanSweeps), static_cast<int>(kSlots));
     return g_ready;
 }

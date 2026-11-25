@@ -16,6 +16,7 @@
 #include "k2/core/legacy_wipe.hpp"
 #include "k2/core/scratch.hpp"
 #include "k2/drivers/usb.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::fs {
 
@@ -115,10 +116,10 @@ bool rings_ready() { return g_rings; }
 namespace {
 
 void log_migration(const fsmigrate::Result& r) {
-    static constexpr const char* kName[] = {"none", "done", "deferred", "stuck", "failed"};
+    static constexpr const char* kName[] = {"none", "done", K2_P("deferred"), K2_P("stuck"), K2_P("failed")};
     K2LOG("[FS] ring layout move %s%s: used=%u above=%u passes=%u files=%u erased=%u%s err=%s", kName[unsigned(r.outcome)],
-          r.resumed ? " (resumed)" : "", unsigned(r.used_blocks), unsigned(r.above), r.passes, r.files, r.erased,
-          r.tight ? " tcap+log dropped" : "", err_name(r.err));
+          r.resumed ? K2_P(" (resumed)") : "", unsigned(r.used_blocks), unsigned(r.above), r.passes, r.files, r.erased,
+          r.tight ? K2_P(" tcap+log dropped") : "", err_name(r.err));
 }
 
 }  // namespace
@@ -127,7 +128,7 @@ Err init(bool& formatted) {
     GrowEnv env;
     Err e = fsgrow::mount(g_fs, env, formatted);
     if (e == Err::Ok && g_fs.wide()) {   // the layout before the rings: emptied above 111 blocks and shrunk, once
-        const scratch::Lease lease("fs.migrate");
+        const scratch::Lease lease("fs.migrate");   // k2-plain: scratch owner tag
         const fsmigrate::Result r = fsmigrate::migrate(g_fs, g_io, {scratch::arena(), scratch::kSize});
         log_migration(r);
         if (!g_fs.ready()) e = g_fs.mount();
@@ -135,7 +136,7 @@ Err init(bool& formatted) {
     g_formatted = formatted;
     if (e == Err::Ok) {
         g_fs.clean_tmp("/");
-        K2LOG("[FS] mounted%s blocks=%u used=%u", formatted ? " (formatted)" : "", unsigned(g_fs.block_count()), unsigned(g_fs.used_blocks()));
+        K2LOG("[FS] mounted%s blocks=%u used=%u", formatted ? K2_P(" (formatted)") : "", unsigned(g_fs.block_count()), unsigned(g_fs.used_blocks()));
         if (formatted) K2LOG("[FS] new volume of %u blocks from 0x%08X formatted; the old volume (if any) is gone", unsigned(g_fs.block_count()),
                              unsigned(flash::kFsBase));
     } else {
@@ -176,7 +177,7 @@ void grow() {
     switch (r.outcome) {
     case fsgrow::Outcome::Grown:
         K2LOG("[FS] grown %u -> %u blocks%s used=%u", unsigned(kFlashBlocks), unsigned(g_fs.block_count()),
-              r.resumed ? " (resumed after a cut)" : "", unsigned(g_fs.used_blocks()));
+              r.resumed ? K2_P(" (resumed after a cut)") : "", unsigned(g_fs.used_blocks()));
         break;
     case fsgrow::Outcome::AlreadyGrown:
         if (g_fs.wide()) K2LOG("[FS] %u blocks, the move into the ring layout waits: rings off", unsigned(g_fs.block_count()));

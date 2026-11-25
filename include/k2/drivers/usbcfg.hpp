@@ -24,7 +24,7 @@ inline constexpr bool kNetBuilt = K2_NET != 0;
 inline constexpr bool kWebusbBuilt = K2_WEBUSB != 0;
 
 inline constexpr std::uint32_t kLegacyAddr = 0x080E6000;   // pre-littlefs raw page, read once for the import
-inline constexpr const char* kPath = "/usb.cfg";
+inline constexpr const char* kPath = "/usb.cfg";   // k2-plain: littlefs path
 inline constexpr std::array<std::uint8_t, 4> kMagic{'K', '2', 'U', 'S'};
 
 struct Setting {
@@ -123,6 +123,7 @@ constexpr Setting decode(const std::array<std::uint8_t, 8>& r, bool net_built = 
 constexpr bool requests_net(const std::array<std::uint8_t, 8>& r) { return valid_record(r) && (r[4] & 4) != 0; }
 constexpr bool requests_webusb(const std::array<std::uint8_t, 8>& r) { return valid_record(r) && (r[4] & 8) != 0; }
 
+// k2-plain-begin: constexpr LinkNote copies raw bytes; tests compare
 constexpr const char* describe(Setting s) {
     if (s.net) return "HID+Net";
     if (s.webusb) return s.hid ? "HID+WebUSB" : s.drive ? "WebUSB+Drive" : "WebUSB";
@@ -157,6 +158,7 @@ constexpr LinkNote link_note(Setting now, Setting next) {
     }
     return t;
 }
+// k2-plain-end
 
 inline Setting load(fs::Fs& f) {
     std::array<std::uint8_t, 8> r{};
