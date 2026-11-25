@@ -4,6 +4,7 @@
 
 #include <cstring>
 
+#include "k2/core/strpack.hpp"
 #include "qrcodegen.h"
 
 namespace k2::qr {
@@ -22,6 +23,7 @@ int encode_placed(std::uint8_t* code, std::uint8_t* data_temp, std::size_t len, 
 
 int encode_version(std::string_view text, std::uint8_t* code, std::uint8_t* data_temp, std::size_t buf_len, int max_version) {
     if (text.empty() || max_version < 1 || max_version > kMaxVersionAny) return 0;
+    K2_EXPECT_PLAIN(text);
     if (buf_len < buf_len_for(max_version)) return 0;   // the payload plus the working storage must fit
     std::memcpy(data_temp, text.data(), text.size());
     return encode_placed(code, data_temp, text.size(), max_version);
@@ -29,6 +31,7 @@ int encode_version(std::string_view text, std::uint8_t* code, std::uint8_t* data
 
 int encode_text_placed(const char* text, std::uint8_t* code, std::uint8_t* temp, int max_version) {
     if (!text || !*text || max_version < 1 || max_version > kMaxVersion) return 0;
+    K2_EXPECT_PLAIN(text);
     if (!qrcodegen_encodeText(text, temp, code, qrcodegen_Ecc_LOW, qrcodegen_VERSION_MIN, max_version,
                               qrcodegen_Mask_AUTO, false))
         return 0;

@@ -10,6 +10,7 @@
 using namespace k2;
 
 static int g_fail = 0;
+static int g_misuse = 0;
 #define CHECK(cond) do { if (!(cond)) { std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); g_fail++; } } while (0)
 
 int main() {
@@ -61,6 +62,23 @@ int main() {
     };
     static_assert(all_fit_p(kTbl, 8, 27 * 8), "packed table should fit 27 cells");
     static_assert(!fits_px_p(8, K2_P("No PD source on either port"), 20 * 8), "too narrow must fail");
+
+    // 5. Host guard: a sink gets a packed string whole, a raw seam (usb::log, QR text) never gets one.
+    strpack::set_misuse_hook([](const char *) { g_misuse++; });
+    CHECK(strpack::is_packed(std::string_view(p1)));
+    CHECK(g_misuse == 0);
+    (void)strpack::is_packed(std::string_view(p1, 2));   // cut: decodes the whole string anyway
+    CHECK(g_misuse == 1);
+    (void)strpack::is_packed(p1 + 1);                    // a pointer into the middle decodes garbage
+    CHECK(g_misuse == 2);
+    strpack::expect_plain("Plain ASCII string");
+    CHECK(g_misuse == 2);
+    strpack::expect_plain(p2);                           // packed pointer at a raw seam
+    CHECK(g_misuse == 3);
+    char copied[64];                                     // packed bytes copied out of the section
+    std::strcpy(copied, p2);
+    strpack::expect_plain(copied);
+    CHECK(g_misuse == 4);
 
     if (g_fail) return 1;
     std::printf("test_strpack: PASS\n");

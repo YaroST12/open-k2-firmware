@@ -44,6 +44,7 @@ K2_HOT void gfx_text(const Surface &s, const Font &f, int16_t x, int16_t y, std:
     if (x < 0 || y < 0 || x >= s.w || y >= s.h || text.empty()) return;
     char dec[80];
     text = strpack::unpack(text, dec);
+    K2_EXPECT_PLAIN(text);   // host: packed bytes that were copied before decoding would show as junk glyphs
     int px = text_width(f, text);
     int room = s.w - x - cell_offset;
     // Landscape stretches origins but not glyphs: text anchored on the mapped right edge may start in the last source columns
@@ -97,6 +98,7 @@ K2_HOT void gfx_text_rot(const Surface &s, const Font &f, int16_t x, int16_t y, 
     if (text.empty()) return;
     char dec[80];
     text = strpack::unpack(text, dec);
+    K2_EXPECT_PLAIN(text);
     const int tw = text_width(f, text);
     if (f.height > kMaxLineH || x < 0 || y < 0 || x + f.height > s.w || y + tw > s.h) {
         K2_TRUNC_NOTE(trunc::Kind::Clip, text, s.h - y);   // nothing is drawn at all
