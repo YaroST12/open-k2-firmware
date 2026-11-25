@@ -210,6 +210,16 @@ void test_ripple_page_navigation_and_settings() {
     t += 100; ui.tick(t);
     CHECK_COND(label_violation(ui.labels()) == nullptr);
 
+    // The settings rows stop at their ends: Up dim on the first row, Dn on the last.
+    const auto dim = [&](Button b) { return ui.labels().b[static_cast<int>(b)].dim; };
+    CHECK_EQ(dim(Button::Minus), true);  CHECK_EQ(dim(Button::Plus), false);
+    ui.on_button(Button::Minus, ButtonEvent::Short, t);   // no wrap to the last row
+    CHECK_EQ(dim(Button::Minus), true);  CHECK_EQ(dim(Button::Plus), false);
+    for (int i = 0; i < 4; i++) ui.on_button(Button::Plus, ButtonEvent::Short, t);   // past the last row: stays
+    CHECK_EQ(dim(Button::Minus), false); CHECK_EQ(dim(Button::Plus), true);
+    for (int i = 0; i < 3; i++) ui.on_button(Button::Minus, ButtonEvent::Short, t);  // back on row 0
+    CHECK_EQ(dim(Button::Minus), true);  CHECK_EQ(dim(Button::Plus), false);
+
     // Move to row 1 (Time / div) and cycle through all 8 settings: Auto (0) -> 25us (1) -> ... -> 2ms (7) -> Auto (0).
     ui.on_button(Button::Plus, ButtonEvent::Short, t);
     for (uint8_t s = 0; s < ripple::kTimebaseSettingCount; s++) {
