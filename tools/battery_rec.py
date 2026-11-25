@@ -127,7 +127,7 @@ def pair(records):
         nxt = not modes or r["mode"] != modes[-1]
         if r["mode"] == "round-trip" or (nxt and len(modes) == 2):
             break
-        if any(p["end"] == "lost" for p in r["phases"]):
+        if any(p["end"] == "lost" for p in r["phases"]) or r["state"] != "done":
             return None
         if nxt:
             modes.append(r["mode"])

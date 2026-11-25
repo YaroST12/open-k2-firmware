@@ -111,6 +111,7 @@ Pair pair(const Shown *runs, int n) {
     for (int i = 0; i < n; i++) {
         const Shown &s = runs[i];
         if (!s.any || empty(s.sum)) continue;
+        if (s.state != RunState::Done) return {};   // a run still measuring (saved every 10 s) would pair a part
         const bool next = k < 0 || s.mode != m[k];
         if (s.mode == Mode::RoundTrip || (next && k == 1)) break;
         if (s.lost) return {};   // part of a stretch, short by what it lost

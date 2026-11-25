@@ -195,6 +195,27 @@ void test_continue_adds() {
     CHECK_EQ(r.gap_s(), 1'000 - 661);   // the stop: from the end at 661 s to the first sample at 1000 s
 }
 
+// A cold boot mid-phase: the record of the last save resumes (one resume, one gap), the samples since that save and the off
+// time are lost; what flows after adds to the saved totals. 20 V x 1 A: 600 s saved, 600 s after the boot.
+void test_resume_after_cold_boot() {
+    Recorder r;
+    r.start(Mode::Charge, Wiring::SamePort, Config{}, 1);
+    feed(r, 0, 600'000, 1000, [](std::uint32_t) { return Sample{20000, 1000}; });
+    const Record saved = record_of(r);   // the progress save
+    feed(r, 601'000, 605'000, 1000, [](std::uint32_t) { return Sample{20000, 1000}; });   // lost with the power
+    Recorder b;
+    CHECK(b.restore(saved));
+    CHECK_EQ(int(b.state()), int(State::Measuring));
+    feed(b, 3'000, 603'000, 1000, [](std::uint32_t) { return Sample{20000, 1000}; });   // the new boot's clock
+    b.end_phase();
+    const Sums s = sums_of(b);
+    NEAR(s.uwh_in, 20.0 * 1200 * kUwhPerWs, 1);
+    CHECK_EQ(b.resumes(), 1);
+    CHECK_EQ(b.phase(0).gaps, 1);
+    CHECK_EQ(b.gap_s(), 3);   // the uptime at the first sample: a lower bound of the gap
+    CHECK_EQ(s.secs, 1200);
+}
+
 // A round trip, same port: 60 Wh in, 48 Wh out: 80.0 %. The discharge starts by itself 5 s into the outflow, those seconds
 // counted from the quiet sample before it (an edge of 48 W x 1 s / 2).
 void test_round_trip_efficiency() {
@@ -253,6 +274,14 @@ void test_pair() {
         const view::Shown c[] = {run(3, Mode::Discharge, 1'000'000), run(2, Mode::Charge, 1'000'000, true)};
         CHECK_EQ(view::pair(c, 2).eff, kNoRatio);
         CHECK_EQ(view::pair(c, 0).eff, kNoRatio);
+        Record m;   // a discharge still measuring (its progress save lists like a done run)
+        m.id = 4;
+        m.mode = Mode::Discharge;
+        m.state = RunState::Measuring;
+        m.phases = 1;
+        m.ph[0] = PhaseRec{Kind::Discharge, End::Running, 0, 60, 0, 2'000'000};
+        const view::Shown d[] = {view::shown(m, true), run(3, Mode::Charge, 10'000'000)};
+        CHECK_EQ(view::pair(d, 2).eff, kNoRatio);
     }
     {   // an empty run (a false start) neither counts nor breaks the stretch; the third stretch is not summed in
         const view::Shown s[] = {run(9, Mode::Discharge, 8'000'000), run(8, Mode::Discharge, 0), run(7, Mode::Charge, 10'000'000),
@@ -419,6 +448,7 @@ int main() {
     test_sign_and_wiring();
     test_gap();
     test_continue_adds();
+    test_resume_after_cold_boot();
     test_round_trip_efficiency();
     test_pair();
     test_real_replay();

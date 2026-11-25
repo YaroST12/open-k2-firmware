@@ -217,6 +217,8 @@ class TestBatteryPair(unittest.TestCase):
         self.assertEqual((p["efficiency_permille"], p["from_id"], p["to_id"]), (800, 7, 9))
         self.assertIsNone(br.pair([rec(3, "discharge", 10**6), rec(2, "round-trip", 10**6), rec(1, "charge", 10**6)]))
         self.assertIsNone(br.pair([rec(3, "discharge", 10**6), rec(2, "charge", 10**6, end="lost")]))
+        running = dict(rec(4, "discharge", 2 * 10**6), state="measuring")   # a progress save of a running discharge
+        self.assertIsNone(br.pair([running, rec(3, "charge", 10**7)]))
 
     def test_list_shows_pair(self):
         link = FakeLink(records={i: REAL[i] for i in (3, 4, 5)})

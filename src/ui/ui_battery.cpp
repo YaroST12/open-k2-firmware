@@ -265,7 +265,7 @@ void BatteryPage::update(uint32_t now_ms) {
         id.head.put(view::pct(pair_.eff).view());
         StrBuf<12> ids;
         ids.put_char('#').put_u32(pair_.lo).put_char('-').put_u32(pair_.hi);
-        id.add(ids.view(), kit::Ident::Ok);
+        id.add(ids.view(), pair_.eff <= 1000 ? kit::Ident::Ok : kit::Ident::Outline);   // over 100 %: a part measured
         id.line.put(view::wh(pair_.uwh_out).view()).put(K2_P(" out / ")).put(view::wh(pair_.uwh_in).view()).put(K2_P(" in"));
     } else if (view_ == View::Runs) {
         id.head.put(K2_P("Saved runs"));
