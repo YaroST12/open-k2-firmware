@@ -320,6 +320,57 @@ void walk_pages(Ui &ui, int rot, const Scenario &sc) {
         all_rows("bt-stored");
         step(Button::Back, "bt-runs");
         step(Button::Back, "bt-done");
+        ui.on_button(Button::Back, ButtonEvent::Short, g_t);
+    }
+    // Battery, long values: a 3-digit id, 123.4 Wh, 99999 mAh, 99h59m59s; a discharge measuring, then Saved runs with the
+    // efficiency of separate runs (a charge, then a discharge) atop, and each stored run.
+    stub_battery_reset();
+    if (battery::hw::service().volume()) {
+        namespace bt = battery;
+        const auto rec = [](std::uint16_t id, bt::Mode m, bt::RunState st) {
+            bt::Record r;
+            r.mode = m;
+            r.state = st;
+            r.armed = true;
+            r.id = id;
+            r.phases = m == bt::Mode::RoundTrip ? 2 : 1;
+            const bool dis = m == bt::Mode::Discharge;
+            const bt::End e = st == bt::RunState::Measuring ? bt::End::Running : bt::End::Auto;
+            r.ph[0] = bt::PhaseRec{dis ? bt::Kind::Discharge : bt::Kind::Charge, e, 0, 359'999, dis ? 0u : 123'456'789u,
+                                   dis ? 123'456'789u : 0u, dis ? 0u : 99'999'000u, dis ? 99'999'000u : 0u};
+            if (r.phases == 2) r.ph[1] = bt::PhaseRec{bt::Kind::Discharge, e, 0, 359'999, 0, 99'456'789, 0, 99'999'000};
+            return r;
+        };
+        bt::store::save(*battery::hw::service().volume(), rec(997, bt::Mode::RoundTrip, bt::RunState::Done));
+        bt::store::save(*battery::hw::service().volume(), rec(998, bt::Mode::Charge, bt::RunState::Done));
+        bt::store::save(*battery::hw::service().volume(), rec(999, bt::Mode::Discharge, bt::RunState::Done));
+        battery::hw::service().rec().restore(rec(999, bt::Mode::Discharge, bt::RunState::Measuring));
+    }
+    enter("battery-long", rot, sc.name);
+    if (ui.push_menu(Menu::Battery, g_t)) {
+        auto step = [&](Button b, const char *what) {
+            ui.on_button(b, ButtonEvent::Short, g_t);
+            draw_for_a_while(ui, what, rot, sc.name);
+        };
+        auto all_rows = [&](const char *what) {
+            for (int i = 0; i < 14; ++i) step(Button::Plus, what);
+            for (int i = 0; i < 14; ++i) step(Button::Minus, what);
+        };
+        all_rows("bt-long-measuring");
+        battery::hw::service().rec().finish();
+        all_rows("bt-long-done");
+        const BatteryPage *p = ui.battery_page();
+        for (int i = 0; p && i < 14 && p->act() != battery::view::Act::Runs; ++i) step(Button::Plus, "bt-long-move");
+        step(Button::Ok, "bt-long-runs");
+        all_rows("bt-long-runs");
+        for (int k = 0; k < 3; ++k) {
+            step(Button::Ok, "bt-long-stored");
+            all_rows("bt-long-stored");
+            step(Button::Back, "bt-long-runs");
+            step(Button::Plus, "bt-long-runs");
+        }
+        step(Button::Back, "bt-long-done");
+        ui.on_button(Button::Back, ButtonEvent::Short, g_t);
     }
     stub_battery_reset();
     // PD diagnosis: every row of the fixture reports has been the focused one (note line open), and Home row 1 with each.

@@ -121,6 +121,7 @@ void BatteryPage::load_runs() {
         if (!bt::store::load(*f, ids[i], r)) continue;
         runs_[n_runs_++] = view::shown(r, true);
     }
+    pair_ = view::pair(runs_, n_runs_);
 }
 
 void BatteryPage::set_view(View v, int sel) {
@@ -239,9 +240,14 @@ void BatteryPage::run_row(int i, bool focused, kit::RowSpec &out) {
     else tail_.put(view::wh(r.mode == bt::Mode::Discharge ? r.sum.uwh_out : r.sum.uwh_in).view());
     out.tail = tail_.view();
     out.tail_color = r.eff_final ? kInk : kInk2;
-    if (focused) {
-        note_row_.put(view::wh(r.sum.uwh_in).view()).put(" in, ").put(view::wh(r.sum.uwh_out).view()).put(" out, ");
-        note_row_.put(view::hm(r.secs).view());
+    if (focused) {   // both energies of a round trip; else the other unit of the tail's (the Wh of a cut one), the time
+        const bool dis = r.mode == bt::Mode::Discharge;
+        if (r.mode == bt::Mode::RoundTrip) {
+            note_row_.put(view::wh(r.sum.uwh_in).view()).put(K2_P(" in, ")).put(view::wh(r.sum.uwh_out).view()).put(K2_P(" out"));
+        } else {
+            note_row_.put(r.lost ? view::wh(dis ? r.sum.uwh_out : r.sum.uwh_in).view() : view::mah(dis ? r.sum.uah_out : r.sum.uah_in).view());
+            note_row_.put(dis ? K2_P(" out, ") : K2_P(" in, ")).put(view::hm(r.secs).view());
+        }
         out.note = note_row_.view();
     }
 }
@@ -255,7 +261,13 @@ void BatteryPage::update(uint32_t now_ms) {
     if (note_until_ && static_cast<int32_t>(note_until_ - now_ms) <= 0) note_until_ = 0;
     // the identity block
     kit::Ident id;
-    if (view_ == View::Runs) {
+    if (view_ == View::Runs && pair_.eff != bt::kNoRatio) {   // a charge and a discharge recorded apart: their efficiency
+        id.head.put(view::pct(pair_.eff).view());
+        StrBuf<12> ids;
+        ids.put_char('#').put_u32(pair_.lo).put_char('-').put_u32(pair_.hi);
+        id.add(ids.view(), kit::Ident::Ok);
+        id.line.put(view::wh(pair_.uwh_out).view()).put(K2_P(" out / ")).put(view::wh(pair_.uwh_in).view()).put(K2_P(" in"));
+    } else if (view_ == View::Runs) {
         id.head.put(K2_P("Saved runs"));
         id.dim = n_runs_ == 0;
         id.line.put(n_runs_ ? K2_P("Newest first, OK opens one") : K2_P("A run is saved when it ends"));

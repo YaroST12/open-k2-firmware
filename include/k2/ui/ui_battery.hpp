@@ -65,6 +65,7 @@ private:
     battery::Record rec_{};
     battery::view::Shown runs_[battery::store::kKeep] = {};
     int n_runs_ = 0;
+    battery::view::Pair pair_{};       // the efficiency of the runs_ recorded apart (view::pair), shown atop Saved runs
     int runs_sel_ = 0;                 // the Runs view's selection, kept while a stored run is open
     battery::view::Act armed_act_ = battery::view::Act::In;
     uint32_t armed_until_ = 0;         // a hand end waits for its second OK until then (0 = none armed)

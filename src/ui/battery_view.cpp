@@ -246,13 +246,13 @@ void ident(const Shown &s, kit::Ident &out) {
     case RunState::Measuring:
         out.head.put(s.kind == Kind::Charge ? K2_P("Charging") : K2_P("Discharging"));
         if (trip) out.add(s.phases == 1 ? K2_P("1 of 2") : K2_P("2 of 2"), K::Solid);
+        // no "in"/"out": the head says it; "Same port, 99h59m59s, 123.4Wh" stays inside kit::kIdLineCells
         out.line.put(wiring_word(s.wiring)).put(", ").put(hms(s.phase_secs).view()).put(", ").put(wh(s.phase_uwh).view());
-        out.line.put(s.kind == Kind::Charge ? " in" : " out");
         return;
     case RunState::Between:
         out.head.put(K2_P("Charged"));
         out.add(K2_P("1 of 2"), K::Solid);
-        out.line.put(s.wiring == Wiring::Moved ? K2_P("Move the bank to the input port") : K2_P("Unplug the charger, load the bank"));
+        out.line.put(s.wiring == Wiring::Moved ? K2_P("Move the bank to the input port") : K2_P("Unplug charger, load the bank"));
         return;
     case RunState::Done:
         break;
