@@ -1991,9 +1991,9 @@ const char *sweep_note(ctsweep::Depth d, bool avs) {
 // The words the Review value and the Running family label append: "Medium 200 mV" in 18 value cells, "USB PD 200 mV" in 16 label cells.
 constexpr const char *kDepthWords[ctsweep::kDepthCount] = {ctsweep::depth_name(ctsweep::Depth::Step100), ctsweep::depth_name(ctsweep::Depth::Step200),
                                                            ctsweep::depth_name(ctsweep::Depth::Phone), ctsweep::depth_name(ctsweep::Depth::Step20)};
-static_assert(all_fit(kDepthWords, kSmallAdvPx, 6 * kSmallAdvPx), "a depth word is wider than its tail");
+static_assert(all_fit_p(kDepthWords, kSmallAdvPx, 6 * kSmallAdvPx), "a depth word is wider than its tail");
 static_assert(all_fit_p(kLevelItems, kSmallAdvPx, 11 * kSmallAdvPx), "a Level word and a depth word are wider than the Review value");
-static_assert(all_fit(kDepthWords, kLabelAdv, 9 * kLabelAdv), "a depth word after the family label is wider than its cells");
+static_assert(all_fit_p(kDepthWords, kLabelAdv, 9 * kLabelAdv), "a depth word after the family label is wider than its cells");
 static_assert(all_fit_p(kNotes, kLabelAdv, kit::kNoteMaxPx), "a note is wider than the row note");
 
 // The Group page's mask for row `row` of family `fam` (the PD family has two algorithm rows - fixed offers, the PPS /

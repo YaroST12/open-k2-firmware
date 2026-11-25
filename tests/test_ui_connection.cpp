@@ -7,6 +7,7 @@
 #include <cstring>
 #include <string>
 #include "test_util.h"
+#include "k2/core/strpack.hpp"
 #include "k2/pd/pd_link.hpp"
 #include "k2/ui/ui_connection.hpp"
 
@@ -87,8 +88,8 @@ static void test_empty_states() {
     for (int t = 0; t < kTabs; t++) {
         for (int o = 0; o < 4; o++) {
             const Empty em = e(static_cast<Tab>(t), static_cast<Topology>(o));
-            CHECK_EQ(std::strlen(em.title) <= 15, 1);
-            CHECK_EQ(std::strlen(em.hint) <= 26, 1);
+            CHECK_EQ(k2::strpack::cells_rt(em.title) <= 15, 1);   // packed copy: the decoded text
+            CHECK_EQ(k2::strpack::cells_rt(em.hint) <= 26, 1);
             CHECK_EQ(std::strstr(em.hint, "OK") == nullptr && std::strstr(em.hint, "START") == nullptr, 1);
         }
     }
@@ -124,8 +125,8 @@ static void test_empty_states_when_possibly_inline() {
             CHECK_EQ(std::strstr(em.title, "NO DEVICE") == nullptr, 1);
             CHECK_EQ(std::strstr(em.title, "NO CHARGER") == nullptr, 1);
             CHECK_EQ(std::strstr(em.hint, "bottom") == nullptr && std::strstr(em.hint, "top port") == nullptr, 1);
-            CHECK_EQ(std::strlen(em.title) <= 15, 1);
-            CHECK_EQ(std::strlen(em.hint) <= 26, 1);
+            CHECK_EQ(k2::strpack::cells_rt(em.title) <= 15, 1);   // packed copy: the decoded text
+            CHECK_EQ(k2::strpack::cells_rt(em.hint) <= 26, 1);
         }
     }
     CHECK_STR(e(Tab::Source, Topology::Unknown).title, "LINE IN USE");
@@ -333,8 +334,8 @@ static void test_sink_tab_dual_role_port() {
         const Empty em = empty_state(Tab::Sink, facts(false, false, false, o, false, raguard::WaitKind::DualRolePort));
         CHECK_STR(em.title, "DUAL-ROLE PORT");
         CHECK_STR(em.hint, "Ask to identify device");
-        CHECK_EQ(std::strlen(em.title) <= 15, 1);
-        CHECK_EQ(std::strlen(em.hint) <= 26, 1);
+        CHECK_EQ(k2::strpack::cells_rt(em.title) <= 15, 1);   // packed copy: the decoded text
+        CHECK_EQ(k2::strpack::cells_rt(em.hint) <= 26, 1);
         CHECK_EQ(std::strstr(em.hint, "OK") == nullptr && std::strstr(em.hint, "START") == nullptr, 1);
     }
     // inline_sink still wins over DualRolePort.
