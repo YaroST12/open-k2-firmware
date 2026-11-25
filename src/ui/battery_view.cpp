@@ -103,6 +103,31 @@ Shown shown(const Record &r, bool any) {
     return s;
 }
 
+Pair pair(const Shown *runs, int n) {
+    Pair p;
+    uint32_t sum[2] = {};
+    Mode m[2] = {};
+    int k = -1;   // the stretch being summed: 0 the newest, 1 the one before it
+    for (int i = 0; i < n; i++) {
+        const Shown &s = runs[i];
+        if (!s.any || empty(s.sum)) continue;
+        if (s.state != RunState::Done) return {};   // a run still measuring (saved every 10 s) would pair a part
+        const bool next = k < 0 || s.mode != m[k];
+        if (s.mode == Mode::RoundTrip || (next && k == 1)) break;
+        if (s.lost) return {};   // part of a stretch, short by what it lost
+        if (next) m[++k] = s.mode;
+        sum[k] += static_cast<uint32_t>(s.mode == Mode::Discharge ? s.sum.uwh_out : s.sum.uwh_in);
+        if (!p.hi) p.hi = s.id;
+        p.lo = s.id;
+    }
+    if (k < 1) return {};
+    const bool dis = m[0] == Mode::Discharge;
+    p.uwh_out = sum[dis ? 0 : 1];
+    p.uwh_in = sum[dis ? 1 : 0];
+    p.eff = ratio_permille(p.uwh_out, p.uwh_in);
+    return p;
+}
+
 bool is_fact(Act a) { return a == Act::In || a == Act::Out || a == Act::Time || a == Act::Eff; }
 
 Rows rows(const Shown &s, bool stored, bool cont) {
@@ -222,13 +247,13 @@ void ident(const Shown &s, kit::Ident &out) {
     case RunState::Measuring:
         out.head.put(s.kind == Kind::Charge ? K2_P("Charging") : K2_P("Discharging"));
         if (trip) out.add(s.phases == 1 ? K2_P("1 of 2") : K2_P("2 of 2"), K::Solid);
+        // no "in"/"out": the head says it; "Same port, 99h59m59s, 123.4Wh" stays inside kit::kIdLineCells
         out.line.put(wiring_word(s.wiring)).put(", ").put(hms(s.phase_secs).view()).put(", ").put(wh(s.phase_uwh).view());
-        out.line.put(s.kind == Kind::Charge ? " in" : " out");
         return;
     case RunState::Between:
         out.head.put(K2_P("Charged"));
         out.add(K2_P("1 of 2"), K::Solid);
-        out.line.put(s.wiring == Wiring::Moved ? K2_P("Move the bank to the input port") : K2_P("Unplug the charger, load the bank"));
+        out.line.put(s.wiring == Wiring::Moved ? K2_P("Move the bank to the input port") : K2_P("Unplug charger, load the bank"));
         return;
     case RunState::Done:
         break;

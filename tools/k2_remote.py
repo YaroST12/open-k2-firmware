@@ -4612,8 +4612,15 @@ def cmd_battery(link, a):
     op = a.battery_cmd
     if op == "status":
         return {"battery": battery_status(link)}
-    if op == "list":
-        return {"battery_runs": battery_list(link)}
+    if op == "list":   # with the efficiency of separate runs (battery_rec.pair) over the stored runs
+        ids = battery_list(link)
+        recs = []
+        for rid in ids:
+            try:
+                recs.append(battery_rec.decode_record(battery_read_record(link, rid)))
+            except battery_rec.BadRecord:
+                pass
+        return {"battery_runs": ids, "battery_pair": battery_rec.pair(recs)}
     if op == "read":
         ids = battery_list(link) if a.all else [a.id]
         recs = []
@@ -4627,7 +4634,7 @@ def cmd_battery(link, a):
                 recs.append(battery_rec.decode_record(raw))
             except battery_rec.BadRecord as e:
                 raise SystemExit(f"battery read {rid}: {e}")
-        return {"battery_records": recs} if a.all else {"battery_record": recs[0]}
+        return {"battery_records": recs, "battery_pair": battery_rec.pair(recs)} if a.all else {"battery_record": recs[0]}
     if op == "start":
         wiring = a.wiring if a.wiring is not None else battery_status(link)["next_wiring"]
         args = bytes([battery_rec.MODES.index(a.mode), battery_rec.WIRINGS.index(wiring)])
@@ -4650,11 +4657,13 @@ def cmd_battery(link, a):
 def render_battery(r):
     import battery_rec
     if "battery_runs" in r:
-        return "stored runs (newest first): " + (", ".join(str(i) for i in r["battery_runs"]) or "none")
+        return ("stored runs (newest first): " + (", ".join(str(i) for i in r["battery_runs"]) or "none")
+                + ("\n" + battery_rec.render_pair(r["battery_pair"]) if "battery_pair" in r else ""))
     if "battery_record" in r:
         return battery_rec.render_record(r["battery_record"])
     if "battery_records" in r:
-        return "\n".join(battery_rec.render_record(x) for x in r["battery_records"]) or "no runs stored"
+        return ("\n".join(battery_rec.render_record(x) for x in r["battery_records"]) or "no runs stored") \
+            + ("\n" + battery_rec.render_pair(r["battery_pair"]) if r["battery_records"] else "")
     return battery_rec.render_status(r["battery"])
 # ---- end Battery ----
 

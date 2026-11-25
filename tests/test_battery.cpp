@@ -689,6 +689,28 @@ std::vector<std::uint8_t> v1_bytes(const Record &r) {
     return v;
 }
 
+// A version 1 discharge keeps its energy in "in" (the columns went by sign then): it reads as out, the phase's own column.
+void test_v1_discharge_reads_out() {
+    Record d;
+    d.id = 3;
+    d.mode = Mode::Discharge;
+    d.phases = 1;
+    d.ph[0] = PhaseRec{Kind::Discharge, End::Auto, 0, 3170, 30'994'272, 0, 1'538'604, 0};
+    const auto b = v1_bytes(d);
+    Record r;
+    CHECK_COND(decode(b, r));
+    const Sums s = sums(r);
+    CHECK_EQ(s.uwh_out, 30'994'272);
+    CHECK_EQ(s.uah_out, 1'538'604);
+    CHECK_EQ(s.uwh_in, 0);
+    // a version 2 record is taken as written
+    d.ph[0] = PhaseRec{Kind::Discharge, End::Auto, 0, 10, 5, 0, 5, 0};
+    std::uint8_t buf[kRecordBytes];
+    encode(d, buf);
+    CHECK_COND(decode(buf, r));
+    CHECK_EQ(sums(r).uwh_in, 5);
+}
+
 // While a phase measures, the record goes to flash every kSaveMs (once it holds energy), only when writes are allowed.
 void test_service_save_cadence() {
     Vol v;
@@ -1462,5 +1484,6 @@ int main() {
     test_service_continue_refusals();
     test_service_continue_then_cold_boot();
     test_service_continue_after_closed_boot();
+    test_v1_discharge_reads_out();
     return test_report("test_battery");
 }
