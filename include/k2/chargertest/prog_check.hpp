@@ -14,6 +14,7 @@
 
 #include "k2/pdspec/analyze.hpp"
 #include "k2/pdspec/prog_judge.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::charger_test::progcheck {
 
@@ -53,7 +54,7 @@ struct Out {
 };
 
 constexpr const char* flag_text(std::uint8_t f) {
-    return f & kOver ? "overshoot" : f & kLate ? "slow rise" : f & kTransient ? "transient" : f & kOff ? "level off" : "";
+    return f & kOver ? K2_P("overshoot") : f & kLate ? K2_P("slow rise") : f & kTransient ? K2_P("transient") : f & kOff ? K2_P("level off") : "";
 }
 
 // The judgment over a measured step (analyze_step) and its PD edges: the PD spec judge (pdspec/prog_judge.hpp) of the move, its failing

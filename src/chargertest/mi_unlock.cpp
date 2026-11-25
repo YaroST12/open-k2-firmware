@@ -6,6 +6,7 @@
 
 #include "k2/chargertest/step_label.hpp"
 #include "k2/pd/pd.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::mi_unlock {
 namespace {
@@ -136,11 +137,11 @@ step_label::Text chain_text(uint8_t code) {
     step_label::Text t;
     Out o{{t}};
     switch (chain_of(code)) {
-    case Chain::NoSvid: o.put("no 0x2717 SVID"); break;
-    case Chain::NoAnswer: o.put("no answer"); break;
-    case Chain::Stalled: o.put("failed at step "); o.num(chain_step(code)); break;
-    case Chain::Verified: o.put("done, verified"); break;
-    case Chain::Finished: o.put("done via 020A"); break;
+    case Chain::NoSvid: o.put(K2_P("no 0x2717 SVID")); break;
+    case Chain::NoAnswer: o.put(K2_P("no answer")); break;
+    case Chain::Stalled: o.put(K2_P("failed at step ")); o.num(chain_step(code)); break;
+    case Chain::Verified: o.put(K2_P("done, verified")); break;
+    case Chain::Finished: o.put(K2_P("done via 020A")); break;
     default: break;
     }
     return t;

@@ -9,7 +9,7 @@ namespace ct = charger_test;
 using A = ct::Algorithm;
 
 void TextOut::put(char c) { if (t.len + 1 < kMax) t.s[t.len++] = c; t.s[t.len] = 0; }
-void TextOut::put(const char* s) { while (*s) put(*s++); }
+void TextOut::put(const char* s) { put(std::string_view(s)); }
 void TextOut::put(std::string_view s) { strpack::for_chars(s, [this](char c) { put(c); }); }
 void TextOut::num(unsigned v) { char d[10]; int k = 0; do { d[k++] = char('0' + v % 10); v /= 10; } while (v && k < 10); while (k) put(d[--k]); }
 void TextOut::milli(unsigned v) {
@@ -30,16 +30,16 @@ bool is_programmable(const ct::Step& s) { return s.algorithm == A::Pps || is_avs
 Text protocol(const ct::Step& s) {
     Text t;
     Out o{t};
-    if (s.hunt) { o.put(s.mv ? "Mi" : "Xiaomi"); return t; }   // a mode the Xiaomi chain unlocked; the chain row itself
+    if (s.hunt) { o.put(s.mv ? "Mi" : K2_P("Xiaomi")); return t; }   // a mode the Xiaomi chain unlocked; the chain row itself
     switch (s.algorithm) {
-    case A::Pd2Fixed: o.put(s.mv ? "PD" : "PD2.0"); break;
-    case A::Pd3Fixed: o.put(s.mv ? "PD" : "PD3.x"); break;
+    case A::Pd2Fixed: o.put(s.mv ? "PD" : K2_P("PD2.0")); break;
+    case A::Pd3Fixed: o.put(s.mv ? "PD" : K2_P("PD3.x")); break;
     case A::Epr: o.put(s.avs ? "AVS" : "EPR"); break;
     case A::SprAvs: case A::EprAvs: o.put("AVS"); break;
     case A::Pps: o.put("PPS"); break;
-    case A::Pd30Revision: o.put("PD3.0 rev"); break;
-    case A::Pd31Revision: o.put("PD3.1 rev"); break;
-    case A::Pd32Revision: o.put("PD3.2 rev"); break;
+    case A::Pd30Revision: o.put(K2_P("PD3.0 rev")); break;
+    case A::Pd31Revision: o.put(K2_P("PD3.1 rev")); break;
+    case A::Pd32Revision: o.put(K2_P("PD3.2 rev")); break;
     case A::Qc2ClassB: o.put("QC2B"); break;
     case A::Qc3ClassB: o.put("QC3B"); break;
     default: o.put(ct::name(s.group)); break;
@@ -115,7 +115,7 @@ Text spec_label(const ct::SpecPoint& p) {
     if (p.what == ct::SpecWhat::HardReset || p.what == ct::SpecWhat::None || !p.mv) {
         Text t;
         Out o{t};
-        o.put(p.what == ct::SpecWhat::HardReset ? "Hard Reset" : "PD spec");
+        o.put(p.what == ct::SpecWhat::HardReset ? K2_P("Hard Reset") : K2_P("PD spec"));
         return t;
     }
     return label(ct::spec_step(p));
@@ -125,7 +125,7 @@ Text interlude_label(ct::Interlude i, const ct::SpecPoint& p) {
     if (i == ct::Interlude::Spec) return spec_label(p);
     Text t;
     Out o{t};
-    o.put(i == ct::Interlude::Probe ? "Charger ID" : i == ct::Interlude::Ceiling ? "SVOOC ceiling" : "");
+    o.put(i == ct::Interlude::Probe ? K2_P("Charger ID") : i == ct::Interlude::Ceiling ? K2_P("SVOOC ceiling") : "");
     return t;
 }
 

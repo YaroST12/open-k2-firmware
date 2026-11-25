@@ -4,6 +4,7 @@
 // what the SuperVOOC ceiling stage claims of each level. The golden vectors in tests/fixtures/oem_watts.txt are shared with the
 // Python mirror (tools/oem_watts.py, tests/test_oem_watts.py).
 #include "test_util.h"
+#include "k2/core/strpack.hpp"
 #include "k2/chargertest/oem_watts.hpp"
 #include "k2/chargertest/step_label.hpp"
 #include <algorithm>
@@ -12,6 +13,7 @@
 #include <fstream>
 #include <map>
 #include <string>
+#include <string_view>
 #include <vector>
 
 using namespace k2;
@@ -49,7 +51,7 @@ static std::vector<std::vector<std::string>> rows(const char* kind) {
 }
 static sc::End end_of(const std::string& n) {
     for (unsigned e = 0; e < sc::kEndCount; ++e)
-        if (n == (e == 0 ? "none" : sc::name(sc::End(e)))) return sc::End(e);
+        if (char d[24]; n == (e == 0 ? std::string_view("none") : k2::strpack::unpack(sc::name(sc::End(e)), d))) return sc::End(e);
     std::fprintf(stderr, "unknown end %s\n", n.c_str());
     std::exit(2);
 }

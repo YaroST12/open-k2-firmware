@@ -23,23 +23,23 @@ struct In {
     bool held = false;           // the identity or the Rd could not go on: OK asks again
 };
 
-constexpr std::string_view status(const In& in) { return in.self_now ? "Self-powered, paused" : "Rebooted mid-run"; }
+constexpr std::string_view status(const In& in) { return in.self_now ? "Self-powered, paused" : "Rebooted mid-run"; } // k2-plain: string_view sized by the truncation walk
 
 constexpr std::string_view row(const In& in) {
-    if (in.gate_ready) return "VBUS 5V stable: ready";
-    if (in.held) return "Press OK to try again";
-    if (in.behind_cable) return "Needs a direct plug";
-    if (in.rd_on && !in.wait_over) return "Rd on, charger pending";
-    return "Waiting for stable 5V";
+    if (in.gate_ready) return "VBUS 5V stable: ready"; // k2-plain: string_view sized by the truncation walk
+    if (in.held) return "Press OK to try again"; // k2-plain: string_view sized by the truncation walk
+    if (in.behind_cable) return "Needs a direct plug"; // k2-plain: string_view sized by the truncation walk
+    if (in.rd_on && !in.wait_over) return "Rd on, charger pending"; // k2-plain: string_view sized by the truncation walk
+    return "Waiting for stable 5V"; // k2-plain: string_view sized by the truncation walk
 }
 
 constexpr std::string_view note(const In& in) {
-    if (in.gate_ready) return "Resumes at 5V, never raises";
-    return in.rd_on ? "Rd on; 5V steady for 0.5s" : "Waiting for 5V, steady 0.5s";
+    if (in.gate_ready) return "Resumes at 5V, never raises"; // k2-plain: string_view sized by the truncation walk
+    return in.rd_on ? "Rd on; 5V steady for 0.5s" : "Waiting for 5V, steady 0.5s"; // k2-plain: string_view sized by the truncation walk
 }
 
 constexpr std::string_view footer(const In& in) {
-    return in.held ? "Held. Results are kept" : "Auto-resumes; results kept";   // a fact, no key names; 27-cell footer
+    return in.held ? "Held. Results are kept" : "Auto-resumes; results kept";   // a fact, no key names; 27-cell footer // k2-plain: string_view sized by the truncation walk
 }
 
 }  // namespace k2::resumetext

@@ -14,6 +14,7 @@
 #include <span>
 
 #include "k2/chargertest/report_card.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::report_card {
 
@@ -26,7 +27,7 @@ struct DeltaLine {
 
 namespace detail {
 inline const char* group_label(unsigned g) {
-    static constexpr const char* n[] = {"PD", "QC2", "QC3", "QC3+", "AFC", "FCP", "SCP", "VOOC", "SVOOC", "SVOOC65", "UFCS", "VIVO"};
+    static constexpr const char* n[] = {"PD", "QC2", "QC3", "QC3+", "AFC", "FCP", "SCP", "VOOC", K2_P("SVOOC"), K2_P("SVOOC65"), "UFCS", "VIVO"};
     return g < kGroups ? n[g] : "?";
 }
 inline const char* alg_label(unsigned a) {
@@ -36,7 +37,7 @@ inline const char* gv_label(GV v) { return v == GV::Pass ? "PASS" : v == GV::Fai
 // Appends to a bounded buffer, always NUL terminated.
 struct Out {
     char* p; size_t n, len = 0;
-    void str(const char* s) { while (*s && len + 1 < n) p[len++] = *s++; p[len] = 0; }
+    void str(const char* s) { strpack::for_chars(s, [this](char c) { if (len + 1 < n) p[len++] = c; }); p[len] = 0; }
     void num(unsigned v) {
         char t[10]; unsigned k = 0;
         do { t[k++] = char('0' + v % 10); v /= 10; } while (v && k < sizeof t);
@@ -77,15 +78,15 @@ inline void format_delta(const DeltaLine& d, char* buf, size_t size) {
     if (size == 0) return;
     buf[0] = 0;
     if (d.kind == DeltaLine::Group) {
-        o.str(detail::group_label(d.index)); o.str(": was "); o.str(detail::gv_label(d.was)); o.str(", now "); o.str(detail::gv_label(d.now));
+        o.str(detail::group_label(d.index)); o.str(K2_P(": was ")); o.str(detail::gv_label(d.was)); o.str(K2_P(", now ")); o.str(detail::gv_label(d.now));
         return;
     }
     o.str(detail::alg_label(d.index));
-    if (d.kind == DeltaLine::RangeMax) { o.str(" max "); o.volts(d.was_dv); o.str(" > "); o.volts(d.now_dv); return; }
-    if (d.was_dv && d.now_dv) { o.str(": fail "); o.volts(d.was_dv); o.str(" > "); o.volts(d.now_dv); return; }
+    if (d.kind == DeltaLine::RangeMax) { o.str(K2_P(" max ")); o.volts(d.was_dv); o.str(" > "); o.volts(d.now_dv); return; }
+    if (d.was_dv && d.now_dv) { o.str(K2_P(": fail ")); o.volts(d.was_dv); o.str(" > "); o.volts(d.now_dv); return; }
     const unsigned dv = d.was_dv ? d.was_dv : d.now_dv;
     o.str(" "); o.volts(dv);
-    o.str(d.was_dv ? ": was FAIL, now PASS" : ": was PASS, now FAIL");
+    o.str(d.was_dv ? K2_P(": was FAIL, now PASS") : K2_P(": was PASS, now FAIL"));
 }
 
 }  // namespace k2::report_card

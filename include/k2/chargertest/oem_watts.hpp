@@ -47,10 +47,10 @@ struct Level {
 // the tree's notes), 150W and 240W (20 V levels, above the ceiling stage's 12 V guard: never askable).
 inline constexpr std::array<Level, 5> kLevels{{
     {Family::Vooc, "VOOC", 5000, 4000, 20, false},
-    {Family::Vooc, "SVOOC", 10000, 5000, 50, true},
-    {Family::Vooc, "SVOOC", 10000, 6500, 65, true},
-    {Family::Vooc, "SVOOC", 10000, 10000, 100, true},
-    {Family::Vooc, "SVOOC", 11000, 11000, 120, true},
+    {Family::Vooc, "SVOOC", 10000, 5000, 50, true}, // k2-plain: row parsed by test_oem_watts.py
+    {Family::Vooc, "SVOOC", 10000, 6500, 65, true}, // k2-plain: row parsed by test_oem_watts.py
+    {Family::Vooc, "SVOOC", 10000, 10000, 100, true}, // k2-plain: row parsed by test_oem_watts.py
+    {Family::Vooc, "SVOOC", 11000, 11000, 120, true}, // k2-plain: row parsed by test_oem_watts.py
 }};
 
 // A family's slice of kLevels.

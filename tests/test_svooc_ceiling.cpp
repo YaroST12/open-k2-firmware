@@ -86,7 +86,7 @@ void test_end_of_reads_a_quiet_adapter_as_stopped() {
     l.quiet_ms = sc::kQuietMs;     CHECK_EQ(int(sc::end_of(l, 4000)), int(End::Stopped));
     l.commands = 0;                CHECK_EQ(int(sc::end_of(l, 4000)), int(End::None));   // never spoke: the wakes go on
     l.commands = 9; l.judged = true; CHECK_EQ(int(sc::end_of(l, 4000)), int(End::Judged));
-    CHECK(std::strcmp(sc::name(End::Stopped), "stopped") == 0);
+    CHECK_STR(sc::name(End::Stopped), "stopped");
 }
 
 void test_result_text() {

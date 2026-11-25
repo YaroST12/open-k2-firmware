@@ -77,6 +77,7 @@
 #include "k2/pd/emlib.hpp"
 #include "k2/fastcharge/fc_engine.hpp"
 #include "k2/pd/pd_sink.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::report_card {
 
@@ -269,7 +270,7 @@ inline const char* group_word(unsigned g) {
 
 // The passive note for a source that listed OPPO's SVID (nothing is sent to it); nullptr when it did not.
 // 33 characters: it fits one 6 px row of the results lines and the card's fact line.
-constexpr const char* oppo_note(const Card& c) { return (c.src_flags & kSrcOppoSvid) ? "OPPO SVID 0x22D9 (discovery only)" : nullptr; }
+constexpr const char* oppo_note(const Card& c) { return (c.src_flags & kSrcOppoSvid) ? K2_P("OPPO SVID 0x22D9 (discovery only)") : nullptr; }
 
 // The SCP current limit the adapter reported to the SCP unit, in mA (src_flags bits 1..7, 50 mA steps; 0 = not read, or a card
 // from before the bits meant anything). The voltage of the note is the highest SCP level that passed, which is the adapter's own

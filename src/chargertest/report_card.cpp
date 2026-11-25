@@ -3,6 +3,7 @@
 #include "k2/chargertest/report_card.hpp"
 
 #include "k2/pd/pd.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::report_card {
 
@@ -19,7 +20,7 @@ struct Out {
         if (n + 1 < cap) out[n++] = c;
         if (cap) out[n] = 0;
     }
-    void str(const char* s) { while (*s) ch(*s++); }
+    void str(const char* s) { strpack::for_chars(s, [this](char c) { ch(c); }); }
     void milli(unsigned v, unsigned dec) {
         char whole[8];
         unsigned w = v / 1000, k = 0;
@@ -86,7 +87,7 @@ uint32_t fnv_step(uint32_t h, uint8_t b) { return (h ^ b) * 16777619u; }
 }  // namespace
 
 const char* group_why(unsigned group, const GroupResult& r) {
-    if (r.reason == uint8_t(ct::Reason::NoQc3Plus)) return "no QC3+";
+    if (r.reason == uint8_t(ct::Reason::NoQc3Plus)) return K2_P("no QC3+");
     if (r.reason == uint8_t(ct::Reason::LinesOpen)) return ct::kLinesOpenCell;   // the cell word; the full cause is the reason's name
     if (r.detail) {
         if (group == unsigned(ct::Group::Pd)) {
@@ -96,8 +97,8 @@ const char* group_why(unsigned group, const GroupResult& r) {
             if (r.detail <= unsigned(pd::SinkResult::BadChoice))
                 return pd::result_name(pd::SinkResult(r.detail));
         } else if (r.detail <= unsigned(fc::Fail::NoChange)) {
-            if (r.detail == unsigned(fc::Fail::NoAnswer) && vooc_group(group)) return "no answer to either wake, unloaded";   // the card has the room
-            if (silent_skip(group, r)) return "no reply";   // skipped: the protocol was never offered, not a failure (a failed group keeps the engine's word)
+            if (r.detail == unsigned(fc::Fail::NoAnswer) && vooc_group(group)) return K2_P("no answer to either wake, unloaded");   // the card has the room
+            if (silent_skip(group, r)) return K2_P("no reply");   // skipped: the protocol was never offered, not a failure (a failed group keeps the engine's word)
             return fc::name(fc::Fail(r.detail));
         }
     }
@@ -110,7 +111,7 @@ bool scp_note(const Card& c, char* out, size_t cap) {
     const unsigned ma = scp_cap_ma(c);
     if (ma == 0) return false;
     Out o{out, cap};
-    o.str("SCP cap ");
+    o.str(K2_P("SCP cap "));
     const GroupResult& g = c.group[unsigned(ct::Group::Scp)];
     if (g.verdict == GV::Pass && g.max_mv >= 1000) {
         o.milli(g.max_mv, 1);
@@ -143,7 +144,7 @@ QcLabel qc_label(const Card& c) {
 }
 
 const char* qc_label_name(QcLabel l) {
-    static constexpr const char* kNames[] = {"", "QC4+", "QC5", "Moto TurboPower", "Samsung SFC 2.0", "Samsung SFC 3.0"};
+    static constexpr const char* kNames[] = {"", "QC4+", "QC5", "Moto TurboPower", "Samsung SFC 2.0", "Samsung SFC 3.0"};   // k2-plain: result_layout slices the label
     const unsigned i = unsigned(l);
     return i < std::size(kNames) ? kNames[i] : "";
 }
@@ -204,17 +205,17 @@ size_t qc_label_justification(const Card& c, char* out, size_t cap) {
     char sub[20];
     if (l == QcLabel::Qc5) {
         if (qc_pd_va_text(c, sub, sizeof sub)) {
-            o.str("via PD ");
+            o.str(K2_P("via PD "));
             o.str(sub);
         } else if (qc_pps_span_text(c, sub, sizeof sub)) {
-            o.str("Qualcomm VID, PPS ");
+            o.str(K2_P("Qualcomm VID, PPS "));
             o.str(sub);
         }
     } else if (qc_pps_va_text(c, sub, sizeof sub)) {
-        o.str("via PPS ");
+        o.str(K2_P("via PPS "));
         o.str(sub);
     } else if (qc_pps_span_text(c, sub, sizeof sub)) {
-        o.str(l == QcLabel::Qc4Plus ? "Qualcomm VID, PPS " : "PPS ");
+        o.str(l == QcLabel::Qc4Plus ? K2_P("Qualcomm VID, PPS ") : "PPS ");
         o.str(sub);
     }
     return o.n;
@@ -303,7 +304,7 @@ size_t auto_name(char* out, uint16_t vid, std::string_view mfr, uint8_t pdp_w) {
             n = vn.view().size();
             std::memcpy(base, vn.c_str(), n);
         } else if (vid) {
-            static constexpr char hx[] = "0123456789ABCDEF";
+            static constexpr char hx[] = "0123456789ABCDEF"; // k2-plain: char array
             std::memcpy(base, "VID ", 4);
             for (unsigned i = 0; i < 4; ++i) base[4 + i] = hx[(vid >> (12 - 4 * i)) & 15];
             n = 8;
