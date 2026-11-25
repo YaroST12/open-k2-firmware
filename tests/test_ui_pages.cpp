@@ -3029,6 +3029,74 @@ static void dump_panel(const char *name, int rot) {
     }
 }
 
+// K2_DUMP=dir: the strip and colour fixes of k2/uinits2 at every rotation (tools/panel2png.py).
+static void dump_ui(const char *name, int rot) {
+    const char *dir = std::getenv("K2_DUMP");
+    if (!dir) return;
+    char p[256];
+    std::snprintf(p, sizeof p, "%s/k2_ui_%s_r%d.panel", dir, name, rot);
+    if (FILE *f = std::fopen(p, "wb")) {
+        std::fwrite(g_panel, 2, 240 * 240, f);
+        std::fclose(f);
+    }
+}
+
+static void test_strip_fix_renders() {
+    if (!std::getenv("K2_DUMP")) return;
+    for (int rot = 0; rot < 4; rot++) {
+        Ui &ui = fresh_ui();
+        uint32_t t = 40000;
+        ui.set_rotation(uint8_t(rot), t);
+        const auto shot = [&](const char *n) { for (int i = 0; i < 4; i++) ui.tick(t += 100); t = settle(ui, t); dump_ui(n, rot); };
+        const auto key = [&](Button b) { ui.on_button(b, ButtonEvent::Short, t += 50); t = settle(ui, t); };
+        ui.goto_page(kDiagPage, t += 100);
+        shot("sysstate");
+        const Menu menus[] = {Menu::Memory, Menu::Cards, Menu::BlackBox, Menu::Emarker};
+        const char *names[] = {"memory", "cards_empty", "bbox_live_only", "saved_cables_empty"};
+        for (int i = 0; i < 4; i++) {
+            ui.goto_page(static_cast<uint8_t>(Page::Lines), t += 100);
+            ui.push_menu(menus[i], t += 100);
+            shot(names[i]);
+        }
+        fill_pdos(3);
+        ui.goto_page(kPdPage, t += 100);
+        shot("spec_fits");
+        g_stub.caps = {};
+        ui.goto_page(static_cast<uint8_t>(Page::ChargerTest), t += 100);
+        for (int i = 0; i < 8; i++) key(Button::Minus);
+        shot("ct_tests_top");
+        for (int i = 0; i < 5; i++) key(Button::Plus);
+        shot("ct_tests_custom");
+        key(Button::Ok);
+        for (int i = 0; i < 8; i++) key(Button::Plus);
+        shot("ct_custom_done");
+        ui.goto_page(static_cast<uint8_t>(Page::Lines), t += 100);
+        ui.push_menu(Menu::CableR, t += 100);
+        ui.set_cable_mode(cable_r::Mode::Kelvin);
+        g_stub.pm_online = true;
+        g_stub.pm = {};
+        g_stub.pm.vbus_mv = 19740; g_stub.pm.current_ma = 310; g_stub.pm.power_mw = 6120;
+        shot("cabler_live");
+        ui.set_cable_mode(cable_r::Mode::Passive);
+        g_stub.pm = {};
+        set_caps_65w();
+        t = open_limit_row(ui, t + 100);
+        key(Button::Ok);                                     // PickLimit
+        key(Button::Plus);                                   // Fixed
+        key(Button::Ok);                                     // EditFixed
+        key(Button::Plus);                                   // Max V
+        key(Button::Ok);
+        key(Button::Plus); key(Button::Plus);                // 9V
+        key(Button::Ok);                                     // 9V's Max A
+        key(Button::Back);                                   // the voltages, 9V kept
+        shot("limit_v_kept");
+        key(Button::Back);                                   // EditFixed
+        shot("limit_edit_kept");
+        g_stub.caps = {};
+        ui.goto_page(uint8_t(Page::Home), t += 100);
+    }
+}
+
 static void test_pd_limit_renders() {
     if (!std::getenv("K2_DUMP")) return;
     for (int rot = 0; rot < 4; rot++) {
@@ -3077,6 +3145,7 @@ static void test_pd_limit_renders() {
 
 int main() {
     test_pd_limit_renders();
+    test_strip_fix_renders();
     test_pd_limit_live_contract_resets_then_arms();
     test_pd_limit_confirm_window();
     test_pd_limit_no_live_contract_no_reset();
