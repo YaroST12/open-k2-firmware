@@ -38,7 +38,7 @@ int cells_rt(const char *s) {
 namespace k2::strpack {
 namespace {
 void abort_hook(const char *what) {
-    std::fprintf(stderr, "strpack misuse: %s\n", what);
+    std::fprintf(stderr, "strpack misuse: %s\n", what); // k2-plain: the decoder's own diagnostics
     std::abort();
 }
 MisuseHook g_hook = abort_hook;
@@ -65,13 +65,13 @@ bool valid_text(std::string_view s) {   // ASCII text, tabs/newlines and well-fo
 void set_misuse_hook(MisuseHook hook) { g_hook = hook ? hook : abort_hook; }
 
 void check_whole(const char *s, std::size_t n) {
-    if (s != __start_k2_strpack && s[-1] != '\0') return g_hook("pointer into the middle of a packed string");
-    if (n != SIZE_MAX && n != std::strlen(s)) g_hook("packed string cut by a string_view length");
+    if (s != __start_k2_strpack && s[-1] != '\0') return g_hook("pointer into the middle of a packed string"); // k2-plain: the decoder's own diagnostics
+    if (n != SIZE_MAX && n != std::strlen(s)) g_hook("packed string cut by a string_view length"); // k2-plain: the decoder's own diagnostics
 }
 
 void expect_plain(std::string_view s) {
-    if (in_section(s.data())) return g_hook("packed string at a raw seam (decode it first)");
-    if (!valid_text(s)) g_hook("packed bytes copied out of their section");
+    if (in_section(s.data())) return g_hook("packed string at a raw seam (decode it first)"); // k2-plain: the decoder's own diagnostics
+    if (!valid_text(s)) g_hook("packed bytes copied out of their section"); // k2-plain: the decoder's own diagnostics
 }
 
 }  // namespace k2::strpack

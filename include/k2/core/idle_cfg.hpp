@@ -15,7 +15,7 @@
 
 namespace k2::idle_cfg {
 
-inline constexpr const char* kPath = "/idle.cfg";
+inline constexpr const char* kPath = "/idle.cfg"; // k2-plain: fs path
 inline constexpr std::array<std::uint8_t, 4> kMagic{'K', '2', 'I', 'D'};
 inline constexpr std::size_t kSize = 11;
 

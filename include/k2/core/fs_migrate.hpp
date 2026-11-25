@@ -38,8 +38,8 @@ namespace k2::fsmigrate {
 
 inline constexpr std::uint32_t kMarginBlocks = 8;   // free blocks the kept files must leave in the 111-block volume
 inline constexpr char kMark = '~';                  // suffix of a file's copy while it is written
-inline constexpr const char* kDropped[] = {"/cards", "/bb"};             // never kept
-inline constexpr const char* kDroppedIfTight[] = {"/tcap", "/log.txt"};  // dropped only when the rest does not fit
+inline constexpr const char* kDropped[] = {"/cards", "/bb"};             // never kept // k2-plain: fs path
+inline constexpr const char* kDroppedIfTight[] = {"/tcap", "/log.txt"};  // dropped only when the rest does not fit // k2-plain: fs path
 
 enum class Outcome : std::uint8_t { None, Migrated, Deferred, Stuck, Failed };
 

@@ -20,6 +20,7 @@
 #include <optional>
 
 #include "k2/core/ringlog.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::boottrace {
 
@@ -100,15 +101,15 @@ inline std::size_t format_sample(char* out, std::size_t n, const Sample& s, std:
     if (n == 0) return 0;
     std::size_t len = 0;
     auto put = [&](char c) { if (len + 1 < n) out[len++] = c; };
-    auto str = [&](const char* p) { while (*p) put(*p++); };
+    auto str = [&](const char* p) { strpack::for_chars(p, put); };
     auto num = [&](unsigned v) {
         char t[10];
         int k = 0;
         do { t[k++] = char('0' + v % 10); v /= 10; } while (v);
         while (k) put(t[--k]);
     };
-    str("t="); num(t_ms); str("ms vbus="); num(s.vbus_mv); str(" aux="); num(s.aux_mv);
-    str(" plus="); num(s.plus ? 1 : 0); str(" cc1="); num(s.cc1_mv); str(" cc2="); num(s.cc2_mv);
+    str("t="); num(t_ms); str(K2_P("ms vbus=")); num(s.vbus_mv); str(K2_P(" aux=")); num(s.aux_mv);
+    str(K2_P(" plus=")); num(s.plus ? 1 : 0); str(K2_P(" cc1=")); num(s.cc1_mv); str(K2_P(" cc2=")); num(s.cc2_mv);
     out[len] = '\0';
     return len;
 }

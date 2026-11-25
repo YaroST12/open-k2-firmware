@@ -15,6 +15,7 @@
 #include "k2/drivers/fusb302.hpp"
 #include "k2/drivers/mode_ram.hpp"
 #include "k2/drivers/usb.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::storage {
 namespace {
@@ -32,7 +33,7 @@ Result finish(const char* what, store::Err e, unsigned slot = 0) {
 // itself lives in the .mode_drive overlay: only the MSC drive serves SAVEDLOG.TXT from RAM, and in Drive mode
 // that tenant owns the region for the whole session. Every other mode reads just the length from the volume.
 constexpr std::size_t kLogKeep = 512;
-constexpr const char* kLogPath = "/log.txt";
+constexpr const char* kLogPath = "/log.txt"; // k2-plain: fs path
 K2_MODE_RAM_DRIVE char g_log[kLogKeep];
 std::size_t g_log_len = 0;
 bool g_log_loaded = false;
@@ -94,7 +95,7 @@ Result save_log() {
     std::size_t skip = total > kLogKeep ? total - kLogKeep : 0;       // keep the newest text
     // Staged in the scratch arena: the RAM mirror itself lives in the .mode_drive overlay (see load_log),
     // which another tenant may own while this runs.
-    const scratch::Lease lease("storage.save_log");
+    const scratch::Lease lease(K2_P("storage.save_log"));
     auto& stage = scratch::as<std::array<char, kLogKeep>>();
     std::size_t n = 0;
     for (const auto part : text) {
@@ -108,12 +109,12 @@ Result save_log() {
     const bool ok = e == fs::Err::Ok || e == fs::Err::NotFound;
     g_log_loaded = ok;
     g_log_len = ok ? n : 0;
-    return finish("save-log", ok ? store::Err::Ok : e == fs::Err::NoSpace ? store::Err::Full : store::Err::FlashProgram);
+    return finish(K2_P("save-log"), ok ? store::Err::Ok : e == fs::Err::NoSpace ? store::Err::Full : store::Err::FlashProgram);
 }
 
 emlib::Result lib_save(const emrec::Record& rec, const emk_quirk::Quirks& quirks) {
     const emlib::Result r = emlib::Library(fs::instance()).save(rec, quirks);
-    K2LOG("[STORE] lib-save -> %s #%u%s\n", emlib::err_name(r.err), static_cast<unsigned>(r.seq), r.existed ? " (already saved)" : "");
+    K2LOG("[STORE] lib-save -> %s #%u%s\n", emlib::err_name(r.err), static_cast<unsigned>(r.seq), r.existed ? K2_P(" (already saved)") : "");
     if (r.err == emlib::Err::Ok && !r.existed) g_gen++;
     return r;
 }
@@ -158,7 +159,7 @@ bool twin_get(std::uint8_t seq, twin::Twin& out) { return twin::Library(fs::inst
 twin::Result twin_save(const twin::Twin& in) {
     const twin::Result r = twin::Library(fs::instance()).save(in);
     K2LOG("[STORE] twin-save -> %s #%u%s\n", twin::err_name(r.err), static_cast<unsigned>(r.seq),
-          r.unchanged ? " (unchanged)" : r.existed ? " (updated)" : "");
+          r.unchanged ? K2_P(" (unchanged)") : r.existed ? K2_P(" (updated)") : "");
     if (r.err == twin::Err::Ok && !r.unchanged) g_gen++;
     return r;
 }

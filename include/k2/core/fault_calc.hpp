@@ -5,6 +5,7 @@
 #pragma once
 #include <cstddef>
 #include <cstdint>
+#include "k2/core/strpack.hpp"
 
 namespace k2::fault {
 
@@ -42,10 +43,10 @@ struct Out {
     char* p;
     std::size_t n, len = 0;
     void put(char c) { if (len + 1 < n) p[len++] = c; }
-    void str(const char* s) { while (*s) put(*s++); }
+    void str(const char* s) { strpack::for_chars(s, [this](char c) { put(c); }); }
     void hex(const char* tag, std::uint32_t v) {
         str(tag);
-        for (int s = 28; s >= 0; s -= 4) put("0123456789ABCDEF"[(v >> s) & 0xF]);
+        for (int s = 28; s >= 0; s -= 4) put("0123456789ABCDEF"[(v >> s) & 0xF]); // k2-plain: indexed digit table
     }
     std::size_t done() { if (n) p[len] = '\0'; return len; }
 };
@@ -66,8 +67,8 @@ inline const char* kind_tag(Kind k) {
 inline std::size_t line_regs(const Info& i, char* buf, std::size_t n) {
     detail::Out o{buf, n};
     if (n == 0) return 0;
-    o.str("[FAULT] "); o.str(detail::kind_tag(i.kind));
-    o.hex(" PC=", i.pc); o.hex(" LR=", i.lr); o.hex(" CFSR=", i.cfsr); o.hex(" BFAR=", i.bfar);
+    o.str(K2_P("[FAULT] ")); o.str(detail::kind_tag(i.kind));
+    o.hex(" PC=", i.pc); o.hex(" LR=", i.lr); o.hex(K2_P(" CFSR="), i.cfsr); o.hex(K2_P(" BFAR="), i.bfar);
     return o.done();
 }
 
@@ -75,8 +76,8 @@ inline std::size_t line_regs(const Info& i, char* buf, std::size_t n) {
 inline std::size_t line_status(const Info& i, char* buf, std::size_t n) {
     detail::Out o{buf, n};
     if (n == 0) return 0;
-    o.str("[FAULT]");
-    o.hex(" HFSR=", i.hfsr); o.hex(" MMFAR=", i.mmfar); o.hex(" SP=", i.sp); o.hex(" PSR=", i.xpsr);
+    o.str(K2_P("[FAULT]"));
+    o.hex(K2_P(" HFSR="), i.hfsr); o.hex(K2_P(" MMFAR="), i.mmfar); o.hex(" SP=", i.sp); o.hex(K2_P(" PSR="), i.xpsr);
     return o.done();
 }
 

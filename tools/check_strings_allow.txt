@@ -21,38 +21,3 @@ src/ui/ui_loop_probe.cpp  opt-in lab build (Makefile filter-out): not in the shi
 src/ui/ui_pdstress.cpp  opt-in lab build (Makefile filter-out): not in the shipping image
 src/ui/ui_pdstress_page.cpp  opt-in lab build (Makefile filter-out): not in the shipping image
 src/ui/ui_twin.cpp  opt-in lab build (Makefile filter-out): not in the shipping image
-include/k2/core/bbpersist.hpp  backlog: K2_P sweep pending
-include/k2/core/bootmode.hpp  backlog: K2_P sweep pending
-include/k2/core/boottrace.hpp  backlog: K2_P sweep pending
-include/k2/core/fault_calc.hpp  backlog: K2_P sweep pending
-include/k2/core/fs_grow.hpp  backlog: K2_P sweep pending
-include/k2/core/fs_migrate.hpp  backlog: K2_P sweep pending
-include/k2/core/idle_cfg.hpp  backlog: K2_P sweep pending
-include/k2/core/lim_comeback.hpp  backlog: K2_P sweep pending
-include/k2/core/loop_guard.hpp  backlog: K2_P sweep pending
-include/k2/core/pc_link.hpp  backlog: K2_P sweep pending
-include/k2/core/rd_intent.hpp  backlog: K2_P sweep pending
-include/k2/core/ripple.hpp  backlog: K2_P sweep pending
-include/k2/core/shell.hpp  backlog: K2_P sweep pending
-include/k2/core/stage_meter.hpp  backlog: K2_P sweep pending
-src/core/boot_pd.cpp  backlog: K2_P sweep pending
-src/core/bootinfo.cpp  backlog: K2_P sweep pending
-src/core/eekeep.cpp  backlog: K2_P sweep pending
-src/core/fault.cpp  backlog: K2_P sweep pending
-src/core/fmt.cpp  backlog: K2_P sweep pending
-src/core/fs.cpp  backlog: K2_P sweep pending
-src/core/idle_hw.cpp  backlog: K2_P sweep pending
-src/core/logfmt.cpp  backlog: K2_P sweep pending
-src/core/main.cpp  backlog: K2_P sweep pending
-src/core/main_loop.cpp  backlog: K2_P sweep pending
-src/core/main_loop_cold.cpp  backlog: K2_P sweep pending
-src/core/memstat.cpp  backlog: K2_P sweep pending
-src/core/rd_comeback.cpp  backlog: K2_P sweep pending
-src/core/remote.cpp  backlog: K2_P sweep pending
-src/core/ripple.cpp  backlog: K2_P sweep pending
-src/core/shell.cpp  backlog: K2_P sweep pending
-src/core/shell_hw_hot.cpp  backlog: K2_P sweep pending
-src/core/storage.cpp  backlog: K2_P sweep pending
-src/core/strpack.cpp  backlog: K2_P sweep pending
-src/core/survey.cpp  backlog: K2_P sweep pending
-src/core/version.cpp  backlog: K2_P sweep pending

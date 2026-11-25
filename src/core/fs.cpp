@@ -54,14 +54,14 @@ bool is_tmp(const char* name) {
 const char* err_name(Err e) {
     switch (e) {
         case Err::Ok: return "ok";
-        case Err::NotFound: return "not found";
-        case Err::NoSpace: return "no space";
-        case Err::Corrupt: return "corrupt";
+        case Err::NotFound: return K2_P("not found");
+        case Err::NoSpace: return K2_P("no space");
+        case Err::Corrupt: return K2_P("corrupt");
         case Err::Io: return "io";
-        case Err::Invalid: return "invalid";
-        case Err::TooBig: return "too big";
-        case Err::Exists: return "exists";
-        case Err::NotReady: return "not ready";
+        case Err::Invalid: return K2_P("invalid");
+        case Err::TooBig: return K2_P("too big");
+        case Err::Exists: return K2_P("exists");
+        case Err::NotReady: return K2_P("not ready");
     }
     return "?";
 }

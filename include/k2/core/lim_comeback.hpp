@@ -15,7 +15,7 @@
 
 namespace k2::limcomeback {
 
-inline constexpr const char* kPath = "/lim.rec";
+inline constexpr const char* kPath = "/lim.rec"; // k2-plain: fs path
 inline constexpr std::array<std::uint8_t, 4> kMagic{'K', '2', 'L', 'M'};
 inline constexpr std::uint8_t kVersion = 1;
 inline constexpr std::uint8_t kSalt = 0xA7;

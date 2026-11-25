@@ -11,6 +11,7 @@
 #include "k2/core/rd_comeback.hpp"
 #include "k2/drivers/fusb302.hpp"
 #include "k2/drivers/systick.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::bootpd {
 
@@ -35,7 +36,7 @@ namespace {
     const std::uint32_t dt = systick::millis() - t0;
     if (is_rd) {
         K2LOG("[PD] self-power bring-up: %s after %u ms\n",
-              fusb302::sink_status().state == pd::SinkState::Ready ? "contract ready" : "no contract",
+              fusb302::sink_status().state == pd::SinkState::Ready ? K2_P("contract ready") : K2_P("no contract"),
               static_cast<unsigned>(dt));
     } else {
         K2LOG("[LIM] comeback bring-up: state=%s after %u ms\n",

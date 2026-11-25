@@ -32,8 +32,8 @@
 
 namespace k2::fsgrow {
 
-inline constexpr char kLegacyMarker[] = "/.legacy";   // k2::fs::wipe_legacy() has run
-inline constexpr char kIntent[] = "/.grow";           // the run was proven blank and the grow is under way
+inline constexpr char kLegacyMarker[] = "/.legacy";   // k2::fs::wipe_legacy() has run // k2-plain: fs path
+inline constexpr char kIntent[] = "/.grow";           // the run was proven blank and the grow is under way // k2-plain: fs path
 
 // bool blank(sector address): the whole 2 KB sector reads 0xFF. void open_run(): the flash guard lets the volume write
 // the run from now on (flash::open_fs_run on the device).

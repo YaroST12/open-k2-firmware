@@ -7,6 +7,7 @@
 #include "k2/core/log.hpp"
 #include "k2/drivers/fusb302.hpp"
 #include "k2/drivers/systick.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::survey {
 namespace {
@@ -168,7 +169,7 @@ void poll(bool charger_test, pd::SvWhy block) {
     if (auto_act == pd::AutoAct::Start) {
         start_auto(now);
     } else if (auto_act == pd::AutoAct::Abort && g_auto_run) {   // load current, a foreign Request or a tool: stop at once
-        K2LOG("[SURVEY] auto read stopped (%s)\n", block == pd::SvWhy::Inline ? "inline" : "link in use");
+        K2LOG("[SURVEY] auto read stopped (%s)\n", block == pd::SvWhy::Inline ? K2_P("inline") : K2_P("link in use"));
         if (g_wire_started) fusb302::survey_wire_abort();
         g_wire_started = false;
         g_s.block_open(block);

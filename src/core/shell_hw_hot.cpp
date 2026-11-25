@@ -37,7 +37,7 @@ K2_HOT void poll() {
     }
     if (!g_session) {
         g_session = true;
-        put("open-k2 shell, 'help' lists the commands\r\n");
+        put("open-k2 shell, 'help' lists the commands\r\n"); // k2-plain: hot file
     }
     // A raw level above 5 V-class signalling is only safe under the monitor's ceiling: drop it if VBUS got there.
     if (g_raw_dp || g_raw_dm) {

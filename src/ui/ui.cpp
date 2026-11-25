@@ -667,7 +667,7 @@ Ui::Session Ui::session() {
 }
 
 // The loop lock's footer line (8 px a character in the 220 px footer band).
-static_assert(fits_px(8, loopguard::kLockText, 220), "the loop lock line is wider than the footer band");
+static_assert(fits_px_p(8, loopguard::kLockText, 220), "the loop lock line is wider than the footer band");
 
 // PD Stress asks this one: the same owners as busy_reason() minus the ones a run causes itself (a held contract, the sink state, an
 // EPR contract). Its own run is not "foreign".

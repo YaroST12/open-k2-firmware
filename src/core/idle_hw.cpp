@@ -21,6 +21,7 @@
 #include "k2/fastcharge/svooc_trig.hpp"
 #include "k2/pd/pdtrace.hpp"
 #include "k2/ui/ui.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::idle_hw {
 
@@ -213,7 +214,7 @@ void service(Ui& ui, bool boot_screen, std::uint32_t now) {
         g_dirty = false;
         if (ok) g_saved = c;
         K2LOG("[IDLE] saved bright=%u dim=%u dim_after=%u off_after=%u (%s)\n", unsigned(c.brightness), unsigned(c.dim_brightness),
-              unsigned(c.dim_after_s), unsigned(c.off_after_s), ok ? "ok" : "FLASH ERROR");
+              unsigned(c.dim_after_s), unsigned(c.off_after_s), ok ? "ok" : K2_P("FLASH ERROR"));
     }
 }
 

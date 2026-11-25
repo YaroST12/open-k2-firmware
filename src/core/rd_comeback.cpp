@@ -17,6 +17,7 @@
 #include "k2/pd/emlib.hpp"
 #include "k2/pd/emrec.hpp"
 #include "k2/pd/pdtrace.hpp"
+#include "k2/core/strpack.hpp"
 
 namespace k2::rdcomeback {
 namespace {
@@ -56,7 +57,7 @@ bool g_dirty = false;            // the follower's record is not on the volume y
 ctcable::Choice g_run_cable{};
 
 const char* kind_name(IntentKind k) {
-    return k == IntentKind::Session ? "session" : k == IntentKind::Reattach ? "reattach" : k == IntentKind::Rescan ? "rescan" : "none";
+    return k == IntentKind::Session ? K2_P("session") : k == IntentKind::Reattach ? K2_P("reattach") : k == IntentKind::Rescan ? K2_P("rescan") : "none";
 }
 
 // The aux rail, once, before the Rd is decided: a USB host feeds it ~5 V, a comeback boot (powered through the charger's Rp by our own
@@ -167,7 +168,7 @@ bool judge_step(std::uint32_t ms) {
     case rdintent::Verdict::Release: break;
     }
     K2LOG("[RDI] comeback released after %u ms (%s): Rd, Ra, spoof and record dropped\n", static_cast<unsigned>(ms),
-          g_rp_seen ? "no capabilities" : "no source");
+          g_rp_seen ? K2_P("no capabilities") : K2_P("no source"));
     release();
     return true;
 }
@@ -188,9 +189,9 @@ void poll() {
     const Intent& want = g_follower.wanted();
     const std::uint32_t t0 = systick::millis();
     const bool ok = save_marker(want);
-    K2LOG("[RDI] marker %s: %s pin=%u cable=%u/%u (%s, %u ms)\n", want.kind == IntentKind::None ? "removed" : "written",
+    K2LOG("[RDI] marker %s: %s pin=%u cable=%u/%u (%s, %u ms)\n", want.kind == IntentKind::None ? K2_P("removed") : K2_P("written"),
           kind_name(want.kind), static_cast<unsigned>(want.pin), static_cast<unsigned>(want.cable.kind),
-          static_cast<unsigned>(want.cable.seq), ok ? "ok" : "FAILED", static_cast<unsigned>(systick::millis() - t0));
+          static_cast<unsigned>(want.cable.seq), ok ? "ok" : K2_P("FAILED"), static_cast<unsigned>(systick::millis() - t0));
 }
 
 void set_run_cable(ctcable::Choice cable) { g_run_cable = cable; }
