@@ -231,6 +231,8 @@ class DecodeTests(unittest.TestCase):
         ev = tl.event(pt.T_TXRESULT, 0, bytes([1, 5, 0x10]))
         self.assertIn("RETRYFAIL", ev["text"])
         self.assertIn("I_RETRYFAIL", ev["text"])
+        ev = tl.event(pt.T_TXRESULT, 0, bytes([4, 4, 0]))
+        self.assertIn("inline", ev["text"])
         tl.event(pt.T_RESET, 0, b"\x00")
         ev = tl.event(pt.T_RESET, 500000, b"\x00")
         self.assertIn("500.0 ms since the previous hard reset", ev["text"])

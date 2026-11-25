@@ -1000,7 +1000,10 @@ def decode_pd_trigger(p):
             "pin": p[17] if len(p) >= 18 else 0,
             "trial_line": p[18] if len(p) >= 19 else 0,    # CC line our single Rd is trying while the direct-plug schedule is live
             "trial_moves": p[19] if len(p) >= 20 else 0,   # moves of the Rd by the direct-plug fallback this attach
-            "auto_hold": bool(p[20]) if len(p) >= 21 else False}   # the hold is the K2's own PDO 1 answer, not a trigger
+            "auto_hold": bool(p[20]) if len(p) >= 21 else False,   # the hold is the K2's own PDO 1 answer, not a trigger
+            # inline: the contract the K2 sniffed between charger and sink (flags bit0 valid, pos, mv, ma); absent before
+            "observed": bool(p[21] & 1) if len(p) >= 27 else False,
+            "obs_pos": p[22] if len(p) >= 27 else 0, "obs_mv": u16(23) if len(p) >= 27 else 0, "obs_ma": u16(25) if len(p) >= 27 else 0}
 
 
 MATCH_VERDICTS = ["no-caps", "no-request", "outside-caps", "wants-higher-v", "current-limited",
@@ -4369,7 +4372,9 @@ def cmd_pd_limit(link, a):
 def render_pd_limit(r):
     s = r["pd_limit"]
     head = f"pd-limit {s['state']}" + (f" ({s['why']})" if s["state"] == "off" and s["why"] != "none" else "")
-    lines = [head + f", limit {s['limit_mw'] / 1000:g} W, {s['injections']} lists, {s['rejects']} rejected, {s['ignores']} ignored"]
+    # Off keeps the last arm's numbers on the K2: the limit is none then. A per-tech limit (Max V/A) has no watt ceiling.
+    limit = "limit none" if s["state"] == "off" else f"limit {s['limit_mw'] / 1000:g} W" if s["limit_mw"] else "no watt cap"
+    lines = [head + f", {limit}, {s['injections']} lists, {s['rejects']} rejected, {s['ignores']} ignored"]
     if s["req_pos"]:
         lines.append(f"  sink Request pos {s['req_pos']}: {s['req_mw'] / 1000:g} W (RDO 0x{s['req_rdo']:08X})")
     lines += [f"  forged pos {i + 1}: PDO 0x{x:08X}" for i, x in enumerate(s["forged"])]
@@ -5716,8 +5721,11 @@ def _render(name, r):
                     f"trigger {t['state']} result={t['result']} pdo={t['pos']} {t['mv'] / 1000:g} V {t['ma'] / 1000:g} A")
         if r.get("pd_cmd") == "handback":
             return f"handback {r['verdict']}"   # the phase-1 lab op's verdict: allowed, or why it was refused
+        # Inline the K2 is not the sink: the live contract is the one it observed, not its own trigger's snapshot.
+        pdo = (f"contract pdo={r['obs_pos']} {r['obs_mv'] / 1000:g} V {r['obs_ma'] / 1000:g} A (observed inline)" if r.get("observed")
+               else f"pdo={r['pos']} {r['mv'] / 1000:g} V {r['ma'] / 1000:g} A")
         return (f"trigger {r['state']} result={r['result']} held={r['held']}{'(auto)' if r.get('held') and r.get('auto_hold') else ''} epr={r['epr']} "
-                f"pdo={r['pos']} {r['mv'] / 1000:g} V {r['ma'] / 1000:g} A hard_resets={r['hard_resets']} source_hard_resets={r['source_hard_resets']}"
+                f"{pdo} hard_resets={r['hard_resets']} source_hard_resets={r['source_hard_resets']}"
                 + (f" Rd pin CC{r['pin']}" if r.get("pin") else "")   # a leftover pinned Rd (pd-reread --pin)
                 + (f" Rd trying CC{r['trial_line']}" if r.get("trial_line") else "")   # the direct-plug schedule is live on that line
                 + (f" line_moves={r['trial_moves']}" if r.get("trial_moves") else ""))

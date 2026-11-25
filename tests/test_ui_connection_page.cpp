@@ -2433,6 +2433,13 @@ static void test_place_two_page_info_and_actions() {
     CHECK_EQ(int(cp(ui).item(spoof_row).act), int(conn::Act::SpoofAs));
     CHECK_EQ(cp(ui).item(spoof_row).enabled, false);
     CHECK_STR(cp(ui).item(spoof_row).tag, "load");
+    {   // the greyed row greys its OK verb; the last row dims Dn
+        const PanelLabels pl = ui.labels();
+        CHECK_STR(pl.b[static_cast<int>(Button::Ok)].shrt, "Open");
+        CHECK_EQ(pl.b[static_cast<int>(Button::Ok)].dim, true);
+        CHECK_EQ(pl.b[static_cast<int>(Button::Plus)].dim, true);
+        CHECK_EQ(pl.b[static_cast<int>(Button::Minus)].dim, false);
+    }
     CHECK_STR(std::string(cp(ui).status_line()).c_str(), "Live sink: unplug load");
     // Short Back on Actions switches back to Overview.
     ui.on_button(Button::Back, ButtonEvent::Short, t += 100);

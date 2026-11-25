@@ -586,6 +586,26 @@ static void test_ring_leave_paint() {
     const unsigned diff = force_full_redraw(ui, 3500);
     std::printf("ring leave from Actions: incremental vs forced diff=%u\n", diff);
     CHECK_EQ(diff, 0u);
+    // A list left on a lower row stays as it is (no rebuild): the ring view still converges to a full redraw.
+    for (bench::Place p : {bench::Place::Battery, bench::Place::Log}) {
+        fixture();
+        Ui u;
+        u.init(1000);
+        u.set_rotation(0, 1000);
+        u.tick(1100);
+        u.tick(1400);
+        u.open_place(p, 2000);
+        for (int i = 0; i < 6; ++i) u.tick(2100 + 50 * i);
+        for (int i = 0; i < 3; ++i) u.on_button(Button::Plus, ButtonEvent::Short, 2500 + i);
+        for (int i = 0; i < 6; ++i) u.tick(2600 + 50 * i);
+        u.on_button(Button::Back, ButtonEvent::Short, 3000);
+        for (int i = 0; i < 6; ++i) u.tick(3100 + 50 * i);
+        while (u.painting()) u.tick(3500);
+        CHECK_EQ(u.ring_view(), true);
+        const unsigned d = force_full_redraw(u, 3500);
+        std::printf("ring leave from row 3: incremental vs forced diff=%u\n", d);
+        CHECK_EQ(d, 0u);
+    }
 }
 
 // Incremental updates must converge to exactly what a forced full redraw paints. The forced

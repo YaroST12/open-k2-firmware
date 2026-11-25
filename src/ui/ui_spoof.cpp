@@ -96,8 +96,8 @@ bool SpoofPage::on_event(Event e) {
 }
 
 Strip SpoofPage::labels() const {
-    Strip l = list_strip(base_labels());
     const CableIdentityList &cl = ctx_.cables;
+    Strip l = list_strip(base_labels(), sel_, cl.count());
     const ctcable::Choice c = cl.choice_at(sel_);
     sl::Id ok = sl::Arm;
     if (c.kind == ctcable::Kind::Off) ok = emk_spoof::active() ? sl::Disarm : cl.selected().kind != ctcable::Kind::Off ? sl::Off : sl::None;

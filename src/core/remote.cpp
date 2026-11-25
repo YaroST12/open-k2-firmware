@@ -945,6 +945,13 @@ remote::PdTriggerSnapshot Remote::pd_trigger() {
     const fusb302::LineTrial lt = fusb302::line_trial();
     t.trial_line = lt.line;      // the line under trial while the direct-plug schedule is live, else 0
     t.trial_moves = lt.moves;
+    const pd::Contract &c = fusb302::contract();
+    if (fusb302::inline_mode() && c.valid) {   // inline: the live contract is the sniffed one, not our own sink's
+        t.obs_flags = static_cast<uint8_t>(1u | (c.ready ? 2u : 0u));
+        t.obs_pos = c.pos;
+        t.obs_mv = c.mv;
+        t.obs_ma = c.op_ma;
+    }
     return t;
 }
 

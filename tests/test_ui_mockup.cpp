@@ -219,13 +219,17 @@ int main() {
     for (int i = 0; i < 4; i++) { ui.on_button(Button::Plus, ButtonEvent::Short, t); t += 100; }
     render(ui, t, "settings_end");   // last of the five 2-line rows selected
     ui.goto_page(kMenuPageBase + static_cast<uint8_t>(Menu::UsbLink), t + 100); render(ui, t, "usblink");
+    for (int i = 0; i < 8; i++) { ui.on_button(Button::Plus, ButtonEvent::Short, t); t += 100; }
+    render(ui, t, "usblink_end");   // stops on the last row: Dn dim
     ui.goto_page(kMenuPageBase + static_cast<uint8_t>(Menu::Autorotate), t + 100); render(ui, t, "autorotate");
     ui.on_button(Button::Plus, ButtonEvent::Short, t); t += 100;
     render(ui, t, "autorotate_2");   // the second choice selected
     // Settings > Display: the Settings row with its summary, the list, the brightness adjust mode and both pick lists.
     ui.goto_page(uint8_t(Page::Settings), t + 100);
     for (int i = 0; i < SettingsPage::kRows; i++) { ui.on_button(Button::Minus, ButtonEvent::Short, t); t += 100; }   // to the top
-    for (int i = 0; i < SettingsPage::kDisplayRow; i++) { ui.on_button(Button::Plus, ButtonEvent::Short, t); t += 100; }
+    for (int i = 0; i < SettingsPage::kDisplayRow - 1; i++) { ui.on_button(Button::Plus, ButtonEvent::Short, t); t += 100; }
+    render(ui, t, "settings_homeboxes");   // OK reads Open
+    ui.on_button(Button::Plus, ButtonEvent::Short, t); t += 100;
     render(ui, t, "settings_display");
     ui.on_button(Button::Minus, ButtonEvent::Short, t); t += 100;   // the row above Display: Long Back, with its note
     render(ui, t, "settings_longback");

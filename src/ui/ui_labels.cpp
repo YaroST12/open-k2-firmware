@@ -84,8 +84,8 @@ constexpr auto kPacked = [] {
 }  // namespace
 
 SlotLabel slot_label(sl::Id id) {
-    const Packed &p = kPacked[id];
-    return {kWords[p.s], kWords[p.l], kWords[p.a_dim & 0x7F], (p.a_dim & 0x80) != 0};
+    const Packed &p = kPacked[id & ~sl::kDimBit];
+    return {kWords[p.s], kWords[p.l], kWords[p.a_dim & 0x7F], ((p.a_dim | id) & 0x80) != 0};
 }
 
 PanelLabels resolve(const Strip &s) {

@@ -192,7 +192,34 @@ static void test_pool() {
     CHECK_EQ(sizeof(Strip), 4u);
 }
 
+// The kit rules on a list strip: a disabled focused row dims the OK verb (text kept), and Up / Dn dim at the list's ends.
+static void test_dim_rules() {
+    const SlotLabel open = slot_label(sl::dim(sl::Open));
+    CHECK_STR(open.shrt, "Open");
+    CHECK_EQ(open.dim, true);
+    const SlotLabel share = slot_label(sl::dim(sl::OpenShare));
+    CHECK_STR(share.lng, "Share");
+    CHECK_EQ(share.dim, true);
+    CHECK_EQ(slot_label(sl::Open).dim, false);
+    CHECK_EQ(slot_label(sl::dim(sl::UpDim)).dim, true);
+    CHECK_EQ(sl::dim(sl::Open) != sl::Open, true);   // the slot signature sees the change
+    const Strip base = nav_strip();
+    Strip s = list_strip(base, 0, 5);
+    CHECK_EQ(int(s[Button::Minus]), int(sl::UpDim));
+    CHECK_EQ(int(s[Button::Plus]), int(sl::Dn));
+    s = list_strip(base, 4, 5);
+    CHECK_EQ(int(s[Button::Minus]), int(sl::Up));
+    CHECK_EQ(int(s[Button::Plus]), int(sl::DnDim));
+    s = list_strip(base, 2, 5);
+    CHECK_EQ(int(s[Button::Minus]), int(sl::Up));
+    CHECK_EQ(int(s[Button::Plus]), int(sl::Dn));
+    s = list_strip(base, 0, 1);
+    CHECK_EQ(int(s[Button::Minus]), int(sl::UpDim));
+    CHECK_EQ(int(s[Button::Plus]), int(sl::DnDim));
+}
+
 int main() {
+    test_dim_rules();
     test_pool();
     test_vocabulary();
     test_label_text();

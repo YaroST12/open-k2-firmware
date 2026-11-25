@@ -40,8 +40,8 @@ public:
     battery::view::Act act() const;
     bool viewing_stored() const { return view_ == View::Stored; }
     bool viewing_runs() const { return view_ == View::Runs; }
-    // The page is what the ring view shows of it as it stands: the Main view at its top, no end waiting for its second OK.
-    bool ring_rest() const { return view_ == View::Main && !armed() && ctx_.rows.state().offset == 0; }
+    // The page is what the ring view shows of it as it stands: the Main view, no end waiting for its second OK.
+    bool ring_rest() const { return view_ == View::Main && !armed(); }
 
 private:
     enum class View : uint8_t { Main, Runs, Stored };

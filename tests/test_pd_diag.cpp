@@ -1440,6 +1440,19 @@ void test_goodcrc_from_the_rx_fifo_is_no_tx_fail() {
     EXPECT_NO(run, Code::TxFail);
 }
 
+// An inline forged frame both partners GoodCRC at once raises neither TXSENT nor RETRYFAIL (TxResult::Inline): delivered,
+// not "K2 send failed" (limiter runs 2026-11-25: the sink's Request follows every one).
+void test_inline_tx_is_no_tx_fail() {
+    Trace t;
+    t.cc(true);
+    t.rx(true, false, Source_Cap, kHubCaps);
+    t.tx(false, false, Request, {rdo(1, 1000, 3000)});
+    t.tx_result(4);
+    Run run;
+    run.go(t);
+    EXPECT_NO(run, Code::TxFail);
+}
+
 // ---- roles and modes ----
 
 // The laptop's left port (source, DFP) rejects the hub's PR_Swap: it stays the 5 V source.
@@ -1887,6 +1900,7 @@ int main() {
     test_capture_gap_is_no_verdict();
     test_tx_fail_and_rx_bad();
     test_goodcrc_from_the_rx_fifo_is_no_tx_fail();
+    test_inline_tx_is_no_tx_fail();
     test_pr_swap_refused_by_source();
     test_pr_swap_accepted_is_quiet();
     test_swap_unanswered();

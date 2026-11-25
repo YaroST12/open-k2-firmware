@@ -236,11 +236,18 @@ static void test_two_parts(uint8_t rotation) {
     ui.tick(12200 + SharePage::kCycleMs + 100);
     CHECK_EQ(int(ui.share().index()), 0);
 
-    // A repaint (capture strip, resync) draws the same part again (it encodes it once more: the workspace is not kept).
+    // A repaint (capture strip, resync) draws the same part again: it encodes at most once more.
     const unsigned enc3 = ui.share().encodes();
     ui.resync(15000);
     for (uint32_t ts = 15002; ui.painting(); ts += 2) ui.tick(ts);
-    CHECK_EQ(int(ui.share().encodes()), int(enc3) + 1);
+    CHECK(ui.share().encodes() <= enc3 + 1);
+    // A screenshot of a scratch page renders 240 one-row strips: the code is built once, not once per strip (18.5 s on the
+    // K2 for the Boot info code before).
+    const unsigned enc4 = ui.share().encodes();
+    ui.capture_state_begin();
+    for (int strip = 0; strip < 240; strip++) ui.render_for_capture(15100);
+    ui.capture_state_end();
+    CHECK(ui.share().encodes() <= enc4 + 1);
     qs::Assembler third(got);
     CHECK(feed(ui, third) == qs::Assembler::Result::Accepted);
 
@@ -950,7 +957,7 @@ static void test_info_view() {
     CHECK(!ui.share().info());
     CHECK(ui.menu() == Menu::Share);                                     // BACK left the text view, not the share
     CHECK_EQ(int(ui.menu_depth()), 1);
-    CHECK_EQ(int(ui.share().encodes()), int(enc) + 1);
+    CHECK_EQ(int(ui.share().encodes()), int(enc));                       // the symbol is still in the arena: drawn, not rebuilt
     CHECK(std::equal(code_panel.begin(), code_panel.end(), g_panel));
 
     ui.on_button(Button::Ok, ButtonEvent::Long, 3500);                   // and Long OK again returns

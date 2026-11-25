@@ -99,6 +99,7 @@ void SharePage::show(unsigned index, uint32_t now_ms) {
 
 void SharePage::enter() {
     encodes_ = paints_ = 0;
+    code_n_ = 0;   // a new record: nothing in the arena is ours
     drawn_n_ = 0;
     link_ = has_link_form();
     cycling_ = !link_ && parts() > 1;
@@ -137,23 +138,26 @@ void SharePage::paint(bool clear) {
 
     scratch::Lease lease("share");   // k2-plain: scratch owner tag
     auto &k = scratch::as<PaintWork>();
+    const std::uint16_t key = static_cast<std::uint16_t>((index_ & 0x7FFF) | (link_ ? 0x8000u : 0u));
+    const bool kept = code_n_ != 0 && code_key_ == key && scratch::epoch() == code_epoch_ + 1;
     std::uint8_t *code;
     std::uint8_t *temp;
     std::uint16_t *line;
-    std::size_t tn;
+    std::size_t tn = 0;
     if (link_) {
         code = k.link.code;
         temp = k.link.temp;
         line = k.link.line;
         const std::span<char> text(reinterpret_cast<char *>(temp), kLinkBuf);
-        tn = v2() ? lk::encode_v2(type(), record(), text) : lk::encode(type(), record(), packed(), text);
+        if (!kept) tn = v2() ? lk::encode_v2(type(), record(), text) : lk::encode(type(), record(), packed(), text);
     } else {
         code = k.frame.code;
         temp = k.frame.temp;
         line = k.frame.line;
-        tn = qrshare::encode_part(type(), schema(), record(), index_, k.frame.text, packed());
+        if (!kept) tn = qrshare::encode_part(type(), schema(), record(), index_, k.frame.text, packed());
     }
-    encodes_++;
+    if (kept) n_ = code_n_;
+    else encodes_++;
     if (tn != 0) {
         if (link_ && tn > static_cast<std::size_t>(kBusyChars)) {   // the slow ones: say so before the encode
             wipe();
@@ -165,6 +169,9 @@ void SharePage::paint(bool clear) {
                    : qr::encode_text_placed(k.frame.text, code, temp, kFrameMaxVersion);
         qr::set_poll(nullptr);
     }
+    code_epoch_ = scratch::epoch();
+    code_key_ = key;
+    code_n_ = static_cast<std::uint8_t>(n_ > 0 && n_ < 256 ? n_ : 0);
     if (n_ > 0) {
         look_ = qrview::look_for(qrview::version_of(n_));
         plan_ = qrview::plan_in(a, n_, 0, kMinModulePx, look_.quiet, look_.px);
