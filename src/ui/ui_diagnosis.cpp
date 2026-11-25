@@ -257,7 +257,7 @@ bool DiagnosisPage::on_event(Event e) {
 }
 
 Strip DiagnosisPage::labels() const {
-    Strip l = list_strip(base_labels());   // short [+]/[-] move the selection; OK opens only the Black Box row
+    Strip l = list_strip(base_labels(), sel_, list_rows());   // short [+]/[-] move the selection; OK opens only the Black Box row
     l[Button::Ok] = on_blackbox() ? sl::Open : sl::None;
     return l;
 }

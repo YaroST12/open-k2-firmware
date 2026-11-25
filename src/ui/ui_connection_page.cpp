@@ -299,11 +299,11 @@ Strip ConnectionPage::labels() const {
     const bool iq_confirm = tab_ == conn::Tab::Sink && valid && items_[static_cast<std::size_t>(i)].act == conn::Act::Identify &&
                             before(ctx_.now, iq_armed_until_);
     const sl::Id ok = (reset_confirm || iq_confirm) ? (share ? sl::ConfirmShare : sl::Confirm)
-                    : valid ? conn::act_slot(items_[static_cast<std::size_t>(i)].act, false, share)
+                    : valid ? sl::dim_if(conn::act_slot(items_[static_cast<std::size_t>(i)].act, false, share),
+                                         !items_[static_cast<std::size_t>(i)].enabled)   // a greyed row: its verb greys too
                     : share ? sl::ShareLong : sl::None;
-    const sl::Id up = i <= 0 ? sl::UpDim : sl::Up;
-    const sl::Id dn = i >= act_count() - 1 ? sl::DnDim : sl::Dn;
-    return {{back, up, ok, dn}};
+    Strip l = list_strip({{back, sl::Up, ok, sl::Dn}}, i, act_count());
+    return l;
 }
 
 bool ConnectionPage::on_event(Event e) {

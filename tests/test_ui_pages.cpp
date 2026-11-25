@@ -73,8 +73,10 @@ static void test_label_sets() {
         const uint8_t p = kPages[i];
         ui.goto_page(p, 20000);
         for (int b = 0; b < 4; b++) CHECK_STR(label(ui, static_cast<Button>(b)), expect[i][b]);
-        CHECK_EQ(ui.labels().b[static_cast<int>(Button::Minus)].dim, false);
-        CHECK_EQ(ui.labels().b[static_cast<int>(Button::Plus)].dim, false);
+        if (std::strcmp(expect[i][1], "Up") != 0) {   // a list dims Up / Dn at its ends (list_strip), the rest never
+            CHECK_EQ(ui.labels().b[static_cast<int>(Button::Minus)].dim, false);
+            CHECK_EQ(ui.labels().b[static_cast<int>(Button::Plus)].dim, false);
+        }
         // Every label fits the slot: characters <= label_max_chars(button).
         for (int b = 0; b < 4; b++) CHECK_EQ(strlen(label(ui, static_cast<Button>(b))) <= label_max_chars(static_cast<Button>(b)), 1);
         CHECK_EQ(label_violation(ui.labels()) == nullptr, true);
@@ -2143,9 +2145,10 @@ static void test_usb_link_toggles() {
     ui.on_button(Button::Minus, ButtonEvent::Short, 21550);       // back to Drive: turning it on drops Net
     ui.on_button(Button::Ok, ButtonEvent::Short, 21560);
     CHECK_EQ(g_stub.usb_stored.net, 0); CHECK_EQ(g_stub.usb_stored.drive, 1);
-    ui.on_button(Button::Plus, ButtonEvent::Short, 21570);        // Network again, then WebUSB, then wrap to HID
-    ui.on_button(Button::Plus, ButtonEvent::Short, 21575);
-    ui.on_button(Button::Plus, ButtonEvent::Short, 21580);
+    ui.on_button(Button::Minus, ButtonEvent::Short, 21570);       // up to HID: the list stops there (no wrap)
+    ui.on_button(Button::Minus, ButtonEvent::Short, 21575);
+    CHECK_STR(label(ui, Button::Minus), "Up");
+    CHECK_EQ(ui.labels().b[static_cast<int>(Button::Minus)].dim, true);
     ui.on_button(Button::Ok, ButtonEvent::Short, 21590);          // HID off: nothing else stays on but Drive
     CHECK_EQ(g_stub.usb_stored.hid, 0); CHECK_EQ(g_stub.usb_stored.net, 0);
     ui.on_button(Button::Ok, ButtonEvent::Short, 21595);          // HID on again, Drive off for the next checks
@@ -2169,10 +2172,11 @@ static void test_usb_link_webusb_row() {
     CHECK_EQ(k2::usbcfg::rows(), 4);
     ui.goto_page(static_cast<uint8_t>(Page::Lines), 23000);
     ui.push_menu(Menu::UsbLink, 23100);
-    ui.on_button(Button::Minus, ButtonEvent::Short, 23200);       // wraps from HID to the last row: WebUSB
+    for (int i = 0; i < 4; i++) ui.on_button(Button::Plus, ButtonEvent::Short, 23200 + i);   // down to WebUSB, the last row: it stops
+    CHECK_EQ(ui.labels().b[static_cast<int>(Button::Plus)].dim, true);
     ui.on_button(Button::Ok, ButtonEvent::Short, 23300);
     CHECK_EQ(g_stub.usb_stored.webusb, 1); CHECK_EQ(g_stub.usb_stored.hid, 0); CHECK_EQ(g_stub.usb_stored.drive, 0);
-    ui.on_button(Button::Plus, ButtonEvent::Short, 23400);        // wrap to HID: the fallback joins
+    for (int i = 0; i < 3; i++) ui.on_button(Button::Minus, ButtonEvent::Short, 23400 + i);   // up to HID: the fallback joins
     ui.on_button(Button::Ok, ButtonEvent::Short, 23500);
     CHECK_EQ(g_stub.usb_stored.webusb, 1); CHECK_EQ(g_stub.usb_stored.hid, 1);
     ui.on_button(Button::Plus, ButtonEvent::Short, 23600);        // Drive on: HID drops out, WebUSB stays

@@ -170,6 +170,15 @@ enum Id : uint8_t {
 };
 }  // namespace sl
 
+// A pool entry shown but unavailable (the focused row is disabled): bit 7 of the id, which slot_label() resolves. The id
+// changes with it, so the slot's signature repaints it.
+namespace sl {
+inline constexpr std::uint8_t kDimBit = 0x80;
+static_assert(kCount <= kDimBit, "bit 7 of a slot id is the dim flag");
+constexpr Id dim(Id id) { return static_cast<Id>(id | kDimBit); }
+constexpr Id dim_if(Id id, bool off) { return off ? dim(id) : id; }
+}  // namespace sl
+
 // What a page returns for its four buttons (Button order Back, Minus, Ok, Plus): four pool ids, 4 bytes.
 struct Strip {
     sl::Id b[4];
@@ -198,6 +207,13 @@ inline constexpr const char *kUp = "Up", *kDn = "Dn";
 constexpr Strip list_strip(Strip base) {
     base[Button::Minus] = sl::Up;
     base[Button::Plus] = sl::Dn;
+    return base;
+}
+
+// The list pair of a list that stops at its ends (no wrap): Up dims on the first row, Dn on the last.
+constexpr Strip list_strip(Strip base, int at, int count) {
+    base[Button::Minus] = at <= 0 ? sl::UpDim : sl::Up;
+    base[Button::Plus] = at >= count - 1 ? sl::DnDim : sl::Dn;
     return base;
 }
 

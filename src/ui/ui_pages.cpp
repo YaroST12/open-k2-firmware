@@ -2112,8 +2112,8 @@ int rotation_choice(const Ui &ui) {
     return ui.rotation_locked() ? 1 + ui.rotation() : 0;
 }
 
-Strip setting_labels(Strip labels, sl::Id action) {
-    labels = list_strip(labels);
+Strip setting_labels(Strip labels, sl::Id action, int at, int count) {
+    labels = list_strip(labels, at, count);
     labels[Button::Ok] = action;
     return labels;
 }
@@ -2421,7 +2421,7 @@ Strip SettingsPage::labels() const {
     const auto row = static_cast<SettingRow>(sel_);
     const bool opens = row < SettingRow::RotateButtons || row >= SettingRow::HomeBoxes;   // the chevron rows
     const bool cycles = row == SettingRow::Smoothing || row == SettingRow::TestLevel || row == SettingRow::SweepDepth || row == SettingRow::LongBack;
-    return setting_labels(base_labels(), opens ? sl::Open : cycles ? sl::Cycle : sl::Toggle);
+    return setting_labels(base_labels(), opens ? sl::Open : cycles ? sl::Cycle : sl::Toggle, sel_, kSettingsRows);
 }
 
 void AutorotatePage::enter() {
@@ -2467,7 +2467,7 @@ bool AutorotatePage::on_event(Event e) {
     return false;
 }
 
-Strip AutorotatePage::labels() const { return setting_labels(base_labels(), sl::Apply); }
+Strip AutorotatePage::labels() const { return setting_labels(base_labels(), sl::Apply, sel_, 5); }
 
 // ---------------------------------------------------------------------------------------
 // Home boxes submenu (configure the 3 Home info boxes: static metric, Rotating, or Off)
@@ -2561,10 +2561,7 @@ bool HomeBoxesPage::on_event(Event e) {
 }
 
 Strip HomeBoxesPage::labels() const {
-    Strip l = list_strip(base_labels());
-    const int at = view_ == View::List ? sel_ : pick_;
-    if (at == 0) l[Button::Minus] = sl::UpDim;
-    if (at >= count() - 1) l[Button::Plus] = sl::DnDim;
+    Strip l = list_strip(base_labels(), view_ == View::List ? sel_ : pick_, count());
     l[Button::Ok] = view_ == View::List ? (sel_ < home::kBoxCount ? sl::Pick : sl::Reset) : sl::Select;
     return l;
 }
@@ -2685,10 +2682,7 @@ Strip DisplayPage::labels() const {
         l[Button::Ok] = sl::Done;
         return l;
     }
-    l = list_strip(l);
-    const int at = view_ >= View::PickDim ? pick_ : sel_;
-    if (at == 0) l[Button::Minus] = sl::UpDim;
-    if (at == count() - 1) l[Button::Plus] = sl::DnDim;
+    l = list_strip(l, view_ >= View::PickDim ? pick_ : sel_, count());
     l[Button::Ok] = view_ == View::List ? (sel_ == 0 ? sl::Set : sl::Pick) : sl::Select;
     return l;
 }
@@ -3213,15 +3207,17 @@ bool ToolsPage::on_event(Event e) {
 }
 
 Strip ToolsPage::labels() const {
-    Strip l = list_strip(base_labels());
     const int at = view_ == View::List ? sel_ : view_ == View::PickLimit ? pick_ : in_tech() ? edit_idx_ : sub_pick_;
-    const int n = count();
-    if (at == 0) l[Button::Minus] = sl::UpDim;
-    if (at >= n - 1) l[Button::Plus] = sl::DnDim;
+    Strip l = list_strip(base_labels(), at, count());
     if (view_ == View::List) {
-        l[Button::Ok] = sel_ >= bench::tools().n ? sl::Pick : sl::Open;
+        const bench::Acts b = bench::tools();
+        bool blocked = false;
+        if (sel_ >= 0 && sel_ < b.n && b.a[sel_].kind == bench::ActKind::Tool)
+            blocked = tool_readiness(b.a[sel_].arg, setup_state(ctx_), ctx_.pm_online).level == ToolLevel::Blocked;
+        l[Button::Ok] = sel_ >= b.n ? sl::Pick : sl::dim_if(sl::Open, blocked);   // a blocked tool's verb greys with its row
     } else if (view_ == View::PickLimit) {
-        l[Button::Ok] = (pick_ >= 1 && pick_ <= 3) ? sl::Open : sl::Select;
+        const bool offered = pick_ == 1 || !has_caps_ || (pick_ == 2 ? has_pps_ : has_avs_);
+        l[Button::Ok] = (pick_ >= 1 && pick_ <= 3) ? sl::dim_if(sl::Open, !offered) : sl::Select;
     } else if (in_tech()) {
         l[Button::Ok] = sl::Pick;
     } else {
@@ -3289,7 +3285,7 @@ void UsbLinkPage::update(uint32_t) {
 bool UsbLinkPage::on_event(Event e) {
     if (e.press != Press::Short) return false;
     if (e.button == Button::Plus || e.button == Button::Minus) {
-        sel_ = (sel_ + (e.button == Button::Plus ? 1 : kUlRows - 1)) % kUlRows;
+        sel_ = std::clamp(sel_ + (e.button == Button::Plus ? 1 : -1), 0, kUlRows - 1);   // stops at the ends, as every list
         update(ctx_.now);
         return true;
     }
@@ -3303,7 +3299,7 @@ bool UsbLinkPage::on_event(Event e) {
 }
 
 Strip UsbLinkPage::labels() const {
-    Strip l = base_labels();
+    Strip l = list_strip(base_labels(), sel_, kUlRows);
     l[Button::Ok] = sl::Toggle;
     return l;
 }

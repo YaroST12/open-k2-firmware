@@ -114,6 +114,8 @@ static void test_page_case1() {
     // PLUS walks down to the last row and stops there; MINUS walks back.
     for (unsigned i = 0; i < rows + 3; i++) ui.on_button(Button::Plus, ButtonEvent::Short, 1300 + i);
     CHECK_EQ(ui.diagnosis_page().selected(), int(rows) - 1);
+    CHECK_EQ(ui.labels().b[static_cast<int>(Button::Plus)].dim, true);    // the list stops: Dn dims on the last row
+    CHECK_EQ(ui.labels().b[static_cast<int>(Button::Minus)].dim, false);
     ui.on_button(Button::Minus, ButtonEvent::Short, 1400);
     CHECK_EQ(ui.diagnosis_page().selected(), int(rows) - 2);
     ui.on_button(Button::Back, ButtonEvent::Short, 1500);

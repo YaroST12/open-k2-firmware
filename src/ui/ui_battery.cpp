@@ -439,7 +439,7 @@ bool BatteryPage::on_event(Event e) {
 }
 
 Strip BatteryPage::labels() const {
-    Strip l = list_strip(base_labels());
+    Strip l = list_strip(base_labels(), sel_, count());
     if (view_ == View::Runs) l[Button::Ok] = n_runs_ ? sl::View : sl::None;
     else if (armed()) l[Button::Ok] = sl::Confirm;
     else l[Button::Ok] = view::act_verb(act());
